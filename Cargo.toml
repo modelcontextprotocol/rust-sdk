@@ -3,12 +3,12 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.dependencies]
-mcp-core = { path = "./crates/mcp-core" }
-mcp-macros = { path = "./crates/mcp-macros" }
+mcp-spec = { path = "./crates/mcp-spec", version = "0.1.0" }
+mcp-macros = { path = "./crates/mcp-macros", version = "0.1.0" }
 
 [workspace.package]
 edition = "2021"
-version = "1.0.7"
+version = "0.1.0"
 authors = ["Block <ai-oss-tools@block.xyz>"]
 license = "MIT"
 repository = "https://github.com/modelcontextprotocol/rust-sdk/"

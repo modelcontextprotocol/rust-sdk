@@ -1,5 +1,5 @@
 [package]
-name = "mcp-core"
+name = "mcp-spec"
 license.workspace = true
 version.workspace = true
 edition.workspace = true

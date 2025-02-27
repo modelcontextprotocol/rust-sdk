@@ -56,9 +56,9 @@ pub enum RouterError {
     PromptNotFound(String),
 }
 
-impl From<RouterError> for mcp_core::protocol::ErrorData {
+impl From<RouterError> for mcp_spec::protocol::ErrorData {
     fn from(err: RouterError) -> Self {
-        use mcp_core::protocol::*;
+        use mcp_spec::protocol::*;
         match err {
             RouterError::MethodNotFound(msg) => ErrorData {
                 code: METHOD_NOT_FOUND,
@@ -94,10 +94,10 @@ impl From<RouterError> for mcp_core::protocol::ErrorData {
     }
 }
 
-impl From<mcp_core::handler::ResourceError> for RouterError {
-    fn from(err: mcp_core::handler::ResourceError) -> Self {
+impl From<mcp_spec::handler::ResourceError> for RouterError {
+    fn from(err: mcp_spec::handler::ResourceError) -> Self {
         match err {
-            mcp_core::handler::ResourceError::NotFound(msg) => RouterError::ResourceNotFound(msg),
+            mcp_spec::handler::ResourceError::NotFound(msg) => RouterError::ResourceNotFound(msg),
             _ => RouterError::Internal("Unknown resource error".to_string()),
         }
     }

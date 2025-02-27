@@ -120,7 +120,7 @@ pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
         struct #struct_name;
 
         #[async_trait::async_trait]
-        impl mcp_core::handler::ToolHandler for #struct_name {
+        impl mcp_spec::handler::ToolHandler for #struct_name {
             fn name(&self) -> &'static str {
                 #tool_name
             }
@@ -130,17 +130,17 @@ pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             fn schema(&self) -> serde_json::Value {
-                mcp_core::handler::generate_schema::<#params_struct_name>()
+                mcp_spec::handler::generate_schema::<#params_struct_name>()
                     .expect("Failed to generate schema")
             }
 
-            async fn call(&self, params: serde_json::Value) -> Result<serde_json::Value, mcp_core::handler::ToolError> {
+            async fn call(&self, params: serde_json::Value) -> Result<serde_json::Value, mcp_spec::handler::ToolError> {
                 let params: #params_struct_name = serde_json::from_value(params)
-                    .map_err(|e| mcp_core::handler::ToolError::InvalidParameters(e.to_string()))?;
+                    .map_err(|e| mcp_spec::handler::ToolError::InvalidParameters(e.to_string()))?;
 
                 // Extract parameters and call the function
                 let result = #fn_name(#(params.#param_names,)*).await
-                    .map_err(|e| mcp_core::handler::ToolError::ExecutionError(e.to_string()))?;
+                    .map_err(|e| mcp_spec::handler::ToolError::ExecutionError(e.to_string()))?;
 
                 Ok(serde_json::to_value(result).expect("should serialize"))
 

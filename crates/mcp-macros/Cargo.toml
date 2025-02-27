@@ -1,7 +1,10 @@
 [package]
 name = "mcp-macros"
+license.workspace = true
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
+description = "Macros for Model Context Protocol SDK"
 
 [lib]
 proc-macro = true
@@ -12,7 +15,7 @@ quote = "1.0"
 proc-macro2 = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-mcp-core = { path = "../mcp-core" }
+mcp-spec = { workspace = true }
 async-trait = "0.1"
 schemars = "0.8"
 convert_case = "0.6.0"

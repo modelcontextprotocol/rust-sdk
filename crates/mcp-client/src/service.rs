@@ -1,5 +1,5 @@
 use futures::future::BoxFuture;
-use mcp_core::protocol::JsonRpcMessage;
+use mcp_spec::protocol::JsonRpcMessage;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tower::{timeout::Timeout, Service, ServiceBuilder};
