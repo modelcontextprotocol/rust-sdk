@@ -142,7 +142,8 @@ where
 
         tracing::info!("Server started");
         while let Some(msg_result) = transport.next().await {
-            let _span = tracing::span!(tracing::Level::INFO, "message_processing").entered();
+            let _span = tracing::span!(tracing::Level::INFO, "message_processing");
+            let _enter = _span.enter();
             match msg_result {
                 Ok(msg) => {
                     match msg {
