@@ -26,6 +26,7 @@ async-trait = "0.1"
 
 
 [dev-dependencies]
+poem = { version = "3.1.7", features = ["sse"] }
 axum = { version = "0.8", features = ["macros"] }
-tokio-util = { version = "0.7", features = ["io", "codec"]}
+tokio-util = { version = "0.7", features = ["io", "codec"] }
 rand = { version = "0.8" }
