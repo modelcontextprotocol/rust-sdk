@@ -177,4 +177,3 @@ impl mcp_server::Router for CounterRouter {
         })
     }
 }
-

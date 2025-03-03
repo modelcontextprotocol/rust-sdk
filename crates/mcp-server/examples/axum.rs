@@ -9,6 +9,7 @@ use axum::{
 use futures::{stream::Stream, StreamExt, TryStreamExt};
 use mcp_server::{ByteTransport, Server};
 use std::collections::HashMap;
+use tokio_util::codec::FramedRead;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use anyhow::Result;
@@ -19,7 +20,8 @@ use tokio::{
     sync::Mutex,
 };
 use tracing_subscriber::{self};
-mod counter;
+mod common;
+use common::counter;
 
 type C2SWriter = Arc<Mutex<io::WriteHalf<io::SimplexStream>>>;
 type SessionId = Arc<str>;
@@ -121,37 +123,13 @@ async fn sse_handler(State(app): State<App>) -> Sse<impl Stream<Item = Result<Ev
         });
     }
 
-    use tokio_util::codec::{Decoder, FramedRead};
-    #[derive(Default)]
-    pub struct LinesBytesCodec;
-    impl Decoder for LinesBytesCodec {
-        type Item = tokio_util::bytes::Bytes;
-        type Error = io::Error;
-        fn decode(
-            &mut self,
-            src: &mut tokio_util::bytes::BytesMut,
-        ) -> Result<Option<Self::Item>, Self::Error> {
-            if let Some(end) = src
-                .iter()
-                .enumerate()
-                .find_map(|(idx, &b)| (b == b'\n').then_some(idx))
-            {
-                let line = src.split_to(end);
-                let _char_next_line = src.split_to(1);
-                Ok(Some(line.freeze()))
-            } else {
-                Ok(None)
-            }
-        }
-    }
-
     let stream = futures::stream::once(futures::future::ok(
         Event::default()
             .event("endpoint")
             .data(format!("?sessionId={session}")),
     ))
     .chain(
-        FramedRead::new(s2c_read, LinesBytesCodec)
+        FramedRead::new(s2c_read, common::jsonrpc_frame_codec::JsonRpcFrameCodec)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
             .and_then(move |bytes| match std::str::from_utf8(&bytes) {
                 Ok(message) => futures::future::ok(Event::default().event("message").data(message)),

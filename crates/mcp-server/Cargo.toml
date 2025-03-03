@@ -29,7 +29,3 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 tokio-util = { version = "0.7", features = ["io", "codec"]}
 rand = { version = "0.8" }
-
-[[example]]
-name = "example-sse-axum"
-path = "examples/sse-axum/main.rs"
