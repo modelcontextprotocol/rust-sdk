@@ -28,10 +28,7 @@ async fn main() -> Result<()> {
     // Create and run the server
     let server = Server::new(router);
 
-    let transport = ByteTransport::new(
-        async_io::AsyncInputStream::get(),
-        async_io::AsyncOutputStream::get(),
-    );
+    let transport = ByteTransport::new(async_io::WasiFd::std_in(), async_io::WasiFd::std_out());
 
     tracing::info!("Server initialized and ready to handle requests");
     Ok(server.run(transport).await?)
@@ -41,17 +38,20 @@ mod async_io {
     use tokio::io::{AsyncRead, AsyncWrite};
     use wasi::{Fd, FD_STDIN, FD_STDOUT};
 
-    pub struct AsyncInputStream {
+    pub struct WasiFd {
         fd: Fd,
     }
 
-    impl AsyncInputStream {
-        pub fn get() -> Self {
+    impl WasiFd {
+        pub fn std_in() -> Self {
             Self { fd: FD_STDIN }
+        }
+        pub fn std_out() -> Self {
+            Self { fd: FD_STDOUT }
         }
     }
 
-    impl AsyncRead for AsyncInputStream {
+    impl AsyncRead for WasiFd {
         fn poll_read(
             self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
@@ -79,17 +79,7 @@ mod async_io {
         }
     }
 
-    pub struct AsyncOutputStream {
-        fd: Fd,
-    }
-
-    impl AsyncOutputStream {
-        pub fn get() -> Self {
-            Self { fd: FD_STDOUT }
-        }
-    }
-
-    impl AsyncWrite for AsyncOutputStream {
+    impl AsyncWrite for WasiFd {
         fn poll_write(
             self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,

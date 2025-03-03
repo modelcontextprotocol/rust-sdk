@@ -1,6 +1,11 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use mcp_core::{handler::{PromptError, ResourceError}, prompt::{Prompt, PromptArgument}, protocol::ServerCapabilities, Content, Resource, Tool, ToolError};
+use mcp_core::{
+    handler::{PromptError, ResourceError},
+    prompt::{Prompt, PromptArgument},
+    protocol::ServerCapabilities,
+    Content, Resource, Tool, ToolError,
+};
 use mcp_server::router::CapabilitiesBuilder;
 use serde_json::Value;
 use tokio::sync::Mutex;
