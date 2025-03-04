@@ -24,8 +24,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 async-trait = "0.1"
 
-
-[dev-dependencies]
-axum = { version = "0.8", features = ["macros"] }
-tokio-util = { version = "0.7", features = ["io", "codec"]}
-rand = { version = "0.8" }
