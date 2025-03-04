@@ -1,10 +1,13 @@
+//! build: cargo build -p mcp-server-examples --example wasi_std_io --target wasm32-wasip1
+//!
+//! run: npx @modelcontextprotocol/inspector wasmedge --dir logs:. run target/wasm32-wasip1/debug/examples/wasi_std_io.wasm
+//!
 use mcp_server::{router::RouterService, ByteTransport, Server};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 mod common;
 use anyhow::Result;
 use common::counter::CounterRouter;
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     // Set up file appender for logging
@@ -27,13 +30,16 @@ async fn main() -> Result<()> {
 
     // Create and run the server
     let server = Server::new(router);
-
+    #[cfg(target_arch = "wasm32")]
     let transport = ByteTransport::new(async_io::WasiFd::std_in(), async_io::WasiFd::std_out());
+    #[cfg(not(target_arch = "wasm32"))]
+    let transport = ByteTransport::new(tokio::io::stdin(), tokio::io::stdout());
 
     tracing::info!("Server initialized and ready to handle requests");
     Ok(server.run(transport).await?)
 }
 
+#[cfg(target_arch = "wasm32")]
 mod async_io {
     use tokio::io::{AsyncRead, AsyncWrite};
     use wasi::{Fd, FD_STDIN, FD_STDOUT};
@@ -106,7 +112,6 @@ mod async_io {
             self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Result<(), std::io::Error>> {
-            // WASI 没有显式的 flush 操作
             std::task::Poll::Ready(Ok(()))
         }
 

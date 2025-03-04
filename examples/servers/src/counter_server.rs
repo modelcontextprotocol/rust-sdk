@@ -4,8 +4,8 @@ use mcp_server::{ByteTransport, Server};
 use tokio::io::{stdin, stdout};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{self, EnvFilter};
+
 mod common;
-use common::counter::CounterRouter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     tracing::info!("Starting MCP server");
 
     // Create an instance of our counter router
-    let router = RouterService(CounterRouter::new());
+    let router = RouterService(common::counter::CounterRouter::new());
 
     // Create and run the server
     let server = Server::new(router);
