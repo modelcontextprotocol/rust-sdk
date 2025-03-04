@@ -20,7 +20,7 @@ futures = "0.3"
 [dev-dependencies]
 axum = { version = "0.8", features = ["macros"] }
 poem = { version = "3.1.7", features = ["sse"] }
-tokio-util = { version = "0.7", features = ["io", "codec"] }
+tokio-util = { version = "0.7", features = ["io", "codec"]}
 rand = { version = "0.8" }
 
 [[example]]
@@ -28,9 +28,9 @@ name = "counter-server"
 path = "src/counter_server.rs"
 
 [[example]]
-name = "axum"
-path = "src/axum.rs"
-
-[[example]]
 name = "poem"
 path = "src/poem.rs"
+
+[[example]]
+name = "axum"
+path = "src/axum.rs"
