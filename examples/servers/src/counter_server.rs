@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mcp_server::router::RouterService;
-use mcp_server::{ByteTransport, Server};
+use mcp_server::{transport::StdioTransport, Server};
 use tokio::io::{stdin, stdout};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{self, EnvFilter};
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
     // Create and run the server
     let server = Server::new(router);
-    let transport = ByteTransport::new(stdin(), stdout());
+    let transport = StdioTransport::new(stdin(), stdout());
 
     tracing::info!("Server initialized and ready to handle requests");
     Ok(server.run(transport).await?)
