@@ -15,6 +15,9 @@ pub use errors::{BoxError, RouterError, ServerError, TransportError};
 pub mod router;
 pub use router::Router;
 
+pub mod toolset;
+pub mod transport;
+
 /// A transport layer that handles JSON-RPC messages over byte
 #[pin_project]
 pub struct ByteTransport<R, W> {
