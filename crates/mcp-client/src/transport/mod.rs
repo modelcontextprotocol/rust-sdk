@@ -1,8 +1,7 @@
-use async_trait::async_trait;
 use mcp_core::protocol::JsonRpcMessage;
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 
 pub type BoxError = Box<dyn std::error::Error + Sync + Send>;
 /// A generic error type for transport operations.
@@ -43,21 +42,22 @@ pub struct TransportMessage {
 }
 
 /// A generic asynchronous transport trait with channel-based communication
-#[async_trait]
 pub trait Transport {
     type Handle: TransportHandle;
 
     /// Start the transport and establish the underlying connection.
     /// Returns the transport handle for sending messages.
-    async fn start(&self) -> Result<Self::Handle, Error>;
+    fn start(&self) -> impl Future<Output = Result<Self::Handle, Error>> + Send;
 
     /// Close the transport and free any resources.
-    async fn close(&self) -> Result<(), Error>;
+    fn close(&self) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
-#[async_trait]
 pub trait TransportHandle: Send + Sync + Clone + 'static {
-    async fn send(&self, message: JsonRpcMessage) -> Result<JsonRpcMessage, Error>;
+    fn send(
+        &self,
+        message: JsonRpcMessage,
+    ) -> impl Future<Output = Result<JsonRpcMessage, Error>> + Send;
 }
 
 // Helper function that contains the common send implementation

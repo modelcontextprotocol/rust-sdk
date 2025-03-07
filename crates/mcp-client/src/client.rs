@@ -5,7 +5,7 @@ use mcp_core::protocol::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{future::Future, sync::atomic::{AtomicU64, Ordering}};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tower::{Service, ServiceExt}; // for Service::ready()
@@ -75,28 +75,27 @@ pub struct InitializeParams {
     pub client_info: ClientInfo,
 }
 
-#[async_trait::async_trait]
 pub trait McpClientTrait: Send + Sync {
-    async fn initialize(
+    fn initialize(
         &mut self,
         info: ClientInfo,
         capabilities: ClientCapabilities,
-    ) -> Result<InitializeResult, Error>;
+    ) -> impl Future<Output = Result<InitializeResult, Error>> + Send;
 
-    async fn list_resources(
+    fn list_resources(
         &self,
         next_cursor: Option<String>,
-    ) -> Result<ListResourcesResult, Error>;
+    ) -> impl Future<Output = Result<ListResourcesResult, Error>> + Send;
 
-    async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, Error>;
+    fn read_resource(&self, uri: &str) -> impl Future<Output = Result<ReadResourceResult, Error>> + Send;
 
-    async fn list_tools(&self, next_cursor: Option<String>) -> Result<ListToolsResult, Error>;
+    fn list_tools(&self, next_cursor: Option<String>) -> impl Future<Output = Result<ListToolsResult, Error>> + Send;
 
-    async fn call_tool(&self, name: &str, arguments: Value) -> Result<CallToolResult, Error>;
+    fn call_tool(&self, name: &str, arguments: Value) -> impl Future<Output = Result<CallToolResult, Error>> + Send;
 
-    async fn list_prompts(&self, next_cursor: Option<String>) -> Result<ListPromptsResult, Error>;
+    fn list_prompts(&self, next_cursor: Option<String>) -> impl Future<Output = Result<ListPromptsResult, Error>> + Send;
 
-    async fn get_prompt(&self, name: &str, arguments: Value) -> Result<GetPromptResult, Error>;
+    fn get_prompt(&self, name: &str, arguments: Value) -> impl Future<Output = Result<GetPromptResult, Error>> + Send;
 }
 
 /// The MCP client is the interface for MCP operations.
@@ -232,7 +231,6 @@ where
     }
 }
 
-#[async_trait::async_trait]
 impl<S> McpClientTrait for McpClient<S>
 where
     S: Service<JsonRpcMessage, Response = JsonRpcMessage> + Clone + Send + Sync + 'static,
