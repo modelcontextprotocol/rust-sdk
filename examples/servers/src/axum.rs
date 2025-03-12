@@ -13,7 +13,6 @@ use tokio_util::codec::FramedRead;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use anyhow::Result;
-use mcp_server::router::RouterService;
 use std::sync::Arc;
 use tokio::{
     io::{self, AsyncWriteExt},
@@ -22,6 +21,7 @@ use tokio::{
 use tracing_subscriber::{self};
 mod common;
 use common::counter;
+use common::counter::RouterService;
 
 type C2SWriter = Arc<Mutex<io::WriteHalf<io::SimplexStream>>>;
 type SessionId = Arc<str>;
