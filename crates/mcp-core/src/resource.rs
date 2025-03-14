@@ -27,6 +27,20 @@ pub struct Resource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTemplate {
+    /// URI template following RFC 6570
+    pub uri_template: String,
+    // Human-readable name for this type
+    pub name: String,
+    // Optional description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    // Optional MIME type for all matching resources
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", untagged)]
 pub enum ResourceContents {
     TextResourceContents {
@@ -45,6 +59,28 @@ pub enum ResourceContents {
 
 fn default_mime_type() -> String {
     "text".to_string()
+}
+
+impl ResourceTemplate {
+    pub fn new<S: AsRef<str>>(uri_template: S, name: &str) -> Result<Self> {
+        let uri_template = uri_template.as_ref();
+        Ok(Self {
+            uri_template: uri_template.to_string(),
+            name: name.to_string(),
+            description: None,
+            mime_type: None,
+        })
+    }
+
+    pub fn with_description<S: Into<String>>(mut self, description: S) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_mime_type<S: Into<String>>(mut self, mime_type: S) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
 }
 
 impl Resource {
@@ -256,5 +292,32 @@ mod tests {
     fn test_invalid_uri() {
         let result = Resource::new("not-a-uri", None, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resource_template_new() -> Result<()> {
+        let template = ResourceTemplate::new("file://{path}", "Project Files")?;
+        assert_eq!(template.uri_template, "file://{path}");
+        assert_eq!(template.name, "Project Files");
+        Ok(())
+    }
+
+    #[test]
+    fn test_resource_template_with_description() -> Result<()> {
+        let template = ResourceTemplate::new("file://{path}", "Project Files")?
+            .with_description("Access files in the project directory");
+        assert_eq!(
+            template.description,
+            Some("Access files in the project directory".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_resource_template_with_mime_type() -> Result<()> {
+        let template =
+            ResourceTemplate::new("file://{path}", "Project Files")?.with_mime_type("text");
+        assert_eq!(template.mime_type, Some("text".to_string()));
+        Ok(())
     }
 }

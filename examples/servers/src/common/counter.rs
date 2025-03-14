@@ -4,7 +4,7 @@ use mcp_core::{
     handler::{PromptError, ResourceError},
     prompt::{Prompt, PromptArgument},
     protocol::ServerCapabilities,
-    Content, Resource, Tool, ToolError,
+    Content, Resource, ResourceTemplate, Tool, ToolError,
 };
 use mcp_server::router::CapabilitiesBuilder;
 use serde_json::Value;
@@ -42,6 +42,19 @@ impl CounterRouter {
     fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
         Resource::new(uri, Some("text/plain".to_string()), Some(name.to_string())).unwrap()
     }
+
+    fn _create_resource_template(
+        &self,
+        uri_template: &str,
+        name: &str,
+        mime_type: &str,
+        description: &str,
+    ) -> ResourceTemplate {
+        ResourceTemplate::new(uri_template, name)
+            .unwrap()
+            .with_description(description)
+            .with_mime_type(mime_type)
+    }
 }
 
 impl mcp_server::Router for CounterRouter {
@@ -56,7 +69,7 @@ impl mcp_server::Router for CounterRouter {
     fn capabilities(&self) -> ServerCapabilities {
         CapabilitiesBuilder::new()
             .with_tools(false)
-            .with_resources(false, false)
+            .with_resources(false, false, false)
             .with_prompts(false)
             .build()
     }
@@ -125,6 +138,15 @@ impl mcp_server::Router for CounterRouter {
             self._create_resource_text("str:////Users/to/some/path/", "cwd"),
             self._create_resource_text("memo://insights", "memo-name"),
         ]
+    }
+
+    fn list_resource_templates(&self) -> Vec<ResourceTemplate> {
+        vec![self._create_resource_template(
+            "file:///{path}",
+            "Project Files",
+            "application/octet-stream",
+            "Access files in the project directory",
+        )]
     }
 
     fn read_resource(
