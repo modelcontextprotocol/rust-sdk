@@ -105,13 +105,17 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    pub async fn write_message(&mut self, msg: JsonRpcMessage) -> Result<(), std::io::Error> {
+    pub async fn write_message(
+        self: &mut Pin<&mut Self>,
+        msg: JsonRpcMessage,
+    ) -> Result<(), std::io::Error> {
         let json = serde_json::to_string(&msg)?;
-        Pin::new(&mut self.writer)
-            .write_all(json.as_bytes())
-            .await?;
-        Pin::new(&mut self.writer).write_all(b"\n").await?;
-        Pin::new(&mut self.writer).flush().await?;
+
+        let mut this = self.as_mut().project();
+        this.writer.write_all(json.as_bytes()).await?;
+        this.writer.write_all(b"\n").await?;
+        this.writer.flush().await?;
+
         Ok(())
     }
 }
@@ -139,6 +143,7 @@ where
     {
         use futures::StreamExt;
         let mut service = self.service;
+        let mut transport = Pin::new(&mut transport);
 
         tracing::info!("Server started");
         while let Some(msg_result) = transport.next().await {
