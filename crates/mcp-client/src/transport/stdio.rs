@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
-use async_trait::async_trait;
 use mcp_core::protocol::JsonRpcMessage;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
@@ -161,7 +160,6 @@ pub struct StdioTransportHandle {
     error_receiver: Arc<Mutex<mpsc::Receiver<Error>>>,
 }
 
-#[async_trait::async_trait]
 impl TransportHandle for StdioTransportHandle {
     async fn send(&self, message: JsonRpcMessage) -> Result<JsonRpcMessage, Error> {
         let result = send_message(&self.sender, message).await;
@@ -244,7 +242,6 @@ impl StdioTransport {
     }
 }
 
-#[async_trait]
 impl Transport for StdioTransport {
     type Handle = StdioTransportHandle;
 

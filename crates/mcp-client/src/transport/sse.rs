@@ -1,5 +1,4 @@
 use crate::transport::{Error, PendingRequests, TransportMessage};
-use async_trait::async_trait;
 use eventsource_client::{Client, SSE};
 use futures::TryStreamExt;
 use mcp_core::protocol::{JsonRpcMessage, JsonRpcRequest};
@@ -220,7 +219,6 @@ pub struct SseTransportHandle {
     sender: mpsc::Sender<TransportMessage>,
 }
 
-#[async_trait::async_trait]
 impl TransportHandle for SseTransportHandle {
     async fn send(&self, message: JsonRpcMessage) -> Result<JsonRpcMessage, Error> {
         send_message(&self.sender, message).await
@@ -262,7 +260,6 @@ impl SseTransport {
     }
 }
 
-#[async_trait]
 impl Transport for SseTransport {
     type Handle = SseTransportHandle;
 

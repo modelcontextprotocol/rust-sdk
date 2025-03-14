@@ -1,4 +1,5 @@
-use async_trait::async_trait;
+use std::future::Future;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,7 +39,6 @@ pub enum PromptError {
 }
 
 /// Trait for implementing MCP tools
-#[async_trait]
 pub trait ToolHandler: Send + Sync + 'static {
     /// The name of the tool
     fn name(&self) -> &'static str;
@@ -50,11 +50,10 @@ pub trait ToolHandler: Send + Sync + 'static {
     fn schema(&self) -> Value;
 
     /// Execute the tool with the given parameters
-    async fn call(&self, params: Value) -> ToolResult<Value>;
+    fn call(&self, params: Value) -> impl Future<Output = ToolResult<Value>> + Send;
 }
 
 /// Trait for implementing MCP resources
-#[async_trait]
 pub trait ResourceTemplateHandler: Send + Sync + 'static {
     /// The URL template for this resource
     fn template() -> &'static str;
@@ -63,7 +62,7 @@ pub trait ResourceTemplateHandler: Send + Sync + 'static {
     fn schema() -> Value;
 
     /// Get the resource value
-    async fn get(&self, params: Value) -> ToolResult<String>;
+    fn get(&self, params: Value) -> impl Future<Output = ToolResult<String>>;
 }
 
 /// Helper function to generate JSON schema for a type
