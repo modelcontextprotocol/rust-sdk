@@ -25,6 +25,7 @@ rand = { version = "0.8" }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
+actix-web = "4"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 tokio = { version = "1", features = ["io-util", "rt", "time", "macros"] }
@@ -41,3 +42,7 @@ path = "src/axum.rs"
 [[example]]
 name = "wasi_std_io"
 path = "src/wasi_std_io.rs"
+
+[[example]]
+name = "actix_web"
+path = "src/actix_web.rs"
