@@ -8,7 +8,7 @@ publish = false
 mcp-server = { path = "../../crates/mcp-server" }
 mcp-core = { path = "../../crates/mcp-core" }
 mcp-macros = { path = "../../crates/mcp-macros" }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["io-util"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -23,6 +23,14 @@ poem = { version = "3.1.7", features = ["sse"] }
 tokio-util = { version = "0.7", features = ["io", "codec"]}
 rand = { version = "0.8" }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+tokio = { version = "1", features = ["io-util", "rt", "time", "macros"] }
+wasi = { version = "0.11.0+wasi-snapshot-preview1" }
+
 [[example]]
 name = "counter-server"
 path = "src/counter_server.rs"
@@ -34,3 +42,7 @@ path = "src/poem.rs"
 [[example]]
 name = "axum"
 path = "src/axum.rs"
+
+[[example]]
+name = "wasi_std_io"
+path = "src/wasi_std_io.rs"
