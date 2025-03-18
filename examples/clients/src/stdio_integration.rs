@@ -24,7 +24,7 @@ async fn main() -> Result<(), ClientError> {
     // Create the transport
     let transport = StdioTransport::new(
         "cargo",
-        vec!["run", "-p", "mcp-server"]
+        vec!["run", "-p", "mcp-server-examples", "--example", "counter-server"]
             .into_iter()
             .map(|s| s.to_string())
             .collect(),
