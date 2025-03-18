@@ -7,7 +7,7 @@ use axum::{
     Router,
 };
 use futures::{stream::Stream, StreamExt, TryStreamExt};
-use mcp_server::{ByteTransport, Server};
+use mcp_server::{transport::StdioTransport, Server};
 use std::collections::HashMap;
 use tokio_util::codec::FramedRead;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -114,7 +114,7 @@ async fn sse_handler(State(app): State<App>) -> Sse<impl Stream<Item = Result<Ev
         tokio::spawn(async move {
             let router = RouterService(counter::CounterRouter::new());
             let server = Server::new(router);
-            let bytes_transport = ByteTransport::new(c2s_read, s2c_write);
+            let bytes_transport = StdioTransport::new(c2s_read, s2c_write);
             let _result = server
                 .run(bytes_transport)
                 .await
