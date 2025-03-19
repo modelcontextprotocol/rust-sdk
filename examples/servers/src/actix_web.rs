@@ -1,7 +1,5 @@
 use actix_web::web::{Bytes, Data, Payload, Query};
-use actix_web::{
-    get, post, App, Error, HttpResponse, HttpServer, Result,
-};
+use actix_web::{get, post, App, Error, HttpResponse, HttpServer, Result};
 use futures::{StreamExt, TryStreamExt};
 use mcp_server::{ByteTransport, Server};
 use std::collections::HashMap;
@@ -15,7 +13,6 @@ use tokio::{
     io::{self, AsyncWriteExt},
     sync::Mutex,
 };
-use tracing_subscriber;
 mod common;
 use common::counter;
 
@@ -76,12 +73,12 @@ async fn post_event_handler(
             return Ok(HttpResponse::PayloadTooLarge().finish());
         }
 
-        if let Err(_) = write_stream.write_all(&chunk).await {
+        if (write_stream.write_all(&chunk).await).is_err() {
             return Ok(HttpResponse::InternalServerError().finish());
         }
     }
 
-    if let Err(_) = write_stream.write_u8(b'\n').await {
+    if (write_stream.write_u8(b'\n').await).is_err() {
         return Ok(HttpResponse::InternalServerError().finish());
     }
 
@@ -130,7 +127,7 @@ async fn sse_handler(app_state: Data<AppState>) -> Result<HttpResponse, Error> {
             .map_ok(move |bytes| {
                 let message = match std::str::from_utf8(&bytes) {
                     Ok(message) => format!("event: message\ndata: {}\n\n", message),
-                    Err(_) => format!("event: error\ndata: Invalid UTF-8 data\n\n"),
+                    Err(_) => "event: error\ndata: Invalid UTF-8 data\n\n".to_string(),
                 };
                 Bytes::from(message)
             }),
