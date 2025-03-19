@@ -4,7 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
-type PromptFuture = Pin<Box<dyn Future<Output = Result<String, PromptError>> + Send + 'static>>;
+type PromptFuture = Pin<Box<dyn Future<Output = Result<String, PromptError>> + 'static>>;
 
 use mcp_core::{
     content::Content,
@@ -81,7 +81,7 @@ impl CapabilitiesBuilder {
     }
 }
 
-pub trait Router: Send + Sync + 'static {
+pub trait Router: 'static {
     fn name(&self) -> String;
     // in the protocol, instructions are optional but we make it required
     fn instructions(&self) -> String;
@@ -91,12 +91,12 @@ pub trait Router: Send + Sync + 'static {
         &self,
         tool_name: &str,
         arguments: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Content>, ToolError>> + Send + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Content>, ToolError>> + 'static>>;
     fn list_resources(&self) -> Vec<mcp_core::resource::Resource>;
     fn read_resource(
         &self,
         uri: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, ResourceError>> + Send + 'static>>;
+    ) -> Pin<Box<dyn Future<Output = Result<String, ResourceError>> + 'static>>;
     fn list_prompts(&self) -> Vec<Prompt>;
     fn get_prompt(&self, prompt_name: &str) -> PromptFuture;
 
@@ -113,7 +113,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_initialize(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             let result = InitializeResult {
                 protocol_version: "2024-11-05".to_string(),
@@ -138,7 +138,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_tools_list(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             let tools = self.list_tools();
 
@@ -159,7 +159,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_tools_call(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             let params = req
                 .params
@@ -196,7 +196,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_resources_list(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             let resources = self.list_resources();
 
@@ -217,7 +217,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_resources_read(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             let params = req
                 .params
@@ -251,7 +251,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_prompts_list(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             let prompts = self.list_prompts();
 
@@ -270,7 +270,7 @@ pub trait Router: Send + Sync + 'static {
     fn handle_prompts_get(
         &self,
         req: JsonRpcRequest,
-    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> {
         async move {
             // Validate and extract parameters
             let params = req
@@ -396,11 +396,11 @@ pub struct RouterService<T>(pub T);
 
 impl<T> Service<JsonRpcRequest> for RouterService<T>
 where
-    T: Router + Clone + Send + Sync + 'static,
+    T: Router + Clone + 'static,
 {
     type Response = JsonRpcResponse;
     type Error = BoxError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))

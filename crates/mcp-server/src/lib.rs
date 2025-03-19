@@ -127,9 +127,8 @@ pub struct Server<S> {
 
 impl<S> Server<S>
 where
-    S: Service<JsonRpcRequest, Response = JsonRpcResponse> + Send,
+    S: Service<JsonRpcRequest, Response = JsonRpcResponse>,
     S::Error: Into<BoxError>,
-    S::Future: Send,
 {
     pub fn new(service: S) -> Self {
         Self { service }
@@ -166,23 +165,20 @@ where
                             );
 
                             // Process the request using our service
-                            let response = match service.call(request).await {
-                                Ok(resp) => resp,
-                                Err(e) => {
-                                    let error_msg = e.into().to_string();
-                                    tracing::error!(error = %error_msg, "Request processing failed");
-                                    JsonRpcResponse {
-                                        jsonrpc: "2.0".to_string(),
-                                        id,
-                                        result: None,
-                                        error: Some(mcp_core::protocol::ErrorData {
-                                            code: mcp_core::protocol::INTERNAL_ERROR,
-                                            message: error_msg,
-                                            data: None,
-                                        }),
-                                    }
+                            let response = service.call(request).await.unwrap_or_else(|e| {
+                                let error_msg = e.into().to_string();
+                                tracing::error!(error = %error_msg, "Request processing failed");
+                                JsonRpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id,
+                                    result: None,
+                                    error: Some(mcp_core::protocol::ErrorData {
+                                        code: mcp_core::protocol::INTERNAL_ERROR,
+                                        message: error_msg,
+                                        data: None,
+                                    }),
                                 }
-                            };
+                            });
 
                             // Serialize response for logging
                             let response_json = serde_json::to_string(&response)
