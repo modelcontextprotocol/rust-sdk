@@ -65,7 +65,7 @@ where
                 };
                 // Log incoming message here before serde conversion to
                 // track incomplete chunks which are not valid JSON
-                tracing::info!(json = %line, "incoming message");
+                tracing::debug!(json = %line, "incoming message");
 
                 // Parse JSON and validate message format
                 match serde_json::from_str::<serde_json::Value>(&line) {
@@ -158,7 +158,7 @@ where
                             let request_json = serde_json::to_string(&request)
                                 .unwrap_or_else(|_| "Failed to serialize request".to_string());
 
-                            tracing::info!(
+                            tracing::debug!(
                                 request_id = ?id,
                                 method = ?request.method,
                                 json = %request_json,
@@ -188,7 +188,7 @@ where
                             let response_json = serde_json::to_string(&response)
                                 .unwrap_or_else(|_| "Failed to serialize response".to_string());
 
-                            tracing::info!(
+                            tracing::debug!(
                                 response_id = ?response.id,
                                 json = %response_json,
                                 "Sending response"

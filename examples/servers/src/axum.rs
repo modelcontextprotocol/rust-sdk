@@ -102,7 +102,7 @@ async fn sse_handler(State(app): State<App>) -> Sse<impl Stream<Item = Result<Ev
     // it's 4KB
     const BUFFER_SIZE: usize = 1 << 12;
     let session = session_id();
-    tracing::info!(%session, "sse connection");
+    tracing::debug!(%session, "sse connection");
     let (c2s_read, c2s_write) = tokio::io::simplex(BUFFER_SIZE);
     let (s2c_read, s2c_write) = tokio::io::simplex(BUFFER_SIZE);
     app.txs
