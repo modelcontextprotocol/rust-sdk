@@ -12,6 +12,8 @@ This directory contains examples demonstrating how to use the Model Context Prot
 
 The client examples demonstrate different ways to connect to MCP servers.
 
+Before running the examples, ensure you have `uv` installed. You can find the installation instructions [here](https://github.com/astral-sh/uv).
+
 ### Available Examples
 
 You can run the examples in two ways:
