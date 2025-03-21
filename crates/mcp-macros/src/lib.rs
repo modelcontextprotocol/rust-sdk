@@ -119,7 +119,7 @@ pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
         #[derive(Default)]
         struct #struct_name;
 
-        #[async_trait::async_trait]
+        #[async_trait::async_trait(?Send)]
         impl mcp_core::handler::ToolHandler for #struct_name {
             fn name(&self) -> &'static str {
                 #tool_name

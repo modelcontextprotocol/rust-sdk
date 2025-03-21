@@ -97,7 +97,7 @@ impl mcp_server::Router for CounterRouter {
         &self,
         tool_name: &str,
         _arguments: Value,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Content>, ToolError>> + Send + 'static>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Content>, ToolError>> + 'static>> {
         let this = self.clone();
         let tool_name = tool_name.to_string();
 
@@ -130,7 +130,7 @@ impl mcp_server::Router for CounterRouter {
     fn read_resource(
         &self,
         uri: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, ResourceError>> + Send + 'static>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, ResourceError>> + 'static>> {
         let uri = uri.to_string();
         Box::pin(async move {
             match uri.as_str() {
@@ -166,7 +166,7 @@ impl mcp_server::Router for CounterRouter {
     fn get_prompt(
         &self,
         prompt_name: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, PromptError>> + Send + 'static>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, PromptError>> + 'static>> {
         let prompt_name = prompt_name.to_string();
         Box::pin(async move {
             match prompt_name.as_str() {

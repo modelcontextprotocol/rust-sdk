@@ -39,7 +39,7 @@ pub enum PromptError {
 
 /// Trait for implementing MCP tools
 #[async_trait]
-pub trait ToolHandler: Send + Sync + 'static {
+pub trait ToolHandler: 'static {
     /// The name of the tool
     fn name(&self) -> &'static str;
 
@@ -55,7 +55,7 @@ pub trait ToolHandler: Send + Sync + 'static {
 
 /// Trait for implementing MCP resources
 #[async_trait]
-pub trait ResourceTemplateHandler: Send + Sync + 'static {
+pub trait ResourceTemplateHandler: 'static {
     /// The URL template for this resource
     fn template() -> &'static str;
 
