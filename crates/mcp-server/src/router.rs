@@ -12,9 +12,9 @@ use mcp_core::{
     prompt::{Prompt, PromptMessage, PromptMessageRole},
     protocol::{
         CallToolResult, GetPromptResult, Implementation, InitializeResult, JsonRpcRequest,
-        JsonRpcResponse, ListPromptsResult, ListResourcesResult, ListToolsResult,
-        PromptsCapability, ReadResourceResult, ResourcesCapability, ServerCapabilities,
-        ToolsCapability,
+        JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+        ListToolsResult, PromptsCapability, ReadResourceResult, ResourcesCapability,
+        ServerCapabilities, ToolsCapability,
     },
     ResourceContents,
 };
@@ -62,10 +62,11 @@ impl CapabilitiesBuilder {
     }
 
     /// Enable resources capability
-    pub fn with_resources(mut self, subscribe: bool, list_changed: bool) -> Self {
+    pub fn with_resources(mut self, subscribe: bool, list_changed: bool, templates: bool) -> Self {
         self.resources = Some(ResourcesCapability {
             subscribe: Some(subscribe),
             list_changed: Some(list_changed),
+            templates: Some(templates),
         });
         self
     }
@@ -93,6 +94,7 @@ pub trait Router: Send + Sync + 'static {
         arguments: Value,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<Content>, ToolError>> + Send + 'static>>;
     fn list_resources(&self) -> Vec<mcp_core::resource::Resource>;
+    fn list_resource_templates(&self) -> Vec<mcp_core::resource::ResourceTemplate>;
     fn read_resource(
         &self,
         uri: &str,
@@ -237,6 +239,25 @@ pub trait Router: Send + Sync + 'static {
                     text: contents,
                 }],
             };
+
+            let mut response = self.create_response(req.id);
+            response.result =
+                Some(serde_json::to_value(result).map_err(|e| {
+                    RouterError::Internal(format!("JSON serialization error: {}", e))
+                })?);
+
+            Ok(response)
+        }
+    }
+
+    fn handle_resources_templates_list(
+        &self,
+        req: JsonRpcRequest,
+    ) -> impl Future<Output = Result<JsonRpcResponse, RouterError>> + Send {
+        async move {
+            let resource_templates = self.list_resource_templates();
+
+            let result = ListResourceTemplatesResult { resource_templates };
 
             let mut response = self.create_response(req.id);
             response.result =
@@ -416,6 +437,7 @@ where
                 "tools/call" => this.handle_tools_call(req).await,
                 "resources/list" => this.handle_resources_list(req).await,
                 "resources/read" => this.handle_resources_read(req).await,
+                "resources/templates/list" => this.handle_resources_templates_list(req).await,
                 "prompts/list" => this.handle_prompts_list(req).await,
                 "prompts/get" => this.handle_prompts_get(req).await,
                 _ => {

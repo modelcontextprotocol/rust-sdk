@@ -2,8 +2,8 @@
 use crate::{
     content::Content,
     prompt::{Prompt, PromptMessage},
-    resource::Resource,
     resource::ResourceContents,
+    resource::{Resource, ResourceTemplate},
     tool::Tool,
 };
 use serde::{Deserialize, Serialize};
@@ -185,6 +185,7 @@ pub struct PromptsCapability {
 pub struct ResourcesCapability {
     pub subscribe: Option<bool>,
     pub list_changed: Option<bool>,
+    pub templates: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -204,6 +205,12 @@ pub struct ListResourcesResult {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ReadResourceResult {
     pub contents: Vec<ResourceContents>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListResourceTemplatesResult {
+    pub resource_templates: Vec<ResourceTemplate>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
