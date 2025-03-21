@@ -1,5 +1,5 @@
 use mcp_core::protocol::{
-    CallToolResult, GetPromptResult, Implementation, InitializeResult, JsonRpcError,
+    CallToolResult, EmptyResult, GetPromptResult, Implementation, InitializeResult, JsonRpcError,
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, ListPromptsResult,
     ListResourcesResult, ListToolsResult, ReadResourceResult, ServerCapabilities, METHOD_NOT_FOUND,
 };
@@ -97,6 +97,8 @@ pub trait McpClientTrait: Send + Sync {
     async fn list_prompts(&self, next_cursor: Option<String>) -> Result<ListPromptsResult, Error>;
 
     async fn get_prompt(&self, name: &str, arguments: Value) -> Result<GetPromptResult, Error>;
+
+    async fn ping(&self) -> Result<EmptyResult, Error>;
 }
 
 /// The MCP client is the interface for MCP operations.
@@ -387,5 +389,11 @@ where
         let params = serde_json::json!({ "name": name, "arguments": arguments });
 
         self.send_request("prompts/get", params).await
+    }
+
+    async fn ping(&self) -> Result<EmptyResult, Error> {
+        let params = serde_json::json!({});
+
+        self.send_request("ping", params).await
     }
 }
