@@ -52,19 +52,35 @@ async fn main() -> Result<()> {
     // Call tool
     let tool_result = client
         .call_tool(
-            "echo_tool",
+            "increment",
             serde_json::json!({ "message": "Client with SSE transport - calling a tool" }),
         )
         .await?;
-    println!("Tool result: {tool_result:?}\n");
+    println!("'increment': Tool result: {tool_result:?}\n");
+
+    let tool_result = client
+        .call_tool(
+            "decrement",
+            serde_json::json!({ "message": "Client with SSE transport - calling a tool" }),
+        )
+        .await?;
+    println!("'decrement': Tool result: {tool_result:?}\n");
+
+    let tool_result = client
+        .call_tool(
+            "get_value",
+            serde_json::json!({ "message": "Client with SSE transport - calling a tool" }),
+        )
+        .await?;
+    println!("'get_value': Tool result: {tool_result:?}\n");
 
     // List resources
-    let resources = client.list_resources(None).await?;
-    println!("Resources: {resources:?}\n");
+    // let resources = client.list_resources(None).await?;
+    // println!("Resources: {resources:?}\n");
 
     // Read resource
-    let resource = client.read_resource("echo://fixedresource").await?;
-    println!("Resource: {resource:?}\n");
+    // let resource = client.read_resource("echo://fixedresource").await?;
+    // println!("Resource: {resource:?}\n");
 
     Ok(())
 }
