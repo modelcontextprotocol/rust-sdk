@@ -2,7 +2,7 @@ use anyhow::Result;
 use mcp_client::client::{ClientCapabilities, ClientInfo, McpClient, McpClientTrait};
 use mcp_client::transport::{SseTransport, Transport};
 use mcp_client::McpService;
-use std::collections::HashMap;
+use reqwest::header::{self, HeaderMap};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -17,8 +17,14 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::AUTHORIZATION,
+        header::HeaderValue::from_str(&format!("Bearer MY_API_KEY"))?,
+    );
+
     // Create the base transport
-    let transport = SseTransport::new("http://localhost:8000/sse", HashMap::new());
+    let transport = SseTransport::new_with_headers("http://localhost:8000/sse", headers);
 
     // Start transport
     let handle = transport.start().await?;

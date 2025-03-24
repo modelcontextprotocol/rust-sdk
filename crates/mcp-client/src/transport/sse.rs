@@ -3,8 +3,7 @@ use async_trait::async_trait;
 use eventsource_client::{Client, SSE};
 use futures::TryStreamExt;
 use mcp_core::protocol::{JsonRpcMessage, JsonRpcRequest};
-use reqwest::Client as HttpClient;
-use std::collections::HashMap;
+use reqwest::{header::HeaderMap, Client as HttpClient};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{timeout, Duration};
@@ -30,6 +29,8 @@ pub struct SseActor {
     http_client: HttpClient,
     /// The discovered endpoint for POST requests (once "endpoint" SSE event arrives)
     post_endpoint: Arc<RwLock<Option<String>>>,
+    /// Headers to include in HTTP POST requests
+    headers: Arc<HeaderMap>,
 }
 
 impl SseActor {
@@ -38,6 +39,7 @@ impl SseActor {
         pending_requests: Arc<PendingRequests>,
         sse_url: String,
         post_endpoint: Arc<RwLock<Option<String>>>,
+        headers: HeaderMap,
     ) -> Self {
         Self {
             receiver,
@@ -45,6 +47,7 @@ impl SseActor {
             sse_url,
             post_endpoint,
             http_client: HttpClient::new(),
+            headers: Arc::new(headers),
         }
     }
 
@@ -56,7 +59,8 @@ impl SseActor {
             Self::handle_incoming_messages(
                 self.sse_url.clone(),
                 Arc::clone(&self.pending_requests),
-                Arc::clone(&self.post_endpoint)
+                Arc::clone(&self.post_endpoint),
+                Arc::clone(&self.headers),
             ),
             Self::handle_outgoing_messages(
                 self.receiver,
@@ -67,6 +71,18 @@ impl SseActor {
         );
     }
 
+    fn build_client(
+        sse_url: &str,
+        headers: Arc<HeaderMap>,
+    ) -> Result<impl Client, eventsource_client::Error> {
+        let mut client_builder = eventsource_client::ClientBuilder::for_url(sse_url)?;
+        for (name, value) in headers.iter() {
+            client_builder = client_builder.header(name.as_str(), value.to_str().unwrap())?;
+        }
+        let client = client_builder.build();
+        Ok(client)
+    }
+
     /// Continuously reads SSE events from `sse_url`.
     /// - If an `endpoint` event is received, store it in `post_endpoint`.
     /// - If a `message` event is received, parse it as `JsonRpcMessage`
@@ -75,9 +91,10 @@ impl SseActor {
         sse_url: String,
         pending_requests: Arc<PendingRequests>,
         post_endpoint: Arc<RwLock<Option<String>>>,
+        headers: Arc<HeaderMap>,
     ) {
-        let client = match eventsource_client::ClientBuilder::for_url(&sse_url) {
-            Ok(builder) => builder.build(),
+        let client = match Self::build_client(&sse_url, headers) {
+            Ok(client) => client,
             Err(e) => {
                 pending_requests.clear().await;
                 warn!("Failed to connect SSE client: {}", e);
@@ -230,15 +247,20 @@ impl TransportHandle for SseTransportHandle {
 #[derive(Clone)]
 pub struct SseTransport {
     sse_url: String,
-    env: HashMap<String, String>,
+    headers: HeaderMap,
 }
 
 /// The SSE transport spawns an `SseActor` on `start()`.
 impl SseTransport {
-    pub fn new<S: Into<String>>(sse_url: S, env: HashMap<String, String>) -> Self {
+    pub fn new<S: Into<String>>(sse_url: S) -> Self {
+        Self::new_with_headers(sse_url, HeaderMap::new())
+    }
+
+    /// Create a new SSE transport with custom headers
+    pub fn new_with_headers<S: Into<String>>(sse_url: S, headers: HeaderMap) -> Self {
         Self {
             sse_url: sse_url.into(),
-            env,
+            headers,
         }
     }
 
@@ -267,11 +289,6 @@ impl Transport for SseTransport {
     type Handle = SseTransportHandle;
 
     async fn start(&self) -> Result<Self::Handle, Error> {
-        // Set environment variables
-        for (key, value) in &self.env {
-            std::env::set_var(key, value);
-        }
-
         // Create a channel for outgoing TransportMessages
         let (tx, rx) = mpsc::channel(32);
 
@@ -284,6 +301,7 @@ impl Transport for SseTransport {
             Arc::new(PendingRequests::new()),
             self.sse_url.clone(),
             post_endpoint,
+            self.headers.clone(),
         );
 
         // Spawn the actor task
