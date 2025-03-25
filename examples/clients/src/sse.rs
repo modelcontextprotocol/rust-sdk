@@ -1,70 +1,48 @@
 use anyhow::Result;
-use mcp_client::client::{ClientCapabilities, ClientInfo, McpClient, McpClientTrait};
-use mcp_client::transport::{SseTransport, Transport};
-use mcp_client::McpService;
-use std::collections::HashMap;
-use std::time::Duration;
-use tracing_subscriber::EnvFilter;
+use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
+use rmcp::{ServiceExt, model::CallToolRequestParam, transport::SseTransport};
+
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive("mcp_client=debug".parse().unwrap())
-                .add_directive("eventsource_client=info".parse().unwrap()),
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("info,{}=debug", env!("CARGO_CRATE_NAME")).into()),
         )
+        .with(tracing_subscriber::fmt::layer())
         .init();
-
-    // Create the base transport
-    let transport = SseTransport::new("http://localhost:8000/sse", HashMap::new());
-
-    // Start transport
-    let handle = transport.start().await?;
-
-    // Create the service with timeout middleware
-    let service = McpService::with_timeout(handle, Duration::from_secs(3));
-
-    // Create client
-    let mut client = McpClient::new(service);
-    println!("Client created\n");
+    let transport = SseTransport::start("http://localhost:8000/sse").await?;
+    let client_info = ClientInfo {
+        protocol_version: Default::default(),
+        capabilities: ClientCapabilities::default(),
+        client_info: Implementation {
+            name: "test sse client".to_string(),
+            version: "0.0.1".to_string(),
+        },
+    };
+    let client = client_info.serve(transport).await.inspect_err(|e| {
+        tracing::error!("client error: {:?}", e);
+    })?;
 
     // Initialize
-    let server_info = client
-        .initialize(
-            ClientInfo {
-                name: "test-client".into(),
-                version: "1.0.0".into(),
-            },
-            ClientCapabilities::default(),
-        )
-        .await?;
-    println!("Connected to server: {server_info:?}\n");
-
-    // Sleep for 100ms to allow the server to start - surprisingly this is required!
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let server_info = client.peer_info();
+    tracing::info!("Connected to server: {server_info:#?}");
 
     // List tools
-    let tools = client.list_tools(None).await?;
-    println!("Available tools: {tools:?}\n");
+    let tools = client.list_tools(Default::default()).await?;
+    tracing::info!("Available tools: {tools:#?}");
 
-    // Call tool
     let tool_result = client
-        .call_tool(
-            "echo_tool",
-            serde_json::json!({ "message": "Client with SSE transport - calling a tool" }),
-        )
+        .call_tool(CallToolRequestParam {
+            name: "increment".into(),
+            arguments: serde_json::json!({}).as_object().cloned(),
+        })
         .await?;
-    println!("Tool result: {tool_result:?}\n");
-
-    // List resources
-    let resources = client.list_resources(None).await?;
-    println!("Resources: {resources:?}\n");
-
-    // Read resource
-    let resource = client.read_resource("echo://fixedresource").await?;
-    println!("Resource: {resource:?}\n");
-
+    tracing::info!("Tool result: {tool_result:#?}");
+    client.cancel().await?;
     Ok(())
 }

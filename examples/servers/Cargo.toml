@@ -1,30 +1,35 @@
 [package]
 name = "mcp-server-examples"
-version = "0.1.0"
-edition = "2021"
+version = "0.1.5"
+edition = "2024"
 publish = false
 
 [dependencies]
-mcp-server = { path = "../../crates/mcp-server" }
-mcp-core = { path = "../../crates/mcp-core" }
-mcp-macros = { path = "../../crates/mcp-macros" }
-tokio = { version = "1", features = ["full"] }
+rmcp= { path = "../../crates/rmcp", features = ["server", "transport-sse-server", "transport-io"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "signal"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "std",
+    "fmt",
+] }
 futures = "0.3"
+rand = { version = "0.9" }
+axum = { version = "0.8", features = ["macros"] }
+schemars = { version = "0.8", optional = true }
+# [dev-dependencies.'cfg(target_arch="linux")'.dependencies]
 
 [dev-dependencies]
-axum = { version = "0.8", features = ["macros"] }
-tokio-util = { version = "0.7", features = ["io", "codec"]}
-rand = { version = "0.8" }
+tokio-stream = { version = "0.1" }
+# tokio-util = { version = "0.7", features = ["io", "codec"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 
 [[example]]
-name = "counter-server"
-path = "src/counter_server.rs"
+name = "std_io"
+path = "src/std_io.rs"
 
 [[example]]
 name = "axum"

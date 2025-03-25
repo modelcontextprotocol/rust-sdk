@@ -1,0 +1,10 @@
+deepseek_key = ""
+cohere_key = ""
+
+[mcp]
+
+[[mcp.server]]
+name = "git"
+protocol = "stdio"
+command = "uvx"
+args = ["mcp-server-git"]

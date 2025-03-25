@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,10 +15,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
+      # install nodejs
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '20'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
+      - name: Set up Python
+        run: uv python install
+      - name: Create venv for python
+        run: uv venv
       - name: Cache dependencies
         uses: actions/cache@v3
         with:

@@ -1,84 +1,31 @@
-# Model Context Protocol Examples
+# Client Examples
 
-This directory contains examples demonstrating how to use the Model Context Protocol (MCP) Rust SDK.
+- [Client SSE](clients/src/sse.rs), using reqwest and eventsource-client.
+- [Client stdio](clients/src/std_io.rs), using tokio to spawn child process.
+- [Everything](clients/src/everything_stdio.rs), test with `@modelcontextprotocol/server-everything`
+- [Collection](clients/src/collection.rs), How to transpose service into dynamic object, so they will have a same type.
 
-## Structure
+# Server Examples
 
-- `clients/`: Examples of MCP clients
-- `servers/`: Examples of MCP servers
-- `macros/`: Examples of MCP macros
+- [Server SSE](servers/src/axum.rs), using axum as web server. 
+- [Server stdio](servers/src/std_io.rs), using tokio async io. 
 
-## Running Client Examples
 
-The client examples demonstrate different ways to connect to MCP servers.
+# Transport Examples
 
-### Available Examples
+- [Tcp](transport/src/tcp.rs)
+- [Transport on http upgrade](transport/src/http_upgrade.rs)
+- [Unix Socket](transport/src/unix_socket.rs)
+- [Websocket](transport/src/websocket.rs)
 
-You can run the examples in two ways:
 
-#### Option 1: From the examples/clients directory
+# Intergration
+- [Rig](examples/rig-integration) A stream chatbot with rig
 
-```bash
-cd examples/clients
-cargo run --example clients
-cargo run --example sse
-cargo run --example stdio
-cargo run --example stdio_integration
+# WASI
+- [WASI-P2 runtime](examples/wasi) How it works with wasip2
+
+## Use Mcp Inspector
+```sh
+npx @modelcontextprotocol/inspector
 ```
-
-#### Option 2: From the root directory
-
-```bash
-cargo run -p mcp-client-examples --example clients
-cargo run -p mcp-client-examples --example sse
-cargo run -p mcp-client-examples --example stdio
-cargo run -p mcp-client-examples --example stdio_integration
-```
-
-## Running Server Examples
-
-The server examples demonstrate how to implement MCP servers.
-
-### Available Examples
-
-You can run the server examples in two ways:
-
-#### Option 1: From the examples/servers directory
-
-```bash
-cd examples/servers
-cargo run --example counter-server
-```
-
-#### Option 2: From the root directory
-
-```bash
-cargo run -p mcp-server-examples --example counter-server
-```
-
-## Running Macros Examples
-
-The macros examples demonstrate how to use the MCP macros to create tools.
-
-### Available Examples
-
-You can run the macros examples in two ways:
-
-#### Option 1: From the examples/macros directory
-
-```bash
-cd examples/macros
-cargo run --example calculator
-```
-
-#### Option 2: From the root directory
-
-```bash
-cargo run -p mcp-macros-examples --example calculator
-```
-
-## Notes
-
-- Some examples may require additional setup or running both client and server components.
-- The server examples use standard I/O for communication, so they can be connected to client examples using stdio transport.
-- For SSE examples, you may need to run a separate SSE server or use a compatible MCP server implementation.
