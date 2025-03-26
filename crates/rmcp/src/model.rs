@@ -1,12 +1,12 @@
 use std::{borrow::Cow, sync::Arc};
-mod annotaded;
+mod annotated;
 mod capabilities;
 mod content;
 mod prompt;
 mod resource;
 mod tool;
 
-pub use annotaded::*;
+pub use annotated::*;
 pub use capabilities::*;
 pub use content::*;
 pub use prompt::*;
