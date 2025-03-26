@@ -4,16 +4,10 @@
 
 # RMCP
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
-![Release status](https://github.com/4t145/rmcp/actions/workflows/release.yml/badge.svg)
+![Release status](https://github.commodelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
 
 A better and clean rust Model Context Protocol SDK implementation with tokio async runtime.
-
-## Comparing to official SDK
-
-The [Official SDK](https://github.com/modelcontextprotocol/rust-sdk/pulls) has too much limit and it was originally built for [goose](https://github.com/block/goose) rather than general using purpose.
-
-All the features listed on specification would be implemented in this crate. And the first and most important thing is, this crate has the correct and intact data [types](crates/rmcp/src/model.rs). See it yourself. 
 
 ## Usage
 
@@ -21,7 +15,7 @@ All the features listed on specification would be implemented in this crate. And
 ```toml
 rmcp = { version = "0.1", features = ["server"] }
 ## or dev channel
-rmcp = { git = "https://github.com/4t145/rmcp", branch = "dev" }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "dev" }
 ```
 
 ### Quick start

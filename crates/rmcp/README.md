@@ -1,6 +1,6 @@
 # RMCP
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
-![Release status](https://github.com/4t145/rmcp/actions/workflows/release.yml/badge.svg)
+![Release status](https://github.commodelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
 
 A better and clean rust Model Context Protocol SDK implementation with tokio async runtime.
@@ -69,7 +69,7 @@ let service = common::counter::Counter::new();
 
 Or if you want to use `tower`, you can [`TowerHandler`] as a adapter.
 
-You can reference the [server examples](https://github.com/4t145/rmcp/tree/release/examples/servers).
+You can reference the [server examples](https://github.commodelcontextprotocol/rust-sdk/tree/release/examples/servers).
 
 #### 3. Serve them together
 ```rust, ignore
@@ -98,7 +98,7 @@ let quit_reason = server.cancel().await?;
 ### Use marcos to declaring tool
 Use `toolbox` and `tool` macros to create tool quickly.
 
-Check this [file](https://github.com/4t145/rmcp/tree/release/examples/servers/src/common/calculator.rs).
+Check this [file](https://github.commodelcontextprotocol/rust-sdk/tree/release/examples/servers/src/common/calculator.rs).
 ```rust, ignore
 use rmcp::{ServerHandler, model::ServerInfo, schemars, tool};
 
@@ -165,7 +165,7 @@ let service = service.into_dyn();
 
 
 ### Examples
-See [examples](https://github.com/4t145/rmcp/tree/release/examples/README.md)
+See [examples](https://github.commodelcontextprotocol/rust-sdk/tree/release/examples/README.md)
 
 ### Features
 - `client`: use client side sdk

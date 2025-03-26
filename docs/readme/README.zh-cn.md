@@ -1,15 +1,9 @@
 # RMCP
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
-![Release status](https://github.com/4t145/rmcp/actions/workflows/release.yml/badge.svg)
+![Release status](https://github.commodelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
 
 一个干净且完整的 MCP SDK
-
-## 与官方SDK相比
-
-[官方库](https://github.com/modelcontextprotocol/rust-sdk/pulls) 功能有限且原先为 [goose](https://github.com/block/goose) 而打造，并非通用。
-
-不同的是，这个库为通用性而打造，并且实现所有Specification的要求. 并且最重要的是，我们有正确的 [数据类型](crates/rmcp/src/model.rs). 请您过目。
 
 ## 使用
 
@@ -17,7 +11,7 @@
 ```toml
 rmcp = { version = "0.1", features = ["server"] }
 ## 或者开发者频道
-rmcp = { git = "https://github.com/4t145/rmcp", branch = "dev" }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "dev" }
 ```
 
 ### 快速上手
