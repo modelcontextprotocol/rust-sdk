@@ -4,7 +4,7 @@ members = [
     "examples/clients",
     "examples/servers",
     "examples/macros"
-]
+, "shiitake_uranai_mcp"]
 resolver = "2"
 
 [workspace.dependencies]
