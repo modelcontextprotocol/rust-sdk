@@ -7,7 +7,7 @@
 ![Release status](https://github.commodelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
 
-A better and clean rust Model Context Protocol SDK implementation with tokio async runtime.
+An official rust Model Context Protocol SDK implementation with tokio async runtime.
 
 ## Usage
 
