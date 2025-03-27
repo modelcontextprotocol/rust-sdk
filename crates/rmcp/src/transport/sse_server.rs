@@ -29,7 +29,7 @@ pub type TransportReceiver = ReceiverStream<RxJsonRpcMessage<RoleServer>>;
 #[derive(Clone)]
 struct App {
     txs: TxStore,
-    tranport_tx: tokio::sync::mpsc::UnboundedSender<SseServerTransport>,
+    transport_tx: tokio::sync::mpsc::UnboundedSender<SseServerTransport>,
     post_path: Arc<str>,
 }
 
@@ -40,11 +40,11 @@ impl App {
         Self,
         tokio::sync::mpsc::UnboundedReceiver<SseServerTransport>,
     ) {
-        let (tranport_tx, tranport_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (transport_tx, tranport_rx) = tokio::sync::mpsc::unbounded_channel();
         (
             Self {
                 txs: Default::default(),
-                tranport_tx,
+                transport_tx,
                 post_path: post_path.into(),
             },
             tranport_rx,
@@ -104,7 +104,7 @@ async fn sse_handler(
         session_id: session.clone(),
         tx_store: app.txs.clone(),
     };
-    let transport_send_result = app.tranport_tx.send(transport);
+    let transport_send_result = app.transport_tx.send(transport);
     if transport_send_result.is_err() {
         tracing::warn!("send transport out error");
         let mut response =

@@ -42,14 +42,14 @@ enum SseTransportState {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct SseTransportRetryCofnig {
+pub struct SseTransportRetryConfig {
     pub max_times: Option<usize>,
     pub min_duration: Duration,
 }
-impl SseTransportRetryCofnig {
+impl SseTransportRetryConfig {
     pub const DEFAULT_MIN_DURATION: Duration = Duration::from_millis(1000);
 }
-impl Default for SseTransportRetryCofnig {
+impl Default for SseTransportRetryConfig {
     fn default() -> Self {
         Self {
             max_times: None,
@@ -69,10 +69,10 @@ pub struct SseTransport {
     post_url: Arc<Url>,
     sse_url: Arc<Url>,
     last_event_id: Option<String>,
-    recommanded_retry_duration_ms: Option<u64>,
+    recommended_retry_duration_ms: Option<u64>,
     #[allow(clippy::type_complexity)]
     request_queue: VecDeque<tokio::sync::oneshot::Receiver<Result<(), SseTransportError>>>,
-    pub retry_config: SseTransportRetryCofnig,
+    pub retry_config: SseTransportRetryConfig,
 }
 
 impl SseTransport {
@@ -140,7 +140,7 @@ impl SseTransport {
             state: SseTransportState::Connected(Box::pin(event_stream)),
             post_url: Arc::from(post_url),
             last_event_id,
-            recommanded_retry_duration_ms: retry,
+            recommended_retry_duration_ms: retry,
             sse_url: Arc::from(url),
             request_queue: Default::default(),
             retry_config: Default::default(),
@@ -152,11 +152,11 @@ impl SseTransport {
     ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError>>
     {
         let retry_duration = {
-            let recommanded_retry_duration = self
-                .recommanded_retry_duration_ms
+            let recommended_retry_duration = self
+                .recommended_retry_duration_ms
                 .map(Duration::from_millis);
             let config_retry_duration = self.retry_config.min_duration;
-            recommanded_retry_duration
+            recommended_retry_duration
                 .map(|d| d.max(config_retry_duration))
                 .unwrap_or(config_retry_duration)
         };
@@ -203,7 +203,7 @@ impl Stream for SseTransport {
                 match event {
                     Some(Ok(event)) => {
                         if let Some(retry) = event.retry {
-                            self.recommanded_retry_duration_ms = Some(retry);
+                            self.recommended_retry_duration_ms = Some(retry);
                         }
                         if let Some(id) = event.id {
                             self.last_event_id = Some(id);
