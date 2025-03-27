@@ -15,7 +15,7 @@ An official rust Model Context Protocol SDK implementation with tokio async runt
 ```toml
 rmcp = { version = "0.1", features = ["server"] }
 ## or dev channel
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "dev" }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
 
 ### Quick start

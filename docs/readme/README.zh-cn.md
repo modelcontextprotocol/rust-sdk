@@ -11,7 +11,7 @@
 ```toml
 rmcp = { version = "0.1", features = ["server"] }
 ## 或者开发者频道
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "dev" }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
 
 ### 快速上手
