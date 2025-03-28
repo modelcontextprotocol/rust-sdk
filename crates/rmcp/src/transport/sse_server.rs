@@ -237,6 +237,8 @@ impl SseServer {
         Ok(sse_server)
     }
 
+    /// Warning: This function creates a new SseServer instance with the provided configuration.
+    /// `App.post_path` may be incorrect if using `Router` as an embedded router.
     pub fn new(config: SseServerConfig) -> (SseServer, Router) {
         let (app, transport_rx) = App::new(config.post_path.clone());
         let router = Router::new()
