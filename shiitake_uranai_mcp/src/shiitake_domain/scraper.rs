@@ -8,13 +8,10 @@ fn get_latest_monday_date() -> String {
     let utc = Utc::now().naive_utc();
     let jst_now = Tokyo.from_utc_datetime(&utc);
     let weekday = jst_now.weekday().num_days_from_monday();
-    let days_to_subtract = match weekday {
-        0 => 0,
-        _ => weekday,
-    };
+    let days_to_subtract = if weekday == 0 { 0 } else { weekday };
     let last_monday = jst_now.date_naive() - Duration::days(days_to_subtract as i64);
     let formatted_date = last_monday.format("%Y-%m-%d").to_string();
-    return formatted_date;
+    formatted_date
 }
 
 pub async fn scrape(constellation: String) -> Result<String, Box<dyn std::error::Error>> {
