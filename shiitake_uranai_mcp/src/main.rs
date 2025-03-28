@@ -1,6 +1,7 @@
 use anyhow::Result;
 use mcp_server::router::RouterService;
 use mcp_server::{ByteTransport, Server};
+use std::env;
 use tokio::io::{stdin, stdout};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{self, EnvFilter};
@@ -25,9 +26,14 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting MCP server");
 
+    let constellation = env::var("CONSTELLATION").map_err(|_| {
+        tracing::error!("CONSTELLATION environment variable not set");
+        anyhow::anyhow!("CONSTELLATION environment variable is required")
+    })?;
+
     // Create an instance of our counter router
     let router = RouterService(
-        server::shiitake_uranai_mcp_server::ShiitakeUranaiRouter::new("sagittarius".to_string()),
+        server::shiitake_uranai_mcp_server::ShiitakeUranaiRouter::new(constellation.to_string()),
     );
 
     // Create and run the server
