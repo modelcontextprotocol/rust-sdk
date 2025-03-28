@@ -4,7 +4,6 @@ use rmcp::{
     Error as McpError, RoleServer, ServerHandler, const_string, model::*, schemars,
     service::RequestContext, tool,
 };
-
 use serde_json::json;
 use tokio::sync::Mutex;
 

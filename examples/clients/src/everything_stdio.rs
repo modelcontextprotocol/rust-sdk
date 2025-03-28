@@ -5,10 +5,8 @@ use rmcp::{
     object,
     transport::TokioChildProcess,
 };
-
 use tokio::process::Command;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {

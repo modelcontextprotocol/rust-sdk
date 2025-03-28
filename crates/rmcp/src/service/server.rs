@@ -1,3 +1,6 @@
+use futures::{SinkExt, StreamExt};
+
+use super::*;
 use crate::model::{
     CancelledNotification, CancelledNotificationParam, ClientInfo, ClientNotification,
     ClientRequest, ClientResult, CreateMessageRequest, CreateMessageRequestParam,
@@ -7,9 +10,6 @@ use crate::model::{
     ResourceUpdatedNotificationParam, ServerInfo, ServerMessage, ServerNotification, ServerRequest,
     ServerResult, ToolListChangedNotification,
 };
-
-use super::*;
-use futures::{SinkExt, StreamExt};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoleServer;

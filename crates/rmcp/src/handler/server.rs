@@ -1,6 +1,8 @@
-use crate::error::Error as McpError;
-use crate::model::*;
-use crate::service::{Peer, RequestContext, RoleServer, Service, ServiceRole};
+use crate::{
+    error::Error as McpError,
+    model::*,
+    service::{Peer, RequestContext, RoleServer, Service, ServiceRole},
+};
 
 mod resource;
 pub mod tool;

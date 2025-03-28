@@ -1,10 +1,13 @@
-use crate::error::Error as McpError;
-use crate::model::{
-    CancelledNotification, CancelledNotificationParam, JsonRpcMessage, Message, RequestId,
-};
-use crate::transport::IntoTransport;
 use futures::future::BoxFuture;
 use thiserror::Error;
+
+use crate::{
+    error::Error as McpError,
+    model::{
+        CancelledNotification, CancelledNotificationParam, JsonRpcMessage, Message, RequestId,
+    },
+    transport::IntoTransport,
+};
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "client")]
@@ -15,10 +18,9 @@ mod server;
 pub use server::*;
 #[cfg(feature = "tower")]
 mod tower;
+use tokio_util::sync::CancellationToken;
 #[cfg(feature = "tower")]
 pub use tower::*;
-
-use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -189,11 +191,12 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
 }
 
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    sync::{Arc, atomic::AtomicU32},
+    time::Duration,
+};
 
 use tokio::sync::mpsc;
 

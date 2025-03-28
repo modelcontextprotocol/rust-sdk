@@ -1,10 +1,10 @@
 //! Content sent around agents, extensions, and LLMs
 //! The various content types can be display to humans but also understood by models
 //! They include optional annotations used to help inform agent usage
-use super::resource::ResourceContents;
-use super::{AnnotateAble, Annotated};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+use super::{AnnotateAble, Annotated, resource::ResourceContents};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
