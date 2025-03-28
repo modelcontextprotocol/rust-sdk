@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, release ]
+    tags:
+      - 'release-*'
+  pull_request:
+    branches: [ main, release ]
+
+env:
+  CARGO_TERM_COLOR: always
+  ARTIFACT_DIR: release-artifacts
+
+jobs:
+  commit-lint:
+    name: Lint Commit Messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          
+      - name: Install commitlint
+        run: |
+          npm install --save-dev @commitlint/cli @commitlint/config-conventional
+          echo "module.exports = {extends: ['@commitlint/config-conventional']}" > commitlint.config.js
+          
+      - name: Lint commit messages
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+  fmt:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Lint with Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      # install nodejs
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Set up Python
+        run: uv python install
+        
+      - name: Create venv for python
+        run: uv venv
+        
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  release:
+    name: Release crates
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/release')
+    needs: [fmt, clippy, test]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cargo login
+        run: cargo login ${{ secrets.CRATES_TOKEN }}
+        
+      - name: Publish macros dry run
+        run: cargo publish -p rmcp-macros --dry-run
+        continue-on-error: true
+        
+      - name: Publish rmcp dry run
+        run: cargo publish -p rmcp --dry-run
+        continue-on-error: true
+        
+      - name: Publish macro
+        if: ${{ startsWith(github.ref, 'refs/tags/release') }}
+        continue-on-error: true 
+        run: cargo publish -p rmcp-macros
+        
+      - name: Publish rmcp
+        if: ${{ startsWith(github.ref, 'refs/tags/release') }}
+        continue-on-error: true 
+        run: cargo publish -p rmcp 
