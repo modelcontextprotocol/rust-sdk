@@ -1,8 +1,9 @@
-use super::JsonObject;
+use std::{collections::BTreeMap, marker::PhantomData};
+
 use paste::paste;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::marker::PhantomData;
+
+use super::JsonObject;
 pub type ExperimentalCapabilities = BTreeMap<String, JsonObject>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

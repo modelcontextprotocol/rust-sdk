@@ -1,15 +1,17 @@
+cargo-features = ["edition2024"]
+
 [package]
 name = "rig-integration"
-edition.workspace = true
-version.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-description.workspace = true
-keywords.workspace = true
-homepage.workspace = true
-categories.workspace = true
-readme.workspace = true
+edition = { workspace = true }
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = { workspace = true }
+keywords = { workspace = true }
+homepage = { workspace = true }
+categories = { workspace = true }
+readme = { workspace = true }
 
 [dependencies]
 rig-core = "0.10.0"

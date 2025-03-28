@@ -1,11 +1,13 @@
+cargo-features = ["edition2024"]
+
 [package]
 name = "rmcp"
-license.workspace = true
-version.workspace = true
-edition.workspace = true
-repository.workspace = true
-homepage.workspace = true
-readme.workspace = true
+license = { workspace = true }
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+readme = { workspace = true }
 description = "Rust SDK for Model Context Protocol"
 documentation = "https://docs.rs/rmcp"
 

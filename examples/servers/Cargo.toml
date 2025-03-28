@@ -1,3 +1,5 @@
+cargo-features = ["edition2024"]
+
 [package]
 name = "mcp-server-examples"
 version = "0.1.5"

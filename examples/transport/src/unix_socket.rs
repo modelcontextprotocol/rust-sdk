@@ -1,6 +1,7 @@
+use std::fs;
+
 use common::calculator::Calculator;
 use rmcp::{serve_client, serve_server};
-use std::fs;
 use tokio::net::{UnixListener, UnixStream};
 
 mod common;

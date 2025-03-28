@@ -1,13 +1,15 @@
 //！ reference: https://html.spec.whatwg.org/multipage/server-sent-events.html
-use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
+
 use futures::{FutureExt, Sink, Stream, StreamExt, future::BoxFuture, stream::BoxStream};
 use reqwest::{
     Client as HttpClient, IntoUrl, Url,
     header::{ACCEPT, HeaderValue},
 };
 use sse_stream::{Error as SseError, Sse, SseStream};
-use std::{collections::VecDeque, sync::Arc, time::Duration};
 use thiserror::Error;
+
+use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 const MIME_TYPE: &str = "text/event-stream";
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-ID";
 

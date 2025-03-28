@@ -1,11 +1,12 @@
 use std::ops::{Deref, DerefMut};
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
 use super::{
     RawContent, RawEmbeddedResource, RawImageContent, RawResource, RawResourceTemplate,
     RawTextContent, Role,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

@@ -1,0 +1,6 @@
+newline_style = "Unix"
+unstable_features = true # Cargo fmt now needs to be called with `cargo +nightly fmt`
+group_imports = "StdExternalCrate" # Create 3 groups: std, external crates, and self.
+imports_granularity = "Crate" # Merge imports from the same crate into a single use statement
+style_edition = "2024"
+max_width = 100

@@ -11,7 +11,6 @@ pub use capabilities::*;
 pub use content::*;
 pub use prompt::*;
 pub use resource::*;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use tool::*;
@@ -981,8 +980,9 @@ impl From<CancelledNotification> for ClientNotification {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn test_notification_serde() {

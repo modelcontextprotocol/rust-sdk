@@ -1,6 +1,8 @@
-use crate::error::Error as McpError;
-use crate::model::*;
-use crate::service::{Peer, RequestContext, RoleClient, Service, ServiceRole};
+use crate::{
+    error::Error as McpError,
+    model::*,
+    service::{Peer, RequestContext, RoleClient, Service, ServiceRole},
+};
 
 impl<H: ClientHandler> Service<RoleClient> for H {
     async fn handle_request(

@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rmcp::service::ServiceExt;
-use rmcp::{model::CallToolRequestParam, transport::TokioChildProcess};
-
+use rmcp::{model::CallToolRequestParam, service::ServiceExt, transport::TokioChildProcess};
 use tokio::process::Command;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
