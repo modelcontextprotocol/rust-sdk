@@ -54,7 +54,6 @@ pub async fn scrape(constellation: String) -> Result<String, Box<dyn std::error:
     .unwrap();
     for element in document.select(&selector1) {
         fortune_text.push_str(&element.text().collect::<Vec<_>>().join(""));
-        fortune_text.push_str("\n\n"); // セクション間に空行を追加
     }
 
     // 二番目のセクションの文章を取得
@@ -62,9 +61,6 @@ pub async fn scrape(constellation: String) -> Result<String, Box<dyn std::error:
     for element in document.select(&selector2) {
         fortune_text.push_str(&element.text().collect::<Vec<_>>().join(""));
     }
-
-    // 結合したテキストを表示
-    println!("{}", fortune_text);
 
     // 結合したテキストを返す関数を作成
     Ok(fortune_text)
