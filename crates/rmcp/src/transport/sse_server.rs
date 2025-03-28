@@ -219,9 +219,9 @@ impl SseServer {
         .await
     }
     pub async fn serve_with_config(config: SseServerConfig) -> io::Result<Self> {
-        let (sse_server, service) = Self::new(&config);
-        let listener = tokio::net::TcpListener::bind(config.bind).await?;
-        let ct = config.ct.child_token();
+        let (sse_server, service) = Self::new(config);
+        let listener = tokio::net::TcpListener::bind(sse_server.config.bind).await?;
+        let ct = sse_server.config.ct.child_token();
         let server = axum::serve(listener, service).with_graceful_shutdown(async move {
             ct.cancelled().await;
             tracing::info!("sse server cancelled");
@@ -232,12 +232,12 @@ impl SseServer {
                     tracing::error!(error = %e, "sse server shutdown with error");
                 }
             }
-            .instrument(tracing::info_span!("sse-server", bind_address = %config.bind)),
+            .instrument(tracing::info_span!("sse-server", bind_address = %sse_server.config.bind)),
         );
         Ok(sse_server)
     }
 
-    pub fn new(config: &SseServerConfig) -> (SseServer, Router) {
+    pub fn new(config: SseServerConfig) -> (SseServer, Router) {
         let (app, transport_rx) = App::new(config.post_path.clone());
         let router = Router::new()
             .route(&config.sse_path, get(sse_handler))
@@ -246,7 +246,7 @@ impl SseServer {
 
         let server = SseServer {
             transport_rx,
-            config: config.clone(),
+            config,
         };
 
         (server, router)

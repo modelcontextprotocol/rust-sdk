@@ -24,14 +24,16 @@ async fn main() -> anyhow::Result<()> {
         ct: tokio_util::sync::CancellationToken::new(),
     };
 
-    let (sse_server, router) = SseServer::new(&config);
+    let (sse_server, router) = SseServer::new(config);
 
     // Do something with the router, e.g., add routes or middleware
 
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
+    let listener = tokio::net::TcpListener::bind(sse_server.config.bind).await?;
+
+    let ct = sse_server.config.ct.child_token();
 
     let server = axum::serve(listener, router).with_graceful_shutdown(async move {
-        config.ct.cancelled().await;
+        ct.cancelled().await;
         tracing::info!("sse server cancelled");
     });
 
