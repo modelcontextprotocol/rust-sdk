@@ -76,6 +76,8 @@ pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging: Option<JsonObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub completions: Option<JsonObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompts: Option<PromptsCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<ResourcesCapability>,
@@ -192,14 +194,15 @@ builder! {
     ServerCapabilities {
         experimental: ExperimentalCapabilities,
         logging: JsonObject,
+        completions: JsonObject,
         prompts: PromptsCapability,
         resources: ResourcesCapability,
         tools: ToolsCapability
     }
 }
 
-impl<const E: bool, const L: bool, const P: bool, const R: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, P, R, true>>
+impl<const E: bool, const L: bool, const C: bool, const P: bool, const R: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, R, true>>
 {
     pub fn enable_tool_list_changed(mut self) -> Self {
         if let Some(c) = self.tools.as_mut() {
@@ -209,8 +212,8 @@ impl<const E: bool, const L: bool, const P: bool, const R: bool>
     }
 }
 
-impl<const E: bool, const L: bool, const R: bool, const T: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, true, R, T>>
+impl<const E: bool, const L: bool, const C: bool, const R: bool, const T: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, true, R, T>>
 {
     pub fn enable_prompts_list_changed(mut self) -> Self {
         if let Some(c) = self.prompts.as_mut() {
@@ -220,8 +223,8 @@ impl<const E: bool, const L: bool, const R: bool, const T: bool>
     }
 }
 
-impl<const E: bool, const L: bool, const P: bool, const T: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, P, true, T>>
+impl<const E: bool, const L: bool, const C: bool, const P: bool, const T: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, true, T>>
 {
     pub fn enable_resources_list_changed(mut self) -> Self {
         if let Some(c) = self.resources.as_mut() {

@@ -6,9 +6,10 @@ use crate::model::{
     ClientRequest, ClientResult, CreateMessageRequest, CreateMessageRequestParam,
     CreateMessageResult, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
     LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
-    PromptListChangedNotification, ResourceListChangedNotification, ResourceUpdatedNotification,
-    ResourceUpdatedNotificationParam, ServerInfo, ServerMessage, ServerNotification, ServerRequest,
-    ServerResult, ToolListChangedNotification,
+    PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
+    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo,
+    ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult,
+    ToolListChangedNotification,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -69,7 +70,6 @@ where
     let mut sink = Box::pin(sink);
     let mut stream = Box::pin(stream);
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
-
     // service
     let (request, id) = stream
         .next()
@@ -78,7 +78,6 @@ where
             std::io::ErrorKind::UnexpectedEof,
             "expect initialize request",
         ))?
-        .into_message()
         .into_request()
         .ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -91,11 +90,23 @@ where
         )
         .into());
     };
-    let init_response = service.get_info();
-    sink.send(
-        ServerMessage::Response(ServerResult::InitializeResult(init_response), id)
-            .into_json_rpc_message(),
-    )
+    let mut init_response = service.get_info();
+    let protocol_version = match peer_info
+        .params
+        .protocol_version
+        .partial_cmp(&init_response.protocol_version)
+        .ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unsupported protocol version",
+        ))? {
+        std::cmp::Ordering::Less => peer_info.params.protocol_version.clone(),
+        _ => init_response.protocol_version,
+    };
+    init_response.protocol_version = protocol_version;
+    sink.send(ServerJsonRpcMessage::response(
+        ServerResult::InitializeResult(init_response),
+        id,
+    ))
     .await?;
     // waiting for notification
     let notification = stream
@@ -105,7 +116,6 @@ where
             std::io::ErrorKind::UnexpectedEof,
             "expect initialize notification",
         ))?
-        .into_message()
         .into_notification()
         .ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidData,

@@ -349,6 +349,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                     name: #name.into(),
                     description: #description.into(),
                     input_schema: #schema.into(),
+                    annotations: None
                 }
             }
         }
@@ -383,8 +384,8 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
         // for receiver type, name it as __rmcp_tool_receiver
         let is_async = input_fn.sig.asyncness.is_some();
         let receiver_ident = || Ident::new("__rmcp_tool_receiver", proc_macro2::Span::call_site());
-        // generate the extraction part for trival args
-        let trival_args = input_fn
+        // generate the extraction part for trivial args
+        let trivial_args = input_fn
             .sig
             .inputs
             .iter()
@@ -413,10 +414,10 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                     Some(line)
                 }
             });
-        let trival_argrextraction_part = quote! {
-            #(#trival_args)*
+        let trivial_arg_extraction_part = quote! {
+            #(#trivial_args)*
         };
-        let processed_argrextraction_part = match &mut tool_macro_attrs.params {
+        let processed_arg_extraction_part = match &mut tool_macro_attrs.params {
             ToolParams::Aggregated { rust_type } => {
                 let PatType { pat, ty, .. } = rust_type;
                 quote! {
@@ -441,7 +442,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             }
         };
         // generate the execution part
-        // has reveiver?
+        // has receiver?
         let params = &input_fn
             .sig
             .inputs
@@ -487,8 +488,8 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             #raw_fn_vis async fn #tool_call_fn_ident(context: rmcp::handler::server::tool::ToolCallContext<'_, Self>)
                 -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
                 use rmcp::handler::server::tool::*;
-                #trival_argrextraction_part
-                #processed_argrextraction_part
+                #trivial_arg_extraction_part
+                #processed_arg_extraction_part
                 #call
             }
         }
