@@ -4,8 +4,8 @@ use crate::model::{
     CreateMessageResult, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
     LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
     PromptListChangedNotification, ResourceListChangedNotification, ResourceUpdatedNotification,
-    ResourceUpdatedNotificationParam, ServerInfo, ServerMessage, ServerNotification, ServerRequest,
-    ServerResult, ToolListChangedNotification,
+    ResourceUpdatedNotificationParam, ServerInfo, ServerJsonRpcMessage, ServerNotification,
+    ServerRequest, ServerResult, ToolListChangedNotification,
 };
 
 use super::*;
@@ -78,7 +78,6 @@ where
             std::io::ErrorKind::UnexpectedEof,
             "expect initialize request",
         ))?
-        .into_message()
         .into_request()
         .ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -92,10 +91,10 @@ where
         .into());
     };
     let init_response = service.get_info();
-    sink.send(
-        ServerMessage::Response(ServerResult::InitializeResult(init_response), id)
-            .into_json_rpc_message(),
-    )
+    sink.send(ServerJsonRpcMessage::response(
+        ServerResult::InitializeResult(init_response),
+        id,
+    ))
     .await?;
     // waiting for notification
     let notification = stream
@@ -105,7 +104,6 @@ where
             std::io::ErrorKind::UnexpectedEof,
             "expect initialize notification",
         ))?
-        .into_message()
         .into_notification()
         .ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidData,

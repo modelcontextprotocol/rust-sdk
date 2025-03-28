@@ -1,9 +1,9 @@
 use crate::model::{
     CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
-    CancelledNotificationParam, ClientInfo, ClientMessage, ClientNotification, ClientRequest,
-    ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult, GetPromptRequest,
-    GetPromptRequestParam, GetPromptResult, InitializeRequest, InitializedNotification,
-    ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+    CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
+    ClientRequest, ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult,
+    GetPromptRequest, GetPromptRequestParam, GetPromptResult, InitializeRequest,
+    InitializedNotification, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
     ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
     ListToolsResult, PaginatedRequestParam, PaginatedRequestParamInner, ProgressNotification,
     ProgressNotificationParam, ReadResourceRequest, ReadResourceRequestParam, ReadResourceResult,
@@ -80,10 +80,10 @@ where
         method: Default::default(),
         params: service.get_info(),
     };
-    sink.send(
-        ClientMessage::Request(ClientRequest::InitializeRequest(init_request), id.clone())
-            .into_json_rpc_message(),
-    )
+    sink.send(ClientJsonRpcMessage::request(
+        ClientRequest::InitializeRequest(init_request),
+        id.clone(),
+    ))
     .await?;
     let (response, response_id) = stream
         .next()
@@ -92,7 +92,6 @@ where
             std::io::ErrorKind::UnexpectedEof,
             "expect initialize response",
         ))?
-        .into_message()
         .into_result()
         .ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -114,12 +113,12 @@ where
         .into());
     };
     // send notification
-    let notification = ClientMessage::Notification(ClientNotification::InitializedNotification(
-        InitializedNotification {
+    let notification = ClientJsonRpcMessage::notification(
+        ClientNotification::InitializedNotification(InitializedNotification {
             method: Default::default(),
-        },
-    ));
-    sink.send(notification.into_json_rpc_message()).await?;
+        }),
+    );
+    sink.send(notification).await?;
     serve_inner(service, (sink, stream), initialize_result, id_provider, ct).await
 }
 

@@ -1,6 +1,8 @@
 use crate::error::Error as McpError;
 use crate::model::{
-    CancelledNotification, CancelledNotificationParam, JsonRpcMessage, Message, RequestId,
+    CancelledNotification, CancelledNotificationParam, JsonRpcBatchRequestItem,
+    JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, RequestId,
 };
 use crate::transport::IntoTransport;
 use futures::future::BoxFuture;
@@ -76,11 +78,6 @@ pub type RxJsonRpcMessage<R> = JsonRpcMessage<
     <R as ServiceRole>::PeerResp,
     <R as ServiceRole>::PeerNot,
 >;
-
-pub type TxMessage<R> =
-    Message<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
-pub type RxMessage<R> =
-    Message<<R as ServiceRole>::PeerReq, <R as ServiceRole>::PeerResp, <R as ServiceRole>::PeerNot>;
 
 pub trait Service<R: ServiceRole>: Send + Sync + 'static {
     fn handle_request(
@@ -189,7 +186,7 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -470,9 +467,8 @@ where
 {
     use futures::{SinkExt, StreamExt};
     const SINK_PROXY_BUFFER_SIZE: usize = 64;
-    let (sink_proxy_tx, mut sink_proxy_rx) = tokio::sync::mpsc::channel::<
-        Message<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>,
-    >(SINK_PROXY_BUFFER_SIZE);
+    let (sink_proxy_tx, mut sink_proxy_rx) =
+        tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
 
     if R::IS_CLIENT {
         tracing::info!(?peer_info, "Service initialized as client");
@@ -496,6 +492,7 @@ where
         let (mut sink, mut stream) = transport.into_transport();
         let mut sink = std::pin::pin!(sink);
         let mut stream = std::pin::pin!(stream);
+        let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
         #[derive(Debug)]
         enum Event<P, R, T> {
             ProxyMessage(P),
@@ -503,48 +500,53 @@ where
             ToSink(T),
         }
         let quit_reason = loop {
-            let evt = tokio::select! {
-                m = sink_proxy_rx.recv() => {
-                    if let Some(m) = m {
-                        Event::ToSink(m)
-                    } else {
-                        continue
+            let evt = if let Some(m) = batch_messages.pop_front() {
+                Event::PeerMessage(m)
+            } else {
+                tokio::select! {
+                    m = sink_proxy_rx.recv() => {
+                        if let Some(m) = m {
+                            Event::ToSink(m)
+                        } else {
+                            continue
+                        }
                     }
-                }
-                m = stream.next() => {
-                    if let Some(m) = m {
-                        Event::PeerMessage(m.into_message())
-                    } else {
-                        // input stream closed
-                        tracing::info!("input stream terminated");
-                        break QuitReason::Closed
+                    m = stream.next() => {
+                        if let Some(m) = m {
+                            Event::PeerMessage(m)
+                        } else {
+                            // input stream closed
+                            tracing::info!("input stream terminated");
+                            break QuitReason::Closed
+                        }
                     }
-                }
-                m = peer_proxy.recv() => {
-                    if let Some(m) = m {
-                        Event::ProxyMessage(m)
-                    } else {
-                        continue
+                    m = peer_proxy.recv() => {
+                        if let Some(m) = m {
+                            Event::ProxyMessage(m)
+                        } else {
+                            continue
+                        }
                     }
-                }
-                _ = serve_loop_ct.cancelled() => {
-                    tracing::info!("task cancelled");
-                    break QuitReason::Cancelled
+                    _ = serve_loop_ct.cancelled() => {
+                        tracing::info!("task cancelled");
+                        break QuitReason::Cancelled
+                    }
                 }
             };
+
             tracing::debug!(?evt, "new event");
             match evt {
                 // response and error
-                Event::ToSink(e) => {
-                    if let Some(id) = match &e {
-                        Message::Response(_, id) => Some(id),
-                        Message::Error(_, id) => Some(id),
+                Event::ToSink(m) => {
+                    if let Some(id) = match &m {
+                        JsonRpcMessage::Response(response) => Some(&response.id),
+                        JsonRpcMessage::Error(error) => Some(&error.id),
                         _ => None,
                     } {
                         if let Some(ct) = local_ct_pool.remove(id) {
                             ct.cancel();
                         }
-                        let send_result = sink.send(e.into_json_rpc_message()).await;
+                        let send_result = sink.send(m).await;
                         if let Err(error) = send_result {
                             tracing::error!(%error, "fail to response message");
                         }
@@ -553,7 +555,7 @@ where
                 Event::ProxyMessage(PeerSinkMessage::Request(request, id, responder)) => {
                     local_responder_pool.insert(id.clone(), responder);
                     let send_result = sink
-                        .send(Message::Request(request, id.clone()).into_json_rpc_message())
+                        .send(JsonRpcMessage::request(request, id.clone()))
                         .await;
                     if let Err(e) = send_result {
                         if let Some(responder) = local_responder_pool.remove(&id) {
@@ -572,9 +574,7 @@ where
                         }
                         Err(notification) => notification,
                     };
-                    let send_result = sink
-                        .send(Message::Notification(notification).into_json_rpc_message())
-                        .await;
+                    let send_result = sink.send(JsonRpcMessage::notification(notification)).await;
                     if let Err(e) = send_result {
                         let _ =
                             responder.send(Err(ServiceError::Transport(std::io::Error::other(e))));
@@ -588,7 +588,9 @@ where
                         }
                     }
                 }
-                Event::PeerMessage(Message::Request(request, id)) => {
+                Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
+                    id, request, ..
+                })) => {
                     tracing::info!(%id, ?request, "received request");
                     {
                         let service = shared_service.clone();
@@ -606,18 +608,21 @@ where
                             let response = match result {
                                 Ok(result) => {
                                     tracing::info!(%id, ?result, "response message");
-                                    Message::Response(result, id)
+                                    JsonRpcMessage::response(result, id)
                                 }
                                 Err(error) => {
                                     tracing::warn!(%id, ?error, "response error");
-                                    Message::Error(error, id)
+                                    JsonRpcMessage::error(error, id)
                                 }
                             };
                             let _send_result = sink.send(response).await;
                         });
                     }
                 }
-                Event::PeerMessage(Message::Notification(notification)) => {
+                Event::PeerMessage(JsonRpcMessage::Notification(JsonRpcNotification {
+                    notification,
+                    ..
+                })) => {
                     tracing::info!(?notification, "received notification");
                     // catch cancelled notification
                     let notification = match notification.try_into() {
@@ -640,7 +645,11 @@ where
                         });
                     }
                 }
-                Event::PeerMessage(Message::Response(result, id)) => {
+                Event::PeerMessage(JsonRpcMessage::Response(JsonRpcResponse {
+                    result,
+                    id,
+                    ..
+                })) => {
                     if let Some(responder) = local_responder_pool.remove(&id) {
                         let response_result = responder.send(Ok(result));
                         if let Err(_error) = response_result {
@@ -648,13 +657,27 @@ where
                         }
                     }
                 }
-                Event::PeerMessage(Message::Error(error, id)) => {
+                Event::PeerMessage(JsonRpcMessage::Error(JsonRpcError { error, id, .. })) => {
                     if let Some(responder) = local_responder_pool.remove(&id) {
                         let _response_result = responder.send(Err(ServiceError::McpError(error)));
                         if let Err(_error) = _response_result {
                             tracing::warn!(%id, "Error sending response");
                         }
                     }
+                }
+                Event::PeerMessage(JsonRpcMessage::BatchRequest(batch)) => {
+                    batch_messages.extend(
+                        batch
+                            .into_iter()
+                            .map(JsonRpcBatchRequestItem::into_non_batch_message),
+                    );
+                }
+                Event::PeerMessage(JsonRpcMessage::BatchResponse(batch)) => {
+                    batch_messages.extend(
+                        batch
+                            .into_iter()
+                            .map(JsonRpcBatchResponseItem::into_non_batch_message),
+                    );
                 }
             }
         };

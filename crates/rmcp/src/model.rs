@@ -95,8 +95,9 @@ impl Default for ProtocolVersion {
     }
 }
 impl ProtocolVersion {
-    pub const LATEST: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const V_2024_11_05: Self = Self::LATEST;
+    pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
+    pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
+    pub const LATEST: Self = Self::V_2025_03_26;
 }
 
 impl Serialize for ProtocolVersion {
@@ -117,11 +118,13 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
         #[allow(clippy::single_match)]
         match s.as_str() {
             "2024-11-05" => return Ok(ProtocolVersion::V_2024_11_05),
+            "2024-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
             _ => {}
         }
         Ok(ProtocolVersion(Cow::Owned(s)))
     }
 }
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NumberOrString {
     Number(u32),
@@ -296,93 +299,109 @@ impl ErrorData {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
-pub enum JsonRpcMessage<Req = Request, Resp = DefaultResponse, Noti = Notification> {
+pub enum JsonRpcBatchRequestItem<Req, Not> {
     Request(JsonRpcRequest<Req>),
-    Response(JsonRpcResponse<Resp>),
-    Notification(JsonRpcNotification<Noti>),
-    Error(JsonRpcError),
+    Notification(JsonRpcNotification<Not>),
 }
 
-impl<Req, Resp, Noti> JsonRpcMessage<Req, Resp, Noti> {
-    pub fn into_message(self) -> Message<Req, Resp, Noti> {
+impl<Req, Not> JsonRpcBatchRequestItem<Req, Not> {
+    pub fn into_non_batch_message<Resp>(self) -> JsonRpcMessage<Req, Resp, Not> {
         match self {
-            JsonRpcMessage::Request(JsonRpcRequest { id, request, .. }) => {
-                Message::Request(request, id)
-            }
-            JsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => {
-                Message::Response(result, id)
-            }
-            JsonRpcMessage::Notification(JsonRpcNotification { notification, .. }) => {
-                Message::Notification(notification)
-            }
-            JsonRpcMessage::Error(JsonRpcError { id, error, .. }) => Message::Error(error, id),
+            JsonRpcBatchRequestItem::Request(r) => JsonRpcMessage::Request(r),
+            JsonRpcBatchRequestItem::Notification(n) => JsonRpcMessage::Notification(n),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Message<Req = Request, Resp = DefaultResponse, Noti = Notification> {
-    Request(Req, RequestId),
-    Response(Resp, RequestId),
-    Error(ErrorData, RequestId),
-    Notification(Noti),
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum JsonRpcBatchResponseItem<Resp> {
+    Response(JsonRpcResponse<Resp>),
+    Error(JsonRpcError),
 }
 
-impl<Req, Resp, Noti> Message<Req, Resp, Noti> {
-    pub fn into_notification(self) -> Option<Noti> {
+impl<Resp> JsonRpcBatchResponseItem<Resp> {
+    pub fn into_non_batch_message<Req, Not>(self) -> JsonRpcMessage<Req, Resp, Not> {
         match self {
-            Message::Notification(notification) => Some(notification),
+            JsonRpcBatchResponseItem::Response(r) => JsonRpcMessage::Response(r),
+            JsonRpcBatchResponseItem::Error(e) => JsonRpcMessage::Error(e),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum JsonRpcMessage<Req = Request, Resp = DefaultResponse, Noti = Notification> {
+    Request(JsonRpcRequest<Req>),
+    Response(JsonRpcResponse<Resp>),
+    Notification(JsonRpcNotification<Noti>),
+    BatchRequest(Vec<JsonRpcBatchRequestItem<Req, Noti>>),
+    BatchResponse(Vec<JsonRpcBatchResponseItem<Resp>>),
+    Error(JsonRpcError),
+}
+
+impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
+    #[inline]
+    pub const fn request(request: Req, id: RequestId) -> Self {
+        JsonRpcMessage::Request(JsonRpcRequest {
+            jsonrpc: JsonRpcVersion2_0,
+            id,
+            request,
+        })
+    }
+    #[inline]
+    pub const fn response(response: Resp, id: RequestId) -> Self {
+        JsonRpcMessage::Response(JsonRpcResponse {
+            jsonrpc: JsonRpcVersion2_0,
+            id,
+            result: response,
+        })
+    }
+    #[inline]
+    pub const fn error(error: ErrorData, id: RequestId) -> Self {
+        JsonRpcMessage::Error(JsonRpcError {
+            jsonrpc: JsonRpcVersion2_0,
+            id,
+            error,
+        })
+    }
+    #[inline]
+    pub const fn notification(notification: Not) -> Self {
+        JsonRpcMessage::Notification(JsonRpcNotification {
+            jsonrpc: JsonRpcVersion2_0,
+            notification,
+        })
+    }
+    pub fn into_request(self) -> Option<(Req, RequestId)> {
+        match self {
+            JsonRpcMessage::Request(r) => Some((r.request, r.id)),
             _ => None,
         }
     }
     pub fn into_response(self) -> Option<(Resp, RequestId)> {
         match self {
-            Message::Response(result, id) => Some((result, id)),
+            JsonRpcMessage::Response(r) => Some((r.result, r.id)),
             _ => None,
         }
     }
-    pub fn into_request(self) -> Option<(Req, RequestId)> {
+    pub fn into_notification(self) -> Option<Not> {
         match self {
-            Message::Request(request, id) => Some((request, id)),
+            JsonRpcMessage::Notification(n) => Some(n.notification),
             _ => None,
         }
     }
     pub fn into_error(self) -> Option<(ErrorData, RequestId)> {
         match self {
-            Message::Error(error, id) => Some((error, id)),
+            JsonRpcMessage::Error(e) => Some((e.error, e.id)),
             _ => None,
         }
     }
     pub fn into_result(self) -> Option<(Result<Resp, ErrorData>, RequestId)> {
         match self {
-            Message::Response(result, id) => Some((Ok(result), id)),
-            Message::Error(error, id) => Some((Err(error), id)),
+            JsonRpcMessage::Response(r) => Some((Ok(r.result), r.id)),
+            JsonRpcMessage::Error(e) => Some((Err(e.error), e.id)),
+
             _ => None,
-        }
-    }
-    pub fn into_json_rpc_message(self) -> JsonRpcMessage<Req, Resp, Noti> {
-        match self {
-            Message::Request(request, id) => JsonRpcMessage::Request(JsonRpcRequest {
-                jsonrpc: JsonRpcVersion2_0,
-                id,
-                request,
-            }),
-            Message::Response(result, id) => JsonRpcMessage::Response(JsonRpcResponse {
-                jsonrpc: JsonRpcVersion2_0,
-                id,
-                result,
-            }),
-            Message::Error(error, id) => JsonRpcMessage::Error(JsonRpcError {
-                jsonrpc: JsonRpcVersion2_0,
-                id,
-                error,
-            }),
-            Message::Notification(notification) => {
-                JsonRpcMessage::Notification(JsonRpcNotification {
-                    jsonrpc: JsonRpcVersion2_0,
-                    notification,
-                })
-            }
         }
     }
 }
@@ -885,7 +904,6 @@ impl ClientResult {
 }
 
 pub type ClientJsonRpcMessage = JsonRpcMessage<ClientRequest, ClientResult, ClientNotification>;
-pub type ClientMessage = Message<ClientRequest, ClientResult, ClientNotification>;
 
 ts_union!(
     export type ServerRequest =
@@ -927,7 +945,6 @@ impl ServerResult {
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;
-pub type ServerMessage = Message<ServerRequest, ServerResult, ServerNotification>;
 
 impl TryInto<CancelledNotification> for ServerNotification {
     type Error = ServerNotification;
@@ -975,12 +992,14 @@ mod tests {
         });
         let message: ClientJsonRpcMessage =
             serde_json::from_value(raw.clone()).expect("invalid notification");
-        let message = message.into_message();
         match &message {
-            ClientMessage::Notification(ClientNotification::InitializedNotification(_n)) => {}
+            ClientJsonRpcMessage::Notification(JsonRpcNotification {
+                notification: ClientNotification::InitializedNotification(_n),
+                ..
+            }) => {}
             _ => panic!("Expected Notification"),
         }
-        let json = serde_json::to_value(message.into_json_rpc_message()).expect("valid json");
+        let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
     }
 
@@ -1057,10 +1076,7 @@ mod tests {
         });
         let request: ClientJsonRpcMessage =
             serde_json::from_value(request.clone()).expect("invalid request");
-        let (request, id) = request
-            .into_message()
-            .into_request()
-            .expect("expect request");
+        let (request, id) = request.into_request().expect("should be a request");
         assert_eq!(id, RequestId::Number(1));
         match request {
             ClientRequest::InitializeRequest(Request {
@@ -1083,7 +1099,6 @@ mod tests {
             serde_json::from_value(raw_response_json.clone()).expect("invalid response");
         let (response, id) = server_response
             .clone()
-            .into_message()
             .into_response()
             .expect("expect response");
         assert_eq!(id, RequestId::Number(1));
