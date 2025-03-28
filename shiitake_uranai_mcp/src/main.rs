@@ -9,6 +9,14 @@ use tracing_subscriber::{self, EnvFilter};
 mod server;
 mod shiitake_scraper;
 
+fn validate_constellation(constellation: &str) -> bool {
+    match constellation.to_lowercase().as_str() {
+        "aries" | "taurus" | "gemini" | "cancer" | "leo" | "virgo" | 
+        "libra" | "scorpio" | "sagittarius" | "capricorn" | "aquarius" | "pisces" => true,
+        _ => false,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Set up file appender for logging
@@ -30,6 +38,14 @@ async fn main() -> Result<()> {
         tracing::error!("CONSTELLATION environment variable not set");
         anyhow::anyhow!("CONSTELLATION environment variable is required")
     })?;
+
+    match validate_constellation(&constellation) {
+        true => tracing::info!("Using constellation: {}", constellation),
+        false => {
+            tracing::error!("Invalid constellation: {}", constellation);
+            return Err(anyhow::anyhow!("CONSTELLATION must be one of: aries, taurus, gemini, cancer, leo, virgo, libra, scorpio, sagittarius, capricorn, aquarius, pisces"));
+        }
+    }
 
     // Create an instance of our counter router
     let router = RouterService(
