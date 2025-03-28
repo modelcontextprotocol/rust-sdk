@@ -9,7 +9,7 @@ use mcp_core::{
 use mcp_server::router::CapabilitiesBuilder;
 use serde_json::Value;
 
-use crate::shiitake_scraper::shiitake_uranai_scraper::scrape;
+use crate::shiitake_domain::scraper::scrape;
 
 #[derive(Clone)]
 pub struct ShiitakeUranaiRouter {

@@ -1,21 +1,14 @@
 use anyhow::Result;
 use mcp_server::router::RouterService;
 use mcp_server::{ByteTransport, Server};
+use shiitake_domain::constellation_validator::validate_constellation;
 use std::env;
 use tokio::io::{stdin, stdout};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{self, EnvFilter};
 
 mod server;
-mod shiitake_scraper;
-
-fn validate_constellation(constellation: &str) -> bool {
-    match constellation.to_lowercase().as_str() {
-        "aries" | "taurus" | "gemini" | "cancer" | "leo" | "virgo" | 
-        "libra" | "scorpio" | "sagittarius" | "capricorn" | "aquarius" | "pisces" => true,
-        _ => false,
-    }
-}
+mod shiitake_domain;
 
 #[tokio::main]
 async fn main() -> Result<()> {

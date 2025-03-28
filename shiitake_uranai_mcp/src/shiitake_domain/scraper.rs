@@ -17,19 +17,6 @@ fn get_latest_monday_date() -> String {
     return formatted_date;
 }
 
-/// 星座一覧
-/// * aries: 牡羊座
-/// * taurus: おうし座
-/// * gemini: 双子座
-/// * cancer: 蟹座
-/// * leo: 獅子座
-/// * virgo: 乙女座
-/// * libra: 天秤座
-/// * scorpio: さそり座
-/// * sagittarius: 射手座
-/// * capricorn: やぎ座
-/// * aquarius: 水瓶座
-/// * pisces: 魚座
 pub async fn scrape(constellation: String) -> Result<String, Box<dyn std::error::Error>> {
     let formatted_date = get_latest_monday_date();
     let url = format!(
@@ -37,14 +24,10 @@ pub async fn scrape(constellation: String) -> Result<String, Box<dyn std::error:
         formatted_date, constellation
     );
 
-    // HTTPリクエストを送信
     let client = Client::new();
     let response = client.get(&url).send().await?.text().await?;
 
-    // HTMLをパース
     let document = Html::parse_document(&response);
-
-    // 占い結果を格納する変数
     let mut fortune_text = String::new();
 
     // 最初のセクションの文章を取得
@@ -62,6 +45,5 @@ pub async fn scrape(constellation: String) -> Result<String, Box<dyn std::error:
         fortune_text.push_str(&element.text().collect::<Vec<_>>().join(""));
     }
 
-    // 結合したテキストを返す関数を作成
     Ok(fortune_text)
 }
