@@ -14,6 +14,8 @@ pub use resource::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use tool::*;
+
+/// You can use [`crate::object!`] or [`crate::model::object`] to create a json object quickly.
 pub type JsonObject<F = Value> = serde_json::Map<String, F>;
 
 /// unwrap the JsonObject under [`serde_json::Value`]
@@ -28,6 +30,8 @@ pub fn object(value: serde_json::Value) -> JsonObject {
     }
 }
 
+
+/// Use this macro just like [`serde_json::json!`]
 #[cfg(feature = "macros")]
 #[macro_export]
 macro_rules! object {
@@ -531,6 +535,9 @@ pub struct ProgressNotificationParam {
     /// Total number of items to process (or total progress required), if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<u32>,
+    /// An optional message describing the current progress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 pub type ProgressNotification = Notification<ProgressNotificationMethod, ProgressNotificationParam>;

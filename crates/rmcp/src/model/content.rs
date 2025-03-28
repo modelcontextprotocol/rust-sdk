@@ -38,11 +38,21 @@ impl EmbeddedResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawAudioContent {
+    pub data: String,
+    pub mime_type: String,
+}
+
+pub type AudioContent = Annotated<RawAudioContent>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),
     Resource(RawEmbeddedResource),
+    Audio(AudioContent),
 }
 
 pub type Content = Annotated<RawContent>;
