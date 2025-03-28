@@ -34,3 +34,7 @@ path = "src/std_io.rs"
 [[example]]
 name = "axum"
 path = "src/axum.rs"
+
+[[example]]
+name = "axum_router"
+path = "src/axum_router.rs"
