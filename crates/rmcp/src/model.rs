@@ -30,7 +30,6 @@ pub fn object(value: serde_json::Value) -> JsonObject {
     }
 }
 
-
 /// Use this macro just like [`serde_json::json!`]
 #[cfg(feature = "macros")]
 #[macro_export]
@@ -101,6 +100,23 @@ impl ProtocolVersion {
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
     pub const LATEST: Self = Self::V_2025_03_26;
+}
+
+impl PartialOrd for ProtocolVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        fn parse(s: &str) -> Option<(u16, u16, u16)> {
+            let (s_year, rest) = s.split_once('-')?;
+            let (s_month, rest) = rest.split_once('-')?;
+            let s_day = rest;
+            let year = s_year.parse::<u16>().ok()?;
+            let month = s_month.parse::<u16>().ok()?;
+            let day = s_day.parse::<u16>().ok()?;
+            Some((year, month, day))
+        }
+        let self_date = parse(self.0.as_ref())?;
+        let other_date = parse(other.0.as_ref())?;
+        Some(self_date.cmp(&other_date))
+    }
 }
 
 impl Serialize for ProtocolVersion {
@@ -1134,5 +1150,12 @@ mod tests {
         let server_response_json: Value = serde_json::to_value(&server_response).expect("msg");
 
         assert_eq!(server_response_json, raw_response_json);
+    }
+
+    #[test]
+    fn test_protocol_version_order() {
+        let v1 = ProtocolVersion::V_2024_11_05;
+        let v2 = ProtocolVersion::V_2025_03_26;
+        assert!(v1 < v2);
     }
 }

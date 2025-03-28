@@ -6,9 +6,10 @@ use crate::model::{
     ClientRequest, ClientResult, CreateMessageRequest, CreateMessageRequestParam,
     CreateMessageResult, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
     LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
-    PromptListChangedNotification, ResourceListChangedNotification, ResourceUpdatedNotification,
-    ResourceUpdatedNotificationParam, ServerInfo, ServerJsonRpcMessage, ServerNotification,
-    ServerRequest, ServerResult, ToolListChangedNotification,
+    PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
+    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo,
+    ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult,
+    ToolListChangedNotification,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -65,11 +66,11 @@ where
     T: IntoTransport<RoleServer, E, A>,
     E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
 {
+    const SUPPORTED_HIGHEST_VERSION: ProtocolVersion = ProtocolVersion::LATEST;
     let (sink, stream) = transport.into_transport();
     let mut sink = Box::pin(sink);
     let mut stream = Box::pin(stream);
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
-
     // service
     let (request, id) = stream
         .next()
@@ -90,7 +91,21 @@ where
         )
         .into());
     };
-    let init_response = service.get_info();
+
+    let protocol_version = match peer_info
+        .params
+        .protocol_version
+        .partial_cmp(&SUPPORTED_HIGHEST_VERSION)
+        .ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unsupported protocol version",
+        ))? {
+        std::cmp::Ordering::Less => peer_info.params.protocol_version.clone(),
+        _ => SUPPORTED_HIGHEST_VERSION,
+    };
+
+    let mut init_response = service.get_info();
+    init_response.protocol_version = protocol_version;
     sink.send(ServerJsonRpcMessage::response(
         ServerResult::InitializeResult(init_response),
         id,
