@@ -219,12 +219,8 @@ impl SseServer {
         .await
     }
     pub async fn serve_with_config(config: SseServerConfig) -> io::Result<Self> {
-        let (app, transport_rx) = App::new(config.post_path.clone());
+        let (sse_server, service) = Self::new(&config);
         let listener = tokio::net::TcpListener::bind(config.bind).await?;
-        let service = Router::new()
-            .route(&config.sse_path, get(sse_handler))
-            .route(&config.post_path, post(post_event_handler))
-            .with_state(app);
         let ct = config.ct.child_token();
         let server = axum::serve(listener, service).with_graceful_shutdown(async move {
             ct.cancelled().await;
@@ -238,11 +234,24 @@ impl SseServer {
             }
             .instrument(tracing::info_span!("sse-server", bind_address = %config.bind)),
         );
-        Ok(Self {
-            transport_rx,
-            config,
-        })
+        Ok(sse_server)
     }
+
+    pub fn new(config: &SseServerConfig) -> (SseServer, Router) {
+        let (app, transport_rx) = App::new(config.post_path.clone());
+        let router = Router::new()
+            .route(&config.sse_path, get(sse_handler))
+            .route(&config.post_path, post(post_event_handler))
+            .with_state(app);
+
+        let server = SseServer {
+            transport_rx,
+            config: config.clone(),
+        };
+
+        (server, router)
+    }
+
     pub fn with_service<S, F>(mut self, service_provider: F) -> CancellationToken
     where
         S: Service<RoleServer>,
