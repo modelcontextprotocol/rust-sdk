@@ -90,6 +90,32 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+  doc:
+    name: Generate Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Generate documentation
+        run: |
+          cargo doc --no-deps -p rmcp -p rmcp-macros
+        # there must be no warnings , doc hasn't been fix yet, so skip it
+        # env:
+          # RUSTDOCFLAGS: -Dwarnings
+
   release:
     name: Release crates
     runs-on: ubuntu-latest
