@@ -99,22 +99,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+      - uses: Swatinem/rust-cache@v2
 
       - name: Generate documentation
         run: |
           cargo doc --no-deps -p rmcp -p rmcp-macros
-        # there must be no warnings , doc hasn't been fix yet, so skip it
-        # env:
-          # RUSTDOCFLAGS: -Dwarnings
+        env:
+          RUSTDOCFLAGS: -Dwarnings
 
   release:
     name: Release crates
