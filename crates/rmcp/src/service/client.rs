@@ -73,7 +73,7 @@ where
     let (sink, stream) = transport.into_transport();
     let mut sink = Box::pin(sink);
     let mut stream = Box::pin(stream);
-    let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
+    let id_provider = <Arc<AtomicU32Provider>>::default();
     // service
     let id = id_provider.next_request_id();
     let init_request = InitializeRequest {

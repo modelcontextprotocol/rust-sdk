@@ -2,6 +2,7 @@ use std::{borrow::Cow, sync::Arc};
 mod annotated;
 mod capabilities;
 mod content;
+mod meta;
 mod prompt;
 mod resource;
 mod tool;
@@ -9,6 +10,7 @@ mod tool;
 pub use annotated::*;
 pub use capabilities::*;
 pub use content::*;
+pub use meta::*;
 pub use prompt::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize};
@@ -190,22 +192,15 @@ impl<'de> Deserialize<'de> for NumberOrString {
 
 pub type RequestId = NumberOrString;
 pub type ProgressToken = NumberOrString;
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct WithMeta<P = JsonObject, M = ()> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub _meta: Option<M>,
-    #[serde(flatten)]
-    pub inner: P,
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestMeta {
-    progress_token: ProgressToken,
+    pub progress_token: ProgressToken,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Request<M = String, P = Option<WithMeta<JsonObject, RequestMeta>>> {
+pub struct Request<M = String, P = JsonObject> {
     pub method: M,
     // #[serde(skip_serializing_if = "Option::is_none")]
     pub params: P,
@@ -216,7 +211,7 @@ pub struct RequestNoParam<M = String> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Notification<M = String, P = Option<WithMeta<JsonObject, JsonObject>>> {
+pub struct Notification<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
 }
@@ -233,9 +228,9 @@ pub struct JsonRpcRequest<R = Request> {
     #[serde(flatten)]
     pub request: R,
 }
-type DefaultResponse = WithMeta<JsonObject, JsonObject>;
+type DefaultResponse = JsonObject;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct JsonRpcResponse<R = DefaultResponse> {
+pub struct JsonRpcResponse<R = JsonObject> {
     pub jsonrpc: JsonRpcVersion2_0,
     pub id: RequestId,
     pub result: R,
@@ -846,6 +841,8 @@ const_string!(CallToolRequestMethod = "tools/call");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolRequestParam {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _meta: Option<RequestMeta>,
     pub name: Cow<'static, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
@@ -1041,7 +1038,7 @@ mod tests {
                 assert_eq!(r.id, RequestId::Number(1));
                 assert_eq!(r.request.method, "request");
                 assert_eq!(
-                    &r.request.params.as_ref().unwrap().inner,
+                    &r.request.params,
                     json!({"key": "value"})
                         .as_object()
                         .expect("should be an object")

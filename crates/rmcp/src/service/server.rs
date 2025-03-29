@@ -6,10 +6,9 @@ use crate::model::{
     ClientRequest, ClientResult, CreateMessageRequest, CreateMessageRequestParam,
     CreateMessageResult, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
     LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
-    PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
-    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo,
-    ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult,
-    ToolListChangedNotification,
+    PromptListChangedNotification, ResourceListChangedNotification, ResourceUpdatedNotification,
+    ResourceUpdatedNotificationParam, ServerInfo, ServerJsonRpcMessage, ServerNotification,
+    ServerRequest, ServerResult, ToolListChangedNotification,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -69,7 +68,7 @@ where
     let (sink, stream) = transport.into_transport();
     let mut sink = Box::pin(sink);
     let mut stream = Box::pin(stream);
-    let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
+    let id_provider = <Arc<AtomicU32Provider>>::default();
     // service
     let (request, id) = stream
         .next()
