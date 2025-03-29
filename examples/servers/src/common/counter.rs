@@ -49,8 +49,7 @@ impl Counter {
 
     #[tool(description = "Get the current counter value")]
     async fn get_value(&self) -> Result<CallToolResult, McpError> {
-        let mut counter = self.counter.lock().await;
-        *counter -= 1;
+        let counter = self.counter.lock().await;
         Ok(CallToolResult::success(vec![Content::text(
             counter.to_string(),
         )]))
@@ -159,12 +158,20 @@ impl ServerHandler for Counter {
 
     async fn get_prompt(
         &self,
-        GetPromptRequestParam { name, arguments: _ }: GetPromptRequestParam,
+        GetPromptRequestParam { name, arguments }: GetPromptRequestParam,
         _: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         match name.as_str() {
             "example_prompt" => {
-                let prompt = "This is an example prompt with your message here: '{message}'";
+                let message = arguments
+                    .and_then(
+                        |json|
+                            json.get("message")
+                                ?.as_str()
+                                .map(|s| s.to_string()))
+                    .ok_or_else(|| McpError::invalid_params("No message provided to example_prompt", None))?;
+
+                let prompt = format!("This is an example prompt with your message here: '{message}'");
                 Ok(GetPromptResult {
                     description: None,
                     messages: vec![PromptMessage {
