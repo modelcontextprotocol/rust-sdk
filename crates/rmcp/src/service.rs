@@ -6,7 +6,8 @@ use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, JsonRpcBatchRequestItem,
         JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage, JsonRpcNotification,
-        JsonRpcRequest, JsonRpcResponse, ProgressToken, RequestId, RequestMeta, WithMeta,
+        JsonRpcRequest, JsonRpcResponse, NumberOrString, ProgressToken, RequestId, RequestMeta,
+        WithMeta,
     },
     transport::IntoTransport,
 };
@@ -220,8 +221,10 @@ impl RequestIdProvider for AtomicU32Provider {
 }
 
 impl ProgressTokenProvider for AtomicU32Provider {
-    fn next_progress_token(&self) -> RequestId {
-        RequestId::Number(self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+    fn next_progress_token(&self) -> ProgressToken {
+        ProgressToken(NumberOrString::Number(
+            self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        ))
     }
 }
 
@@ -379,9 +382,9 @@ impl<R: ServiceRole> Peer<R> {
     ) -> Result<RequestHandle<R>, ServiceError> {
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
-        request.set_meta(Some(RequestMeta {
-            progress_token: progress_token.clone(),
-        }));
+        if let Some(meta) = request.get_meta_mut() {
+            meta.progress_token = Some(progress_token.clone());
+        };
         let (responder, receiver) = tokio::sync::oneshot::channel();
         self.tx
             .send(PeerSinkMessage::Request {

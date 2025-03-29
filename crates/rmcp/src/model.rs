@@ -191,12 +191,24 @@ impl<'de> Deserialize<'de> for NumberOrString {
 }
 
 pub type RequestId = NumberOrString;
-pub type ProgressToken = NumberOrString;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(transparent)]
+pub struct ProgressToken(pub NumberOrString);
+
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestMeta {
-    pub progress_token: ProgressToken,
+    pub progress_token: Option<ProgressToken>,
+    #[serde(flatten)]
+    pub ext: JsonObject
+}
+
+impl RequestMeta {
+    pub fn is_empty(&self) -> bool {
+        self.progress_token.is_none() && self.ext.is_empty()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -841,8 +853,8 @@ const_string!(CallToolRequestMethod = "tools/call");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolRequestParam {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub _meta: Option<RequestMeta>,
+    #[serde(skip_serializing_if = "RequestMeta::is_empty", default)]
+    pub _meta: RequestMeta,
     pub name: Cow<'static, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,

@@ -72,6 +72,7 @@ async fn client() -> anyhow::Result<()> {
                     "a": 10,
                     "b": 20
                 })),
+                _meta: Default::default()
             })
             .await?;
 

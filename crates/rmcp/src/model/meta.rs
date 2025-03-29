@@ -1,34 +1,34 @@
 use super::{ClientRequest, RequestMeta, ServerRequest};
 
 pub trait WithMeta<M> {
-    fn set_meta(&mut self, meta: Option<M>);
+    fn get_meta_mut(&mut self) -> Option<&mut M>;
     fn get_meta(&self) -> Option<&M>;
 }
 
 impl WithMeta<RequestMeta> for ClientRequest {
-    fn set_meta(&mut self, meta: Option<RequestMeta>) {
+    fn get_meta_mut(&mut self) -> Option<&mut RequestMeta> {
         #[allow(clippy::single_match)]
         match self {
-            ClientRequest::CallToolRequest(req) => {
-                req.params._meta = meta;
-            }
-            _ => {}
+            ClientRequest::CallToolRequest(req) => Some(&mut req.params._meta),
+            _ => None,
         }
     }
 
     fn get_meta(&self) -> Option<&RequestMeta> {
         #[allow(clippy::single_match)]
         match self {
-            ClientRequest::CallToolRequest(req) => req.params._meta.as_ref(),
+            ClientRequest::CallToolRequest(req) => Some(&req.params._meta),
             _ => None,
         }
     }
 }
 
 impl WithMeta<RequestMeta> for ServerRequest {
-    fn set_meta(&mut self, _meta: Option<RequestMeta>) {}
-
     fn get_meta(&self) -> Option<&RequestMeta> {
+        None
+    }
+
+    fn get_meta_mut(&mut self) -> Option<&mut RequestMeta> {
         None
     }
 }
