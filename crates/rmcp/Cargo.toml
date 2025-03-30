@@ -1,4 +1,4 @@
-cargo-features = ["edition2024"]
+
 
 [package]
 name = "rmcp"
@@ -95,5 +95,5 @@ path = "tests/test_with_python.rs"
 
 [[test]]
 name = "test_with_js"
-required-features = ["server", "transport-sse-server"]
+required-features = ["server", "client", "transport-sse-server", "transport-child-process"]
 path = "tests/test_with_js.rs"
