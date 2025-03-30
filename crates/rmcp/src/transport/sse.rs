@@ -60,6 +60,94 @@ impl Default for SseTransportRetryConfig {
     }
 }
 
+pub trait SseClient: Send + Sync {
+    fn connect(
+        &self,
+        last_event_id: Option<String>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError>>;
+
+    fn post(&self, session_id: &str, message: ClientJsonRpcMessage) -> impl Future<Output = Result<(), SseTransportError>>;
+}
+
+pub struct RetryConfig {
+    pub max_times: Option<usize>,
+    pub min_duration: Duration,
+}
+
+pub struct ReqwestSseClient {
+    http_client: HttpClient,
+    sse_url: Url,
+}
+impl ReqwestSseClient {
+    pub fn new<U>(url: U) -> Result<Self, SseTransportError>
+    where
+        U: IntoUrl,
+    {
+        let url = url.into_url()?;
+        Ok(Self { http_client: HttpClient::default(), sse_url: url })
+    }
+
+    pub async fn new_with_timeout<U>(url: U, timeout: Duration) -> Result<Self, SseTransportError>
+    where
+        U: IntoUrl,
+    {
+        let mut client = HttpClient::builder();
+        client = client.timeout(timeout);
+        let client = client.build()?;
+        let url = url.into_url()?;
+        Ok(Self { http_client: client, sse_url: url })
+    }
+}
+
+impl SseClient for ReqwestSseClient {
+    fn connect(
+        &self,
+        last_event_id: Option<String>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError>>
+    {
+        let client = self.http_client.clone();
+        let sse_url = self.sse_url.as_ref().to_string();
+        let last_event_id = last_event_id.clone();
+        let fut = async move {
+            let mut request_builder = client.get(&sse_url).header(ACCEPT, MIME_TYPE);
+            if let Some(last_event_id) = last_event_id {
+                request_builder = request_builder.header(HEADER_LAST_EVENT_ID, last_event_id);
+            }
+            let response = request_builder.send().await?;
+            let response = response.error_for_status()?;
+            match response.headers().get(reqwest::header::CONTENT_TYPE) {
+                Some(ct) => {
+                    if ct.as_bytes() != MIME_TYPE.as_bytes() {
+                        return Err(SseTransportError::UnexpectedContentType(Some(ct.clone())));
+                    }
+                }
+                None => {
+                    return Err(SseTransportError::UnexpectedContentType(None));
+                }
+            }
+            let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+            Ok(event_stream)
+        };
+        fut.boxed()
+    }
+
+    fn post(&self, session_id: &str, message: ClientJsonRpcMessage) -> impl Future<Output = Result<(), SseTransportError>> {
+      let client = self.http_client.clone();
+      let sse_url = self.sse_url.clone();
+      let session_id = session_id.to_string();
+      async move {
+        let uri = sse_url.join(&session_id).map_err(SseTransportError::from)?;
+        let request_builder = client.post(uri.as_ref()).json(&message);
+        request_builder
+            .send()
+            .await
+            .and_then(|resp| resp.error_for_status())
+            .map_err(SseTransportError::from)
+            .map(drop)
+      }
+    }
+}
+
 /// # Transport for client sse
 ///
 /// Call [`SseTransport::start`] to create a new transport from url.
@@ -159,7 +247,7 @@ impl SseTransport {
                 .map(Duration::from_millis);
             let config_retry_duration = self.retry_config.min_duration;
             recommended_retry_duration
-                .map(|d| d.max(config_retry_duration))
+                .map(|d: Duration| d.max(config_retry_duration))
                 .unwrap_or(config_retry_duration)
         };
         let client = self.http_client.clone();
