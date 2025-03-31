@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rig::tool::{ToolDyn as RigTool, ToolEmbeddingDyn, ToolSet};
+use rig::tool::{ToolDyn as RigTool, ToolSet};
 use rmcp::{
     RoleClient,
     model::{CallToolRequestParam, CallToolResult, Tool as McpTool},
@@ -24,7 +24,12 @@ impl RigTool for McpToolAdaptor {
     {
         Box::pin(std::future::ready(rig::completion::ToolDefinition {
             name: self.name(),
-            description: self.tool.description.to_string(),
+            description: self
+                .tool
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
             parameters: self.tool.schema_as_json_value(),
         }))
     }
@@ -48,22 +53,6 @@ impl RigTool for McpToolAdaptor {
 
             Ok(convert_mcp_call_tool_result_to_string(call_mcp_tool_result))
         })
-    }
-}
-
-impl ToolEmbeddingDyn for McpToolAdaptor {
-    fn embedding_docs(&self) -> Vec<String> {
-        vec![
-            self.tool.description.clone().to_string(),
-            format!("Tool name: {}", self.tool.name),
-            format!("Tool capability: {}", self.tool.description),
-        ]
-    }
-
-    fn context(&self) -> serde_json::Result<serde_json::Value> {
-        Ok(serde_json::json!({
-            "tool_name": self.tool.name,
-        }))
     }
 }
 

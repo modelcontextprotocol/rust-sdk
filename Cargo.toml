@@ -1,4 +1,4 @@
-cargo-features = ["edition2024"]
+
 
 [workspace]
 members = ["crates/rmcp", "crates/rmcp-macros", "examples/*"]
