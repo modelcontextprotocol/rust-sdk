@@ -102,4 +102,3 @@ path = "tests/test_with_js.rs"
 name = "test_notification"
 required-features = ["server", "client"]
 path = "tests/test_notification.rs"
-
