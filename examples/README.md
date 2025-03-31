@@ -7,9 +7,8 @@
 
 # Server Examples
 
-- [Server SSE](servers/src/axum.rs), using axum as web server. 
-- [Server stdio](servers/src/std_io.rs), using tokio async io. 
-
+- [Server SSE](servers/src/axum.rs), using axum as web server.
+- [Server stdio](servers/src/std_io.rs), using tokio async io.
 
 # Transport Examples
 
@@ -18,14 +17,16 @@
 - [Unix Socket](transport/src/unix_socket.rs)
 - [Websocket](transport/src/websocket.rs)
 
+# Integration
 
-# Intergration
 - [Rig](examples/rig-integration) A stream chatbot with rig
 
 # WASI
+
 - [WASI-P2 runtime](examples/wasi) How it works with wasip2
 
 ## Use Mcp Inspector
+
 ```sh
 npx @modelcontextprotocol/inspector
 ```

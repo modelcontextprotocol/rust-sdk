@@ -1,6 +1,5 @@
 use rmcp::{ServerHandler, handler::server::tool::ToolCallContext, tool};
 use schemars::JsonSchema;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema)]

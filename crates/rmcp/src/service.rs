@@ -1,10 +1,13 @@
-use crate::error::Error as McpError;
-use crate::model::{
-    CancelledNotification, CancelledNotificationParam, JsonRpcMessage, Message, RequestId,
-};
-use crate::transport::IntoTransport;
 use futures::future::BoxFuture;
 use thiserror::Error;
+
+use crate::{
+    error::Error as McpError,
+    model::{
+        CancelledNotification, CancelledNotificationParam, JsonRpcMessage, Message, RequestId,
+    },
+    transport::IntoTransport,
+};
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "client")]
@@ -15,10 +18,9 @@ mod server;
 pub use server::*;
 #[cfg(feature = "tower")]
 mod tower;
+use tokio_util::sync::CancellationToken;
 #[cfg(feature = "tower")]
 pub use tower::*;
-
-use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -189,11 +191,12 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
 }
 
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    sync::{Arc, atomic::AtomicU32},
+    time::Duration,
+};
 
 use tokio::sync::mpsc;
 
@@ -339,10 +342,12 @@ impl<R: ServiceRole> Peer<R> {
         self.tx
             .send(PeerSinkMessage::Notification(notification, responder))
             .await
-            .map_err(|_m| ServiceError::Transport(std::io::Error::other("disconnected")))?;
-        receiver
-            .await
-            .map_err(|_e| ServiceError::Transport(std::io::Error::other("disconnected")))?
+            .map_err(|_m| {
+                ServiceError::Transport(std::io::Error::other("disconnected: receiver dropped"))
+            })?;
+        receiver.await.map_err(|_e| {
+            ServiceError::Transport(std::io::Error::other("disconnected: responder dropped"))
+        })?
     }
     pub async fn send_request(&self, request: R::Req) -> Result<R::PeerResp, ServiceError> {
         self.send_cancellable_request(request, PeerRequestOptions::no_options())
@@ -575,10 +580,12 @@ where
                     let send_result = sink
                         .send(Message::Notification(notification).into_json_rpc_message())
                         .await;
-                    if let Err(e) = send_result {
-                        let _ =
-                            responder.send(Err(ServiceError::Transport(std::io::Error::other(e))));
-                    }
+                    let response = if let Err(e) = send_result {
+                        Err(ServiceError::Transport(std::io::Error::other(e)))
+                    } else {
+                        Ok(())
+                    };
+                    let _ = responder.send(response);
                     if let Some(param) = cancellation_param {
                         if let Some(responder) = local_responder_pool.remove(&param.request_id) {
                             tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");

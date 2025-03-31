@@ -14,7 +14,8 @@ pub struct Tool {
     /// The name of the tool
     pub name: Cow<'static, str>,
     /// A description of what the tool does
-    pub description: Cow<'static, str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Arc<JsonObject>,
 }
@@ -29,7 +30,7 @@ impl Tool {
     {
         Tool {
             name: name.into(),
-            description: description.into(),
+            description: Some(description.into()),
             input_schema: input_schema.into(),
         }
     }

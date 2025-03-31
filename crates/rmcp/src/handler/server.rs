@@ -1,6 +1,8 @@
-use crate::error::Error as McpError;
-use crate::model::*;
-use crate::service::{Peer, RequestContext, RoleServer, Service, ServiceRole};
+use crate::{
+    error::Error as McpError,
+    model::*,
+    service::{Peer, RequestContext, RoleServer, Service, ServiceRole},
+};
 
 mod resource;
 pub mod tool;
@@ -101,7 +103,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
 }
 
 #[allow(unused_variables)]
-pub trait ServerHandler: Sized + Clone + Send + Sync + 'static {
+pub trait ServerHandler: Sized + Send + Sync + 'static {
     fn ping(
         &self,
         context: RequestContext<RoleServer>,

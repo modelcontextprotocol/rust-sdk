@@ -1,3 +1,6 @@
+use futures::{SinkExt, StreamExt};
+
+use super::*;
 use crate::model::{
     CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
     CancelledNotificationParam, ClientInfo, ClientMessage, ClientNotification, ClientRequest,
@@ -11,9 +14,6 @@ use crate::model::{
     SetLevelRequest, SetLevelRequestParam, SubscribeRequest, SubscribeRequestParam,
     UnsubscribeRequest, UnsubscribeRequestParam,
 };
-
-use super::*;
-use futures::{SinkExt, StreamExt};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoleClient;

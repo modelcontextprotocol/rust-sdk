@@ -4,9 +4,8 @@ use tokio::{
     process::{ChildStdin, ChildStdout},
 };
 
-use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
-
 use super::IntoTransport;
+use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 pub(crate) fn child_process(
     mut child: tokio::process::Child,

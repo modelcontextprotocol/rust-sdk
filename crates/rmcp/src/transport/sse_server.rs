@@ -1,8 +1,5 @@
-use crate::{
-    RoleServer, Service,
-    model::ClientJsonRpcMessage,
-    service::{RxJsonRpcMessage, TxJsonRpcMessage},
-};
+use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
+
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -14,13 +11,15 @@ use axum::{
     routing::{get, post},
 };
 use futures::{Sink, SinkExt, Stream};
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
 use tracing::Instrument;
 
-use std::sync::Arc;
-use tokio::io;
+use crate::{
+    RoleServer, Service,
+    model::ClientJsonRpcMessage,
+    service::{RxJsonRpcMessage, TxJsonRpcMessage},
+};
 type SessionId = Arc<str>;
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
@@ -88,8 +87,7 @@ async fn sse_handler(
     const AUTO_PING_INTERVAL: Duration = Duration::from_secs(1);
     let session = session_id();
     tracing::info!(%session, "sse connection");
-    use tokio_stream::StreamExt;
-    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::{StreamExt, wrappers::ReceiverStream};
     use tokio_util::sync::PollSender;
     let (from_client_tx, from_client_rx) = tokio::sync::mpsc::channel(64);
     let (to_client_tx, to_client_rx) = tokio::sync::mpsc::channel(64);

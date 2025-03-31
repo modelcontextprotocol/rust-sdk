@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 
 use common::calculator::Calculator;
 use futures::{Sink, Stream};
-
 use rmcp::{
     RoleClient, RoleServer, ServiceExt,
     service::{RunningService, RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},

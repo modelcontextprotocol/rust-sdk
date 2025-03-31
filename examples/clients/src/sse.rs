@@ -1,9 +1,10 @@
 use anyhow::Result;
-use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
-use rmcp::{ServiceExt, model::CallToolRequestParam, transport::SseTransport};
-
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use rmcp::{
+    ServiceExt,
+    model::{CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation},
+    transport::SseTransport,
+};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {

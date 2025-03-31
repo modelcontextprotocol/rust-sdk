@@ -1,7 +1,9 @@
 use rmcp::transport::sse_server::SseServer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use tracing_subscriber::{self};
+use tracing_subscriber::{
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    {self},
+};
 mod common;
 use common::counter::Counter;
 
