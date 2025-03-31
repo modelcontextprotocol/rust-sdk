@@ -67,10 +67,7 @@ impl From<reqwest::Error> for SseTransportError<reqwest::Error> {
 }
 
 pub trait SseClient<E: std::error::Error + Send + Sync>: Clone + Send + Sync + 'static {
-    fn connect(
-        &self,
-        last_event_id: Option<String>,
-    ) -> SseStreamFuture<E>;
+    fn connect(&self, last_event_id: Option<String>) -> SseStreamFuture<E>;
 
     fn post(
         &self,
@@ -134,10 +131,7 @@ impl ReqwestSseClient {
 }
 
 impl SseClient<reqwest::Error> for ReqwestSseClient {
-    fn connect(
-        &self,
-        last_event_id: Option<String>,
-    ) -> SseStreamFuture<reqwest::Error> {
+    fn connect(&self, last_event_id: Option<String>) -> SseStreamFuture<reqwest::Error> {
         let client = self.http_client.clone();
         let sse_url = self.sse_url.as_ref().to_string();
         let last_event_id = last_event_id.clone();
@@ -244,10 +238,7 @@ impl<C: SseClient<E>, E: std::error::Error + Send + Sync + 'static> SseTransport
         })
     }
 
-    fn retry_connection(
-        &self,
-    ) -> SseStreamFuture<E>
-    {
+    fn retry_connection(&self) -> SseStreamFuture<E> {
         let retry_duration = {
             let recommended_retry_duration = self
                 .recommended_retry_duration_ms
