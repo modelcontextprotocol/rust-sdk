@@ -90,6 +90,23 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+  doc:
+    name: Generate Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Generate documentation
+        run: |
+          cargo doc --no-deps -p rmcp -p rmcp-macros
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+
   release:
     name: Release crates
     runs-on: ubuntu-latest

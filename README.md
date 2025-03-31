@@ -24,9 +24,13 @@ Start a client in one line:
 use rmcp::{ServiceExt, transport::TokioChildProcess};
 use tokio::process::Command;
 
-let client = ().serve(
-    TokioChildProcess::new(Command::new("npx").arg("-y").arg("@modelcontextprotocol/server-everything"))?
-).await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = ().serve(
+        TokioChildProcess::new(Command::new("npx").arg("-y").arg("@modelcontextprotocol/server-everything"))?
+    ).await?;
+    Ok(())
+}
 ```
 
 #### 1. Build a transport
