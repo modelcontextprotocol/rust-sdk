@@ -13,8 +13,8 @@ use axum::{
     },
     routing::{get, post},
 };
-use futures::{Sink, SinkExt, Stream, StreamExt};
-use std::{collections::HashMap, net::SocketAddr};
+use futures::{Sink, SinkExt, Stream};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
 use tracing::Instrument;
@@ -40,14 +40,14 @@ impl App {
         Self,
         tokio::sync::mpsc::UnboundedReceiver<SseServerTransport>,
     ) {
-        let (transport_tx, tranport_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (transport_tx, transport_rx) = tokio::sync::mpsc::unbounded_channel();
         (
             Self {
                 txs: Default::default(),
                 transport_tx,
                 post_path: post_path.into(),
             },
-            tranport_rx,
+            transport_rx,
         )
     }
 }
@@ -85,8 +85,10 @@ async fn post_event_handler(
 async fn sse_handler(
     State(app): State<App>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, io::Error>>>, Response<String>> {
+    const AUTO_PING_INTERVAL: Duration = Duration::from_secs(1);
     let session = session_id();
     tracing::info!(%session, "sse connection");
+    use tokio_stream::StreamExt;
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_util::sync::PollSender;
     let (from_client_tx, from_client_rx) = tokio::sync::mpsc::channel(64);
@@ -108,7 +110,7 @@ async fn sse_handler(
     if transport_send_result.is_err() {
         tracing::warn!("send transport out error");
         let mut response =
-            Response::new("fail to send out trasnport, it seems server is closed".to_string());
+            Response::new("fail to send out transport, it seems server is closed".to_string());
         *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
         return Err(response);
     }
@@ -118,12 +120,16 @@ async fn sse_handler(
             .event("endpoint")
             .data(format!("{post_path}?sessionId={session}")),
     ))
-    .chain(ReceiverStream::new(to_client_rx).map(|message| {
-        match serde_json::to_string(&message) {
+    .chain(
+        ReceiverStream::new(to_client_rx).map(|message| match serde_json::to_string(&message) {
             Ok(bytes) => Ok(Event::default().event("message").data(&bytes)),
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        }
-    }));
+        }),
+    )
+    .merge(
+        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(AUTO_PING_INTERVAL))
+            .map(|_| Ok(Event::default().comment("ping"))),
+    );
     Ok(Sse::new(stream))
 }
 
@@ -190,6 +196,7 @@ impl Stream for SseServerTransport {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
+        use futures::StreamExt;
         self.stream.poll_next_unpin(cx)
     }
 }
