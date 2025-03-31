@@ -347,7 +347,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             #input_fn_vis fn #tool_attr_fn_ident() -> rmcp::model::Tool {
                 rmcp::model::Tool {
                     name: #name.into(),
-                    description: #description.into(),
+                    description: Some(#description.into()),
                     input_schema: #schema.into(),
                 }
             }

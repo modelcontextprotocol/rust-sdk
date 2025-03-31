@@ -1,5 +1,3 @@
-cargo-features = ["edition2024"]
-
 [package]
 name = "rig-integration"
 edition = { workspace = true }
