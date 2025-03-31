@@ -103,7 +103,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
 }
 
 #[allow(unused_variables)]
-pub trait ServerHandler: Sized + Clone + Send + Sync + 'static {
+pub trait ServerHandler: Sized + Send + Sync + 'static {
     fn ping(
         &self,
         context: RequestContext<RoleServer>,
