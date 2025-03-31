@@ -153,7 +153,7 @@ impl SseClient<reqwest::Error> for ReqwestSseClient {
             let response = response.error_for_status()?;
             match response.headers().get(reqwest::header::CONTENT_TYPE) {
                 Some(ct) => {
-                    if ct.as_bytes() != MIME_TYPE.as_bytes() {
+                    if !ct.as_bytes().starts_with(MIME_TYPE.as_bytes()) {
                         return Err(SseTransportError::UnexpectedContentType(Some(ct.clone())));
                     }
                 }
@@ -190,7 +190,7 @@ impl SseClient<reqwest::Error> for ReqwestSseClient {
 
 /// # Transport for client sse
 ///
-/// Call [`SseTransport::start`] to create a new transport from url.
+/// Call [`SseTransport::start`] to create a  new transport from url.
 ///
 /// Call [`SseTransport::start_with_client`] to create a new transport with a customized reqwest client.
 pub struct SseTransport<C: SseClient<E>, E: std::error::Error + Send + Sync + 'static> {
