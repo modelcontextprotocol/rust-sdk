@@ -342,10 +342,12 @@ impl<R: ServiceRole> Peer<R> {
         self.tx
             .send(PeerSinkMessage::Notification(notification, responder))
             .await
-            .map_err(|_m| ServiceError::Transport(std::io::Error::other("disconnected")))?;
-        receiver
-            .await
-            .map_err(|_e| ServiceError::Transport(std::io::Error::other("disconnected")))?
+            .map_err(|_m| {
+                ServiceError::Transport(std::io::Error::other("disconnected: receiver dropped"))
+            })?;
+        receiver.await.map_err(|_e| {
+            ServiceError::Transport(std::io::Error::other("disconnected: responder dropped"))
+        })?
     }
     pub async fn send_request(&self, request: R::Req) -> Result<R::PeerResp, ServiceError> {
         self.send_cancellable_request(request, PeerRequestOptions::no_options())
@@ -578,10 +580,12 @@ where
                     let send_result = sink
                         .send(Message::Notification(notification).into_json_rpc_message())
                         .await;
-                    if let Err(e) = send_result {
-                        let _ =
-                            responder.send(Err(ServiceError::Transport(std::io::Error::other(e))));
-                    }
+                    let response = if let Err(e) = send_result {
+                        Err(ServiceError::Transport(std::io::Error::other(e)))
+                    } else {
+                        Ok(())
+                    };
+                    let _ = responder.send(response);
                     if let Some(param) = cancellation_param {
                         if let Some(responder) = local_responder_pool.remove(&param.request_id) {
                             tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");

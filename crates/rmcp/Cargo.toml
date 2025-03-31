@@ -97,3 +97,9 @@ path = "tests/test_with_python.rs"
 name = "test_with_js"
 required-features = ["server", "client", "transport-sse-server", "transport-child-process"]
 path = "tests/test_with_js.rs"
+
+[[test]]
+name = "test_notification"
+required-features = ["server", "client"]
+path = "tests/test_notification.rs"
+
