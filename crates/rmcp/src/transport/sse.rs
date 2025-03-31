@@ -29,14 +29,14 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     UnexpectedContentType(Option<HeaderValue>),
 }
 
+type SseStreamFuture<E> =
+    BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError<E>>>;
+
 enum SseTransportState<E: std::error::Error + Send + Sync + 'static> {
     Connected(BoxStream<'static, Result<Sse, SseError>>),
     Retrying {
         times: usize,
-        fut: BoxFuture<
-            'static,
-            Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError<E>>,
-        >,
+        fut: SseStreamFuture<E>,
     },
     Fatal {
         reason: String,
@@ -70,7 +70,7 @@ pub trait SseClient<E: std::error::Error + Send + Sync>: Clone + Send + Sync + '
     fn connect(
         &self,
         last_event_id: Option<String>,
-    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError<E>>>;
+    ) -> SseStreamFuture<E>;
 
     fn post(
         &self,
@@ -137,10 +137,7 @@ impl SseClient<reqwest::Error> for ReqwestSseClient {
     fn connect(
         &self,
         last_event_id: Option<String>,
-    ) -> BoxFuture<
-        'static,
-        Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError<reqwest::Error>>,
-    > {
+    ) -> SseStreamFuture<reqwest::Error> {
         let client = self.http_client.clone();
         let sse_url = self.sse_url.as_ref().to_string();
         let last_event_id = last_event_id.clone();
@@ -249,7 +246,7 @@ impl<C: SseClient<E>, E: std::error::Error + Send + Sync + 'static> SseTransport
 
     fn retry_connection(
         &self,
-    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError<E>>>
+    ) -> SseStreamFuture<E>
     {
         let retry_duration = {
             let recommended_retry_duration = self
