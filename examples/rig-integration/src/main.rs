@@ -11,7 +11,7 @@ pub mod config;
 pub mod mcp_adaptor;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = config::Config::retrive("config.toml").await?;
+    let config = config::Config::retrieve("config.toml").await?;
     let openai_client = {
         if let Some(key) = config.deepseek_key {
             deepseek::Client::new(&key)
