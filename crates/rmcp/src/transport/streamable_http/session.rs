@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 
-use futures::Sink;
-use tokio::sync::{
-    RwLock,
-    mpsc::{Receiver, Sender},
-};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::model::{
     CancelledNotificationParam, ClientJsonRpcMessage, ClientRequest, JsonRpcNotification,
@@ -61,7 +57,9 @@ impl Session {
         if self.request_router.contains_key(&request_id) {
             return Err(SessionError::DuplicatedRequestId(request_id.clone()));
         };
-        let progress_token = request.get_meta().and_then(|meta| meta.progress_token.clone());
+        let progress_token = request
+            .get_meta()
+            .and_then(|meta| meta.progress_token.clone());
         let (tx, rx) = tokio::sync::mpsc::channel(Self::REQUEST_WISE_CHANNEL_SIZE);
         self.send_to_service(ClientJsonRpcMessage::Request(JsonRpcRequest {
             request,
@@ -150,7 +148,3 @@ impl Session {
         Ok(())
     }
 }
-
-
-
-

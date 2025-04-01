@@ -196,13 +196,12 @@ pub type RequestId = NumberOrString;
 #[serde(transparent)]
 pub struct ProgressToken(pub NumberOrString);
 
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestMeta {
     pub progress_token: Option<ProgressToken>,
     #[serde(flatten)]
-    pub ext: JsonObject
+    pub ext: JsonObject,
 }
 
 impl RequestMeta {
