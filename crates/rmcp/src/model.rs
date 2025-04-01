@@ -2,14 +2,16 @@ use std::{borrow::Cow, sync::Arc};
 mod annotated;
 mod capabilities;
 mod content;
+mod extension;
 mod meta;
 mod prompt;
 mod resource;
+mod serde_impl;
 mod tool;
-
 pub use annotated::*;
 pub use capabilities::*;
 pub use content::*;
+pub use extension::*;
 pub use meta::*;
 pub use prompt::*;
 pub use resource::*;
@@ -152,6 +154,15 @@ pub enum NumberOrString {
     String(Arc<str>),
 }
 
+impl NumberOrString {
+    pub fn into_json_value(self) -> Value {
+        match self {
+            NumberOrString::Number(n) => Value::Number(serde_json::Number::from(n)),
+            NumberOrString::String(s) => Value::String(s.to_string()),
+        }
+    }
+}
+
 impl std::fmt::Display for NumberOrString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -195,41 +206,42 @@ pub type RequestId = NumberOrString;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(transparent)]
 pub struct ProgressToken(pub NumberOrString);
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct RequestMeta {
-    pub progress_token: Option<ProgressToken>,
-    #[serde(flatten)]
-    pub ext: JsonObject,
-}
-
-impl RequestMeta {
-    pub fn is_empty(&self) -> bool {
-        self.progress_token.is_none() && self.ext.is_empty()
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Request<M = String, P = JsonObject> {
     pub method: M,
     // #[serde(skip_serializing_if = "Option::is_none")]
     pub params: P,
+    /// extensions will carry anything possible in the context, including [`Meta`]
+    ///
+    /// this is similar with the Extensions in `http` crate
+    pub extensions: Extensions,
 }
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RequestNoParam<M = String> {
     pub method: M,
+    /// extensions will carry anything possible in the context, including [`Meta`]
+    ///
+    /// this is similar with the Extensions in `http` crate
+    pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Notification<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
+    /// extensions will carry anything possible in the context, including [`Meta`]
+    ///
+    /// this is similar with the Extensions in `http` crate
+    pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct NotificationNoParam<M = String> {
     pub method: M,
+    /// extensions will carry anything possible in the context, including [`Meta`]
+    ///
+    /// this is similar with the Extensions in `http` crate
+    pub extensions: Extensions,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -852,8 +864,6 @@ const_string!(CallToolRequestMethod = "tools/call");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolRequestParam {
-    #[serde(skip_serializing_if = "RequestMeta::is_empty", default)]
-    pub _meta: RequestMeta,
     pub name: Cow<'static, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
@@ -890,7 +900,7 @@ macro_rules! ts_union {
         export type $U: ident =
             $(|)?$($V: ident)|*;
     ) => {
-        #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+        #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         pub enum $U {
             $($V($V),)*
@@ -1118,6 +1128,7 @@ mod tests {
                         capabilities,
                         client_info,
                     },
+                ..
             }) => {
                 assert_eq!(capabilities.roots.unwrap().list_changed, Some(true));
                 assert_eq!(capabilities.sampling.unwrap().len(), 0);

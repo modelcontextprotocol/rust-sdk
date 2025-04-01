@@ -39,7 +39,6 @@ async fn main() -> Result<()> {
         .call_tool(CallToolRequestParam {
             name: "git_status".into(),
             arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
-            _meta: Default::default(),
         })
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");

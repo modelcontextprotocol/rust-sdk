@@ -191,6 +191,7 @@ macro_rules! method {
             let result = self
                 .send_request(ServerRequest::$Req($Req {
                     method: Default::default(),
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -205,6 +206,7 @@ macro_rules! method {
                 .send_request(ServerRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -238,6 +240,7 @@ macro_rules! method {
             self.send_notification(ServerNotification::$Not($Not {
                 method: Default::default(),
                 params,
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
@@ -247,6 +250,7 @@ macro_rules! method {
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ServerNotification::$Not($Not {
                 method: Default::default(),
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())

@@ -65,11 +65,7 @@ pub struct ToolCallContext<'service, S> {
 impl<'service, S> ToolCallContext<'service, S> {
     pub fn new(
         service: &'service S,
-        CallToolRequestParam {
-            name,
-            arguments,
-            _meta,
-        }: CallToolRequestParam,
+        CallToolRequestParam { name, arguments }: CallToolRequestParam,
         request_context: RequestContext<RoleServer>,
     ) -> Self {
         Self {

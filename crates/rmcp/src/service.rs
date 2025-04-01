@@ -4,10 +4,10 @@ use thiserror::Error;
 use crate::{
     error::Error as McpError,
     model::{
-        CancelledNotification, CancelledNotificationParam, JsonRpcBatchRequestItem,
+        CancelledNotification, CancelledNotificationParam, GetMeta, JsonRpcBatchRequestItem,
         JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage, JsonRpcNotification,
-        JsonRpcRequest, JsonRpcResponse, NumberOrString, ProgressToken, RequestId, RequestMeta,
-        ServerJsonRpcMessage, WithMeta,
+        JsonRpcRequest, JsonRpcResponse, Meta, NumberOrString, ProgressToken, RequestId,
+        ServerJsonRpcMessage,
     },
     transport::IntoTransport,
 };
@@ -59,12 +59,12 @@ impl<T> TransferObject for T where
 
 #[allow(private_bounds, reason = "there's no the third implementation")]
 pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
-    type Req: TransferObject + WithMeta<RequestMeta>;
+    type Req: TransferObject + GetMeta;
     type Resp: TransferObject;
     type Not: TryInto<CancelledNotification, Error = Self::Not>
         + From<CancelledNotification>
         + TransferObject;
-    type PeerReq: TransferObject + WithMeta<RequestMeta>;
+    type PeerReq: TransferObject + GetMeta;
     type PeerResp: TransferObject;
     type PeerNot: TryInto<CancelledNotification, Error = Self::PeerNot>
         + From<CancelledNotification>
@@ -265,6 +265,7 @@ impl<R: ServiceRole> RequestHandle<R> {
                             reason: Some(Self::REQUEST_TIMEOUT_REASON.to_owned()),
                         },
                         method: crate::model::CancelledNotificationMethod,
+                        extensions: Default::default(),
                     };
                     let _ = self.peer.send_notification(notification.into()).await;
                     error
@@ -285,6 +286,7 @@ impl<R: ServiceRole> RequestHandle<R> {
                 reason,
             },
             method: crate::model::CancelledNotificationMethod,
+            extensions: Default::default(),
         };
         self.peer.send_notification(notification.into()).await?;
         Ok(())
@@ -384,9 +386,9 @@ impl<R: ServiceRole> Peer<R> {
     ) -> Result<RequestHandle<R>, ServiceError> {
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
-        if let Some(meta) = request.get_meta_mut() {
-            meta.progress_token = Some(progress_token.clone());
-        };
+        request
+            .get_meta_mut()
+            .set_progress_token(progress_token.clone());
         let (responder, receiver) = tokio::sync::oneshot::channel();
         self.tx
             .send(PeerSinkMessage::Request {
@@ -455,7 +457,7 @@ pub struct RequestContext<R: ServiceRole> {
     /// this token will be cancelled when the [`CancelledNotification`] is received.
     pub ct: CancellationToken,
     pub id: RequestId,
-    pub meta: Option<RequestMeta>,
+    pub meta: Meta,
     /// An interface to fetch the remote client or server
     pub peer: Peer<R>,
 }
@@ -651,7 +653,7 @@ where
                             ct: context_ct,
                             id: id.clone(),
                             peer: peer.clone(),
-                            meta: request.get_meta().cloned(),
+                            meta: request.get_meta().clone(),
                         };
                         tokio::spawn(async move {
                             let result = service.handle_request(request, context).await;

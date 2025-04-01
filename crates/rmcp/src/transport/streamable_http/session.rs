@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::model::{
-    CancelledNotificationParam, ClientJsonRpcMessage, ClientRequest, JsonRpcNotification,
+    CancelledNotificationParam, ClientJsonRpcMessage, ClientRequest, GetMeta, JsonRpcNotification,
     JsonRpcRequest, Notification, ProgressNotificationParam, ProgressToken, RequestId,
-    ServerJsonRpcMessage, ServerNotification, WithMeta,
+    ServerJsonRpcMessage, ServerNotification,
 };
 
 pub const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
@@ -57,9 +57,7 @@ impl Session {
         if self.request_router.contains_key(&request_id) {
             return Err(SessionError::DuplicatedRequestId(request_id.clone()));
         };
-        let progress_token = request
-            .get_meta()
-            .and_then(|meta| meta.progress_token.clone());
+        let progress_token = request.get_meta().get_progress_token();
         let (tx, rx) = tokio::sync::mpsc::channel(Self::REQUEST_WISE_CHANNEL_SIZE);
         self.send_to_service(ClientJsonRpcMessage::Request(JsonRpcRequest {
             request,

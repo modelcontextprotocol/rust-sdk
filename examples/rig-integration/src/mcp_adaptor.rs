@@ -47,7 +47,6 @@ impl RigTool for McpToolAdaptor {
                     name: self.tool.name.clone(),
                     arguments: serde_json::from_str(&args)
                         .map_err(rig::tool::ToolError::JsonError)?,
-                    _meta: Default::default(),
                 })
                 .await
                 .map_err(|e| rig::tool::ToolError::ToolCallError(Box::new(e)))?;

@@ -142,6 +142,7 @@ where
     let init_request = InitializeRequest {
         method: Default::default(),
         params: service.get_info(),
+        extensions: Default::default(),
     };
     sink.send(ClientJsonRpcMessage::request(
         ClientRequest::InitializeRequest(init_request),
@@ -170,6 +171,7 @@ where
     let notification = ClientJsonRpcMessage::notification(
         ClientNotification::InitializedNotification(InitializedNotification {
             method: Default::default(),
+            extensions: Default::default(),
         }),
     );
     sink.send(notification).await?;
@@ -196,6 +198,7 @@ macro_rules! method {
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -210,6 +213,7 @@ macro_rules! method {
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -224,6 +228,7 @@ macro_rules! method {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
                 params,
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
@@ -233,6 +238,7 @@ macro_rules! method {
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
