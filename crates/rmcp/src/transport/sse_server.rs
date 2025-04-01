@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     response::{
         Response,
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
 };
@@ -25,16 +25,20 @@ type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
 pub type TransportReceiver = ReceiverStream<RxJsonRpcMessage<RoleServer>>;
 
+const DEFAULT_AUTO_PING_INTERVAL: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 struct App {
     txs: TxStore,
     transport_tx: tokio::sync::mpsc::UnboundedSender<SseServerTransport>,
     post_path: Arc<str>,
+    sse_ping_interval: Duration,
 }
 
 impl App {
     pub fn new(
         post_path: String,
+        sse_ping_interval: Duration,
     ) -> (
         Self,
         tokio::sync::mpsc::UnboundedReceiver<SseServerTransport>,
@@ -45,6 +49,7 @@ impl App {
                 txs: Default::default(),
                 transport_tx,
                 post_path: post_path.into(),
+                sse_ping_interval,
             },
             transport_rx,
         )
@@ -84,7 +89,6 @@ async fn post_event_handler(
 async fn sse_handler(
     State(app): State<App>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, io::Error>>>, Response<String>> {
-    const AUTO_PING_INTERVAL: Duration = Duration::from_secs(1);
     let session = session_id();
     tracing::info!(%session, "sse connection");
     use tokio_stream::{StreamExt, wrappers::ReceiverStream};
@@ -113,22 +117,19 @@ async fn sse_handler(
         return Err(response);
     }
     let post_path = app.post_path.as_ref();
+    let ping_interval = app.sse_ping_interval;
     let stream = futures::stream::once(futures::future::ok(
         Event::default()
             .event("endpoint")
             .data(format!("{post_path}?sessionId={session}")),
     ))
-    .chain(
-        ReceiverStream::new(to_client_rx).map(|message| match serde_json::to_string(&message) {
+    .chain(ReceiverStream::new(to_client_rx).map(|message| {
+        match serde_json::to_string(&message) {
             Ok(bytes) => Ok(Event::default().event("message").data(&bytes)),
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        }),
-    )
-    .merge(
-        tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(AUTO_PING_INTERVAL))
-            .map(|_| Ok(Event::default().comment("ping"))),
-    );
-    Ok(Sse::new(stream))
+        }
+    }));
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(ping_interval)))
 }
 
 pub struct SseServerTransport {
@@ -205,6 +206,7 @@ pub struct SseServerConfig {
     pub sse_path: String,
     pub post_path: String,
     pub ct: CancellationToken,
+    pub sse_keep_alive: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -220,6 +222,7 @@ impl SseServer {
             sse_path: "/sse".to_string(),
             post_path: "/message".to_string(),
             ct: CancellationToken::new(),
+            sse_keep_alive: None,
         })
         .await
     }
@@ -245,7 +248,10 @@ impl SseServer {
     /// Warning: This function creates a new SseServer instance with the provided configuration.
     /// `App.post_path` may be incorrect if using `Router` as an embedded router.
     pub fn new(config: SseServerConfig) -> (SseServer, Router) {
-        let (app, transport_rx) = App::new(config.post_path.clone());
+        let (app, transport_rx) = App::new(
+            config.post_path.clone(),
+            config.sse_keep_alive.unwrap_or(DEFAULT_AUTO_PING_INTERVAL),
+        );
         let router = Router::new()
             .route(&config.sse_path, get(sse_handler))
             .route(&config.post_path, post(post_event_handler))
