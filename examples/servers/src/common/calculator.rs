@@ -1,5 +1,6 @@
 use rmcp::{
     ServerHandler,
+    handler::server::wrapper::Json,
     model::{ServerCapabilities, ServerInfo},
     schemars, tool,
 };
@@ -28,8 +29,8 @@ impl Calculator {
         #[tool(param)]
         #[schemars(description = "the left hand side number")]
         b: i32,
-    ) -> String {
-        (a - b).to_string()
+    ) -> Json<i32> {
+        Json(a - b)
     }
 }
 

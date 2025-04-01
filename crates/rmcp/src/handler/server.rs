@@ -6,7 +6,7 @@ use crate::{
 
 mod resource;
 pub mod tool;
-
+pub mod wrapper;
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,
