@@ -12,7 +12,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub async fn retrive(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub async fn retrieve(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let content = tokio::fs::read_to_string(path).await?;
         let config: Self = toml::from_str(&content)?;
         Ok(config)

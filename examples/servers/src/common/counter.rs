@@ -146,7 +146,7 @@ impl ServerHandler for Counter {
             next_cursor: None,
             prompts: vec![Prompt::new(
                 "example_prompt",
-                Some("This is an example prompt that takes one required agrument, message"),
+                Some("This is an example prompt that takes one required argument, message"),
                 Some(vec![PromptArgument {
                     name: "message".to_string(),
                     description: Some("A message to put in the prompt".to_string()),

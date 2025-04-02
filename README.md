@@ -188,3 +188,7 @@ See [examples](examples/README.md)
 
 - [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
 - [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
+
+## Development with Dev Container
+
+See [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.

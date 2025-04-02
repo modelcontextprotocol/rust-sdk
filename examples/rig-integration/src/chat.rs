@@ -74,9 +74,12 @@ pub async fn output_error(
     e: impl std::fmt::Display,
     output: &mut BufWriter<tokio::io::Stdout>,
 ) -> std::io::Result<()> {
-    output.write_all(b"\x1b[31mERROR: \x1b[0m").await?;
+    output
+        .write_all(b"\x1b[1;31m\xE2\x9D\x8C ERROR: \x1b[0m")
+        .await?;
     output.write_all(e.to_string().as_bytes()).await?;
     output.write_all(b"\n").await?;
+    output.flush().await?;
     Ok(())
 }
 
@@ -84,7 +87,11 @@ pub async fn output_agent(
     content: impl std::fmt::Display,
     output: &mut BufWriter<tokio::io::Stdout>,
 ) -> std::io::Result<()> {
+    output
+        .write_all(b"\x1b[1;34m\xF0\x9F\xA4\x96 Agent: \x1b[0m")
+        .await?;
     output.write_all(content.to_string().as_bytes()).await?;
+    output.write_all(b"\n").await?;
     output.flush().await?;
     Ok(())
 }
@@ -93,16 +100,22 @@ pub async fn stream_output_toolcall(
     content: impl std::fmt::Display,
     output: &mut BufWriter<tokio::io::Stdout>,
 ) -> std::io::Result<()> {
-    output.write_all(b"\x1b[33mtool>\x1b[0m ").await?;
+    output
+        .write_all(b"\x1b[1;33m\xF0\x9F\x9B\xA0 Tool Call: \x1b[0m")
+        .await?;
     output.write_all(content.to_string().as_bytes()).await?;
     output.write_all(b"\n").await?;
+    output.flush().await?;
     Ok(())
 }
 
 pub async fn stream_output_agent_start(
     output: &mut BufWriter<tokio::io::Stdout>,
 ) -> std::io::Result<()> {
-    output.write_all(b"\x1b[34magent>\x1b[0m ").await?;
+    output
+        .write_all(b"\x1b[1;34m\xF0\x9F\xA4\x96 Agent: \x1b[0m")
+        .await?;
+    output.flush().await?;
     Ok(())
 }
 
@@ -110,5 +123,6 @@ pub async fn stream_output_agent_finished(
     output: &mut BufWriter<tokio::io::Stdout>,
 ) -> std::io::Result<()> {
     output.write_all(b"\n").await?;
+    output.flush().await?;
     Ok(())
 }

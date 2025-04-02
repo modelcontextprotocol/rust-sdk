@@ -44,7 +44,7 @@ impl Demo {
 fn test_complex_schema() {
     let attr = Demo::chat_tool_attr();
     let input_schema = attr.input_schema;
-    let enum_numer = input_schema
+    let enum_number = input_schema
         .get("definitions")
         .unwrap()
         .as_object()
@@ -58,6 +58,6 @@ fn test_complex_schema() {
         .as_array()
         .unwrap()
         .len();
-    assert_eq!(enum_numer, 4);
+    assert_eq!(enum_number, 4);
     println!("{}", serde_json::to_string_pretty(&input_schema).unwrap());
 }
