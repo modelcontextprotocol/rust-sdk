@@ -94,7 +94,7 @@ let quit_reason = server.waiting().await?;
 let quit_reason = server.cancel().await?;
 ```
 
-### Use marcos to declaring tool
+### Use macros to declaring tool
 
 Use `toolbox` and `tool` macros to create tool quickly.
 
