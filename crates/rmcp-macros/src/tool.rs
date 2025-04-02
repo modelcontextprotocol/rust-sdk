@@ -213,11 +213,11 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
     // let mut fommated_fn_args: Punctuated<FnArg, Comma> = Punctuated::new();
     let mut unextractable_args_indexes = HashSet::new();
     for (index, mut fn_arg) in input_fn.sig.inputs.iter_mut().enumerate() {
-        enum Catched {
+        enum Caught {
             Param(ToolFnParamAttrs),
             Aggregated(PatType),
         }
-        let mut catched = None;
+        let mut caught = None;
         match &mut fn_arg {
             FnArg::Receiver(_) => {
                 continue;
@@ -244,7 +244,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                                                 "input param must have an ident as name",
                                             ));
                                         };
-                                        catched.replace(Catched::Param(ToolFnParamAttrs {
+                                        caught.replace(Caught::Param(ToolFnParamAttrs {
                                             serde_meta: Vec::new(),
                                             schemars_meta: Vec::new(),
                                             ident: arg_ident,
@@ -252,7 +252,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                                         }));
                                     }
                                     ParamMarker::Aggregated => {
-                                        catched.replace(Catched::Aggregated(pat_type.clone()));
+                                        caught.replace(Caught::Aggregated(pat_type.clone()));
                                     }
                                 }
                             } else if meta_list.path.is_ident(SERDE_IDENT) {
@@ -268,8 +268,8 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                         }
                     }
                 }
-                match catched {
-                    Some(Catched::Param(mut param)) => {
+                match caught {
+                    Some(Caught::Param(mut param)) => {
                         param.serde_meta = serde_metas;
                         param.schemars_meta = schemars_metas;
                         match &mut tool_macro_attrs.params {
@@ -282,7 +282,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                         }
                         unextractable_args_indexes.insert(index);
                     }
-                    Some(Catched::Aggregated(rust_type)) => {
+                    Some(Caught::Aggregated(rust_type)) => {
                         tool_macro_attrs.params = ToolParams::Aggregated { rust_type };
                         unextractable_args_indexes.insert(index);
                     }
