@@ -527,9 +527,9 @@ where
         tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
 
     if R::IS_CLIENT {
-        tracing::info!(?peer_info, "Service initialized as client");
+        tracing::debug!(?peer_info, "Service initialized as client");
     } else {
-        tracing::info!(?peer_info, "Service initialized as server");
+        tracing::debug!(?peer_info, "Service initialized as server");
     }
 
     let (peer, mut peer_proxy) = <Peer<R>>::new(id_provider, peer_info);
@@ -572,7 +572,7 @@ where
                             Event::PeerMessage(m)
                         } else {
                             // input stream closed
-                            tracing::info!("input stream terminated");
+                            tracing::debug!("input stream terminated");
                             break QuitReason::Closed
                         }
                     }
@@ -584,7 +584,7 @@ where
                         }
                     }
                     _ = serve_loop_ct.cancelled() => {
-                        tracing::info!("task cancelled");
+                        tracing::debug!("task cancelled");
                         break QuitReason::Cancelled
                     }
                 }
@@ -646,7 +646,7 @@ where
                     let _ = responder.send(response);
                     if let Some(param) = cancellation_param {
                         if let Some(responder) = local_responder_pool.remove(&param.request_id) {
-                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
+                            tracing::debug!(id = %param.request_id, reason = param.reason, "cancelled");
                             let _response_result = responder.send(Err(ServiceError::Cancelled {
                                 reason: param.reason.clone(),
                             }));
@@ -656,7 +656,7 @@ where
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
                     id, request, ..
                 })) => {
-                    tracing::info!(%id, ?request, "received request");
+                    tracing::debug!(%id, ?request, "received request");
                     {
                         let service = shared_service.clone();
                         let sink = sink_proxy_tx.clone();
@@ -674,11 +674,11 @@ where
                             let result = service.handle_request(request, context).await;
                             let response = match result {
                                 Ok(result) => {
-                                    tracing::info!(%id, ?result, "response message");
+                                    tracing::debug!(%id, ?result, "response message");
                                     JsonRpcMessage::response(result, id)
                                 }
                                 Err(error) => {
-                                    tracing::warn!(%id, ?error, "response error");
+                                    tracing::debug!(%id, ?error, "response error");
                                     JsonRpcMessage::error(error, id)
                                 }
                             };
@@ -690,12 +690,12 @@ where
                     notification,
                     ..
                 })) => {
-                    tracing::info!(?notification, "received notification");
+                    tracing::debug!(?notification, "received notification");
                     // catch cancelled notification
                     let notification = match notification.try_into() {
                         Ok::<CancelledNotification, _>(cancelled) => {
                             if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
-                                tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
+                                tracing::debug!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
                                 ct.cancel();
                             }
                             cancelled.into()
@@ -752,7 +752,7 @@ where
         if let Err(e) = sink_close_result {
             tracing::error!(%e, "fail to close sink");
         }
-        tracing::info!(?quit_reason, "serve finished");
+        tracing::debug!(?quit_reason, "serve finished");
         quit_reason
     });
     Ok(RunningService {
