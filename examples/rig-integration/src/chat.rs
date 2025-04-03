@@ -87,11 +87,7 @@ pub async fn output_agent(
     content: impl std::fmt::Display,
     output: &mut BufWriter<tokio::io::Stdout>,
 ) -> std::io::Result<()> {
-    output
-        .write_all(b"\x1b[1;34m\xF0\x9F\xA4\x96 Agent: \x1b[0m")
-        .await?;
     output.write_all(content.to_string().as_bytes()).await?;
-    output.write_all(b"\n").await?;
     output.flush().await?;
     Ok(())
 }
