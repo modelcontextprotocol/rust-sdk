@@ -4,16 +4,16 @@ use thiserror::Error;
 use super::*;
 use crate::model::{
     CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
-    CancelledNotificationParam, ClientInfo, ClientMessage, ClientNotification, ClientRequest,
-    ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult, GetPromptRequest,
-    GetPromptRequestParam, GetPromptResult, InitializeRequest, InitializedNotification,
-    JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
-    ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-    ListToolsResult, PaginatedRequestParam, PaginatedRequestParamInner, ProgressNotification,
-    ProgressNotificationParam, ReadResourceRequest, ReadResourceRequestParam, ReadResourceResult,
-    RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
-    ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParam, SubscribeRequest,
-    SubscribeRequestParam, UnsubscribeRequest, UnsubscribeRequestParam,
+    CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
+    ClientRequest, ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult,
+    GetPromptRequest, GetPromptRequestParam, GetPromptResult, InitializeRequest,
+    InitializedNotification, JsonRpcResponse, ListPromptsRequest, ListPromptsResult,
+    ListResourceTemplatesRequest, ListResourceTemplatesResult, ListResourcesRequest,
+    ListResourcesResult, ListToolsRequest, ListToolsResult, PaginatedRequestParam,
+    ProgressNotification, ProgressNotificationParam, ReadResourceRequest, ReadResourceRequestParam,
+    ReadResourceResult, RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage,
+    ServerNotification, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParam,
+    SubscribeRequest, SubscribeRequestParam, UnsubscribeRequest, UnsubscribeRequestParam,
 };
 
 /// It represents the error that may occur when serving the client.
@@ -141,11 +141,12 @@ where
     let init_request = InitializeRequest {
         method: Default::default(),
         params: service.get_info(),
+        extensions: Default::default(),
     };
-    sink.send(
-        ClientMessage::Request(ClientRequest::InitializeRequest(init_request), id.clone())
-            .into_json_rpc_message(),
-    )
+    sink.send(ClientJsonRpcMessage::request(
+        ClientRequest::InitializeRequest(init_request),
+        id.clone(),
+    ))
     .await?;
 
     let (response, response_id) = expect_response(&mut stream, "initialize response")
@@ -166,12 +167,13 @@ where
     };
 
     // send notification
-    let notification = ClientMessage::Notification(ClientNotification::InitializedNotification(
-        InitializedNotification {
+    let notification = ClientJsonRpcMessage::notification(
+        ClientNotification::InitializedNotification(InitializedNotification {
             method: Default::default(),
-        },
-    ));
-    sink.send(notification.into_json_rpc_message()).await?;
+            extensions: Default::default(),
+        }),
+    );
+    sink.send(notification).await?;
     serve_inner(service, (sink, stream), initialize_result, id_provider, ct).await
 }
 
@@ -195,6 +197,22 @@ macro_rules! method {
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
+                }))
+                .await?;
+            match result {
+                ServerResult::$Resp(result) => Ok(result),
+                _ => Err(ServiceError::UnexpectedResponse),
+            }
+        }
+    };
+    (peer_req $method:ident $Req:ident($Param: ident)? => $Resp: ident ) => {
+        pub async fn $method(&self, params: Option<$Param>) -> Result<$Resp, ServiceError> {
+            let result = self
+                .send_request(ClientRequest::$Req($Req {
+                    method: Default::default(),
+                    params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -209,6 +227,7 @@ macro_rules! method {
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -223,6 +242,7 @@ macro_rules! method {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
                 params,
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
@@ -232,6 +252,7 @@ macro_rules! method {
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
@@ -243,14 +264,14 @@ impl Peer<RoleClient> {
     method!(peer_req complete CompleteRequest(CompleteRequestParam) => CompleteResult);
     method!(peer_req set_level SetLevelRequest(SetLevelRequestParam));
     method!(peer_req get_prompt GetPromptRequest(GetPromptRequestParam) => GetPromptResult);
-    method!(peer_req list_prompts ListPromptsRequest(PaginatedRequestParam) => ListPromptsResult);
-    method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParam) => ListResourcesResult);
-    method!(peer_req list_resource_templates ListResourceTemplatesRequest(PaginatedRequestParam) => ListResourceTemplatesResult);
+    method!(peer_req list_prompts ListPromptsRequest(PaginatedRequestParam)? => ListPromptsResult);
+    method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParam)? => ListResourcesResult);
+    method!(peer_req list_resource_templates ListResourceTemplatesRequest(PaginatedRequestParam)? => ListResourceTemplatesResult);
     method!(peer_req read_resource ReadResourceRequest(ReadResourceRequestParam) => ReadResourceResult);
     method!(peer_req subscribe SubscribeRequest(SubscribeRequestParam) );
     method!(peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParam));
     method!(peer_req call_tool CallToolRequest(CallToolRequestParam) => CallToolResult);
-    method!(peer_req list_tools ListToolsRequest(PaginatedRequestParam) => ListToolsResult);
+    method!(peer_req list_tools ListToolsRequest(PaginatedRequestParam)? => ListToolsResult);
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -267,7 +288,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_tools(Some(PaginatedRequestParamInner { cursor }))
+                .list_tools(Some(PaginatedRequestParam { cursor }))
                 .await?;
             tools.extend(result.tools);
             cursor = result.next_cursor;
@@ -286,7 +307,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_prompts(Some(PaginatedRequestParamInner { cursor }))
+                .list_prompts(Some(PaginatedRequestParam { cursor }))
                 .await?;
             prompts.extend(result.prompts);
             cursor = result.next_cursor;
@@ -305,7 +326,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_resources(Some(PaginatedRequestParamInner { cursor }))
+                .list_resources(Some(PaginatedRequestParam { cursor }))
                 .await?;
             resources.extend(result.resources);
             cursor = result.next_cursor;
@@ -326,7 +347,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_resource_templates(Some(PaginatedRequestParamInner { cursor }))
+                .list_resource_templates(Some(PaginatedRequestParam { cursor }))
                 .await?;
             resource_templates.extend(result.resource_templates);
             cursor = result.next_cursor;

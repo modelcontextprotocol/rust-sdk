@@ -453,7 +453,7 @@ macro_rules! tool_box {
     (@derive $tool_box:ident) => {
         async fn list_tools(
             &self,
-            _: $crate::model::PaginatedRequestParam,
+            _: Option<$crate::model::PaginatedRequestParam>,
             _: $crate::service::RequestContext<$crate::service::RoleServer>,
         ) -> Result<$crate::model::ListToolsResult, $crate::Error> {
             Ok($crate::model::ListToolsResult {

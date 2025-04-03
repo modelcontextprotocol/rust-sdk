@@ -141,21 +141,21 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     }
     fn list_prompts(
         &self,
-        request: PaginatedRequestParam,
+        request: Option<PaginatedRequestParam>,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListPromptsResult::default()))
     }
     fn list_resources(
         &self,
-        request: PaginatedRequestParam,
+        request: Option<PaginatedRequestParam>,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListResourcesResult::default()))
     }
     fn list_resource_templates(
         &self,
-        request: PaginatedRequestParam,
+        request: Option<PaginatedRequestParam>,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListResourceTemplatesResult::default()))
@@ -192,7 +192,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     }
     fn list_tools(
         &self,
-        request: PaginatedRequestParam,
+        request: Option<PaginatedRequestParam>,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListToolsResult::default()))

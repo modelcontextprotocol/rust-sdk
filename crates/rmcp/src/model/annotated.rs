@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    RawContent, RawEmbeddedResource, RawImageContent, RawResource, RawResourceTemplate,
-    RawTextContent, Role,
+    RawAudioContent, RawContent, RawEmbeddedResource, RawImageContent, RawResource,
+    RawResourceTemplate, RawTextContent, Role,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -162,6 +162,7 @@ macro_rules! annotate {
 annotate!(RawContent);
 annotate!(RawTextContent);
 annotate!(RawImageContent);
+annotate!(RawAudioContent);
 annotate!(RawEmbeddedResource);
 annotate!(RawResource);
 annotate!(RawResourceTemplate);
