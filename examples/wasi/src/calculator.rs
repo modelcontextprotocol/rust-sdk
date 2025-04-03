@@ -18,14 +18,14 @@ impl Calculator {
         (a + b).to_string()
     }
 
-    #[tool(description = "Calculate the sum of two numbers")]
+    #[tool(description = "Calculate the sub of two numbers")]
     fn sub(
         &self,
         #[tool(param)]
         #[schemars(description = "the left hand side number")]
         a: i32,
         #[tool(param)]
-        #[schemars(description = "the left hand side number")]
+        #[schemars(description = "the right hand side number")]
         b: i32,
     ) -> String {
         (a - b).to_string()
