@@ -25,18 +25,18 @@ anyhow = "1.0"
 tower = "0.5"
 
 [[example]]
-name = "sse"
+name = "clients_sse"
 path = "src/sse.rs"
 
 [[example]]
-name = "std_io"
+name = "clients_std_io"
 path = "src/std_io.rs"
 
 [[example]]
-name = "everything_stdio"
+name = "clients_everything_stdio"
 path = "src/everything_stdio.rs"
 
 [[example]]
-name = "collection"
+name = "clients_collection"
 path = "src/collection.rs"
 

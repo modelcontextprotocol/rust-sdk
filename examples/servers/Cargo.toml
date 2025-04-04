@@ -30,13 +30,13 @@ tokio-stream = { version = "0.1" }
 tokio-util = { version = "0.7", features = ["codec"] }
 
 [[example]]
-name = "std_io"
+name = "servers_std_io"
 path = "src/std_io.rs"
 
 [[example]]
-name = "axum"
+name = "servers_axum"
 path = "src/axum.rs"
 
 [[example]]
-name = "axum_router"
+name = "servers_axum_router"
 path = "src/axum_router.rs"

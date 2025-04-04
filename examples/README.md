@@ -1,3 +1,34 @@
+# Quick Start With Cluade Desktop
+
+1. **Build the Server (Counter Example)**
+    ```sh
+    cargo build --release --example servers_std_io
+    ```
+    This builds a standard input/output MCP server binary.
+
+2. **Add or update this section in your** `~/.config/claude-desktop/config.toml`
+    ```json
+    {
+        "mcpServers": {
+            "counter": {
+            "command": "PATH-TO/rust-sdk/target/release/examples/servers_std_io.exe",
+            "args": []
+            }
+        }
+    }
+    ```
+
+3. **Once Claude Desktop is running, try chatting:**
+    ```text
+    counter.say_hello
+    ```
+    Or test other tools like:
+    ```text
+    counter.increment
+    counter.get_value
+    counter.sum {"a": 3, "b": 4}
+    ```
+
 # Client Examples
 
 - [Client SSE](clients/src/sse.rs), using reqwest and eventsource-client.
