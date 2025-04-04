@@ -1,4 +1,4 @@
-# Quick Start With Cluade Desktop
+# Quick Start With Claude Desktop
 
 1. **Build the Server (Counter Example)**
     ```sh
