@@ -1,5 +1,3 @@
-cargo-features = ["edition2024"]
-
 [package]
 name = "rmcp-macros"
 license = { workspace = true }
@@ -15,7 +13,7 @@ documentation = "https://docs.rs/rmcp-macros"
 proc-macro = true
 
 [dependencies]
-syn = {version = "2", features = ["full"]}
+syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 

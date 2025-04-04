@@ -1,5 +1,3 @@
-cargo-features = ["edition2024"]
-
 [package]
 name = "rmcp"
 license = { workspace = true }
@@ -19,7 +17,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2"
 chrono = { version = "0.4.38", features = ["serde"] }
-tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 futures = "0.3"
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
@@ -35,8 +33,8 @@ base64 = { version = "0.21", optional = true }
 # for SSE client
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
-    "stream",
     "rustls-tls",
+    "stream",
 ], optional = true }
 sse-stream = { version = "0.1.3", optional = true }
 url = { version = "2.4", optional = true }
@@ -54,22 +52,22 @@ rand = { version = "0.9", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 
 # macro
-rmcp-macros = { version = "0.1", workspace = true, optional = true }
+rmcp-macros = { workspace = true, optional = true }
 
 [features]
 default = ["base64", "macros", "server"]
 client = []
-server = ["transport-async-rw", "dep:schemars"]
-macros = ["dep:rmcp-macros", "dep:paste"]
+server = ["dep:schemars", "transport-async-rw"]
+macros = ["dep:paste", "dep:rmcp-macros"]
 transport-sse = ["dep:reqwest", "dep:sse-stream", "dep:url"]
-transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
-transport-io = ["transport-async-rw", "tokio/io-std"]
-transport-child-process = ["transport-async-rw", "tokio/process"]
+transport-async-rw = ["tokio-util/codec", "tokio/io-util"]
+transport-io = ["tokio/io-std", "transport-async-rw"]
+transport-child-process = ["tokio/process", "transport-async-rw"]
 transport-sse-server = [
-    "transport-async-rw",
     "dep:axum",
     "dep:rand",
     "dep:tokio-stream",
+    "transport-async-rw",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
@@ -80,8 +78,8 @@ schemars = { version = "0.8" }
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
     "env-filter",
-    "std",
     "fmt",
+    "std",
 ] }
 [[test]]
 name = "test_tool_macros"
@@ -90,7 +88,13 @@ path = "tests/test_tool_macros.rs"
 
 [[test]]
 name = "test_with_python"
-required-features = ["server", "client", "transport-sse-server", "transport-sse", "transport-child-process"]
+required-features = [
+    "client",
+    "server",
+    "transport-child-process",
+    "transport-sse",
+    "transport-sse-server",
+]
 path = "tests/test_with_python.rs"
 
 [[test]]

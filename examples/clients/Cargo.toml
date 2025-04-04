@@ -1,17 +1,15 @@
-cargo-features = ["edition2024"]
-
 [package]
 name = "mcp-client-examples"
 version = "0.1.5"
-edition = "2024"
+edition = { workspace = true }
 publish = false
 
 [dependencies]
 rmcp = { path = "../../crates/rmcp", features = [
     "client",
-    "transport-sse",
+    "tower",
     "transport-child-process",
-    "tower"
+    "transport-sse",
 ] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -39,4 +37,3 @@ path = "src/everything_stdio.rs"
 [[example]]
 name = "collection"
 path = "src/collection.rs"
-
