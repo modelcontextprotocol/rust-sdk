@@ -100,6 +100,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     fn get_info(&self) -> <RoleServer as ServiceRole>::Info {
         self.get_info()
     }
+
 }
 
 #[allow(unused_variables)]
@@ -228,5 +229,27 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
 
     fn get_info(&self) -> ServerInfo {
         ServerInfo::default()
+    }
+
+    fn log(
+        &self,
+        level: LoggingLevel,
+        message: &str,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        let peer = self.get_peer();
+        let params = LoggingMessageNotificationParam {
+            level,
+            data: serde_json::json!({
+                "message": message,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }),
+            logger: None,
+        };
+        
+        async move {
+            if let Some(p) = peer {
+                let _ = p.notify_logging_message(params).await;
+            }
+        }
     }
 }

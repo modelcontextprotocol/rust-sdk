@@ -610,7 +610,7 @@ pub type PromptListChangedNotification = NotificationNoParam<PromptListChangedNo
 const_string!(ToolListChangedNotificationMethod = "notifications/tools/list_changed");
 pub type ToolListChangedNotification = NotificationNoParam<ToolListChangedNotificationMethod>;
 // 日志相关
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum LoggingLevel {
     Debug,
@@ -960,6 +960,17 @@ impl From<CancelledNotification> for ClientNotification {
         ClientNotification::CancelledNotification(value)
     }
 }
+
+const_string!(LogRequestMethod = "logging/log");
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogRequestParam {
+    pub level: LoggingLevel,
+    pub message: String,
+}
+
+pub type LogRequest = Request<LogRequestMethod, LogRequestParam>;
 
 #[cfg(test)]
 mod tests {

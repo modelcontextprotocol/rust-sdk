@@ -13,7 +13,7 @@ use crate::model::{
     ProgressNotificationParam, ReadResourceRequest, ReadResourceRequestParam, ReadResourceResult,
     RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
     ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParam, SubscribeRequest,
-    SubscribeRequestParam, UnsubscribeRequest, UnsubscribeRequestParam,
+    SubscribeRequestParam, UnsubscribeRequest, UnsubscribeRequestParam, LogRequest, LogRequestParam,
 };
 
 /// It represents the error that may occur when serving the client.
