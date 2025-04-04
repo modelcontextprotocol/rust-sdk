@@ -18,7 +18,7 @@ rmcp = { path = "../../crates/rmcp", features = [
     "client",
     "transport-child-process",
     "transport-sse",
-], no-default-features = true }
+] }
 anyhow = "1.0"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }

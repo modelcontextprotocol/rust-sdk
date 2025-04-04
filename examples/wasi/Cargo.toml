@@ -17,7 +17,7 @@ readme = { workspace = true }
 crate-type = ["cdylib"]
 
 [dependencies]
-wasi = { version = "0.14.2+wasi-0.2.4"}
+wasi = { version = "0.14.2"}
 tokio = { version = "1", features = ["rt", "io-util", "sync", "macros", "time"] }
 rmcp= { path = "../../crates/rmcp", features = ["server", "macros"] }
 serde = { version  = "1", features = ["derive"]}
