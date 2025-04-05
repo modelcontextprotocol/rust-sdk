@@ -67,6 +67,7 @@ pub use sse_server::SseServer;
 // #[cfg(feature = "transport-ws")]
 // pub mod ws;
 
+pub mod streamable_http;
 pub trait IntoTransport<R, E, A>: Send + 'static
 where
     R: ServiceRole,

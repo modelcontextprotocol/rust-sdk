@@ -349,6 +349,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                     name: #name.into(),
                     description: Some(#description.into()),
                     input_schema: #schema.into(),
+                    annotations: None
                 }
             }
         }
@@ -413,10 +414,10 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                     Some(line)
                 }
             });
-        let trivial_argrextraction_part = quote! {
+        let trivial_arg_extraction_part = quote! {
             #(#trivial_args)*
         };
-        let processed_argrextraction_part = match &mut tool_macro_attrs.params {
+        let processed_arg_extraction_part = match &mut tool_macro_attrs.params {
             ToolParams::Aggregated { rust_type } => {
                 let PatType { pat, ty, .. } = rust_type;
                 quote! {
@@ -487,8 +488,8 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             #raw_fn_vis async fn #tool_call_fn_ident(context: rmcp::handler::server::tool::ToolCallContext<'_, Self>)
                 -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
                 use rmcp::handler::server::tool::*;
-                #trivial_argrextraction_part
-                #processed_argrextraction_part
+                #trivial_arg_extraction_part
+                #processed_arg_extraction_part
                 #call
             }
         }

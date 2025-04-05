@@ -4,14 +4,15 @@ use thiserror::Error;
 use super::*;
 use crate::model::{
     CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
-    CancelledNotificationParam, ClientInfo, ClientMessage, ClientNotification, ClientRequest,
-    ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult, GetPromptRequest,
-    GetPromptRequestParam, GetPromptResult, InitializeRequest, InitializedNotification,
-    JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
-    ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-    ListToolsResult, PaginatedRequestParam, PaginatedRequestParamInner, ProgressNotification,
-    ProgressNotificationParam, ReadResourceRequest, ReadResourceRequestParam, ReadResourceResult,
-    RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
+    CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
+    ClientRequest, ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult,
+    GetPromptRequest, GetPromptRequestParam, GetPromptResult, InitializeRequest,
+    InitializedNotification, JsonRpcResponse, ListPromptsRequest, ListPromptsResult,
+    ListResourceTemplatesRequest, ListResourceTemplatesResult, ListResourcesRequest,
+    ListResourcesResult, ListToolsRequest, ListToolsResult, PaginatedRequestParam,
+    PaginatedRequestParamInner, ProgressNotification, ProgressNotificationParam,
+    ReadResourceRequest, ReadResourceRequestParam, ReadResourceResult, RequestId,
+    RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
     ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParam, SubscribeRequest,
     SubscribeRequestParam, UnsubscribeRequest, UnsubscribeRequestParam,
 };
@@ -141,11 +142,12 @@ where
     let init_request = InitializeRequest {
         method: Default::default(),
         params: service.get_info(),
+        extensions: Default::default(),
     };
-    sink.send(
-        ClientMessage::Request(ClientRequest::InitializeRequest(init_request), id.clone())
-            .into_json_rpc_message(),
-    )
+    sink.send(ClientJsonRpcMessage::request(
+        ClientRequest::InitializeRequest(init_request),
+        id.clone(),
+    ))
     .await?;
 
     let (response, response_id) = expect_response(&mut stream, "initialize response")
@@ -166,12 +168,13 @@ where
     };
 
     // send notification
-    let notification = ClientMessage::Notification(ClientNotification::InitializedNotification(
-        InitializedNotification {
+    let notification = ClientJsonRpcMessage::notification(
+        ClientNotification::InitializedNotification(InitializedNotification {
             method: Default::default(),
-        },
-    ));
-    sink.send(notification.into_json_rpc_message()).await?;
+            extensions: Default::default(),
+        }),
+    );
+    sink.send(notification).await?;
     serve_inner(service, (sink, stream), initialize_result, id_provider, ct).await
 }
 
@@ -195,6 +198,7 @@ macro_rules! method {
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -209,6 +213,7 @@ macro_rules! method {
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -223,6 +228,7 @@ macro_rules! method {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
                 params,
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
@@ -232,6 +238,7 @@ macro_rules! method {
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
