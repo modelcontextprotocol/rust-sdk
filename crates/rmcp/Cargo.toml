@@ -80,6 +80,7 @@ tracing-subscriber = { version = "0.3", features = [
     "std",
     "fmt",
 ] }
+async-trait = "0.1"
 [[test]]
 name = "test_tool_macros"
 required-features = ["server"]
@@ -104,4 +105,9 @@ path = "tests/test_notification.rs"
 name = "test_logging"
 required-features = ["server", "client"]
 path = "tests/test_logging.rs"
+
+[[test]]
+name = "test_message_protocol"
+required-features = ["client"]
+path = "tests/test_message_protocol.rs"
 

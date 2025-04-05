@@ -84,6 +84,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
             McpError::method_not_found::<CreateMessageRequestMethod>(),
         ))
     }
+
     fn list_roots(
         &self,
         context: RequestContext<RoleClient>,

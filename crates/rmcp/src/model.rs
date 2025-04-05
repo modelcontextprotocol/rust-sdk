@@ -660,6 +660,16 @@ pub struct SamplingMessage {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum ContextInclusion {
+    #[serde(rename = "allServers")]
+    AllServers,
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "thisServer")]
+    ThisServer,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMessageRequestParam {
     pub messages: Vec<SamplingMessage>,
@@ -668,7 +678,7 @@ pub struct CreateMessageRequestParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_context: Option<String>,
+    pub include_context: Option<ContextInclusion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     pub max_tokens: u32,

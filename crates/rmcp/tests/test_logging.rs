@@ -1,133 +1,24 @@
 // cargo test --features "server client" --package rmcp test_logging
-use std::{
-    future::Future,
-    sync::{Arc, Mutex},
-};
+mod common;
 
+use std::sync::{Arc, Mutex};
+
+use common::handlers::{TestClientHandler, TestServer};
 use rmcp::{
-    ClientHandler, Error as McpError, Peer, RoleClient, RoleServer, ServerHandler, ServiceExt,
-    model::{
-        LoggingLevel, LoggingMessageNotificationParam, ServerCapabilities, ServerInfo,
-        SetLevelRequestParam,
-    },
-    service::RequestContext,
+    ServiceExt,
+    model::{LoggingLevel, LoggingMessageNotificationParam, SetLevelRequestParam},
 };
+use serde_json::json;
 use tokio::sync::Notify;
-
-pub struct LoggingClient {
-    receive_signal: Arc<Notify>,
-    received_messages: Arc<Mutex<Vec<LoggingMessageNotificationParam>>>,
-    peer: Option<Peer<RoleClient>>,
-}
-
-impl ClientHandler for LoggingClient {
-    async fn on_logging_message(&self, params: LoggingMessageNotificationParam) {
-        println!("Client: Received log message: {:?}", params);
-        let mut messages = self.received_messages.lock().unwrap();
-        messages.push(params);
-        self.receive_signal.notify_one();
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        self.peer.replace(peer);
-    }
-
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        self.peer.clone()
-    }
-}
-
-pub struct TestServer {}
-
-impl TestServer {
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-impl ServerHandler for TestServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_logging().build(),
-            ..Default::default()
-        }
-    }
-
-    fn set_level(
-        &self,
-        request: SetLevelRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        let peer = context.peer;
-        async move {
-            let (data, logger) = match request.level {
-                LoggingLevel::Error => (
-                    serde_json::json!({
-                        "message": "Failed to process request",
-                        "error_code": "E1001",
-                        "error_details": "Connection timeout",
-                        "timestamp": chrono::Utc::now().to_rfc3339(),
-                    }),
-                    Some("error_handler".to_string()),
-                ),
-                LoggingLevel::Debug => (
-                    serde_json::json!({
-                        "message": "Processing request",
-                        "function": "handle_request",
-                        "line": 42,
-                        "context": {
-                            "request_id": "req-123",
-                            "user_id": "user-456"
-                        },
-                        "timestamp": chrono::Utc::now().to_rfc3339(),
-                    }),
-                    Some("debug_logger".to_string()),
-                ),
-                LoggingLevel::Info => (
-                    serde_json::json!({
-                        "message": "System status update",
-                        "status": "healthy",
-                        "metrics": {
-                            "requests_per_second": 150,
-                            "average_latency_ms": 45,
-                            "error_rate": 0.01
-                        },
-                        "timestamp": chrono::Utc::now().to_rfc3339(),
-                    }),
-                    Some("monitoring".to_string()),
-                ),
-                _ => (
-                    serde_json::json!({
-                        "message": format!("Message at level {:?}", request.level),
-                        "timestamp": chrono::Utc::now().to_rfc3339(),
-                    }),
-                    None,
-                ),
-            };
-
-            if let Err(e) = peer
-                .notify_logging_message(LoggingMessageNotificationParam {
-                    level: request.level,
-                    data,
-                    logger,
-                })
-                .await
-            {
-                panic!("Failed to send notification: {}", e);
-            }
-            Ok(())
-        }
-    }
-}
 
 #[tokio::test]
 async fn test_logging_spec_compliance() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let receive_signal = Arc::new(Notify::new());
-    let received_messages = Arc::new(Mutex::new(Vec::new()));
+    let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
 
-    // Start server
-    tokio::spawn(async move {
+    // Start server in a separate task
+    let server_handle = tokio::spawn(async move {
         let server = TestServer::new().serve(server_transport).await?;
 
         // Test server can send messages before level is set
@@ -147,15 +38,16 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
         anyhow::Ok(())
     });
 
-    let client = LoggingClient {
-        receive_signal: receive_signal.clone(),
-        received_messages: received_messages.clone(),
-        peer: None,
-    }
+    let client = TestClientHandler::with_notification(
+        true,
+        true,
+        receive_signal.clone(),
+        received_messages.clone(),
+    )
     .serve(client_transport)
     .await?;
 
-    // Verify server-initiated message
+    // Wait for the initial server message
     receive_signal.notified().await;
     {
         let mut messages = received_messages.lock().unwrap();
@@ -173,6 +65,8 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
             .peer()
             .set_level(SetLevelRequestParam { level })
             .await?;
+
+        // Wait for each message response
         receive_signal.notified().await;
 
         let mut messages = received_messages.lock().unwrap();
@@ -194,7 +88,12 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
         messages.clear();
     }
 
+    // Important: Cancel the client before ending the test
     client.cancel().await?;
+
+    // Wait for server to complete
+    server_handle.await??;
+
     Ok(())
 }
 
@@ -202,32 +101,31 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
 async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let receive_signal = Arc::new(Notify::new());
-    let received_messages = Arc::new(Mutex::new(Vec::new()));
+    let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
 
-    // Start server
-    tokio::spawn(async move {
+    let server_handle = tokio::spawn(async move {
         let server = TestServer::new().serve(server_transport).await?;
         server.waiting().await?;
         anyhow::Ok(())
     });
 
-    let client = LoggingClient {
-        receive_signal: receive_signal.clone(),
-        received_messages: received_messages.clone(),
-        peer: None,
-    }
+    let client = TestClientHandler::with_notification(
+        true,
+        true,
+        receive_signal.clone(),
+        received_messages.clone(),
+    )
     .serve(client_transport)
     .await?;
 
     // Test 1: Error reporting scenario
-    // User should see detailed error information
     client
         .peer()
         .set_level(SetLevelRequestParam {
             level: LoggingLevel::Error,
         })
         .await?;
-    receive_signal.notified().await;
+    receive_signal.notified().await; // Wait for response
     {
         let messages = received_messages.lock().unwrap();
         let msg = &messages[0];
@@ -247,14 +145,13 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     }
 
     // Test 2: Debug scenario
-    // User debugging their application should see detailed information
     client
         .peer()
         .set_level(SetLevelRequestParam {
             level: LoggingLevel::Debug,
         })
         .await?;
-    receive_signal.notified().await;
+    receive_signal.notified().await; // Wait for response
     {
         let messages = received_messages.lock().unwrap();
         let msg = messages.last().unwrap();
@@ -271,14 +168,13 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     }
 
     // Test 3: Production monitoring scenario
-    // User monitoring production should see important status updates
     client
         .peer()
         .set_level(SetLevelRequestParam {
             level: LoggingLevel::Info,
         })
         .await?;
-    receive_signal.notified().await;
+    receive_signal.notified().await; // Wait for response
     {
         let messages = received_messages.lock().unwrap();
         let msg = messages.last().unwrap();
@@ -287,7 +183,10 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
         assert!(data.contains_key("metrics"), "Should include metrics");
     }
 
+    // Important: Cancel client and wait for server before ending
     client.cancel().await?;
+    server_handle.await??;
+
     Ok(())
 }
 
@@ -326,4 +225,127 @@ fn test_logging_level_serialization() {
             spec_string, level
         );
     }
+}
+
+#[tokio::test]
+async fn test_logging_edge_cases() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let receive_signal = Arc::new(Notify::new());
+    let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
+
+    let server_handle = tokio::spawn(async move {
+        let server = TestServer::new().serve(server_transport).await?;
+        server.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClientHandler::with_notification(
+        true,
+        true,
+        receive_signal.clone(),
+        received_messages.clone(),
+    )
+    .serve(client_transport)
+    .await?;
+
+    // Test all logging levels from spec
+    for level in [
+        LoggingLevel::Alert,
+        LoggingLevel::Critical,
+        LoggingLevel::Notice, // These weren't tested before
+    ] {
+        client
+            .peer()
+            .set_level(SetLevelRequestParam { level })
+            .await?;
+        receive_signal.notified().await;
+
+        let messages = received_messages.lock().unwrap();
+        let msg = messages.last().unwrap();
+        assert_eq!(msg.level, level);
+    }
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_logging_optional_fields() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let receive_signal = Arc::new(Notify::new());
+    let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
+
+    let server_handle = tokio::spawn(async move {
+        let server = TestServer::new().serve(server_transport).await?;
+
+        // Test message with and without optional logger field
+        for (level, has_logger) in [(LoggingLevel::Info, true), (LoggingLevel::Debug, false)] {
+            server
+                .peer()
+                .notify_logging_message(LoggingMessageNotificationParam {
+                    level,
+                    data: json!({"test": "data"}),
+                    logger: has_logger.then(|| "test_logger".to_string()),
+                })
+                .await?;
+        }
+
+        server.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TestClientHandler::with_notification(
+        true,
+        true,
+        receive_signal.clone(),
+        received_messages.clone(),
+    )
+    .serve(client_transport)
+    .await?;
+
+    // Wait for the initial server message
+    receive_signal.notified().await;
+    {
+        let mut messages = received_messages.lock().unwrap();
+        assert_eq!(messages.len(), 2, "Should receive two messages");
+        messages.clear();
+    }
+
+    // Test level filtering and message format
+    for level in [LoggingLevel::Info, LoggingLevel::Debug] {
+        client
+            .peer()
+            .set_level(SetLevelRequestParam { level })
+            .await?;
+
+        // Wait for each message response
+        receive_signal.notified().await;
+
+        let mut messages = received_messages.lock().unwrap();
+        let msg = messages.last().unwrap();
+
+        // Verify required fields
+        assert_eq!(msg.level, level);
+        assert!(msg.data.is_object());
+
+        // Verify data format
+        let data = msg.data.as_object().unwrap();
+        assert!(data.contains_key("message"));
+        assert!(data.contains_key("timestamp"));
+
+        // Verify timestamp
+        let timestamp = data["timestamp"].as_str().unwrap();
+        chrono::DateTime::parse_from_rfc3339(timestamp).expect("RFC3339 timestamp");
+
+        messages.clear();
+    }
+
+    // Important: Cancel the client before ending the test
+    client.cancel().await?;
+
+    // Wait for server to complete
+    server_handle.await??;
+
+    Ok(())
 }
