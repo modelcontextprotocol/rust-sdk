@@ -36,14 +36,7 @@
 //!     println!("{:?}", tools);
 //!     Ok(())
 //! }
-//!
-/// ```rust,ignore
-/// # use rmcp::ServiceExt;
-/// # async fn example() -> anyhow::Result<()> {
-/// #     let stream = tokio::io::duplex(1024);
-/// #     Ok(())
-/// # }
-/// ```
+//! ```
 
 use futures::{Sink, Stream};
 
