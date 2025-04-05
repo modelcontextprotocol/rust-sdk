@@ -177,30 +177,114 @@ pub(crate) fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenSt
 pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Result<TokenStream> {
     let tool_impl_attr: ToolImplItemAttrs = syn::parse2(attr)?;
     let tool_box_ident = tool_impl_attr.tool_box;
-    if input.trait_.is_some() {
-        if let Some(ident) = tool_box_ident {
-            input.items.push(parse_quote!(
-                rmcp::tool_box!(@derive #ident);
-            ));
-        }
-    } else if let Some(ident) = tool_box_ident {
-        let mut tool_fn_idents = Vec::new();
-        for item in &input.items {
-            if let syn::ImplItem::Fn(method) = item {
-                for attr in &method.attrs {
-                    if attr.path().is_ident(TOOL_IDENT) {
-                        tool_fn_idents.push(method.sig.ident.clone());
-                    }
+
+    // get all tool function ident
+    let mut tool_fn_idents = Vec::new();
+    for item in &input.items {
+        if let syn::ImplItem::Fn(method) = item {
+            for attr in &method.attrs {
+                if attr.path().is_ident(TOOL_IDENT) {
+                    tool_fn_idents.push(method.sig.ident.clone());
                 }
             }
         }
-        let this_type_ident = &input.self_ty;
-        input.items.push(parse_quote!(
-            rmcp::tool_box!(#this_type_ident {
-                #(#tool_fn_idents),*
-            } #ident);
-        ));
     }
+
+    // handle different cases
+    if input.trait_.is_some() {
+        if let Some(ident) = tool_box_ident {
+            // check if there are generic parameters
+            if !input.generics.params.is_empty() {
+                // for trait implementation with generic parameters, directly use the already generated *_inner method
+
+                // generate call_tool method
+                input.items.push(parse_quote! {
+                    async fn call_tool(
+                        &self,
+                        request: rmcp::model::CallToolRequestParam,
+                        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+                    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
+                        self.call_tool_inner(request, context).await
+                    }
+                });
+
+                // generate list_tools method
+                input.items.push(parse_quote! {
+                    async fn list_tools(
+                        &self,
+                        request: rmcp::model::PaginatedRequestParam,
+                        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+                    ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
+                        self.list_tools_inner(request, context).await
+                    }
+                });
+            } else {
+                // if there are no generic parameters, add tool box derive
+                input.items.push(parse_quote!(
+                    rmcp::tool_box!(@derive #ident);
+                ));
+            }
+        }
+    } else if let Some(ident) = tool_box_ident {
+        // if it is a normal impl block
+        if !input.generics.params.is_empty() {
+            // if there are generic parameters, not use tool_box! macro, but generate code directly
+
+            // create call code for each tool function
+            let match_arms = tool_fn_idents.iter().map(|ident| {
+                let attr_fn = Ident::new(&format!("{}_tool_attr", ident), ident.span());
+                let call_fn = Ident::new(&format!("{}_tool_call", ident), ident.span());
+                quote! {
+                    name if name == Self::#attr_fn().name => {
+                        Self::#call_fn(tcc).await
+                    }
+                }
+            });
+
+            let tool_attrs = tool_fn_idents.iter().map(|ident| {
+                let attr_fn = Ident::new(&format!("{}_tool_attr", ident), ident.span());
+                quote! { Self::#attr_fn() }
+            });
+
+            // implement call_tool method
+            input.items.push(parse_quote! {
+                async fn call_tool_inner(
+                    &self,
+                    request: rmcp::model::CallToolRequestParam,
+                    context: rmcp::service::RequestContext<rmcp::RoleServer>,
+                ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
+                    let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+                    match tcc.name() {
+                        #(#match_arms,)*
+                        _ => Err(rmcp::Error::invalid_params("tool not found", None)),
+                    }
+                }
+            });
+
+            // implement list_tools method
+            input.items.push(parse_quote! {
+                async fn list_tools_inner(
+                    &self,
+                    _: rmcp::model::PaginatedRequestParam,
+                    _: rmcp::service::RequestContext<rmcp::RoleServer>,
+                ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
+                    Ok(rmcp::model::ListToolsResult {
+                        next_cursor: None,
+                        tools: vec![#(#tool_attrs),*],
+                    })
+                }
+            });
+        } else {
+            // if there are no generic parameters, use the original tool_box! macro
+            let this_type_ident = &input.self_ty;
+            input.items.push(parse_quote!(
+                rmcp::tool_box!(#this_type_ident {
+                    #(#tool_fn_idents),*
+                } #ident);
+            ));
+        }
+    }
+
     Ok(quote! {
         #input
     })

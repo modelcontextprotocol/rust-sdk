@@ -40,3 +40,7 @@ path = "src/axum.rs"
 [[example]]
 name = "servers_axum_router"
 path = "src/axum_router.rs"
+
+[[example]]
+name = "servers_generic_server"
+path = "src/generic_service.rs"

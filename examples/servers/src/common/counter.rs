@@ -19,6 +19,7 @@ pub struct Counter {
 }
 #[tool(tool_box)]
 impl Counter {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             counter: Arc::new(Mutex::new(0)),
