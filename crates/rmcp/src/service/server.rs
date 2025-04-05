@@ -4,12 +4,12 @@ use thiserror::Error;
 use super::*;
 use crate::model::{
     CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
-    ClientMessage, ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
+    ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
     CreateMessageRequestParam, CreateMessageResult, ListRootsRequest, ListRootsResult,
     LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
     ProgressNotificationParam, PromptListChangedNotification, ResourceListChangedNotification,
-    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo, ServerMessage,
-    ServerNotification, ServerRequest, ServerResult, ToolListChangedNotification,
+    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo, ServerNotification,
+    ServerRequest, ServerResult, ToolListChangedNotification,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,10 +33,10 @@ impl ServiceRole for RoleServer {
 #[derive(Error, Debug)]
 pub enum ServerError {
     #[error("expect initialized request, but received: {0:?}")]
-    ExpectedInitRequest(Option<ClientMessage>),
+    ExpectedInitRequest(Option<ClientJsonRpcMessage>),
 
     #[error("expect initialized notification, but received: {0:?}")]
-    ExpectedInitNotification(Option<ClientMessage>),
+    ExpectedInitNotification(Option<ClientJsonRpcMessage>),
 
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
@@ -75,15 +75,17 @@ where
 }
 
 /// Helper function to get the next message from the stream
-async fn expect_next_message<S>(stream: &mut S, context: &str) -> Result<ClientMessage, ServerError>
+async fn expect_next_message<S>(
+    stream: &mut S,
+    context: &str,
+) -> Result<ClientJsonRpcMessage, ServerError>
 where
     S: StreamExt<Item = ClientJsonRpcMessage> + Unpin,
 {
-    Ok(stream
+    stream
         .next()
         .await
-        .ok_or_else(|| ServerError::ConnectionClosed(context.to_string()))?
-        .into_message())
+        .ok_or_else(|| ServerError::ConnectionClosed(context.to_string()))
 }
 
 /// Helper function to expect a request from the stream
@@ -144,16 +146,28 @@ where
 
     let ClientRequest::InitializeRequest(peer_info) = request else {
         return Err(handle_server_error(ServerError::ExpectedInitRequest(Some(
-            ClientMessage::Request(request, id),
+            ClientJsonRpcMessage::request(request, id),
         ))));
     };
 
     // Send initialize response
-    let init_response = service.get_info();
-    sink.send(
-        ServerMessage::Response(ServerResult::InitializeResult(init_response), id)
-            .into_json_rpc_message(),
-    )
+    let mut init_response = service.get_info();
+    let protocol_version = match peer_info
+        .params
+        .protocol_version
+        .partial_cmp(&init_response.protocol_version)
+        .ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unsupported protocol version",
+        ))? {
+        std::cmp::Ordering::Less => peer_info.params.protocol_version.clone(),
+        _ => init_response.protocol_version,
+    };
+    init_response.protocol_version = protocol_version;
+    sink.send(ServerJsonRpcMessage::response(
+        ServerResult::InitializeResult(init_response),
+        id,
+    ))
     .await?;
 
     // Wait for initialize notification
@@ -163,7 +177,7 @@ where
 
     let ClientNotification::InitializedNotification(_) = notification else {
         return Err(handle_server_error(ServerError::ExpectedInitNotification(
-            Some(ClientMessage::Notification(notification)),
+            Some(ClientJsonRpcMessage::notification(notification)),
         )));
     };
 
@@ -177,6 +191,7 @@ macro_rules! method {
             let result = self
                 .send_request(ServerRequest::$Req($Req {
                     method: Default::default(),
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -191,6 +206,7 @@ macro_rules! method {
                 .send_request(ServerRequest::$Req($Req {
                     method: Default::default(),
                     params,
+                    extensions: Default::default(),
                 }))
                 .await?;
             match result {
@@ -224,6 +240,7 @@ macro_rules! method {
             self.send_notification(ServerNotification::$Not($Not {
                 method: Default::default(),
                 params,
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())
@@ -233,6 +250,7 @@ macro_rules! method {
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ServerNotification::$Not($Not {
                 method: Default::default(),
+                extensions: Default::default(),
             }))
             .await?;
             Ok(())

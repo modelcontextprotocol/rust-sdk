@@ -4,7 +4,10 @@ use thiserror::Error;
 use crate::{
     error::Error as McpError,
     model::{
-        CancelledNotification, CancelledNotificationParam, JsonRpcMessage, Message, RequestId,
+        CancelledNotification, CancelledNotificationParam, GetMeta, JsonRpcBatchRequestItem,
+        JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage, JsonRpcNotification,
+        JsonRpcRequest, JsonRpcResponse, Meta, NumberOrString, ProgressToken, RequestId,
+        ServerJsonRpcMessage,
     },
     transport::IntoTransport,
 };
@@ -56,12 +59,12 @@ impl<T> TransferObject for T where
 
 #[allow(private_bounds, reason = "there's no the third implementation")]
 pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
-    type Req: TransferObject;
+    type Req: TransferObject + GetMeta;
     type Resp: TransferObject;
     type Not: TryInto<CancelledNotification, Error = Self::Not>
         + From<CancelledNotification>
         + TransferObject;
-    type PeerReq: TransferObject;
+    type PeerReq: TransferObject + GetMeta;
     type PeerResp: TransferObject;
     type PeerNot: TryInto<CancelledNotification, Error = Self::PeerNot>
         + From<CancelledNotification>
@@ -78,11 +81,6 @@ pub type RxJsonRpcMessage<R> = JsonRpcMessage<
     <R as ServiceRole>::PeerResp,
     <R as ServiceRole>::PeerNot,
 >;
-
-pub type TxMessage<R> =
-    Message<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
-pub type RxMessage<R> =
-    Message<<R as ServiceRole>::PeerReq, <R as ServiceRole>::PeerResp, <R as ServiceRole>::PeerNot>;
 
 pub trait Service<R: ServiceRole>: Send + Sync + 'static {
     fn handle_request(
@@ -192,7 +190,7 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
 }
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ops::Deref,
     sync::{Arc, atomic::AtomicU32},
     time::Duration,
@@ -204,14 +202,29 @@ pub trait RequestIdProvider: Send + Sync + 'static {
     fn next_request_id(&self) -> RequestId;
 }
 
+pub trait ProgressTokenProvider: Send + Sync + 'static {
+    fn next_progress_token(&self) -> ProgressToken;
+}
+
+pub type AtomicU32RequestIdProvider = AtomicU32Provider;
+pub type AtomicU32ProgressTokenProvider = AtomicU32Provider;
+
 #[derive(Debug, Default)]
-pub struct AtomicU32RequestIdProvider {
+pub struct AtomicU32Provider {
     id: AtomicU32,
 }
 
-impl RequestIdProvider for AtomicU32RequestIdProvider {
+impl RequestIdProvider for AtomicU32Provider {
     fn next_request_id(&self) -> RequestId {
         RequestId::Number(self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
+impl ProgressTokenProvider for AtomicU32Provider {
+    fn next_progress_token(&self) -> ProgressToken {
+        ProgressToken(NumberOrString::Number(
+            self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+        ))
     }
 }
 
@@ -228,6 +241,7 @@ pub struct RequestHandle<R: ServiceRole> {
     pub options: PeerRequestOptions,
     pub peer: Peer<R>,
     pub id: RequestId,
+    pub progress_token: ProgressToken,
 }
 
 impl<R: ServiceRole> RequestHandle<R> {
@@ -251,6 +265,7 @@ impl<R: ServiceRole> RequestHandle<R> {
                             reason: Some(Self::REQUEST_TIMEOUT_REASON.to_owned()),
                         },
                         method: crate::model::CancelledNotificationMethod,
+                        extensions: Default::default(),
                     };
                     let _ = self.peer.send_notification(notification.into()).await;
                     error
@@ -271,6 +286,7 @@ impl<R: ServiceRole> RequestHandle<R> {
                 reason,
             },
             method: crate::model::CancelledNotificationMethod,
+            extensions: Default::default(),
         };
         self.peer.send_notification(notification.into()).await?;
         Ok(())
@@ -278,24 +294,28 @@ impl<R: ServiceRole> RequestHandle<R> {
 }
 
 #[derive(Debug)]
-pub enum PeerSinkMessage<R: ServiceRole> {
-    Request(
-        R::Req,
-        RequestId,
-        Responder<Result<R::PeerResp, ServiceError>>,
-    ),
-    Notification(R::Not, Responder<Result<(), ServiceError>>),
+pub(crate) enum PeerSinkMessage<R: ServiceRole> {
+    Request {
+        request: R::Req,
+        id: RequestId,
+        responder: Responder<Result<R::PeerResp, ServiceError>>,
+    },
+    Notification {
+        notification: R::Not,
+        responder: Responder<Result<(), ServiceError>>,
+    },
 }
 
 /// An interface to fetch the remote client or server
 ///
 /// For general purpose, call [`Peer::send_request`] or [`Peer::send_notification`] to send message to remote peer.
 ///
-/// To create a cancellable request, call [`Peer::send_cancellable_request`].
+/// To create a cancellable request, call [`Peer::send_request_with_option`].
 #[derive(Clone)]
 pub struct Peer<R: ServiceRole> {
     tx: mpsc::Sender<PeerSinkMessage<R>>,
     request_id_provider: Arc<dyn RequestIdProvider>,
+    progress_token_provider: Arc<dyn ProgressTokenProvider>,
     info: Arc<R::PeerInfo>,
 }
 
@@ -312,7 +332,8 @@ type ProxyOutbound<R> = mpsc::Receiver<PeerSinkMessage<R>>;
 
 #[derive(Debug, Default)]
 pub struct PeerRequestOptions {
-    timeout: Option<Duration>,
+    pub timeout: Option<Duration>,
+    pub meta: Option<Meta>,
 }
 
 impl PeerRequestOptions {
@@ -323,7 +344,7 @@ impl PeerRequestOptions {
 
 impl<R: ServiceRole> Peer<R> {
     const CLIENT_CHANNEL_BUFFER_SIZE: usize = 1024;
-    pub fn new(
+    pub(crate) fn new(
         request_id_provider: Arc<dyn RequestIdProvider>,
         peer_info: R::PeerInfo,
     ) -> (Peer<R>, ProxyOutbound<R>) {
@@ -332,6 +353,7 @@ impl<R: ServiceRole> Peer<R> {
             Self {
                 tx,
                 request_id_provider,
+                progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 info: peer_info.into(),
             },
             rx,
@@ -340,7 +362,10 @@ impl<R: ServiceRole> Peer<R> {
     pub async fn send_notification(&self, notification: R::Not) -> Result<(), ServiceError> {
         let (responder, receiver) = tokio::sync::oneshot::channel();
         self.tx
-            .send(PeerSinkMessage::Notification(notification, responder))
+            .send(PeerSinkMessage::Notification {
+                notification,
+                responder,
+            })
             .await
             .map_err(|_m| {
                 ServiceError::Transport(std::io::Error::other("disconnected: receiver dropped"))
@@ -350,25 +375,46 @@ impl<R: ServiceRole> Peer<R> {
         })?
     }
     pub async fn send_request(&self, request: R::Req) -> Result<R::PeerResp, ServiceError> {
-        self.send_cancellable_request(request, PeerRequestOptions::no_options())
+        self.send_request_with_option(request, PeerRequestOptions::no_options())
             .await?
             .await_response()
             .await
     }
+
     pub async fn send_cancellable_request(
         &self,
         request: R::Req,
         options: PeerRequestOptions,
     ) -> Result<RequestHandle<R>, ServiceError> {
+        self.send_request_with_option(request, options).await
+    }
+
+    pub async fn send_request_with_option(
+        &self,
+        mut request: R::Req,
+        options: PeerRequestOptions,
+    ) -> Result<RequestHandle<R>, ServiceError> {
         let id = self.request_id_provider.next_request_id();
+        let progress_token = self.progress_token_provider.next_progress_token();
+        request
+            .get_meta_mut()
+            .set_progress_token(progress_token.clone());
+        if let Some(meta) = options.meta.clone() {
+            request.get_meta_mut().extend(meta);
+        }
         let (responder, receiver) = tokio::sync::oneshot::channel();
         self.tx
-            .send(PeerSinkMessage::Request(request, id.clone(), responder))
+            .send(PeerSinkMessage::Request {
+                request,
+                id: id.clone(),
+                responder,
+            })
             .await
             .map_err(|_m| ServiceError::Transport(std::io::Error::other("disconnected")))?;
         Ok(RequestHandle {
             id,
             rx: receiver,
+            progress_token,
             options,
             peer: self.clone(),
         })
@@ -424,6 +470,7 @@ pub struct RequestContext<R: ServiceRole> {
     /// this token will be cancelled when the [`CancelledNotification`] is received.
     pub ct: CancellationToken,
     pub id: RequestId,
+    pub meta: Meta,
     /// An interface to fetch the remote client or server
     pub peer: Peer<R>,
 }
@@ -464,7 +511,7 @@ async fn serve_inner<R, S, T, E, A>(
     mut service: S,
     transport: T,
     peer_info: R::PeerInfo,
-    id_provider: Arc<AtomicU32RequestIdProvider>,
+    id_provider: Arc<AtomicU32Provider>,
     ct: CancellationToken,
 ) -> Result<RunningService<R, S>, E>
 where
@@ -475,9 +522,8 @@ where
 {
     use futures::{SinkExt, StreamExt};
     const SINK_PROXY_BUFFER_SIZE: usize = 64;
-    let (sink_proxy_tx, mut sink_proxy_rx) = tokio::sync::mpsc::channel::<
-        Message<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>,
-    >(SINK_PROXY_BUFFER_SIZE);
+    let (sink_proxy_tx, mut sink_proxy_rx) =
+        tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
 
     if R::IS_CLIENT {
         tracing::info!(?peer_info, "Service initialized as client");
@@ -501,6 +547,7 @@ where
         let (mut sink, mut stream) = transport.into_transport();
         let mut sink = std::pin::pin!(sink);
         let mut stream = std::pin::pin!(stream);
+        let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
         #[derive(Debug)]
         enum Event<P, R, T> {
             ProxyMessage(P),
@@ -508,57 +555,66 @@ where
             ToSink(T),
         }
         let quit_reason = loop {
-            let evt = tokio::select! {
-                m = sink_proxy_rx.recv() => {
-                    if let Some(m) = m {
-                        Event::ToSink(m)
-                    } else {
-                        continue
+            let evt = if let Some(m) = batch_messages.pop_front() {
+                Event::PeerMessage(m)
+            } else {
+                tokio::select! {
+                    m = sink_proxy_rx.recv() => {
+                        if let Some(m) = m {
+                            Event::ToSink(m)
+                        } else {
+                            continue
+                        }
                     }
-                }
-                m = stream.next() => {
-                    if let Some(m) = m {
-                        Event::PeerMessage(m.into_message())
-                    } else {
-                        // input stream closed
-                        tracing::info!("input stream terminated");
-                        break QuitReason::Closed
+                    m = stream.next() => {
+                        if let Some(m) = m {
+                            Event::PeerMessage(m)
+                        } else {
+                            // input stream closed
+                            tracing::info!("input stream terminated");
+                            break QuitReason::Closed
+                        }
                     }
-                }
-                m = peer_proxy.recv() => {
-                    if let Some(m) = m {
-                        Event::ProxyMessage(m)
-                    } else {
-                        continue
+                    m = peer_proxy.recv() => {
+                        if let Some(m) = m {
+                            Event::ProxyMessage(m)
+                        } else {
+                            continue
+                        }
                     }
-                }
-                _ = serve_loop_ct.cancelled() => {
-                    tracing::info!("task cancelled");
-                    break QuitReason::Cancelled
+                    _ = serve_loop_ct.cancelled() => {
+                        tracing::info!("task cancelled");
+                        break QuitReason::Cancelled
+                    }
                 }
             };
+
             tracing::debug!(?evt, "new event");
             match evt {
                 // response and error
-                Event::ToSink(e) => {
-                    if let Some(id) = match &e {
-                        Message::Response(_, id) => Some(id),
-                        Message::Error(_, id) => Some(id),
+                Event::ToSink(m) => {
+                    if let Some(id) = match &m {
+                        JsonRpcMessage::Response(response) => Some(&response.id),
+                        JsonRpcMessage::Error(error) => Some(&error.id),
                         _ => None,
                     } {
                         if let Some(ct) = local_ct_pool.remove(id) {
                             ct.cancel();
                         }
-                        let send_result = sink.send(e.into_json_rpc_message()).await;
+                        let send_result = sink.send(m).await;
                         if let Err(error) = send_result {
                             tracing::error!(%error, "fail to response message");
                         }
                     }
                 }
-                Event::ProxyMessage(PeerSinkMessage::Request(request, id, responder)) => {
+                Event::ProxyMessage(PeerSinkMessage::Request {
+                    request,
+                    id,
+                    responder,
+                }) => {
                     local_responder_pool.insert(id.clone(), responder);
                     let send_result = sink
-                        .send(Message::Request(request, id.clone()).into_json_rpc_message())
+                        .send(JsonRpcMessage::request(request, id.clone()))
                         .await;
                     if let Err(e) = send_result {
                         if let Some(responder) = local_responder_pool.remove(&id) {
@@ -567,7 +623,10 @@ where
                         }
                     }
                 }
-                Event::ProxyMessage(PeerSinkMessage::Notification(notification, responder)) => {
+                Event::ProxyMessage(PeerSinkMessage::Notification {
+                    notification,
+                    responder,
+                }) => {
                     // catch cancellation notification
                     let mut cancellation_param = None;
                     let notification = match notification.try_into() {
@@ -577,9 +636,7 @@ where
                         }
                         Err(notification) => notification,
                     };
-                    let send_result = sink
-                        .send(Message::Notification(notification).into_json_rpc_message())
-                        .await;
+                    let send_result = sink.send(JsonRpcMessage::notification(notification)).await;
                     let response = if let Err(e) = send_result {
                         Err(ServiceError::Transport(std::io::Error::other(e)))
                     } else {
@@ -595,7 +652,9 @@ where
                         }
                     }
                 }
-                Event::PeerMessage(Message::Request(request, id)) => {
+                Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
+                    id, request, ..
+                })) => {
                     tracing::info!(%id, ?request, "received request");
                     {
                         let service = shared_service.clone();
@@ -607,24 +666,28 @@ where
                             ct: context_ct,
                             id: id.clone(),
                             peer: peer.clone(),
+                            meta: request.get_meta().clone(),
                         };
                         tokio::spawn(async move {
                             let result = service.handle_request(request, context).await;
                             let response = match result {
                                 Ok(result) => {
                                     tracing::info!(%id, ?result, "response message");
-                                    Message::Response(result, id)
+                                    JsonRpcMessage::response(result, id)
                                 }
                                 Err(error) => {
                                     tracing::warn!(%id, ?error, "response error");
-                                    Message::Error(error, id)
+                                    JsonRpcMessage::error(error, id)
                                 }
                             };
                             let _send_result = sink.send(response).await;
                         });
                     }
                 }
-                Event::PeerMessage(Message::Notification(notification)) => {
+                Event::PeerMessage(JsonRpcMessage::Notification(JsonRpcNotification {
+                    notification,
+                    ..
+                })) => {
                     tracing::info!(?notification, "received notification");
                     // catch cancelled notification
                     let notification = match notification.try_into() {
@@ -647,7 +710,11 @@ where
                         });
                     }
                 }
-                Event::PeerMessage(Message::Response(result, id)) => {
+                Event::PeerMessage(JsonRpcMessage::Response(JsonRpcResponse {
+                    result,
+                    id,
+                    ..
+                })) => {
                     if let Some(responder) = local_responder_pool.remove(&id) {
                         let response_result = responder.send(Ok(result));
                         if let Err(_error) = response_result {
@@ -655,13 +722,27 @@ where
                         }
                     }
                 }
-                Event::PeerMessage(Message::Error(error, id)) => {
+                Event::PeerMessage(JsonRpcMessage::Error(JsonRpcError { error, id, .. })) => {
                     if let Some(responder) = local_responder_pool.remove(&id) {
                         let _response_result = responder.send(Err(ServiceError::McpError(error)));
                         if let Err(_error) = _response_result {
                             tracing::warn!(%id, "Error sending response");
                         }
                     }
+                }
+                Event::PeerMessage(JsonRpcMessage::BatchRequest(batch)) => {
+                    batch_messages.extend(
+                        batch
+                            .into_iter()
+                            .map(JsonRpcBatchRequestItem::into_non_batch_message),
+                    );
+                }
+                Event::PeerMessage(JsonRpcMessage::BatchResponse(batch)) => {
+                    batch_messages.extend(
+                        batch
+                            .into_iter()
+                            .map(JsonRpcBatchResponseItem::into_non_batch_message),
+                    );
                 }
             }
         };
