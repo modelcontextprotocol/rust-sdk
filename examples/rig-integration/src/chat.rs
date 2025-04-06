@@ -2,12 +2,11 @@ use futures::StreamExt;
 use rig::{
     agent::Agent,
     message::Message,
-    providers::deepseek::DeepSeekCompletionModel,
-    streaming::{StreamingChat, StreamingChoice},
+    streaming::{StreamingChat, StreamingChoice, StreamingCompletionModel},
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 
-pub async fn cli_chatbot(chatbot: Agent<DeepSeekCompletionModel>) -> anyhow::Result<()> {
+pub async fn cli_chatbot<M: StreamingCompletionModel>(chatbot: Agent<M>) -> anyhow::Result<()> {
     let mut chat_log = vec![];
 
     let mut output = BufWriter::new(tokio::io::stdout());
@@ -27,6 +26,7 @@ pub async fn cli_chatbot(chatbot: Agent<DeepSeekCompletionModel>) -> anyhow::Res
         }
         match chatbot.stream_chat(input, chat_log.clone()).await {
             Ok(mut response) => {
+                tracing::info!(%input);
                 chat_log.push(Message::user(input));
                 stream_output_agent_start(&mut output).await?;
                 let mut message_buf = String::new();

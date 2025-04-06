@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rig::tool::{ToolDyn as RigTool, ToolSet};
+use rig::tool::{ToolDyn as RigTool, ToolEmbeddingDyn, ToolSet};
 use rmcp::{
     RoleClient,
     model::{CallToolRequestParam, CallToolResult, Tool as McpTool},
@@ -49,10 +49,28 @@ impl RigTool for McpToolAdaptor {
                         .map_err(rig::tool::ToolError::JsonError)?,
                 })
                 .await
+                .inspect(|result| tracing::info!(?result))
+                .inspect_err(|error| tracing::error!(%error))
                 .map_err(|e| rig::tool::ToolError::ToolCallError(Box::new(e)))?;
 
             Ok(convert_mcp_call_tool_result_to_string(call_mcp_tool_result))
         })
+    }
+}
+
+impl ToolEmbeddingDyn for McpToolAdaptor {
+    fn context(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::to_value(self.tool.clone())
+    }
+
+    fn embedding_docs(&self) -> Vec<String> {
+        vec![
+            self.tool
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
+        ]
     }
 }
 
@@ -72,7 +90,7 @@ impl McpManager {
         for result in results {
             match result {
                 Err(e) => {
-                    eprintln!("Failed to get tool set: {:?}", e);
+                    tracing::error!(error = %e, "Failed to get tool set");
                 }
                 Ok(tools) => {
                     tool_set.add_tools(tools);
@@ -89,14 +107,15 @@ pub fn convert_mcp_call_tool_result_to_string(result: CallToolResult) -> String 
 
 pub async fn get_tool_set(server: ServerSink) -> anyhow::Result<ToolSet> {
     let tools = server.list_all_tools().await?;
-    let mut tool_set = ToolSet::default();
+    let mut tool_builder = ToolSet::builder();
     for tool in tools {
-        eprintln!("get tool: {}", tool.name);
+        tracing::info!("get tool: {}", tool.name);
         let adaptor = McpToolAdaptor {
             tool: tool.clone(),
             server: server.clone(),
         };
-        tool_set.add_tool(adaptor);
+        tool_builder = tool_builder.dynamic_tool(adaptor);
     }
+    let tool_set = tool_builder.build();
     Ok(tool_set)
 }
