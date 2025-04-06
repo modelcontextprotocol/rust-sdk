@@ -54,7 +54,7 @@
 
 # WASI
 
-- [WASI-P2 runtime](examples/wasi) How it works with wasip2
+- [WASI-P2 runtime](wasi) How it works with wasip2
 
 ## Use Mcp Inspector
 
