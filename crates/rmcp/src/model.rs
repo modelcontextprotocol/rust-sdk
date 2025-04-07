@@ -200,6 +200,15 @@ pub struct Request<M = String, P = JsonObject> {
     pub extensions: Extensions,
 }
 
+impl<M, P> GetExtensions for Request<M, P> {
+    fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+    fn extensions_mut(&mut self) -> &mut Extensions {
+        &mut self.extensions
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestOptionalParam<M = String, P = JsonObject> {
     pub method: M,
@@ -220,6 +229,14 @@ pub struct RequestNoParam<M = String> {
     pub extensions: Extensions,
 }
 
+impl<M> GetExtensions for RequestNoParam<M> {
+    fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+    fn extensions_mut(&mut self) -> &mut Extensions {
+        &mut self.extensions
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Notification<M = String, P = JsonObject> {
     pub method: M,

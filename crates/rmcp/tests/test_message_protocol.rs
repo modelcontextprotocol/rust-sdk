@@ -71,6 +71,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
                 meta: Default::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -112,6 +113,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(2),
                 meta: Default::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -153,6 +155,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(3),
                 meta: Default::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -214,6 +217,7 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -280,6 +284,7 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -354,6 +359,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -387,6 +393,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(2),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await;
@@ -439,6 +446,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -478,6 +486,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(2),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await?;
@@ -534,6 +543,7 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
                 meta: Meta::default(),
+                extensions: Default::default(),
             },
         )
         .await?;

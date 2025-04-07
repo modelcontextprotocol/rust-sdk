@@ -13,21 +13,26 @@ pub trait GetMeta {
     fn get_meta(&self) -> &Meta;
 }
 
+pub trait GetExtensions {
+    fn extensions(&self) -> &Extensions;
+    fn extensions_mut(&mut self) -> &mut Extensions;
+}
+
 macro_rules! variant_extension {
     (
         $Enum: ident {
             $($variant: ident)*
         }
     ) => {
-        impl $Enum {
-            pub fn extensions(&self) -> &Extensions {
+        impl GetExtensions for $Enum {
+            fn extensions(&self) -> &Extensions {
                 match self {
                     $(
                         $Enum::$variant(v) => &v.extensions,
                     )*
                 }
             }
-            pub fn extensions_mut(&mut self) -> &mut Extensions {
+            fn extensions_mut(&mut self) -> &mut Extensions {
                 match self {
                     $(
                         $Enum::$variant(v) => &mut v.extensions,
