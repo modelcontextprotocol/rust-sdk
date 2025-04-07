@@ -60,6 +60,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -69,6 +70,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
+                meta: Default::default(),
             },
         )
         .await?;
@@ -99,6 +101,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -108,6 +111,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(2),
+                meta: Default::default(),
             },
         )
         .await?;
@@ -138,6 +142,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -147,6 +152,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(3),
+                meta: Default::default(),
             },
         )
         .await?;
@@ -197,6 +203,7 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -206,6 +213,7 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
+                meta: Meta::default(),
             },
         )
         .await?;
@@ -261,6 +269,7 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -270,6 +279,7 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
+                meta: Meta::default(),
             },
         )
         .await?;
@@ -333,6 +343,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -342,6 +353,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
+                meta: Meta::default(),
             },
         )
         .await?;
@@ -364,6 +376,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -373,6 +386,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(2),
+                meta: Meta::default(),
             },
         )
         .await;
@@ -414,6 +428,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -423,6 +438,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
+                meta: Meta::default(),
             },
         )
         .await?;
@@ -451,6 +467,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -460,6 +477,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(2),
+                meta: Meta::default(),
             },
         )
         .await?;
@@ -505,6 +523,7 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
             stop_sequences: None,
             metadata: None,
         },
+        extensions: Default::default(),
     });
 
     let result = handler
@@ -514,6 +533,7 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
                 peer: client.peer().clone(),
                 ct: CancellationToken::new(),
                 id: NumberOrString::Number(1),
+                meta: Meta::default(),
             },
         )
         .await?;
