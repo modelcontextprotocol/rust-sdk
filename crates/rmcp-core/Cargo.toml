@@ -1,0 +1,49 @@
+[package]
+name = "rmcp-core"
+license = { workspace = true }
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+readme = { workspace = true }
+description = "Rust SDK for Model Context Protocol"
+documentation = "https://docs.rs/rmcp"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+thiserror = "2"
+chrono = { version = "0.4.38", features = ["serde"] }
+tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
+futures = "0.3"
+tracing = { version = "0.1" }
+tokio-util = { version = "0.7" }
+pin-project-lite = "0.2"
+paste = { version = "1", optional = true }
+# for auto generate schema
+schemars = { version = "0.8", optional = true }
+
+# for image encoding
+base64 = { version = "0.22", optional = true }
+ 
+# macro
+rmcp-macros = { version = "0.1", workspace = true, optional = true }
+
+[features]
+default = ["base64", "macros"]
+macros = ["dep:rmcp-macros", "dep:paste"]
+schemars = ["dep:schemars"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+anyhow = "1.0"
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "std",
+    "fmt",
+] }
+async-trait = "0.1"

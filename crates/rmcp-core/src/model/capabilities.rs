@@ -38,7 +38,7 @@ pub struct RootsCapabilities {
 ///
 /// # Builder
 /// ```rust
-/// # use rmcp::model::ClientCapabilities;
+/// # use rmcp_core::model::ClientCapabilities;
 /// let cap = ClientCapabilities::builder()
 ///     .enable_experimental()
 ///     .enable_roots()
@@ -58,7 +58,7 @@ pub struct ClientCapabilities {
 ///
 /// ## Builder
 /// ```rust
-/// # use rmcp::model::ServerCapabilities;
+/// # use rmcp_core::model::ServerCapabilities;
 /// let cap = ServerCapabilities::builder()
 ///     .enable_logging()
 ///     .enable_experimental()

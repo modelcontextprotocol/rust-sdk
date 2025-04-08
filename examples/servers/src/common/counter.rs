@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use rmcp::{
-    Error as McpError, RoleServer, ServerHandler, const_string, model::*, schemars,
-    service::RequestContext, tool,
+    Error as McpError, RoleServer, ServerHandler, model::*, schemars, service::RequestContext, tool,
 };
+use rmcp_core::const_string;
 use serde_json::json;
 use tokio::sync::Mutex;
 

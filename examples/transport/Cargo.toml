@@ -15,7 +15,8 @@ readme = { workspace = true }
 all-features = true
 
 [dependencies]
-rmcp = { path = "../../crates/rmcp", features = ["server", "client"] }
+rmcp = { path = "../../crates/rmcp", features = ["server", "client", "macros"] }
+rmcp-core = { path = "../../crates/rmcp-core", features = ["macros"] }
 tokio = { version = "1", features = [
     "macros",
     "rt",

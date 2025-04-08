@@ -1,4 +1,8 @@
-use rmcp::{ServerHandler, model::ServerInfo, schemars, tool, tool_box};
+use rmcp::{
+    ServerHandler,
+    model::{IntoCallToolResult, ServerInfo},
+    schemars, tool, tool_box,
+};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SumRequest {

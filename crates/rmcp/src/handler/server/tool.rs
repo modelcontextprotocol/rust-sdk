@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     RoleServer,
-    model::{CallToolRequestParam, CallToolResult, ConstString, IntoContents, JsonObject},
+    model::{CallToolRequestParam, CallToolResult, ConstString, IntoCallToolResult, JsonObject},
     service::RequestContext,
 };
 /// A shortcut for generating a JSON schema for a type.
@@ -86,30 +86,6 @@ pub trait FromToolCallContextPart<'a, S>: Sized {
     ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error>;
 }
 
-pub trait IntoCallToolResult {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error>;
-}
-impl IntoCallToolResult for () {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
-        Ok(CallToolResult::success(vec![]))
-    }
-}
-
-impl<T: IntoContents> IntoCallToolResult for T {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
-        Ok(CallToolResult::success(self.into_contents()))
-    }
-}
-
-impl<T: IntoContents, E: IntoContents> IntoCallToolResult for Result<T, E> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
-        match self {
-            Ok(value) => Ok(CallToolResult::success(value.into_contents())),
-            Err(error) => Ok(CallToolResult::error(error.into_contents())),
-        }
-    }
-}
-
 pin_project_lite::pin_project! {
     #[project = IntoCallToolResultFutProj]
     pub enum IntoCallToolResultFut<F, R> {
@@ -142,12 +118,6 @@ where
             }
             IntoCallToolResultFutProj::Ready { result } => result.poll(cx),
         }
-    }
-}
-
-impl IntoCallToolResult for Result<CallToolResult, crate::Error> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
-        self
     }
 }
 

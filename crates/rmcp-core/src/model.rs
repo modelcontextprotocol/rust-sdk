@@ -45,7 +45,7 @@ macro_rules! object {
     };
 }
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy, Eq)]
-#[cfg_attr(feature = "server", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct EmptyObject {}
 
 pub trait ConstString: Default {
@@ -1037,6 +1037,36 @@ impl From<CancelledNotification> for ServerNotification {
 impl From<CancelledNotification> for ClientNotification {
     fn from(value: CancelledNotification) -> Self {
         ClientNotification::CancelledNotification(value)
+    }
+}
+
+pub trait IntoCallToolResult {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error>;
+}
+impl IntoCallToolResult for () {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+        Ok(CallToolResult::success(vec![]))
+    }
+}
+
+impl<T: IntoContents> IntoCallToolResult for T {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+        Ok(CallToolResult::success(self.into_contents()))
+    }
+}
+
+impl IntoCallToolResult for Result<CallToolResult, crate::Error> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+        self
+    }
+}
+
+impl<T: IntoContents, E: IntoContents> IntoCallToolResult for Result<T, E> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+        match self {
+            Ok(value) => Ok(CallToolResult::success(value.into_contents())),
+            Err(error) => Ok(CallToolResult::error(error.into_contents())),
+        }
     }
 }
 

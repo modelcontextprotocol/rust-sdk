@@ -2,7 +2,7 @@ use futures::future::BoxFuture;
 use thiserror::Error;
 
 use crate::{
-    error::Error as McpError,
+    Error as McpError,
     model::{
         CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
         JsonRpcBatchRequestItem, JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage,

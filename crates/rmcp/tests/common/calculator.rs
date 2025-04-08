@@ -1,6 +1,6 @@
 use rmcp::{
     ServerHandler,
-    model::{ServerCapabilities, ServerInfo},
+    model::{IntoCallToolResult, ServerCapabilities, ServerInfo},
     schemars, tool,
 };
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
