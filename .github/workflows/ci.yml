@@ -97,6 +97,41 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-features
+  
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # install nodejs
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Set up Python
+        run: uv python install
+        
+      - name: Create venv for python
+        run: uv venv
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+
+      - name: Run tests with coverage
+        run: cargo llvm-cov --all-features
 
   doc:
     name: Generate Documentation
