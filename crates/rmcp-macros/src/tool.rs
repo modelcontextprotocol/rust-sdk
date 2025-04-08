@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{
     Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility, parse::Parse,
-    parse_quote,
+    parse_quote, spanned::Spanned,
 };
 
 #[derive(Default)]
@@ -21,6 +21,7 @@ impl Parse for ToolImplItemAttrs {
                 "tool_box" => {
                     tool_box = Some(None);
                     if input.lookahead1().peek(Token![=]) {
+                        input.parse::<Token![=]>()?;
                         let value: Ident = input.parse()?;
                         tool_box = Some(Some(value));
                     }
@@ -224,6 +225,11 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
                     rmcp::tool_box!(@derive #ident);
                 ));
             }
+        } else {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "tool_box attribute is required for trait implementation",
+            ));
         }
     } else if let Some(ident) = tool_box_ident {
         // if it is a normal impl block
@@ -367,6 +373,12 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                         unextractable_args_indexes.insert(index);
                     }
                     Some(Caught::Aggregated(rust_type)) => {
+                        if let ToolParams::Params { .. } = tool_macro_attrs.params {
+                            return Err(syn::Error::new(
+                                rust_type.span(),
+                                "cannot mix aggregated and individual parameters",
+                            ));
+                        }
                         tool_macro_attrs.params = ToolParams::Aggregated { rust_type };
                         unextractable_args_indexes.insert(index);
                     }
@@ -626,10 +638,12 @@ mod test {
 
     #[test]
     fn test_trait_tool_macro() -> syn::Result<()> {
-        let attr = quote! {};
+        let attr = quote! {
+            tool_box = Calculator
+        };
         let input = quote! {
             impl ServerHandler for Calculator {
-                tool_box!(@derive);
+                #[tool]
                 fn get_info(&self) -> ServerInfo {
                     ServerInfo {
                         instructions: Some("A simple calculator".into()),
