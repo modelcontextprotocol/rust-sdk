@@ -6,7 +6,7 @@
     ```
     This builds a standard input/output MCP server binary.
 
-2. **Add or update this section in your** `~/.config/claude-desktop/config.toml`
+2. **Add or update this section in your** `~/.config/claude-desktop/config.toml` (Linux) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
     ```json
     {
         "mcpServers": {
@@ -18,7 +18,10 @@
     }
     ```
 
-3. **Once Claude Desktop is running, try chatting:**
+3. **Ensure that the MCP UI elements appear in Claude Desktop**
+    The MCP UI elements will only show up in Claude for Desktop if at least one server is properly configured.
+
+4. **Once Claude Desktop is running, try chatting:**
     ```text
     counter.say_hello
     ```
