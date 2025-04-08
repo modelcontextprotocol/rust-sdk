@@ -6,12 +6,26 @@
     ```
     This builds a standard input/output MCP server binary.
 
-2. **Add or update this section in your** `~/.config/claude-desktop/config.toml`
+2. **Add or update this section in your** `PATH-TO/claude_desktop_config.json`
+
+    **Windows**
     ```json
     {
         "mcpServers": {
             "counter": {
             "command": "PATH-TO/rust-sdk/target/release/examples/servers_std_io.exe",
+            "args": []
+            }
+        }
+    }
+    ```
+
+    **McOS/Linux**
+    ```json
+    {
+        "mcpServers": {
+            "counter": {
+            "command": "PATH-TO/rust-sdk/target/release/examples/servers_std_io",
             "args": []
             }
         }
