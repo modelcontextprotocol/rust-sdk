@@ -125,7 +125,7 @@ impl Calculator {
     }
 
     // sync function
-    #[tool(description = "Calculate the sum of two numbers")]
+    #[tool(description = "Calculate the difference of two numbers")]
     fn sub(
         &self,
         #[tool(param)]

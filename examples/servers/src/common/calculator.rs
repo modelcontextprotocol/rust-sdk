@@ -20,7 +20,7 @@ impl Calculator {
         (a + b).to_string()
     }
 
-    #[tool(description = "Calculate the sub of two numbers")]
+    #[tool(description = "Calculate the difference of two numbers")]
     fn sub(
         &self,
         #[tool(param)]
