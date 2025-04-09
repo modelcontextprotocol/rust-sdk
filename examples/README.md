@@ -85,7 +85,3 @@
 ```sh
 npx @modelcontextprotocol/inspector
 ```
-
-```
-
-```
