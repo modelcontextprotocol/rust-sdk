@@ -1,7 +1,7 @@
 use rmcp::{
     ServerHandler,
     handler::server::wrapper::Json,
-    model::{ServerCapabilities, ServerInfo},
+    model::{IntoCallToolResult, ServerCapabilities, ServerInfo},
     schemars, tool,
 };
 

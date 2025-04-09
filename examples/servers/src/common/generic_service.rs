@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rmcp::{
     ServerHandler,
-    model::{ServerCapabilities, ServerInfo},
+    model::{IntoCallToolResult, ServerCapabilities, ServerInfo},
     schemars, tool,
 };
 

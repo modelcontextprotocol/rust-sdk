@@ -1,7 +1,8 @@
 use std::fs;
 
 use common::calculator::Calculator;
-use rmcp::{serve_client, serve_server};
+use rmcp::{model::CallToolRequestParam, serve_client, serve_server};
+use rmcp_core::object;
 use tokio::net::{UnixListener, UnixStream};
 
 mod common;
@@ -66,9 +67,9 @@ async fn client() -> anyhow::Result<()> {
         println!("Calling sum tool: {}", sum_tool.name);
         let result = client
             .peer()
-            .call_tool(rmcp::model::CallToolRequestParam {
+            .call_tool(CallToolRequestParam {
                 name: sum_tool.name.clone(),
-                arguments: Some(rmcp::object!({
+                arguments: Some(object!({
                     "a": 10,
                     "b": 20
                 })),

@@ -27,7 +27,7 @@ paste = { version = "1", optional = true }
 schemars = { version = "0.8", optional = true }
 
 # for image encoding
-base64 = { version = "0.21", optional = true }
+base64 = { version = "0.22", optional = true }
 
 # for SSE client
 reqwest = { version = "0.12", default-features = false, features = [
@@ -52,11 +52,12 @@ tokio-stream = { version = "0.1", optional = true }
 
 # macro
 rmcp-macros = { version = "0.1", workspace = true, optional = true }
+rmcp-core = { version = "0.1", workspace = true, optional = true, features = ["schemars"] }
 
 [features]
-default = ["base64", "macros", "server"]
-client = []
-server = ["transport-async-rw", "dep:schemars"]
+default = ["base64", "macros", "server", "dep:rmcp-core"]
+client = ["dep:rmcp-core"]
+server = ["transport-async-rw", "dep:schemars", "dep:rmcp-core"]
 macros = ["dep:rmcp-macros", "dep:paste"]
 transport-sse = ["dep:reqwest", "dep:sse-stream", "dep:url"]
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]

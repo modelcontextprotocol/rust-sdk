@@ -1,5 +1,5 @@
 use crate::{
-    error::Error as McpError,
+    Error as McpError,
     model::*,
     service::{Peer, RequestContext, RoleServer, Service, ServiceRole},
 };

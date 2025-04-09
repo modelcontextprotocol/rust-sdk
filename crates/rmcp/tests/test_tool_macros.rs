@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
-use rmcp::{ServerHandler, handler::server::tool::ToolCallContext, tool};
+use rmcp::{
+    ServerHandler,
+    handler::server::tool::ToolCallContext,
+    model::IntoCallToolResult,
+    tool,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

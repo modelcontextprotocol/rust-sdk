@@ -1,8 +1,6 @@
-mod error;
-pub use error::Error;
+pub use rmcp_core::{Error, model};
 
 /// Basic data types in MCP specification
-pub mod model;
 #[cfg(any(feature = "client", feature = "server"))]
 pub mod service;
 #[cfg(feature = "client")]

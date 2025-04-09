@@ -2,9 +2,9 @@ use anyhow::Result;
 use rmcp::{
     ServiceExt,
     model::{CallToolRequestParam, GetPromptRequestParam, ReadResourceRequestParam},
-    object,
     transport::TokioChildProcess,
 };
+use rmcp_core::object;
 use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
