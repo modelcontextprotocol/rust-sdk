@@ -6,11 +6,11 @@
    cargo build --release --example servers_std_io
    ```
 
-    This builds a standard input/output MCP server binary.
+   This builds a standard input/output MCP server binary.
 
 2. **Add or update this section in your** `PATH-TO/claude_desktop_config.json`
 
-    Windows
+   Windows
 
    ```json
    {
@@ -40,15 +40,18 @@
    The MCP UI elements will only show up in Claude for Desktop if at least one server is properly configured.
 
 4. **Once Claude Desktop is running, try chatting:**
-   `text
-counter.say_hello
-`
+
+   ```text
+   counter.say_hello
+   ```
+
    Or test other tools like:
-   `text
-counter.increment
-counter.get_value
-counter.sum {"a": 3, "b": 4}
-`
+
+   ```texts
+   counter.increment
+   counter.get_value
+   counter.sum {"a": 3, "b": 4}
+   ```
 
 # Client Examples
 
@@ -81,4 +84,8 @@ counter.sum {"a": 3, "b": 4}
 
 ```sh
 npx @modelcontextprotocol/inspector
+```
+
+```
+
 ```
