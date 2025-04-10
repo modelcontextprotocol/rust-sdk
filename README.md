@@ -202,7 +202,7 @@ See [examples](examples/README.md)
 - [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
 
 ## Related Projects
-- [containerd-mcp-server](https://github.com/modelcontextprotocol/containerd-mcp-server) - A containerd-based MCP server implementation
+- [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
 
 ## Development with Dev Container
 See [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.
