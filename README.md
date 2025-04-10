@@ -24,7 +24,7 @@ rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "mai
 
 Start a client in one line:
 
-```rust
+```rust, ignore
 use rmcp::{ServiceExt, transport::TokioChildProcess};
 use tokio::process::Command;
 
@@ -37,7 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### 1. Build a transport
+<details>
+<summary>1. Build a transport</summary>
 
 ```rust, ignore
 use tokio::io::{stdin, stdout};
@@ -58,48 +59,59 @@ For server, the sink item is [`ServerJsonRpcMessage`](crate::model::ServerJsonRp
 4. A tuple of [`tokio::io::AsyncRead`] `R `and [`tokio::io::AsyncWrite`] `W`: `(R, W)`.
 
 For example, you can see how we build a transport through TCP stream or http upgrade so easily. [examples](examples/README.md)
+</details>
 
-#### 2. Build a service
+<details>
+<summary>2. Build a service</summary>
 
 You can easily build a service by using [`ServerHandler`](crates/rmcp/src/handler/server.rs) or [`ClientHandler`](crates/rmcp/src/handler/client.rs).
 
 ```rust, ignore
 let service = common::counter::Counter::new();
 ```
+</details>
 
-#### 3. Serve them together
+<details>
+<summary>3. Serve them together</summary>
 
 ```rust, ignore
 // this call will finish the initialization process
 let server = service.serve(transport).await?;
 ```
+</details>
 
-#### 4. Interact with the server
+<details>
+<summary>4. Interact with the server</summary>
 
 Once the server is initialized, you can send requests or notifications:
 
 ```rust, ignore
-// request
+// request 
 let roots = server.list_roots().await?;
 
 // or send notification
 server.notify_cancelled(...).await?;
 ```
+</details>
 
-#### 5. Waiting for service shutdown
+<details>
+<summary>5. Waiting for service shutdown</summary>
 
 ```rust, ignore
 let quit_reason = server.waiting().await?;
 // or cancel it
 let quit_reason = server.cancel().await?;
 ```
+</details>
 
 ### Use macros to declaring tool
 
 Use `toolbox` and `tool` macros to create tool quickly.
 
-Check this [file](examples/servers/src/common/calculator.rs).
+<details>
+<summary>Example: Calculator Tool</summary>
 
+Check this [file](examples/servers/src/common/calculator.rs).
 ```rust, ignore
 use rmcp::{ServerHandler, model::ServerInfo, schemars, tool};
 
@@ -150,19 +162,19 @@ impl ServerHandler for Calculator {
         }
     }
 }
-
 ```
+
 
 The only thing you should do is to make the function's return type implement `IntoCallToolResult`.
 
 And you can just implement `IntoContents`, and the return value will be marked as success automatically.
 
 If you return a type of `Result<T, E>` where `T` and `E` both implemented `IntoContents`, it's also OK.
+</details>
 
 ### Manage Multi Services
 
 For many cases you need to manage several service in a collection, you can call `into_dyn` to convert services into the same type.
-
 ```rust, ignore
 let service = service.into_dyn();
 ```
@@ -177,7 +189,7 @@ See [examples](examples/README.md)
 - `server`: use server side sdk
 - `macros`: macros default
 
-#### Transports
+### Transports
 
 - `transport-io`: Server stdio transport
 - `transport-sse-server`: Server SSE transport
@@ -189,6 +201,8 @@ See [examples](examples/README.md)
 - [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
 - [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
 
-## Development with Dev Container
+## Related Projects
+- [containerd-mcp-server](https://github.com/modelcontextprotocol/containerd-mcp-server) - A containerd-based MCP server implementation
 
+## Development with Dev Container
 See [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.

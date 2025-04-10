@@ -75,6 +75,7 @@
 # Integration
 
 - [Rig](examples/rig-integration) A stream chatbot with rig
+- [Simple Chat Client](examples/simple-chat-client) A simple chat client implementation using the Model Context Protocol (MCP) SDK.
 
 # WASI
 

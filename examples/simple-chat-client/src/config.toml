@@ -1,0 +1,10 @@
+openai_key = "key" 
+chat_url = "url"
+model_name = "model_name"
+
+[mcp]
+[[mcp.server]]
+name = "MCP server name"
+protocol = "stdio"
+command = "MCP server path"
+args = [" "]
