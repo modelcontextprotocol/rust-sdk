@@ -5,7 +5,7 @@ use super::*;
 use crate::model::{
     CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
     ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-    CreateMessageRequestParam, CreateMessageResult, ListRootsRequest, ListRootsResult,
+    CreateMessageRequestParam, CreateMessageResult, ErrorData, ListRootsRequest, ListRootsResult,
     LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
     ProgressNotificationParam, PromptListChangedNotification, ResourceListChangedNotification,
     ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo, ServerNotification,
@@ -40,6 +40,12 @@ pub enum ServerError {
 
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
+
+    #[error("unexpected initialize result: {0:?}")]
+    UnexpectedInitializeResponse(ServerResult),
+
+    #[error("initialize failed: {0}")]
+    InitializeFailed(ErrorData),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -144,14 +150,34 @@ where
         .await
         .map_err(handle_server_error)?;
 
-    let ClientRequest::InitializeRequest(peer_info) = request else {
+    let ClientRequest::InitializeRequest(peer_info) = &request else {
         return Err(handle_server_error(ServerError::ExpectedInitRequest(Some(
             ClientJsonRpcMessage::request(request, id),
         ))));
     };
-
+    let (peer, peer_rx) = Peer::new(id_provider, peer_info.params.clone());
+    let context = RequestContext {
+        ct: ct.child_token(),
+        id: id.clone(),
+        meta: request.get_meta().clone(),
+        extensions: request.extensions().clone(),
+        peer: peer.clone(),
+    };
     // Send initialize response
-    let mut init_response = service.get_info();
+    let init_response = service.handle_request(request.clone(), context).await;
+    let mut init_response = match init_response {
+        Ok(ServerResult::InitializeResult(init_response)) => init_response,
+        Ok(result) => {
+            return Err(handle_server_error(
+                ServerError::UnexpectedInitializeResponse(result),
+            ));
+        }
+        Err(e) => {
+            sink.send(ServerJsonRpcMessage::error(e.clone(), id))
+                .await?;
+            return Err(handle_server_error(ServerError::InitializeFailed(e)));
+        }
+    };
     let protocol_version = match peer_info
         .params
         .protocol_version
@@ -174,15 +200,14 @@ where
     let notification = expect_notification(&mut stream, "initialize notification")
         .await
         .map_err(handle_server_error)?;
-
     let ClientNotification::InitializedNotification(_) = notification else {
         return Err(handle_server_error(ServerError::ExpectedInitNotification(
             Some(ClientJsonRpcMessage::notification(notification)),
         )));
     };
-
+    let _ = service.handle_notification(notification).await;
     // Continue processing service
-    serve_inner(service, (sink, stream), peer_info.params, id_provider, ct).await
+    serve_inner(service, (sink, stream), peer, peer_rx, ct).await
 }
 
 macro_rules! method {

@@ -174,7 +174,8 @@ where
         }),
     );
     sink.send(notification).await?;
-    serve_inner(service, (sink, stream), initialize_result, id_provider, ct).await
+    let (peer, peer_rx) = Peer::new(id_provider, initialize_result);
+    serve_inner(service, (sink, stream), peer, peer_rx, ct).await
 }
 
 macro_rules! method {
