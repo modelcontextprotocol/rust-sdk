@@ -23,7 +23,7 @@
    }
    ```
 
-   McOS/Linux
+   MacOS/Linux
 
    ```json
    {
@@ -37,7 +37,7 @@
    ```
 
 3. **Ensure that the MCP UI elements appear in Claude Desktop**
-   The MCP UI elements will only show up in Claude for Desktop if at least one server is properly configured.
+   The MCP UI elements will only show up in Claude for Desktop if at least one server is properly configured. It may require to restart Claude for Desktop.
 
 4. **Once Claude Desktop is running, try chatting:**
 
