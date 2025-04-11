@@ -38,19 +38,25 @@ async fn main() -> Result<()> {
 
     // Call tool echo
     let tool_result = service
-        .call_tool(CallToolRequestParam {
-            name: "echo".into(),
-            arguments: Some(object!({ "message": "hi from rmcp" })),
-        })
+        .call_tool(
+            CallToolRequestParam {
+                name: "echo".into(),
+                arguments: Some(object!({ "message": "hi from rmcp" })),
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Tool result for echo: {tool_result:#?}");
 
     // Call tool longRunningOperation
     let tool_result = service
-        .call_tool(CallToolRequestParam {
-            name: "longRunningOperation".into(),
-            arguments: Some(object!({ "duration": 3, "steps": 1 })),
-        })
+        .call_tool(
+            CallToolRequestParam {
+                name: "longRunningOperation".into(),
+                arguments: Some(object!({ "duration": 3, "steps": 1 })),
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Tool result for longRunningOperation: {tool_result:#?}");
 
@@ -60,9 +66,12 @@ async fn main() -> Result<()> {
 
     // Read resource
     let resource = service
-        .read_resource(ReadResourceRequestParam {
-            uri: "test://static/resource/3".into(),
-        })
+        .read_resource(
+            ReadResourceRequestParam {
+                uri: "test://static/resource/3".into(),
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Resource: {resource:#?}");
 
@@ -72,19 +81,25 @@ async fn main() -> Result<()> {
 
     // Get simple prompt
     let prompt = service
-        .get_prompt(GetPromptRequestParam {
-            name: "simple_prompt".into(),
-            arguments: None,
-        })
+        .get_prompt(
+            GetPromptRequestParam {
+                name: "simple_prompt".into(),
+                arguments: None,
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Prompt - simple: {prompt:#?}");
 
     // Get complex prompt (returns text & image)
     let prompt = service
-        .get_prompt(GetPromptRequestParam {
-            name: "complex_prompt".into(),
-            arguments: Some(object!({ "temperature": "0.5", "style": "formal" })),
-        })
+        .get_prompt(
+            GetPromptRequestParam {
+                name: "complex_prompt".into(),
+                arguments: Some(object!({ "temperature": "0.5", "style": "formal" })),
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Prompt - complex: {prompt:#?}");
 
