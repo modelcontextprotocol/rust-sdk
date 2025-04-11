@@ -43,11 +43,14 @@ impl RigTool for McpToolAdaptor {
         let server = self.server.clone();
         Box::pin(async move {
             let call_mcp_tool_result = server
-                .call_tool(CallToolRequestParam {
-                    name: self.tool.name.clone(),
-                    arguments: serde_json::from_str(&args)
-                        .map_err(rig::tool::ToolError::JsonError)?,
-                })
+                .call_tool(
+                    CallToolRequestParam {
+                        name: self.tool.name.clone(),
+                        arguments: serde_json::from_str(&args)
+                            .map_err(rig::tool::ToolError::JsonError)?,
+                    },
+                    Default::default(),
+                )
                 .await
                 .inspect(|result| tracing::info!(?result))
                 .inspect_err(|error| tracing::error!(%error))

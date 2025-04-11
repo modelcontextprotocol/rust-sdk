@@ -10,8 +10,8 @@ use sse_stream::{Error as SseError, Sse, SseStream};
 use thiserror::Error;
 
 use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
-const MIME_TYPE: &str = "text/event-stream";
-const HEADER_LAST_EVENT_ID: &str = "Last-Event-ID";
+pub const MIME_TYPE: &str = "text/event-stream";
+pub const HEADER_LAST_EVENT_ID: &str = "Last-Event-ID";
 
 #[derive(Error, Debug)]
 pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
@@ -29,7 +29,7 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     UnexpectedContentType(Option<HeaderValue>),
 }
 
-type SseStreamFuture<E> =
+pub type SseStreamFuture<E> =
     BoxFuture<'static, Result<BoxStream<'static, Result<Sse, SseError>>, SseTransportError<E>>>;
 
 enum SseTransportState<E: std::error::Error + Send + Sync + 'static> {

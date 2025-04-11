@@ -26,7 +26,10 @@ async fn client() -> anyhow::Result<()> {
         .connect("127.0.0.1:8001".parse()?)
         .await?;
     let client = serve_client((), stream).await?;
-    let tools = client.peer().list_tools(Default::default()).await?;
+    let tools = client
+        .peer()
+        .list_tools(Default::default(), Default::default())
+        .await?;
     println!("{:?}", tools);
     Ok(())
 }

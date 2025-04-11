@@ -193,12 +193,16 @@ macro_rules! method {
         }
     };
     (peer_req $method:ident $Req:ident($Param: ident) => $Resp: ident ) => {
-        pub async fn $method(&self, params: $Param) -> Result<$Resp, ServiceError> {
+        pub async fn $method(
+            &self,
+            params: $Param,
+            extensions: Extensions,
+        ) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
-                    extensions: Default::default(),
+                    extensions,
                 }))
                 .await?;
             match result {
@@ -208,12 +212,16 @@ macro_rules! method {
         }
     };
     (peer_req $method:ident $Req:ident($Param: ident)? => $Resp: ident ) => {
-        pub async fn $method(&self, params: Option<$Param>) -> Result<$Resp, ServiceError> {
+        pub async fn $method(
+            &self,
+            params: Option<$Param>,
+            extensions: Extensions,
+        ) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
-                    extensions: Default::default(),
+                    extensions,
                 }))
                 .await?;
             match result {
@@ -223,12 +231,16 @@ macro_rules! method {
         }
     };
     (peer_req $method:ident $Req:ident($Param: ident)) => {
-        pub async fn $method(&self, params: $Param) -> Result<(), ServiceError> {
+        pub async fn $method(
+            &self,
+            params: $Param,
+            extensions: Extensions,
+        ) -> Result<(), ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
-                    extensions: Default::default(),
+                    extensions,
                 }))
                 .await?;
             match result {
@@ -239,21 +251,25 @@ macro_rules! method {
     };
 
     (peer_not $method:ident $Not:ident($Param: ident)) => {
-        pub async fn $method(&self, params: $Param) -> Result<(), ServiceError> {
+        pub async fn $method(
+            &self,
+            params: $Param,
+            extensions: Extensions,
+        ) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
                 params,
-                extensions: Default::default(),
+                extensions,
             }))
             .await?;
             Ok(())
         }
     };
     (peer_not $method:ident $Not:ident) => {
-        pub async fn $method(&self) -> Result<(), ServiceError> {
+        pub async fn $method(&self, extensions: Extensions) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
-                extensions: Default::default(),
+                extensions,
             }))
             .await?;
             Ok(())
@@ -289,7 +305,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_tools(Some(PaginatedRequestParam { cursor }))
+                .list_tools(Some(PaginatedRequestParam { cursor }), Default::default())
                 .await?;
             tools.extend(result.tools);
             cursor = result.next_cursor;
@@ -308,7 +324,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_prompts(Some(PaginatedRequestParam { cursor }))
+                .list_prompts(Some(PaginatedRequestParam { cursor }), Default::default())
                 .await?;
             prompts.extend(result.prompts);
             cursor = result.next_cursor;
@@ -327,7 +343,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_resources(Some(PaginatedRequestParam { cursor }))
+                .list_resources(Some(PaginatedRequestParam { cursor }), Default::default())
                 .await?;
             resources.extend(result.resources);
             cursor = result.next_cursor;
@@ -348,7 +364,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_resource_templates(Some(PaginatedRequestParam { cursor }))
+                .list_resource_templates(Some(PaginatedRequestParam { cursor }), Default::default())
                 .await?;
             resource_templates.extend(result.resource_templates);
             cursor = result.next_cursor;
