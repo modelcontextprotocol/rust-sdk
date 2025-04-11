@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    Error as McpError, RoleServer, ServerHandler, const_string, model::*, schemars,
-    service::RequestContext, tool,
+    Error as McpError, RoleServer, ServerHandler, model::*, schemars, service::RequestContext, tool,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -24,10 +23,6 @@ impl Counter {
         Self {
             counter: Arc::new(Mutex::new(0)),
         }
-    }
-
-    fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
-        RawResource::new(uri, name.to_string()).no_annotation()
     }
 
     #[tool(description = "Increment the counter by 1")]
@@ -81,7 +76,7 @@ impl Counter {
         )]))
     }
 }
-const_string!(Echo = "echo");
+
 #[tool(tool_box)]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
@@ -102,10 +97,13 @@ impl ServerHandler for Counter {
         _request: Option<PaginatedRequestParam>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
+        fn create_resource_text(uri: &str, name: &str) -> Resource {
+            RawResource::new(uri, name.to_string()).no_annotation()
+        }
         Ok(ListResourcesResult {
             resources: vec![
-                self._create_resource_text("str:////Users/to/some/path/", "cwd"),
-                self._create_resource_text("memo://insights", "memo-name"),
+                create_resource_text("str:////Users/to/some/path/", "cwd"),
+                create_resource_text("memo://insights", "memo-name"),
             ],
             next_cursor: None,
         })
