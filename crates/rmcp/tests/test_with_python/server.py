@@ -8,11 +8,18 @@ def add(a: int, b: int) -> int:
     return a + b
 
 
+# Add a static greeting resource
+@mcp.resource("greeting://static")
+def get_greeting() -> str:
+    """Get a personalized greeting"""
+    return f"Hello!"
+
+
 # Add a dynamic greeting resource
 @mcp.resource("greeting://{name}")
 def get_greeting(name: str) -> str:
     """Get a personalized greeting"""
-    return f"Hello, {name}!"
+    return f"Hello {name}!"
 
 
 

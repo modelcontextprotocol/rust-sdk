@@ -60,8 +60,14 @@ async fn test_with_js_server() -> anyhow::Result<()> {
     let client = ().serve(transport).await?;
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
+    assert!(resources.len() == 1);
+    assert_eq!(resources[0].name, "greeting");
+    assert_eq!(resources[0].uri, "test://static");
+
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
+    assert!(tools.len() == 1);
+    assert_eq!(tools[0].name, "add");
 
     client.cancel().await?;
     Ok(())

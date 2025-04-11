@@ -7,6 +7,19 @@ const server = new McpServer({
   version: "1.0.0"
 });
 
+// Add a static greeting resource
+server.resource(
+  "greeting",
+  "test://static",
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      text: `Hello!`
+    }]
+  })
+);
+
+// Add a dynamic greeting resource
 server.resource(
   "greeting",
   new ResourceTemplate("greeting://{name}", { list: undefined }),

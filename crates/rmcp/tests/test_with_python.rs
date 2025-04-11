@@ -62,9 +62,16 @@ async fn test_with_python_server() -> anyhow::Result<()> {
 
     let client = ().serve(transport).await?;
     let resources = client.list_all_resources().await?;
-    tracing::info!("{:#?}", resources);
+    tracing::info!("resources: {:#?}", resources);
+    assert!(resources.len() == 1);
+    assert_eq!(resources[0].name, "greeting://static");
+
     let tools = client.list_all_tools().await?;
-    tracing::info!("{:#?}", tools);
+    tracing::info!("tools: {:#?}", tools);
+    assert!(tools.len() == 1);
+    let tool = tools.first().unwrap();
+    assert_eq!(tool.name, "add");
+
     client.cancel().await?;
     Ok(())
 }
