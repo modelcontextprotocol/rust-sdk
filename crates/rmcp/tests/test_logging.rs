@@ -63,7 +63,7 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
     ] {
         client
             .peer()
-            .set_level(SetLevelRequestParam { level })
+            .set_level(SetLevelRequestParam { level }, Default::default())
             .await?;
 
         // Wait for each message response
@@ -121,9 +121,12 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 1: Error reporting scenario
     client
         .peer()
-        .set_level(SetLevelRequestParam {
-            level: LoggingLevel::Error,
-        })
+        .set_level(
+            SetLevelRequestParam {
+                level: LoggingLevel::Error,
+            },
+            Default::default(),
+        )
         .await?;
     receive_signal.notified().await; // Wait for response
     {
@@ -147,9 +150,12 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 2: Debug scenario
     client
         .peer()
-        .set_level(SetLevelRequestParam {
-            level: LoggingLevel::Debug,
-        })
+        .set_level(
+            SetLevelRequestParam {
+                level: LoggingLevel::Debug,
+            },
+            Default::default(),
+        )
         .await?;
     receive_signal.notified().await; // Wait for response
     {
@@ -170,9 +176,12 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 3: Production monitoring scenario
     client
         .peer()
-        .set_level(SetLevelRequestParam {
-            level: LoggingLevel::Info,
-        })
+        .set_level(
+            SetLevelRequestParam {
+                level: LoggingLevel::Info,
+            },
+            Default::default(),
+        )
         .await?;
     receive_signal.notified().await; // Wait for response
     {
@@ -256,7 +265,7 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
     ] {
         client
             .peer()
-            .set_level(SetLevelRequestParam { level })
+            .set_level(SetLevelRequestParam { level }, Default::default())
             .await?;
         receive_signal.notified().await;
 
@@ -316,7 +325,7 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
     for level in [LoggingLevel::Info, LoggingLevel::Debug] {
         client
             .peer()
-            .set_level(SetLevelRequestParam { level })
+            .set_level(SetLevelRequestParam { level }, Default::default())
             .await?;
 
         // Wait for each message response

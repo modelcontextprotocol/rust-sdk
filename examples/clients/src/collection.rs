@@ -32,14 +32,19 @@ async fn main() -> Result<()> {
         let _server_info = service.peer_info();
 
         // List tools
-        let _tools = service.list_tools(Default::default()).await?;
+        let _tools = service
+            .list_tools(Default::default(), Default::default())
+            .await?;
 
         // Call tool 'git_status' with arguments = {"repo_path": "."}
         let _tool_result = service
-            .call_tool(CallToolRequestParam {
-                name: "git_status".into(),
-                arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
-            })
+            .call_tool(
+                CallToolRequestParam {
+                    name: "git_status".into(),
+                    arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
+                },
+                Default::default(),
+            )
             .await?;
     }
     for (_, service) in client_list {
