@@ -56,6 +56,11 @@ pub mod sse;
 #[cfg(feature = "transport-sse")]
 pub use sse::SseTransport;
 
+#[cfg(all(feature = "transport-sse", feature = "auth"))]
+pub mod sse_auth;
+#[cfg(all(feature = "transport-sse", feature = "auth"))]
+pub use sse_auth::{AuthorizedSseClient, create_authorized_transport};
+
 // #[cfg(feature = "tower")]
 // pub mod tower;
 
@@ -63,6 +68,11 @@ pub use sse::SseTransport;
 pub mod sse_server;
 #[cfg(feature = "transport-sse-server")]
 pub use sse_server::SseServer;
+
+#[cfg(feature = "auth")]
+pub mod auth;
+#[cfg(feature = "auth")]
+pub use auth::{AuthorizationManager, AuthorizationSession, AuthorizedHttpClient, AuthError};
 
 // #[cfg(feature = "transport-ws")]
 // pub mod ws;
