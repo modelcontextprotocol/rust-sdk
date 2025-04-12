@@ -10,6 +10,6 @@ the config file is in `src/config.toml`. you can change the config to your own.M
 
 After configuring the config file, you can run the example:
 ```bash
-cargo run --bin simple-chat
+cargo run --bin simple_chat
 ```
 
