@@ -476,6 +476,23 @@ pub struct RequestContext<R: ServiceRole> {
     pub peer: Peer<R>,
 }
 
+impl<R: ServiceRole> RequestContext<R> {
+    pub fn from_peer(peer: Peer<R>) -> Self {
+        Self {
+            ct: Default::default(),
+            id: NumberOrString::Number(1),
+            meta: Default::default(),
+            extensions: Default::default(),
+            peer,
+        }
+    }
+    pub fn from_peer_and_id(peer: Peer<R>, id: RequestId) -> Self {
+        let mut context = Self::from_peer(peer);
+        context.id = id;
+        context
+    }
+}
+
 /// Use this function to skip initialization process
 pub async fn serve_directly<R, S, T, E, A>(
     service: S,
