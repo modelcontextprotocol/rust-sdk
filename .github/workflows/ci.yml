@@ -136,10 +136,6 @@ jobs:
   security_audit:
     name: Security Audit
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
-
     steps:
       - uses: actions/checkout@v4
 
@@ -148,13 +144,11 @@ jobs:
       
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install dependencies
-        run: cargo fetch
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
       
-      - name: Cargo audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run cargo-audit
+        run: cargo audit
 
   doc:
     name: Generate Documentation
