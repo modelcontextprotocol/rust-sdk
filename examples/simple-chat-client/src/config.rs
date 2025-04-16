@@ -10,6 +10,7 @@ pub struct Config {
     pub chat_url: Option<String>,
     pub mcp: Option<McpConfig>,
     pub model_name: Option<String>,
+    pub proxy: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

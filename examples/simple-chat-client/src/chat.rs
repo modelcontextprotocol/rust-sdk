@@ -4,11 +4,10 @@ use std::{
 };
 
 use anyhow::Result;
-use serde_json::Value;
 
 use crate::{
     client::ChatClient,
-    model::{CompletionRequest, Message, Tool as ModelTool},
+    model::{CompletionRequest, Message},
     tool::{Tool as ToolTrait, ToolSet},
 };
 
@@ -147,24 +146,5 @@ impl ChatSession {
         }
 
         Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl ToolTrait for ModelTool {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn description(&self) -> String {
-        self.description.clone()
-    }
-
-    fn parameters(&self) -> Value {
-        self.parameters.clone()
-    }
-
-    async fn call(&self, _args: Value) -> Result<String> {
-        unimplemented!("ModelTool can't be called directly, only for tool definition")
     }
 }

@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::var("OPENAI_API_KEY").expect("need set api key"));
     let url = config.chat_url.clone();
     println!("url is {:?}", url);
-    let openai_client = Arc::new(OpenAIClient::new(api_key, url));
+    let openai_client = Arc::new(OpenAIClient::new(api_key, url, config.proxy));
 
     // create tool set
     let mut tool_set = ToolSet::default();
