@@ -21,7 +21,7 @@ mod server;
 pub use server::*;
 #[cfg(feature = "tower")]
 mod tower;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
 pub use tower::*;
 use tracing::instrument;
@@ -429,8 +429,8 @@ pub struct RunningService<R: ServiceRole, S: Service<R>> {
     service: Arc<S>,
     peer: Peer<R>,
     handle: tokio::task::JoinHandle<QuitReason>,
-    /// cancellation token
-    ct: CancellationToken,
+    /// cancellation token with drop guard
+    dg: DropGuard,
 }
 impl<R: ServiceRole, S: Service<R>> Deref for RunningService<R, S> {
     type Target = Peer<R>;
@@ -453,8 +453,9 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
         self.handle.await
     }
     pub async fn cancel(self) -> Result<QuitReason, tokio::task::JoinError> {
-        self.ct.cancel();
-        self.waiting().await
+        let RunningService { dg, handle, .. } = self;
+        dg.disarm().cancel();
+        handle.await
     }
 }
 
@@ -759,6 +760,6 @@ where
         service,
         peer: peer_return,
         handle,
-        ct,
+        dg: ct.drop_guard(),
     })
 }
