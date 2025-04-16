@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
             })
             .await?;
     }
-    for (_, service) in client_list {
+    for (_, mut service) in client_list {
         service.cancel().await?;
     }
     Ok(())

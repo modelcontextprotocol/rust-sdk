@@ -60,7 +60,7 @@
 //! use tokio::process::Command;
 //!
 //! async fn client() -> Result<()> {
-//!     let service = ()
+//!     let mut service = ()
 //!       .serve(TokioChildProcess::new(
 //!             Command::new("uvx").arg("mcp-server-git"),
 //!         )?)

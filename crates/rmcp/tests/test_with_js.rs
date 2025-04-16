@@ -57,7 +57,7 @@ async fn test_with_js_server() -> anyhow::Result<()> {
         tokio::process::Command::new("node").arg("tests/test_with_js/server.js"),
     )?;
 
-    let client = ().serve(transport).await?;
+    let mut client = ().serve(transport).await?;
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
     let tools = client.list_all_tools().await?;

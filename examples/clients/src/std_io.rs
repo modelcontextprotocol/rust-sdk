@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let service = ()
+    let mut service = ()
         .serve(TokioChildProcess::new(
             Command::new("uvx").arg("mcp-server-git"),
         )?)

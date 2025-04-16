@@ -84,7 +84,7 @@ async fn test_server_notification() -> anyhow::Result<()> {
         anyhow::Ok(())
     });
     let receive_signal = Arc::new(Notify::new());
-    let client = Client {
+    let mut client = Client {
         peer: Default::default(),
         receive_signal: receive_signal.clone(),
     }

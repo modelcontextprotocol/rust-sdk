@@ -16,7 +16,7 @@ use tokio_util::sync::{CancellationToken, PollSender};
 use tracing::Instrument;
 
 use crate::{
-    RoleServer, Service,
+    RoleServer, Service, ServiceError,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage},
 };
@@ -279,7 +279,7 @@ impl SseServer {
                 tokio::spawn(async move {
                     let server = service.serve_with_ct(transport, ct).await?;
                     server.waiting().await?;
-                    tokio::io::Result::Ok(())
+                    Ok::<(), ServiceError>(())
                 });
             }
         });
