@@ -405,10 +405,36 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
     // generate get tool attr function
     let tool_attr_fn = {
         let description = if let Some(expr) = tool_macro_attrs.fn_item.description {
+            // Use explicitly provided description if available
             expr
         } else {
-            parse_quote! {
-                ""
+            // Try to extract documentation comments
+            let mut doc_content = String::new();
+
+            for attr in &input_fn.attrs {
+                if attr.path().is_ident("doc") {
+                    if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
+                        let doc_line = lit.value();
+                        if !doc_content.is_empty() {
+                            doc_content.push_str("\n");
+                        }
+                        doc_content.push_str(doc_line.trim());
+                    }
+                }
+            }
+
+            if !doc_content.is_empty() {
+                // Use documentation comments if available
+                let doc_str = doc_content.trim().to_string();
+                // Convert the string to a string literal expression
+                parse_quote! {
+                    #doc_str
+                }
+            } else {
+                // Fall back to empty string if no description is found
+                parse_quote! {
+                    ""
+                }
             }
         };
         let schema = match &tool_macro_attrs.params {
@@ -655,6 +681,55 @@ mod test {
         let input = tool(attr, input)?;
 
         println!("input: {:#}", input);
+        Ok(())
+    }
+    #[test]
+    fn test_doc_comment_description() -> syn::Result<()> {
+        let attr = quote! {}; // No explicit description
+        let input = quote! {
+            /// This is a test description from doc comments
+            /// with multiple lines
+            fn test_function(&self) -> Result<(), Error> {
+                Ok(())
+            }
+        };
+        let result = tool(attr, input)?;
+
+        // The output should contain the description from doc comments
+        let result_str = result.to_string();
+        assert!(result_str.contains("This is a test description from doc comments"));
+        assert!(result_str.contains("with multiple lines"));
+
+        Ok(())
+    }
+    #[test]
+    fn test_explicit_description_priority() -> syn::Result<()> {
+        let attr = quote! {
+            description = "Explicit description has priority"
+        };
+        let input = quote! {
+            /// Doc comment description that should be ignored
+            fn test_function(&self) -> Result<(), Error> {
+                Ok(())
+            }
+        };
+        let result = tool(attr, input)?;
+
+        // The output should contain the explicit description
+        let result_str = result.to_string();
+        assert!(result_str.contains("Explicit description has priority"));
+
+        // Check that in the description = ... part we don't have the doc comment text
+        let tool_attr_fn_part = result_str
+            .split("fn test_function_tool_attr")
+            .nth(1)
+            .unwrap_or("");
+        let description_part = tool_attr_fn_part
+            .split("description: Some")
+            .nth(1)
+            .unwrap_or("");
+        assert!(!description_part.contains("Doc comment description that should be ignored"));
+
         Ok(())
     }
 }
