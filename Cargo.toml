@@ -6,7 +6,7 @@ resolver = "2"
 
 [workspace.dependencies]
 rmcp = { version = "0.1.5", path = "./crates/rmcp" }
-rmcp-macros = { version = "0.1.5", path = "./crates/rmcp-macros" }
+rmcp-macros = { path = "./crates/rmcp-macros" }
 
 [workspace.package]
 edition = "2024"

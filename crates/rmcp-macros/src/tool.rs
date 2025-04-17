@@ -413,28 +413,22 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
 
             for attr in &input_fn.attrs {
                 if attr.path().is_ident("doc") {
-                    if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
-                        let doc_line = lit.value();
-                        if !doc_content.is_empty() {
-                            doc_content.push_str("\n");
+                    if let syn::Meta::NameValue(name_value) = &attr.meta {
+                        if let syn::Expr::Lit(expr_lit) = &name_value.value {
+                            if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                                let doc_line = lit_str.value();
+                                if !doc_content.is_empty() {
+                                    doc_content.push_str("\n");
+                                }
+                                doc_content.push_str(doc_line.trim());
+                            }
                         }
-                        doc_content.push_str(doc_line.trim());
                     }
                 }
             }
 
-            if !doc_content.is_empty() {
-                // Use documentation comments if available
-                let doc_str = doc_content.trim().to_string();
-                // Convert the string to a string literal expression
-                parse_quote! {
-                    #doc_str
-                }
-            } else {
-                // Fall back to empty string if no description is found
-                parse_quote! {
-                    ""
-                }
+            parse_quote! {
+                    #doc_content.trim().to_string()
             }
         };
         let schema = match &tool_macro_attrs.params {
