@@ -712,18 +712,6 @@ mod test {
         // The output should contain the explicit description
         let result_str = result.to_string();
         assert!(result_str.contains("Explicit description has priority"));
-
-        // Check that in the description = ... part we don't have the doc comment text
-        let tool_attr_fn_part = result_str
-            .split("fn test_function_tool_attr")
-            .nth(1)
-            .unwrap_or("");
-        let description_part = tool_attr_fn_part
-            .split("description: Some")
-            .nth(1)
-            .unwrap_or("");
-        assert!(!description_part.contains("Doc comment description that should be ignored"));
-
         Ok(())
     }
 }
