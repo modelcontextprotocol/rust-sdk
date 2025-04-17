@@ -14,7 +14,9 @@ use crate::{
 };
 /// A shortcut for generating a JSON schema for a type.
 pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
-    let schema = schemars::r#gen::SchemaGenerator::default().into_root_schema_for::<T>();
+    let settings = schemars::r#gen::SchemaSettings::openapi3();
+    let generator = settings.into_generator();
+    let schema = generator.into_root_schema_for::<T>();
     let object = serde_json::to_value(schema).expect("failed to serialize schema");
     match object {
         serde_json::Value::Object(object) => object,
