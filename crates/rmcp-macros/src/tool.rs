@@ -418,7 +418,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                             if let syn::Lit::Str(lit_str) = &expr_lit.lit {
                                 let doc_line = lit_str.value();
                                 if !doc_content.is_empty() {
-                                    doc_content.push_str("\n");
+                                    doc_content.push('\n');
                                 }
                                 doc_content.push_str(doc_line.trim());
                             }
