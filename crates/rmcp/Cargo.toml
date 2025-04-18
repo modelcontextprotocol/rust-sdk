@@ -23,6 +23,10 @@ tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
 paste = { version = "1", optional = true }
+
+# oauth2 support
+oauth2 = { version = "4.3", optional = true }
+
 # for auto generate schema
 schemars = { version = "0.8", optional = true }
 
@@ -70,6 +74,8 @@ transport-sse-server = [
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
+auth = ["dep:oauth2", "dep:reqwest", "dep:url"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 schemars = { version = "0.8" }
