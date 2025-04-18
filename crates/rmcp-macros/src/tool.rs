@@ -301,7 +301,11 @@ fn extract_doc_line(attr: &syn::Attribute) -> Option<String> {
         if let syn::Meta::NameValue(name_value) = &attr.meta {
             if let syn::Expr::Lit(expr_lit) = &name_value.value {
                 if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                    return Some(lit_str.value().trim().to_string());
+                    let str = lit_str.value().trim().to_string();
+                    if str.is_empty() {
+                        return None;
+                    }
+                    return Some(str);
                 }
             }
         }
