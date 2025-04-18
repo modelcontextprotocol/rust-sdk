@@ -58,7 +58,10 @@ async fn client() -> anyhow::Result<()> {
     println!("Client connected and initialized successfully");
 
     // List available tools
-    let tools = client.peer().list_tools(Default::default()).await?;
+    let tools = client
+        .peer()
+        .list_tools(Default::default(), Default::default())
+        .await?;
     println!("Available tools: {:?}", tools);
 
     // Call the sum tool
@@ -66,13 +69,16 @@ async fn client() -> anyhow::Result<()> {
         println!("Calling sum tool: {}", sum_tool.name);
         let result = client
             .peer()
-            .call_tool(rmcp::model::CallToolRequestParam {
-                name: sum_tool.name.clone(),
-                arguments: Some(rmcp::object!({
-                    "a": 10,
-                    "b": 20
-                })),
-            })
+            .call_tool(
+                rmcp::model::CallToolRequestParam {
+                    name: sum_tool.name.clone(),
+                    arguments: Some(rmcp::object!({
+                        "a": 10,
+                        "b": 20
+                    })),
+                },
+                Default::default(),
+            )
             .await?;
 
         println!("Result: {:?}", result);

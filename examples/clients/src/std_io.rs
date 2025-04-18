@@ -31,15 +31,20 @@ async fn main() -> Result<()> {
     tracing::info!("Connected to server: {server_info:#?}");
 
     // List tools
-    let tools = service.list_tools(Default::default()).await?;
+    let tools = service
+        .list_tools(Default::default(), Default::default())
+        .await?;
     tracing::info!("Available tools: {tools:#?}");
 
     // Call tool 'git_status' with arguments = {"repo_path": "."}
     let tool_result = service
-        .call_tool(CallToolRequestParam {
-            name: "git_status".into(),
-            arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
-        })
+        .call_tool(
+            CallToolRequestParam {
+                name: "git_status".into(),
+                arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
     service.cancel().await?;

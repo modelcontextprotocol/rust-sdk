@@ -34,14 +34,19 @@ async fn main() -> Result<()> {
     tracing::info!("Connected to server: {server_info:#?}");
 
     // List tools
-    let tools = client.list_tools(Default::default()).await?;
+    let tools = client
+        .list_tools(Default::default(), Default::default())
+        .await?;
     tracing::info!("Available tools: {tools:#?}");
 
     let tool_result = client
-        .call_tool(CallToolRequestParam {
-            name: "increment".into(),
-            arguments: serde_json::json!({}).as_object().cloned(),
-        })
+        .call_tool(
+            CallToolRequestParam {
+                name: "increment".into(),
+                arguments: serde_json::json!({}).as_object().cloned(),
+            },
+            Default::default(),
+        )
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
     client.cancel().await?;
