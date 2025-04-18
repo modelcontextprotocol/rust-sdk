@@ -422,7 +422,8 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             expr
         } else {
             // Try to extract documentation comments
-            let doc_content = input_fn.attrs
+            let doc_content = input_fn
+                .attrs
                 .iter()
                 .filter_map(extract_doc_line)
                 .collect::<Vec<_>>()
