@@ -296,6 +296,19 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
     })
 }
 
+fn extract_doc_line(attr: &syn::Attribute) -> Option<String> {
+    if attr.path().is_ident("doc") {
+        if let syn::Meta::NameValue(name_value) = &attr.meta {
+            if let syn::Expr::Lit(expr_lit) = &name_value.value {
+                if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                    return Some(lit_str.value().trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Result<TokenStream> {
     let mut tool_macro_attrs = ToolAttrs::default();
     let args: ToolFnItemAttrs = syn::parse2(attr)?;
@@ -409,23 +422,11 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             expr
         } else {
             // Try to extract documentation comments
-            let mut doc_content = String::new();
-
-            for attr in &input_fn.attrs {
-                if attr.path().is_ident("doc") {
-                    if let syn::Meta::NameValue(name_value) = &attr.meta {
-                        if let syn::Expr::Lit(expr_lit) = &name_value.value {
-                            if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                                let doc_line = lit_str.value();
-                                if !doc_content.is_empty() {
-                                    doc_content.push('\n');
-                                }
-                                doc_content.push_str(doc_line.trim());
-                            }
-                        }
-                    }
-                }
-            }
+            let doc_content = input_fn.attrs
+                .iter()
+                .filter_map(extract_doc_line)
+                .collect::<Vec<_>>()
+                .join("\n");
 
             parse_quote! {
                     #doc_content.trim().to_string()
