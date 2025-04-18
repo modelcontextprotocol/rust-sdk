@@ -300,24 +300,24 @@ fn extract_doc_line(attr: &syn::Attribute) -> Option<String> {
     if !attr.path().is_ident("doc") {
         return None;
     }
-    
+
     let name_value = match &attr.meta {
         syn::Meta::NameValue(nv) => nv,
         _ => return None,
     };
-    
+
     let expr_lit = match &name_value.value {
         syn::Expr::Lit(lit) => lit,
         _ => return None,
     };
-    
+
     let lit_str = match &expr_lit.lit {
         syn::Lit::Str(s) => s,
         _ => return None,
     };
-    
+
     let content = lit_str.value().trim().to_string();
-    
+
     if content.is_empty() {
         None
     } else {
