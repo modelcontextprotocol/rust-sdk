@@ -296,33 +296,27 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
     })
 }
 
+// extract doc line from attribute
 fn extract_doc_line(attr: &syn::Attribute) -> Option<String> {
     if !attr.path().is_ident("doc") {
         return None;
     }
 
-    let name_value = match &attr.meta {
-        syn::Meta::NameValue(nv) => nv,
-        _ => return None,
+    let syn::Meta::NameValue(name_value) = &attr.meta else {
+        return None;
     };
 
-    let expr_lit = match &name_value.value {
-        syn::Expr::Lit(lit) => lit,
-        _ => return None,
+    let syn::Expr::Lit(expr_lit) = &name_value.value else {
+        return None;
     };
 
-    let lit_str = match &expr_lit.lit {
-        syn::Lit::Str(s) => s,
-        _ => return None,
+    let syn::Lit::Str(lit_str) = &expr_lit.lit else {
+        return None;
     };
 
     let content = lit_str.value().trim().to_string();
 
-    if content.is_empty() {
-        None
-    } else {
-        Some(content)
-    }
+    (!content.is_empty()).then_some(content)
 }
 
 pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Result<TokenStream> {
