@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Start server
-    let service = ()
+    let mut service = ()
         .serve(TokioChildProcess::new(
             Command::new("npx")
                 .arg("-y")

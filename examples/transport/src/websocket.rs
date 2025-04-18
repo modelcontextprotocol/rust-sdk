@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .init();
     start_server().await?;
-    let client = http_client("ws://127.0.0.1:8001").await?;
+    let mut client = http_client("ws://127.0.0.1:8001").await?;
     let tools = client.list_all_tools().await?;
     client.cancel().await?;
     tracing::info!("{:#?}", tools);

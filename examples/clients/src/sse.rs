@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
             version: "0.0.1".to_string(),
         },
     };
-    let client = client_info.serve(transport).await.inspect_err(|e| {
+    let mut client = client_info.serve(transport).await.inspect_err(|e| {
         tracing::error!("client error: {:?}", e);
     })?;
 

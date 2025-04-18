@@ -38,7 +38,7 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let mut client = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -109,7 +109,7 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let mut client = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -239,7 +239,7 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let mut client = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -295,7 +295,7 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let mut client = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),

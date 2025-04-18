@@ -42,7 +42,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
 
     // Start client that honors context requests
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let mut client = handler.clone().serve(client_transport).await?;
 
     // Test ThisServer context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -188,7 +188,7 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
 
     // Start client that ignores context requests
     let handler = TestClientHandler::new(false, false);
-    let client = handler.clone().serve(client_transport).await?;
+    let mut client = handler.clone().serve(client_transport).await?;
 
     // Test that context requests are ignored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -250,7 +250,7 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
 
     // Start client
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let mut client = handler.clone().serve(client_transport).await?;
 
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
@@ -320,7 +320,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let mut client = handler.clone().serve(client_transport).await?;
 
     // Test valid sequence: User -> Assistant -> User
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -417,7 +417,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
 
     // Client that only honors ThisServer but ignores AllServers
     let handler = TestClientHandler::new(true, false);
-    let client = handler.clone().serve(client_transport).await?;
+    let mut client = handler.clone().serve(client_transport).await?;
 
     // Test ThisServer is honored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -514,7 +514,7 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let mut client = handler.clone().serve(client_transport).await?;
 
     // Test context handling
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
