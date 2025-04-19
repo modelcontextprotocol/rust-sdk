@@ -16,14 +16,17 @@ pub struct OpenAIClient {
 }
 
 impl OpenAIClient {
-    pub fn new(api_key: String, url: Option<String>) -> Self {
+    pub fn new(api_key: String, url: Option<String>, proxy: Option<bool>) -> Self {
         let base_url = url.unwrap_or("https://api.openai.com/v1/chat/completions".to_string());
-
-        // create http client without proxy
-        let client = HttpClient::builder()
-            .no_proxy()
-            .build()
-            .unwrap_or_else(|_| HttpClient::new());
+        let proxy = proxy.unwrap_or(false);
+        let client = if proxy {
+            HttpClient::new()
+        } else {
+            HttpClient::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_else(|_| HttpClient::new())
+        };
 
         Self {
             api_key,
@@ -41,12 +44,6 @@ impl OpenAIClient {
 #[async_trait]
 impl ChatClient for OpenAIClient {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
-        println!("sending request to {}", self.base_url);
-        println!("using api key: {}", self.api_key);
-        let request_json = serde_json::to_string(&request)?;
-        println!("request content: {}", request_json);
-        // no proxy
-
         let response = self
             .client
             .post(&self.base_url)
