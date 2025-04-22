@@ -2,19 +2,18 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use rmcp::{
-    RoleClient, ServiceExt,
+    ServiceExt,
     model::ClientInfo,
     transport::{
-        auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient},
+        auth::{AuthorizationManager, AuthorizationSession},
         create_authorized_transport,
         sse::SseTransportRetryConfig,
     },
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     sync::Mutex,
 };
-use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<()> {

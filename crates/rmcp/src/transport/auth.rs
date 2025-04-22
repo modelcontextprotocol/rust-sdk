@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::time::Duration;
-use futures::future::BoxFuture;
 use oauth2::basic::BasicTokenType;
 use oauth2::{
     AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
@@ -14,7 +13,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::{self, Instant};
 
-/// 错误定义
+/// Auth error
 #[derive(Debug, Error)]
 pub enum AuthError {
     #[error("OAuth authorization required")]
