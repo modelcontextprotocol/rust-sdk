@@ -18,3 +18,4 @@ rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = [
     "transport-child-process",
     "transport-sse",
 ], no-default-features = true }
+clap = { version = "4.0", features = ["derive"] }
