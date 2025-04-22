@@ -1,5 +1,3 @@
-
-
 [package]
 name = "mcp-client-examples"
 version = "0.1.5"
@@ -24,6 +22,7 @@ futures = "0.3"
 anyhow = "1.0"
 url = "2.4"
 tower = "0.5"
+axum = "0.8"
 
 [[example]]
 name = "clients_sse"

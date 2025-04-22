@@ -17,9 +17,12 @@ tracing-subscriber = { version = "0.3", features = [
     "fmt",
 ] }
 futures = "0.3"
-rand = { version = "0.9" }
+rand = { version = "0.8", features = ["std"] }
 axum = { version = "0.8", features = ["macros"] }
 schemars = { version = "0.8", optional = true }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = "0.4"
+uuid = { version = "1.6", features = ["v4", "serde"] }
 # [dev-dependencies.'cfg(target_arch="linux")'.dependencies]
 
 [dev-dependencies]
@@ -46,3 +49,7 @@ path = "src/generic_service.rs"
 [[example]]
 name = "servers_auth_sse"
 path = "src/auth_sse.rs"
+
+[[example]]
+name = "mcp_oauth_server"
+path = "src/mcp_oauth_server.rs"

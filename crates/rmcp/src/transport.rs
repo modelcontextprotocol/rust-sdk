@@ -72,7 +72,7 @@ pub use sse_server::SseServer;
 #[cfg(feature = "auth")]
 pub mod auth;
 #[cfg(feature = "auth")]
-pub use auth::{AuthorizationManager, AuthorizationSession, AuthorizedHttpClient, AuthError};
+pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient};
 
 // #[cfg(feature = "transport-ws")]
 // pub mod ws;

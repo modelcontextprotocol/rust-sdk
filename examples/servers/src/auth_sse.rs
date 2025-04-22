@@ -2,18 +2,14 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, Request, StatusCode},
     middleware::{self, Next},
     response::{Html, Response},
     routing::get,
-    Json, Router,
 };
-use rmcp::{
-    service::ServiceExt, 
-    transport::{auth::AuthError, SseServer, sse_server::SseServerConfig},
-    ServerHandler, tool,
-};
+use rmcp::transport::{SseServer, sse_server::SseServerConfig};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 mod common;
@@ -74,7 +70,8 @@ async fn auth_middleware(
 
 // Root path handler
 async fn index() -> Html<&'static str> {
-    Html(r#"
+    Html(
+        r#"
     <!DOCTYPE html>
     <html>
     <head>
@@ -108,7 +105,8 @@ curl -H "Authorization: Bearer demo-token" http://127.0.0.1:8000/sse
         </pre>
     </body>
     </html>
-    "#)
+    "#,
+    )
 }
 
 // Health check endpoint
@@ -135,12 +133,12 @@ async fn get_token(Path(token_id): Path<String>) -> Result<Json<serde_json::Valu
 async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::registry()
-    .with(
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "debug".to_string().into()),
-    )
-    .with(tracing_subscriber::fmt::layer())
-    .init();
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "debug".to_string().into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     // Create token store
     let token_store = Arc::new(TokenStore::new());
@@ -166,11 +164,10 @@ async fn main() -> Result<()> {
         .route("/token/{token_id}", get(get_token));
 
     // Create protected SSE routes (require authorization)
-    let protected_sse_router = sse_router
-        .layer(middleware::from_fn_with_state(
-            token_store.clone(),
-            auth_middleware,
-        ));
+    let protected_sse_router = sse_router.layer(middleware::from_fn_with_state(
+        token_store.clone(),
+        auth_middleware,
+    ));
 
     // Create main router, public endpoints don't require authorization
     let app = Router::new()
@@ -214,4 +211,4 @@ async fn main() -> Result<()> {
 
     println!("Server has been shut down");
     Ok(())
-} 
+}
