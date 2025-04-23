@@ -191,7 +191,7 @@ impl AuthorizationManager {
 
         let client_id = ClientId::new(config.client_id);
         let redirect_url = RedirectUrl::new(config.redirect_uri.clone())
-            .map_err(|e| AuthError::OAuthError(format!("Invalid registry URL: {}", e)))?;
+            .map_err(|e| AuthError::OAuthError(format!("Invalid redirect URL: {}", e)))?;
 
         let mut client_builder = BasicClient::new(
             client_id.clone(),
@@ -321,6 +321,7 @@ impl AuthorizationManager {
 
         // store pkce verifier for later use
         *self.pkce_verifier.write().await = Some(pkce_verifier);
+        debug!("set pkce verifier: {:?}", self.pkce_verifier.read().await);
 
         Ok(auth_url.to_string())
     }
@@ -335,7 +336,9 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
-        let pkce_verifier = self.pkce_verifier.write().await.take().unwrap();
+        let pkce_verifier = self.pkce_verifier.write().await.take().ok_or_else(|| {
+            AuthError::InternalError("PKCE verifier not found".to_string())
+        })?;
 
         // exchange token
         let token_result = oauth_client
@@ -344,6 +347,7 @@ impl AuthorizationManager {
             .request(http_client)
             .map_err(|e| AuthError::TokenExchangeFailed(e.to_string()))?;
 
+        debug!("exchange token result: {:?}", token_result);
         // store credentials
         *self.credentials.write().await = Some(token_result.clone());
 
@@ -406,7 +410,7 @@ impl AuthorizationManager {
     /// prepare request, add authorization header
     pub async fn prepare_request(
         &self,
-        mut request: reqwest::RequestBuilder,
+        request: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder, AuthError> {
         let token = self.get_access_token().await?;
         Ok(request.header(AUTHORIZATION, format!("Bearer {}", token)))
@@ -431,7 +435,6 @@ pub struct AuthorizationSession {
     pub auth_manager: Arc<Mutex<AuthorizationManager>>,
     pub auth_url: String,
     pub redirect_uri: String,
-    pub pkce_verifier: PkceCodeVerifier,
 }
 
 impl AuthorizationSession {
@@ -470,19 +473,11 @@ impl AuthorizationSession {
             .await
             .get_authorization_url(scopes)
             .await?;
-        let pkce_verifier = auth_manager
-            .lock()
-            .await
-            .pkce_verifier
-            .write()
-            .await
-            .take()
-            .unwrap();
+
         Ok(Self {
             auth_manager,
             auth_url,
             redirect_uri: redirect_uri.to_string(),
-            pkce_verifier,
         })
     }
 
