@@ -6,7 +6,6 @@ use oauth2::{
     RefreshToken, RefreshTokenRequest, Scope, StandardTokenResponse, TokenResponse, TokenType,
     TokenUrl,
     basic::{BasicClient, BasicTokenType},
-    reqwest::http_client,
 };
 use reqwest::{Client as HttpClient, IntoUrl, StatusCode, Url, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
@@ -87,7 +86,20 @@ pub struct OAuthClientConfig {
 pub struct AuthorizationManager {
     http_client: HttpClient,
     metadata: Option<AuthorizationMetadata>,
-    oauth_client: Option<BasicClient>,
+    oauth_client: Option<
+        oauth2::Client<
+            oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>,
+            StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>,
+            oauth2::StandardTokenIntrospectionResponse<EmptyExtraTokenFields, BasicTokenType>,
+            oauth2::StandardRevocableToken,
+            oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>,
+            oauth2::EndpointSet,
+            oauth2::EndpointNotSet,
+            oauth2::EndpointNotSet,
+            oauth2::EndpointNotSet,
+            oauth2::EndpointSet,
+        >,
+    >,
     credentials: RwLock<Option<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>>>,
     pkce_verifier: RwLock<Option<PkceCodeVerifier>>,
     base_url: Url,
@@ -189,26 +201,19 @@ impl AuthorizationManager {
         let token_url = TokenUrl::new(metadata.token_endpoint.clone())
             .map_err(|e| AuthError::OAuthError(format!("Invalid token URL: {}", e)))?;
 
+        // debug!("token url: {:?}", token_url);
         let client_id = ClientId::new(config.client_id);
         let redirect_url = RedirectUrl::new(config.redirect_uri.clone())
-            .map_err(|e| AuthError::OAuthError(format!("Invalid redirect URL: {}", e)))?;
+            .map_err(|e| AuthError::OAuthError(format!("Invalid re URL: {}", e)))?;
 
-        let mut client_builder = BasicClient::new(
-            client_id.clone(),
-            None,
-            auth_url.clone(),
-            Some(token_url.clone()),
-        )
-        .set_redirect_uri(redirect_url.clone());
+        debug!("client_id: {:?}", client_id);
+        let mut client_builder = BasicClient::new(client_id.clone())
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url);
 
         if let Some(secret) = config.client_secret {
-            client_builder = BasicClient::new(
-                client_id,
-                Some(ClientSecret::new(secret)),
-                auth_url,
-                Some(token_url),
-            )
-            .set_redirect_uri(redirect_url);
+            client_builder = client_builder.set_client_secret(ClientSecret::new(secret));
         }
 
         self.oauth_client = Some(client_builder);
@@ -274,7 +279,7 @@ impl AuthorizationManager {
                 status, error_text
             )));
         }
-
+        debug!("registration response: {:?}", response);
         let reg_response = match response.json::<ClientRegistrationResponse>().await {
             Ok(response) => response,
             Err(e) => {
@@ -331,20 +336,30 @@ impl AuthorizationManager {
         &self,
         code: &str,
     ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>, AuthError> {
+        debug!("start exchange code for token: {:?}", code);
         let oauth_client = self
             .oauth_client
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
-        let pkce_verifier = self.pkce_verifier.write().await.take().ok_or_else(|| {
-            AuthError::InternalError("PKCE verifier not found".to_string())
-        })?;
-
+        let pkce_verifier = self
+            .pkce_verifier
+            .write()
+            .await
+            .take()
+            .ok_or_else(|| AuthError::InternalError("PKCE verifier not found".to_string()))?;
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| AuthError::InternalError(e.to_string()))?;
+        debug!("client_id: {:?}", oauth_client.client_id());
         // exchange token
         let token_result = oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
+            .add_extra_param("client_id", oauth_client.client_id().to_string())
             .set_pkce_verifier(pkce_verifier)
-            .request(http_client)
+            .request_async(&http_client)
+            .await
             .map_err(|e| AuthError::TokenExchangeFailed(e.to_string()))?;
 
         debug!("exchange token result: {:?}", token_result);
@@ -398,7 +413,8 @@ impl AuthorizationManager {
         // refresh token
         let token_result = oauth_client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.secret().to_string()))
-            .request(http_client)
+            .request_async(&self.http_client)
+            .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
         // store new credentials

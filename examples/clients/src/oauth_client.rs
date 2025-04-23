@@ -25,6 +25,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const MCP_SERVER_URL: &str = "http://localhost:3000/mcp";
 const MCP_REDIRECT_URI: &str = "http://localhost:8080/callback";
+const MCP_SSE_URL: &str = "http://localhost:3000/mcp/sse";
 const CALLBACK_PORT: u16 = 8080;
 
 #[derive(Clone)]
@@ -160,7 +161,7 @@ async fn main() -> Result<()> {
     let auth_code = code_receiver
         .await
         .context("Failed to get authorization code")?;
-
+    tracing::info!("Received authorization code: {}", auth_code);
     // Exchange code for access token
     tracing::info!("Exchanging authorization code for access token...");
     let credentials = match session_arc.handle_callback(&auth_code).await {
@@ -173,6 +174,7 @@ async fn main() -> Result<()> {
             return Err(anyhow::anyhow!("Authorization failed: {}", e));
         }
     };
+    tracing::info!("Access token: {:?}", credentials);
 
     output
         .write_all(b"\nAuthorization successful! Access token obtained.\n\n")
@@ -182,7 +184,7 @@ async fn main() -> Result<()> {
     // Create authorized transport
     tracing::info!("Establishing authorized connection to MCP server...");
     let transport = match create_authorized_transport(
-        &server_url,
+        MCP_SSE_URL.to_string(),
         auth_manager_arc,
         Some(retry_config),
     )
