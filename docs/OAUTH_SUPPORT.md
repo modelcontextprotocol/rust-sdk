@@ -24,7 +24,7 @@ rmcp = { version = "0.1", features = ["auth", "transport-sse"] }
 
 ### 2. Create Authorization Manager
 
-```rust
+```rust ignore
 use std::sync::Arc;
 use rmcp::transport::auth::AuthorizationManager;
 
@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
 
 ### 3. Create Authorization Session and Get Authorization
 
-```rust
+```rust ignore
 use rmcp::transport::auth::AuthorizationSession;
 
 async fn get_authorization(auth_manager: Arc<AuthorizationManager>) -> anyhow::Result<()> {
@@ -72,7 +72,8 @@ async fn connect_with_auth(auth_manager: Arc<AuthorizationManager>) -> anyhow::R
     // Create authorized SSE transport
     let transport = create_authorized_transport(
         "https://api.example.com/mcp",
-        auth_manager.clone()
+        auth_manager.clone(),
+        None
     ).await?;
     
     // Create client
@@ -110,17 +111,19 @@ async fn make_authorized_request(auth_manager: Arc<AuthorizationManager>) -> any
 ```
 
 ## Complete Example
+client: Please refer to `examples/clients/src/oauth_client.rs` for a complete usage example.
+server: Please refer to `examples/servers/src/mcp_oauth_server.rs` for a complete usage example.
+### Running the Example in server
+```bash
+# Run example
+cargo run --example mcp_oauth_server
+```
 
-Please refer to `examples/oauth_client.rs` for a complete usage example.
-
-## Running the Example
+### Running the Example in client
 
 ```bash
-# Set server URL (optional)
-export MCP_SERVER_URL=https://api.example.com/mcp
-
 # Run example
-cargo run --bin oauth-client
+cargo run --example oauth-client
 ```
 
 ## Authorization Flow Description

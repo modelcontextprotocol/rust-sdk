@@ -1,3 +1,10 @@
+/// This example shows how to use the RMCP SSE server with OAuth authorization.
+/// Use the inspector to view this server https://github.com/modelcontextprotocol/inspector
+/// The default index page is available at http://127.0.0.1:8000/
+/// # Get a token
+/// curl http://127.0.0.1:8000/api/token/demo
+/// # Connect to SSE using the token
+/// curl -H "Authorization: Bearer demo-token" http://127.0.0.1:8000/sse
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
@@ -10,10 +17,9 @@ use axum::{
     routing::get,
 };
 use rmcp::transport::{SseServer, sse_server::SseServerConfig};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 mod common;
-use common::{calculator::Calculator, counter::Counter};
+use common::counter::Counter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const BIND_ADDRESS: &str = "127.0.0.1:8000";
@@ -41,11 +47,9 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
         .get("Authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|auth_header| {
-            if auth_header.starts_with("Bearer ") {
-                Some(auth_header[7..].to_string())
-            } else {
-                None
-            }
+            auth_header
+                .strip_prefix("Bearer ")
+                .map(|stripped| stripped.to_string())
         })
 }
 

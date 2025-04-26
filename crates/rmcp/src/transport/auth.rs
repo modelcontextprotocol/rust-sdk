@@ -1,19 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use oauth2::{
-    AccessToken, AuthUrl, AuthorizationCode, AuthorizationRequest, ClientId, ClientSecret,
-    CsrfToken, EmptyExtraTokenFields, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
-    RefreshToken, RefreshTokenRequest, Scope, StandardTokenResponse, TokenResponse, TokenType,
-    TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, StandardTokenResponse,
+    TokenResponse, TokenUrl,
     basic::{BasicClient, BasicTokenType},
 };
 use reqwest::{Client as HttpClient, IntoUrl, StatusCode, Url, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{
-    sync::{Mutex, RwLock},
-    time::{self, Instant},
-};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error};
 
 /// Auth error
@@ -82,24 +78,31 @@ pub struct OAuthClientConfig {
     pub redirect_uri: String,
 }
 
+// add type aliases for oauth2 types
+type OAuthErrorResponse = oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>;
+type OAuthTokenResponse = StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>;
+type OAuthTokenIntrospection =
+    oauth2::StandardTokenIntrospectionResponse<EmptyExtraTokenFields, BasicTokenType>;
+type OAuthRevocableToken = oauth2::StandardRevocableToken;
+type OAuthRevocationError = oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>;
+type OAuthClient = oauth2::Client<
+    OAuthErrorResponse,
+    OAuthTokenResponse,
+    OAuthTokenIntrospection,
+    OAuthRevocableToken,
+    OAuthRevocationError,
+    oauth2::EndpointSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointSet,
+>;
+
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: HttpClient,
     metadata: Option<AuthorizationMetadata>,
-    oauth_client: Option<
-        oauth2::Client<
-            oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>,
-            StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>,
-            oauth2::StandardTokenIntrospectionResponse<EmptyExtraTokenFields, BasicTokenType>,
-            oauth2::StandardRevocableToken,
-            oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>,
-            oauth2::EndpointSet,
-            oauth2::EndpointNotSet,
-            oauth2::EndpointNotSet,
-            oauth2::EndpointNotSet,
-            oauth2::EndpointSet,
-        >,
-    >,
+    oauth_client: Option<OAuthClient>,
     credentials: RwLock<Option<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>>>,
     pkce_verifier: RwLock<Option<PkceCodeVerifier>>,
     base_url: Url,
@@ -524,7 +527,7 @@ pub struct AuthorizedHttpClient {
 impl AuthorizedHttpClient {
     /// create new authorized http client
     pub fn new(auth_manager: Arc<AuthorizationManager>, client: Option<HttpClient>) -> Self {
-        let inner_client = client.unwrap_or_else(|| HttpClient::new());
+        let inner_client = client.unwrap_or_default();
         Self {
             auth_manager,
             inner_client,

@@ -4,14 +4,14 @@ use anyhow::{Context, Result};
 use axum::{
     Router,
     extract::{Query, State},
-    response::{Html, Redirect},
+    response::Html,
     routing::get,
 };
 use rmcp::{
     ServiceExt,
     model::ClientInfo,
     transport::{
-        auth::{AuthError, AuthorizationManager, AuthorizationSession},
+        auth::{AuthorizationManager, AuthorizationSession},
         create_authorized_transport,
         sse::SseTransportRetryConfig,
     },
@@ -30,13 +30,13 @@ const CALLBACK_PORT: u16 = 8080;
 
 #[derive(Clone)]
 struct AppState {
-    auth_session: Arc<AuthorizationSession>,
     code_receiver: Arc<Mutex<Option<oneshot::Sender<String>>>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CallbackParams {
     code: String,
+    #[allow(dead_code)]
     state: Option<String>,
 }
 
@@ -52,7 +52,7 @@ async fn callback_handler(
     }
 
     // Return success page
-    Html(format!(
+    Html(
         r#"
         <!DOCTYPE html>
         <html>
@@ -73,8 +73,8 @@ async fn callback_handler(
             </div>
         </body>
         </html>
-        "#
-    ))
+        "#.to_string()
+    )
 }
 
 #[tokio::main]
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
     let session = AuthorizationSession::new(
         auth_manager_arc.clone(),
         &["mcp", "profile", "email"],
-        &MCP_REDIRECT_URI,
+        MCP_REDIRECT_URI,
     )
     .await
     .context("Failed to create authorization session")?;
@@ -120,7 +120,6 @@ async fn main() -> Result<()> {
 
     // Create app state
     let app_state = AppState {
-        auth_session: session_arc.clone(),
         code_receiver: Arc::new(Mutex::new(Some(code_sender))),
     };
 

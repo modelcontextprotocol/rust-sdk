@@ -1,18 +1,16 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration, usize};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Form, Path, Query, State},
-    http::{HeaderMap, Method, Request, StatusCode, Uri},
+    extract::{Form, Query, State},
+    http::{Request, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use hyper::body;
 use rand::{Rng, distributions::Alphanumeric};
-use reqwest::Client as HttpClient;
 use rmcp::transport::{
     SseServer,
     auth::{
@@ -33,13 +31,12 @@ use common::counter::Counter;
 
 const BIND_ADDRESS: &str = "127.0.0.1:3000";
 
-// MCP OAuth Store for managing tokens and sessions
+// A easy way to manage MCP OAuth Store for managing tokens and sessions
 #[derive(Clone, Debug)]
 struct McpOAuthStore {
     clients: Arc<RwLock<HashMap<String, OAuthClientConfig>>>,
     auth_sessions: Arc<RwLock<HashMap<String, AuthSession>>>,
     access_tokens: Arc<RwLock<HashMap<String, McpAccessToken>>>,
-    http_client: HttpClient,
 }
 
 impl McpOAuthStore {
@@ -59,10 +56,6 @@ impl McpOAuthStore {
             clients: Arc::new(RwLock::new(clients)),
             auth_sessions: Arc::new(RwLock::new(HashMap::new())),
             access_tokens: Arc::new(RwLock::new(HashMap::new())),
-            http_client: HttpClient::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("Failed to create HTTP client"),
         }
     }
 
@@ -83,18 +76,15 @@ impl McpOAuthStore {
     async fn create_auth_session(
         &self,
         client_id: String,
-        redirect_uri: String,
         scope: Option<String>,
         state: Option<String>,
         session_id: String,
     ) -> String {
         let session = AuthSession {
-            id: session_id.clone(),
             client_id,
-            redirect_uri,
             scope,
-            state,
-            created_at: chrono::Utc::now(),
+            _state: state,
+            _created_at: chrono::Utc::now(),
             auth_token: None,
         };
 
@@ -152,17 +142,18 @@ impl McpOAuthStore {
     }
 }
 
+// a simple session record for auth session
 #[derive(Clone, Debug)]
 struct AuthSession {
-    id: String,
     client_id: String,
-    redirect_uri: String,
     scope: Option<String>,
-    state: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
+    _state: Option<String>,
+    _created_at: chrono::DateTime<chrono::Utc>,
     auth_token: Option<AuthToken>,
 }
 
+// a simple token record for auth token
+// not used oauth2 token for avoid include oauth2 crate in this example
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct AuthToken {
     access_token: String,
@@ -172,6 +163,8 @@ struct AuthToken {
     scope: Option<String>,
 }
 
+// a simple token record for mcp token ,
+// not used oauth2 token for avoid include oauth2 crate in this example
 #[derive(Clone, Debug, Serialize)]
 struct McpAccessToken {
     access_token: String,
@@ -185,18 +178,12 @@ struct McpAccessToken {
 
 #[derive(Debug, Deserialize)]
 struct AuthorizeQuery {
+    #[allow(dead_code)]
     response_type: String,
     client_id: String,
     redirect_uri: String,
     scope: Option<String>,
     state: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthCallbackQuery {
-    code: String,
-    state: Option<String>,
-    session_id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -305,7 +292,8 @@ async fn oauth_authorize(
     Query(params): Query<AuthorizeQuery>,
     State(state): State<Arc<McpOAuthStore>>,
 ) -> impl IntoResponse {
-    if let Some(client) = state
+    debug!("doing oauth_authorize");
+    if let Some(_client) = state
         .validate_client(&params.client_id, &params.redirect_uri)
         .await
     {
@@ -394,10 +382,11 @@ async fn oauth_approve(
             "{}?error=access_denied&error_description={}{}",
             form.redirect_uri,
             "user rejected the authorization request",
-            form.state
-                .is_empty()
-                .then_some("")
-                .unwrap_or(&format!("&state={}", form.state))
+            if form.state.is_empty() {
+                "".to_string()
+            } else {
+                format!("&state={}", form.state)
+            }
         );
         return Redirect::to(&redirect_url).into_response();
     }
@@ -410,7 +399,6 @@ async fn oauth_approve(
     let session_id = state
         .create_auth_session(
             form.client_id.clone(),
-            form.redirect_uri.clone(),
             Some(form.scope.clone()),
             Some(form.state.clone()),
             session_id.clone(),
@@ -439,10 +427,11 @@ async fn oauth_approve(
         "{}?code={}{}",
         form.redirect_uri,
         auth_code,
-        form.state
-            .is_empty()
-            .then_some("")
-            .unwrap_or(&format!("&state={}", form.state))
+        if form.state.is_empty() {
+            "".to_string()
+        } else {
+            format!("&state={}", form.state)
+        }
     );
 
     info!("authorization approved, redirecting to: {}", redirect_url);
@@ -491,7 +480,6 @@ async fn oauth_token(
                 .into_response();
         }
     };
-
 
     if token_req.grant_type != "authorization_code" {
         info!("unsupported grant type: {}", token_req.grant_type);
@@ -584,27 +572,29 @@ async fn oauth_token(
 async fn validate_token_middleware(
     State(token_store): State<Arc<McpOAuthStore>>,
     request: Request<axum::body::Body>,
-) -> Result<Option<String>, StatusCode> {
+    next: Next,
+) -> Response {
+    debug!("validate_token_middleware");
     // Extract the access token from the Authorization header
     let auth_header = request.headers().get("Authorization");
     let token = match auth_header {
         Some(header) => {
             let header_str = header.to_str().unwrap_or("");
-            if header_str.starts_with("Bearer ") {
-                header_str[7..].to_string()
+            if let Some(stripped) = header_str.strip_prefix("Bearer ") {
+                stripped.to_string()
             } else {
-                return Err(StatusCode::UNAUTHORIZED);
+                return StatusCode::UNAUTHORIZED.into_response();
             }
         }
         None => {
-            return Err(StatusCode::UNAUTHORIZED);
+            return StatusCode::UNAUTHORIZED.into_response();
         }
     };
 
     // Validate the token
     match token_store.validate_token(&token).await {
-        Some(_) => Ok(Some(token)),
-        None => Err(StatusCode::UNAUTHORIZED),
+        Some(_) => next.run(request).await,
+        None => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
@@ -615,7 +605,7 @@ async fn oauth_authorization_server() -> impl IntoResponse {
         token_endpoint: format!("http://{}/oauth/token", BIND_ADDRESS),
         scopes_supported: Some(vec!["profile".to_string(), "email".to_string()]),
         registration_endpoint: format!("http://{}/oauth/register", BIND_ADDRESS),
-        issuer: Some(format!("{}", BIND_ADDRESS)),
+        issuer: Some(BIND_ADDRESS.to_string()),
         jwks_uri: Some(format!("http://{}/oauth/jwks", BIND_ADDRESS)),
     };
     debug!("metadata: {:?}", metadata);
@@ -677,10 +667,7 @@ async fn log_request(request: Request<Body>, next: Next) -> Response {
     let headers = request.headers().clone();
     let mut header_log = String::new();
     for (key, value) in headers.iter() {
-        let value_str = match value.to_str() {
-            Ok(v) => v,
-            Err(_) => "<binary>",
-        };
+        let value_str = value.to_str().unwrap_or("<binary>");
         header_log.push_str(&format!("\n  {}: {}", key, value_str));
     }
 
@@ -732,7 +719,7 @@ async fn main() -> Result<()> {
 
     // Create SSE server configuration for MCP
     let sse_config = SseServerConfig {
-        bind: addr.clone(),
+        bind: addr,
         sse_path: "/mcp/sse".to_string(),
         post_path: "/mcp/message".to_string(),
         ct: CancellationToken::new(),
@@ -743,10 +730,10 @@ async fn main() -> Result<()> {
     let (sse_server, sse_router) = SseServer::new(sse_config);
 
     // Create protected SSE routes (require authorization)
-    // let protected_sse_router = sse_router.layer(middleware::from_fn_with_state(
-    //     oauth_store.clone(),
-    //     validate_token_middleware,
-    // ));
+    let protected_sse_router = sse_router.layer(middleware::from_fn_with_state(
+        oauth_store.clone(),
+        validate_token_middleware,
+    ));
 
     // Create HTTP router with request logging middleware
     let app = Router::new()
@@ -764,7 +751,7 @@ async fn main() -> Result<()> {
         .with_state(oauth_store.clone())
         .layer(middleware::from_fn(log_request));
 
-    let app = app.merge(sse_router.with_state(()));
+    let app = app.merge(protected_sse_router);
     // Register token validation middleware for SSE
     let cancel_token = sse_server.config.ct.clone();
     // Handle Ctrl+C

@@ -179,6 +179,10 @@ For many cases you need to manage several service in a collection, you can call 
 let service = service.into_dyn();
 ```
 
+### OAuth Support
+
+See [docs/OAUTH_SUPPORT.md](docs/OAUTH_SUPPORT.md) for details.
+
 ### Examples
 
 See [examples](examples/README.md)

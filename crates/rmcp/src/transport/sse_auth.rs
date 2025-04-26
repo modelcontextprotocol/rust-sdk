@@ -1,22 +1,18 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use futures::{
-    Future, Sink, Stream, StreamExt, future::BoxFuture, sink::SinkExt as FuturesSinkExt,
-    stream::BoxStream,
-};
+use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use reqwest::{
     Client as HttpClient, IntoUrl, Url,
-    header::{ACCEPT, AUTHORIZATION, HeaderValue},
+    header::{ACCEPT, AUTHORIZATION},
 };
 use sse_stream::{Error as SseError, Sse, SseStream};
-use thiserror::Error;
 use tokio::sync::Mutex;
 
 use super::{
     auth::{AuthError, AuthorizationManager},
     sse::{SseClient, SseTransport, SseTransportError, SseTransportRetryConfig},
 };
-use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use crate::model::ClientJsonRpcMessage;
 
 // SSE MIME type
 const MIME_TYPE: &str = "text/event-stream";
@@ -28,7 +24,7 @@ pub struct AuthorizedSseClient {
     http_client: HttpClient,
     sse_url: Url,
     auth_manager: Arc<Mutex<AuthorizationManager>>,
-    retry_config: SseTransportRetryConfig,
+    _retry_config: Option<SseTransportRetryConfig>, // TODO retry config may be used by authorized transport for token
 }
 
 impl AuthorizedSseClient {
@@ -46,7 +42,7 @@ impl AuthorizedSseClient {
             http_client: HttpClient::default(),
             sse_url: url,
             auth_manager,
-            retry_config: retry_config.unwrap_or_default(),
+            _retry_config: retry_config,
         })
     }
 
@@ -65,39 +61,8 @@ impl AuthorizedSseClient {
             http_client: client,
             sse_url: url,
             auth_manager,
-            retry_config: retry_config.unwrap_or_default(),
+            _retry_config: retry_config,
         })
-    }
-
-    /// get access token, support retry
-    async fn get_token_with_retry(&self) -> Result<String, SseTransportError<reqwest::Error>> {
-        let mut retries = 0;
-        let max_retries = self.retry_config.max_times;
-        let base_delay = self.retry_config.min_duration;
-
-        loop {
-            match self.auth_manager.lock().await.get_access_token().await {
-                Ok(token) => return Ok(token),
-                Err(AuthError::AuthorizationRequired) => {
-                    return Err(SseTransportError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Authorization required",
-                    )));
-                }
-                Err(_e) => {
-                    if retries >= max_retries.unwrap_or(0) {
-                        return Err(SseTransportError::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "Authorization required",
-                        )));
-                    }
-                    retries += 1;
-                    // todo: need to optimize
-                    let delay = base_delay.as_millis();
-                    tokio::time::sleep(Duration::from_millis(delay as u64)).await;
-                }
-            }
-        }
     }
 }
 
@@ -166,7 +131,7 @@ impl SseClient<reqwest::Error> for AuthorizedSseClient {
                 .await
                 .get_access_token()
                 .await
-                .map_err(|e| SseTransportError::<reqwest::Error>::from(e))?;
+                .map_err(SseTransportError::<reqwest::Error>::from)?;
 
             let uri = sse_url.join(&session_id).map_err(SseTransportError::from)?;
             let request_builder = client
@@ -203,5 +168,7 @@ where
     U: IntoUrl,
 {
     let client = AuthorizedSseClient::new(url, auth_manager, retry_config)?;
-    SseTransport::start_with_client(client).await
+    let mut transport = SseTransport::start_with_client(client).await?;
+    transport.retry_config = retry_config.unwrap_or_default();
+    Ok(transport)
 }
