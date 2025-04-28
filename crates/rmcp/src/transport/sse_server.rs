@@ -79,6 +79,7 @@ async fn post_event_handler(
             .ok_or(StatusCode::NOT_FOUND)?
             .clone()
     };
+    
     match tx.send(message).await {
         Ok(_) => Ok(StatusCode::ACCEPTED),
         Err(e) => {
@@ -86,7 +87,6 @@ async fn post_event_handler(
             Err(StatusCode::GONE)
         }
     }
-    Ok(StatusCode::ACCEPTED)
 }
 
 async fn sse_handler(
