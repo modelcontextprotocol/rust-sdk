@@ -79,9 +79,12 @@ async fn post_event_handler(
             .ok_or(StatusCode::NOT_FOUND)?
             .clone()
     };
-    if tx.send(message).await.is_err() {
-        tracing::error!("send message error");
-        return Err(StatusCode::GONE);
+    match tx.send(message).await {
+        Ok(_) => Ok(StatusCode::ACCEPTED),
+        Err(e) => {
+            tracing::error!("send message error: {}", e);
+            Err(StatusCode::GONE)
+        }
     }
     Ok(StatusCode::ACCEPTED)
 }
