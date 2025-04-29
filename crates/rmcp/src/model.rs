@@ -569,6 +569,14 @@ pub struct PaginatedRequestParam {
 const_string!(PingRequestMethod = "ping");
 pub type PingRequest = RequestNoParam<PingRequestMethod>;
 
+const_string!(StderrNotificationMethod = "notifications/stderr");
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StderrNotificationParam {
+    pub content: String,
+}
+pub type StderrNotification = Notification<StderrNotificationMethod, StderrNotificationParam>;
+
 const_string!(ProgressNotificationMethod = "notifications/progress");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -981,6 +989,7 @@ ts_union!(
     | ResourceUpdatedNotification
     | ResourceListChangedNotification
     | ToolListChangedNotification
+    | StderrNotification
     | PromptListChangedNotification;
 );
 
