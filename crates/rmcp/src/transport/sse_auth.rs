@@ -9,7 +9,7 @@ use sse_stream::{Error as SseError, Sse, SseStream};
 use tokio::sync::Mutex;
 
 use super::{
-    auth::{AuthError, AuthorizationManager},
+    auth::{AuthError, AuthorizationManager, OAuthState},
     sse::{SseClient, SseTransport, SseTransportError, SseTransportRetryConfig},
 };
 use crate::model::ClientJsonRpcMessage;
@@ -161,14 +161,23 @@ impl From<AuthError> for SseTransportError<reqwest::Error> {
 /// create authorized sse transport
 pub async fn create_authorized_transport<U>(
     url: U,
-    auth_manager: Arc<Mutex<AuthorizationManager>>,
+    auth_state: OAuthState,
     retry_config: Option<SseTransportRetryConfig>,
 ) -> Result<SseTransport<AuthorizedSseClient, reqwest::Error>, SseTransportError<reqwest::Error>>
 where
     U: IntoUrl,
 {
-    let client = AuthorizedSseClient::new(url, auth_manager, retry_config)?;
-    let mut transport = SseTransport::start_with_client(client).await?;
-    transport.retry_config = retry_config.unwrap_or_default();
-    Ok(transport)
+    match auth_state {
+        OAuthState::Authorized(auth_manager) => {
+            let auth_manager = Arc::new(Mutex::new(auth_manager));
+            let client = AuthorizedSseClient::new(url, auth_manager, retry_config)?;
+            let mut transport = SseTransport::start_with_client(client).await?;
+            transport.retry_config = retry_config.unwrap_or_default();
+            Ok(transport)
+        }
+        _ => Err(SseTransportError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Not authorized".to_string(),
+        ))),
+    }
 }

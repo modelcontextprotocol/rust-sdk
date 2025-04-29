@@ -1,6 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Result;
+use askama::Template;
 use axum::{
     Json, Router,
     body::Body,
@@ -22,7 +23,7 @@ use rmcp::transport::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 // Import Counter tool for MCP service
@@ -30,6 +31,7 @@ mod common;
 use common::counter::Counter;
 
 const BIND_ADDRESS: &str = "127.0.0.1:3000";
+const INDEX_HTML: &str = include_str!("html/mcp_oauth_index.html");
 
 // A easy way to manage MCP OAuth Store for managing tokens and sessions
 #[derive(Clone, Debug)]
@@ -189,14 +191,18 @@ struct AuthorizeQuery {
 #[derive(Debug, Deserialize, Serialize)]
 struct TokenRequest {
     grant_type: String,
+    #[serde(default)]
     code: String,
     #[serde(default)]
     client_id: String,
     #[serde(default)]
     client_secret: String,
+    #[serde(default)]
     redirect_uri: String,
     #[serde(default)]
     code_verifier: Option<String>,
+    #[serde(default)]
+    refresh_token: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -217,74 +223,17 @@ fn generate_random_string(length: usize) -> String {
 
 // Root path handler
 async fn index() -> Html<&'static str> {
-    Html(
-        r#"
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>MCP OAuth Server</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px auto; max-width: 800px; line-height: 1.6; }
-            h1, h2 { color: #333; }
-            code { background: #f4f4f4; padding: 2px 5px; border-radius: 3px; }
-            .endpoint { background: #f9f9f9; padding: 15px; border-radius: 5px; margin-bottom: 15px; }
-            .flow { background: #e8f5e9; padding: 15px; border-radius: 5px; margin-bottom: 15px; }
-        </style>
-    </head>
-    <body>
-        <h1>MCP OAuth Server</h1>
-        <p>This is an MCP server with OAuth 2.0 integration to a third-party authorization server.</p>
-        
-        <h2>Available Endpoints:</h2>
-        
-        <div class="endpoint">
-            <h3>Authorization Endpoint</h3>
-            <p><code>GET /oauth/authorize</code></p>
-            <p>Parameters:</p>
-            <ul>
-                <li><code>response_type</code> - Must be "code"</li>
-                <li><code>client_id</code> - Client identifier (e.g., "mcp-client")</li>
-                <li><code>redirect_uri</code> - URI to redirect after authorization</li>
-                <li><code>scope</code> - Optional requested scope</li>
-                <li><code>state</code> - Optional state value for CSRF prevention</li>
-            </ul>
-        </div>
-        
-        <div class="endpoint">
-            <h3>Token Endpoint</h3>
-            <p><code>POST /oauth/token</code></p>
-            <p>Parameters:</p>
-            <ul>
-                <li><code>grant_type</code> - Must be "authorization_code"</li>
-                <li><code>code</code> - The authorization code</li>
-                <li><code>client_id</code> - Client identifier</li>
-                <li><code>client_secret</code> - Client secret</li>
-                <li><code>redirect_uri</code> - Redirect URI used in authorization request</li>
-            </ul>
-        </div>
-        
-        <div class="endpoint">
-            <h3>MCP SSE Endpoints</h3>
-            <p><code>/mcp/sse</code> - SSE connection endpoint (requires OAuth token)</p>
-            <p><code>/mcp/message</code> - Message endpoint (requires OAuth token)</p>
-        </div>
-        
-        <div class="flow">
-            <h2>OAuth Flow:</h2>
-            <ol>
-                <li>MCP Client initiates OAuth flow with this MCP Server</li>
-                <li>MCP Server redirects to Third-Party OAuth Server</li>
-                <li>User authenticates with Third-Party Server</li>
-                <li>Third-Party Server redirects back to MCP Server with auth code</li>
-                <li>MCP Server exchanges the code for a third-party access token</li>
-                <li>MCP Server generates its own token bound to the third-party session</li>
-                <li>MCP Server completes the OAuth flow with the MCP Client</li>
-            </ol>
-        </div>
-    </body>
-    </html>
-    "#,
-    )
+    Html(INDEX_HTML)
+}
+
+#[derive(Template)]
+#[template(path = "mcp_oauth_authorize.html")]
+struct OAuthAuthorizeTemplate {
+    client_id: String,
+    redirect_uri: String,
+    scope: String,
+    state: String,
+    scopes: String,
 }
 
 // Initial OAuth authorize endpoint
@@ -297,60 +246,19 @@ async fn oauth_authorize(
         .validate_client(&params.client_id, &params.redirect_uri)
         .await
     {
-        // create authorize page for user to approve
-        let html = format!(
-            r#"
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>MCP OAuth</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 40px auto; max-width: 600px; line-height: 1.6; }}
-                    h1 {{ color: #333; }}
-                    .container {{ background: #f9f9f9; padding: 20px; border-radius: 5px; border: 1px solid #ddd; }}
-                    .btn-group {{ margin-top: 20px; }}
-                    .btn {{ padding: 10px 15px; border-radius: 3px; cursor: pointer; margin-right: 10px; }}
-                    .btn-primary {{ background: #4285f4; color: white; border: none; }}
-                    .btn-secondary {{ background: #f1f1f1; color: #333; border: 1px solid #ddd; }}
-                    .client-info {{ margin-bottom: 20px; padding: 10px; background: #f0f0f0; border-radius: 3px; }}
-                </style>
-            </head>
-            <body>
-                <h1>MCP OAuth Server</h1>
-                <div class="container">
-                    <div class="client-info">
-                        <p><strong>{client_id}</strong> requests access to your account.</p>
-                        <p>requested scopes: {scopes}</p>
-                    </div>
-                    
-                    <form action="/oauth/approve" method="post">
-                        <input type="hidden" name="client_id" value="{client_id}">
-                        <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                        <input type="hidden" name="scope" value="{scope}">
-                        <input type="hidden" name="state" value="{state}">
-                        
-                        <div class="btn-group">
-                            <button type="submit" name="approved" value="true" class="btn btn-primary">Approve</button>
-                            <button type="submit" name="approved" value="false" class="btn btn-secondary">Reject</button>
-                        </div>
-                    </form>
-                </div>
-            </body>
-            </html>
-            "#,
-            client_id = params.client_id,
-            redirect_uri = params.redirect_uri,
-            scope = params.scope.clone().unwrap_or_default(),
-            state = params.state.clone().unwrap_or_default(),
-            scopes = params
+        let template = OAuthAuthorizeTemplate {
+            client_id: params.client_id,
+            redirect_uri: params.redirect_uri,
+            scope: params.scope.clone().unwrap_or_default(),
+            state: params.state.clone().unwrap_or_default(),
+            scopes: params
                 .scope
                 .clone()
-                .unwrap_or_else(|| "basic access".to_string()),
-        );
+                .unwrap_or_else(|| "Basic scope".to_string()),
+        };
 
-        Html(html).into_response()
+        Html(template.render().unwrap()).into_response()
     } else {
-        // invalid client_id or redirect_uri
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -480,7 +388,17 @@ async fn oauth_token(
                 .into_response();
         }
     };
-
+    if token_req.grant_type == "refresh_token" {
+        warn!("this easy server only support authorization_code now");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "unsupported_grant_type",
+                "error_description": "only authorization_code is supported"
+            })),
+        )
+            .into_response();
+    }
     if token_req.grant_type != "authorization_code" {
         info!("unsupported grant type: {}", token_req.grant_type);
         return (

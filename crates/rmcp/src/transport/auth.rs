@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
@@ -9,7 +12,7 @@ use oauth2::{
 use reqwest::{Client as HttpClient, IntoUrl, StatusCode, Url, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, error};
 
 /// Auth error
@@ -103,8 +106,9 @@ pub struct AuthorizationManager {
     http_client: HttpClient,
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
-    credentials: RwLock<Option<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>>>,
+    credentials: RwLock<Option<OAuthTokenResponse>>,
     pkce_verifier: RwLock<Option<PkceCodeVerifier>>,
+    expires_at: RwLock<Option<Instant>>,
     base_url: Url,
 }
 
@@ -126,7 +130,7 @@ pub struct ClientRegistrationResponse {
 }
 
 impl AuthorizationManager {
-    /// create new auth manager
+    /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
         let base_url = base_url.into_url()?;
         let http_client = HttpClient::builder()
@@ -134,21 +138,22 @@ impl AuthorizationManager {
             .build()
             .map_err(|e| AuthError::InternalError(e.to_string()))?;
 
-        let mut manager = Self {
+        let manager = Self {
             http_client,
             metadata: None,
             oauth_client: None,
             credentials: RwLock::new(None),
             pkce_verifier: RwLock::new(None),
+            expires_at: RwLock::new(None),
             base_url,
         };
 
-        // try to discover oauth2 metadata
-        if let Ok(metadata) = manager.discover_metadata().await {
-            manager.metadata = Some(metadata);
-        }
-
         Ok(manager)
+    }
+
+    pub fn with_client(&mut self, http_client: HttpClient) -> Result<(), AuthError> {
+        self.http_client = http_client;
+        Ok(())
     }
 
     /// discover oauth2 metadata
@@ -351,11 +356,13 @@ impl AuthorizationManager {
             .await
             .take()
             .ok_or_else(|| AuthError::InternalError("PKCE verifier not found".to_string()))?;
+
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| AuthError::InternalError(e.to_string()))?;
         debug!("client_id: {:?}", oauth_client.client_id());
+
         // exchange token
         let token_result = oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
@@ -365,6 +372,12 @@ impl AuthorizationManager {
             .await
             .map_err(|e| AuthError::TokenExchangeFailed(e.to_string()))?;
 
+        // get expires_in from token response
+        let expires_in = token_result.expires_in();
+        if let Some(expires_in) = expires_in {
+            let expires_at = Instant::now() + expires_in;
+            *self.expires_at.write().await = Some(expires_at);
+        }
         debug!("exchange token result: {:?}", token_result);
         // store credentials
         *self.credentials.write().await = Some(token_result.clone());
@@ -377,11 +390,11 @@ impl AuthorizationManager {
         let credentials = self.credentials.read().await;
 
         if let Some(creds) = credentials.as_ref() {
-            // check if the token is expired
-            if let Some(expires_in) = creds.expires_in() {
-                if expires_in <= Duration::from_secs(0) {
-                    // token expired, try to refresh
-                    drop(credentials); // release the lock
+            // check if the token is expire
+            if let Some(expires_at) = *self.expires_at.read().await {
+                if expires_at < Instant::now() {
+                    // token expired, try to refresh , release the lock
+                    drop(credentials);
                     let new_creds = self.refresh_token().await?;
                     return Ok(new_creds.access_token().secret().to_string());
                 }
@@ -412,7 +425,7 @@ impl AuthorizationManager {
         let refresh_token = current_credentials.refresh_token().ok_or_else(|| {
             AuthError::TokenRefreshFailed("No refresh token available".to_string())
         })?;
-
+        debug!("refresh token: {:?}", refresh_token);
         // refresh token
         let token_result = oauth_client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.secret().to_string()))
@@ -423,6 +436,12 @@ impl AuthorizationManager {
         // store new credentials
         *self.credentials.write().await = Some(token_result.clone());
 
+        // get expires_in from token response
+        let expires_in = token_result.expires_in();
+        if let Some(expires_in) = expires_in {
+            let expires_at = Instant::now() + expires_in;
+            *self.expires_at.write().await = Some(expires_at);
+        }
         Ok(token_result)
     }
 
@@ -451,7 +470,7 @@ impl AuthorizationManager {
 
 /// oauth2 authorization session, for guiding user to complete the authorization process
 pub struct AuthorizationSession {
-    pub auth_manager: Arc<Mutex<AuthorizationManager>>,
+    pub auth_manager: AuthorizationManager,
     pub auth_url: String,
     pub redirect_uri: String,
 }
@@ -459,7 +478,7 @@ pub struct AuthorizationSession {
 impl AuthorizationSession {
     /// create new authorization session
     pub async fn new(
-        auth_manager: Arc<Mutex<AuthorizationManager>>,
+        mut auth_manager: AuthorizationManager,
         scopes: &[&str],
         redirect_uri: &str,
     ) -> Result<Self, AuthError> {
@@ -473,8 +492,6 @@ impl AuthorizationSession {
 
         // try to dynamic register client
         let config = match auth_manager
-            .lock()
-            .await
             .register_client("MCP Client", redirect_uri)
             .await
         {
@@ -486,12 +503,8 @@ impl AuthorizationSession {
             }
         };
         // reset client config
-        auth_manager.lock().await.configure_client(config)?;
-        let auth_url = auth_manager
-            .lock()
-            .await
-            .get_authorization_url(scopes)
-            .await?;
+        auth_manager.configure_client(config)?;
+        let auth_url = auth_manager.get_authorization_url(scopes).await?;
 
         Ok(Self {
             auth_manager,
@@ -510,11 +523,7 @@ impl AuthorizationSession {
         &self,
         code: &str,
     ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>, AuthError> {
-        self.auth_manager
-            .lock()
-            .await
-            .exchange_code_for_token(code)
-            .await
+        self.auth_manager.exchange_code_for_token(code).await
     }
 }
 
@@ -554,5 +563,156 @@ impl AuthorizedHttpClient {
     /// send post request
     pub async fn post<U: IntoUrl>(&self, url: U) -> Result<reqwest::RequestBuilder, AuthError> {
         self.request(reqwest::Method::POST, url).await
+    }
+}
+
+/// OAuth state machine
+/// Use the OAuthState to manage the OAuth client is more recommend
+/// But also you can use the AuthorizationManager,AuthorizationSession,AuthorizedHttpClient directly
+pub enum OAuthState {
+    /// the AuthorizationManager
+    Unauthorized(AuthorizationManager),
+    /// the AuthorizationSession
+    Session(AuthorizationSession),
+    /// the authd AuthorizationManager
+    Authorized(AuthorizationManager),
+    /// the authd http client
+    AuthorizedHttpClient(AuthorizedHttpClient),
+}
+
+impl OAuthState {
+    /// Create new OAuth state machine
+    pub async fn new<U: IntoUrl>(
+        base_url: U,
+        client: Option<HttpClient>,
+    ) -> Result<Self, AuthError> {
+        let mut manager = AuthorizationManager::new(base_url).await?;
+        if let Some(client) = client {
+            manager.with_client(client)?;
+        }
+        Ok(OAuthState::Unauthorized(manager))
+    }
+
+    /// start authorization
+    pub async fn start_authorization(
+        &mut self,
+        scopes: &[&str],
+        redirect_uri: &str,
+    ) -> Result<(), AuthError> {
+        if let OAuthState::Unauthorized(mut manager) = std::mem::replace(
+            self,
+            OAuthState::Unauthorized(AuthorizationManager::new("http://localhost").await?),
+        ) {
+            debug!("start discovery");
+            let metadata = manager.discover_metadata().await?;
+            manager.metadata = Some(metadata);
+            debug!("start session");
+            let session = AuthorizationSession::new(manager, scopes, redirect_uri).await?;
+            *self = OAuthState::Session(session);
+            Ok(())
+        } else {
+            Err(AuthError::InternalError(
+                "Already in session state".to_string(),
+            ))
+        }
+    }
+
+    /// complete authorization
+    pub async fn complete_authorization(&mut self) -> Result<(), AuthError> {
+        if let OAuthState::Session(session) = std::mem::replace(
+            self,
+            OAuthState::Unauthorized(AuthorizationManager::new("http://localhost").await?),
+        ) {
+            *self = OAuthState::Authorized(session.auth_manager);
+            Ok(())
+        } else {
+            Err(AuthError::InternalError("Not in session state".to_string()))
+        }
+    }
+    /// covert to authorized http client
+    pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
+        if let OAuthState::Authorized(manager) = std::mem::replace(
+            self,
+            OAuthState::Authorized(AuthorizationManager::new("http://localhost").await?),
+        ) {
+            *self = OAuthState::AuthorizedHttpClient(AuthorizedHttpClient::new(
+                Arc::new(manager),
+                None,
+            ));
+            Ok(())
+        } else {
+            Err(AuthError::InternalError(
+                "Not in authorized state".to_string(),
+            ))
+        }
+    }
+    /// get current authorization url
+    pub async fn get_authorization_url(&self) -> Result<String, AuthError> {
+        match self {
+            OAuthState::Session(session) => Ok(session.get_authorization_url().to_string()),
+            OAuthState::Unauthorized(_) => {
+                Err(AuthError::InternalError("Not in session state".to_string()))
+            }
+            OAuthState::Authorized(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+            OAuthState::AuthorizedHttpClient(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+        }
+    }
+
+    /// handle authorization callback
+    pub async fn handle_callback(&mut self, code: &str) -> Result<(), AuthError> {
+        match self {
+            OAuthState::Session(session) => {
+                session.handle_callback(code).await?;
+                self.complete_authorization().await
+            }
+            OAuthState::Unauthorized(_) => {
+                Err(AuthError::InternalError("Not in session state".to_string()))
+            }
+            OAuthState::Authorized(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+            OAuthState::AuthorizedHttpClient(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+        }
+    }
+
+    /// get access token
+    pub async fn get_access_token(&self) -> Result<String, AuthError> {
+        match self {
+            OAuthState::Unauthorized(manager) => manager.get_access_token().await,
+            OAuthState::Session(_) => {
+                Err(AuthError::InternalError("Not in manager state".to_string()))
+            }
+            OAuthState::Authorized(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+            OAuthState::AuthorizedHttpClient(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+        }
+    }
+
+    /// refresh access token
+    pub async fn refresh_token(&self) -> Result<(), AuthError> {
+        match self {
+            OAuthState::Unauthorized(_) => {
+                Err(AuthError::InternalError("Not in manager state".to_string()))
+            }
+            OAuthState::Session(_) => {
+                Err(AuthError::InternalError("Not in manager state".to_string()))
+            }
+            OAuthState::Authorized(manager) => {
+                manager.refresh_token().await?;
+                Ok(())
+            }
+            OAuthState::AuthorizedHttpClient(_) => {
+                Err(AuthError::InternalError("Already authorized".to_string()))
+            }
+        }
     }
 }

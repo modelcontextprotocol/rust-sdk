@@ -10,7 +10,7 @@ This document describes the OAuth 2.1 authorization implementation for Model Con
 - Dynamic client registration
 - Automatic token refresh
 - Authorized SSE transport implementation
-
+- Authorized HTTP Client implementation
 ## Usage Guide
 
 ### 1. Enable Features
@@ -22,92 +22,58 @@ Enable the auth feature in Cargo.toml:
 rmcp = { version = "0.1", features = ["auth", "transport-sse"] }
 ```
 
-### 2. Create Authorization Manager
+### 2. Use OAuthState
 
 ```rust ignore
-use std::sync::Arc;
-use rmcp::transport::auth::AuthorizationManager;
+    // Initialize oauth state machine
+    let mut oauth_state = OAuthState::new(&server_url, None)
+        .await
+        .context("Failed to initialize oauth state machine")?;
+    oauth_state
+        .start_authorization(&["mcp", "profile", "email"], MCP_REDIRECT_URI)
+        .await
+        .context("Failed to start authorization")?;
 
-async fn main() -> anyhow::Result<()> {
-    // Create authorization manager
-    let auth_manager = Arc::new(AuthorizationManager::new("https://api.example.com/mcp").await?);
-    
-    Ok(())
-}
 ```
 
-### 3. Create Authorization Session and Get Authorization
+### 3. Get authorization url and do callback
 
 ```rust ignore
-use rmcp::transport::auth::AuthorizationSession;
-
-async fn get_authorization(auth_manager: Arc<AuthorizationManager>) -> anyhow::Result<()> {
-    // Create authorization session
-    let session = AuthorizationSession::new(
-        auth_manager.clone(),
-        &["mcp"], // Requested scopes
-        "http://localhost:8080/callback", // Redirect URI
-    ).await?;
-    
     // Get authorization URL and guide user to open it
-    let auth_url = session.get_authorization_url();
+    let auth_url = oauth_state.get_authorization_url().await?;
     println!("Please open the following URL in your browser for authorization:\n{}", auth_url);
     
     // Handle callback - In real applications, this is typically done in a callback server
     let auth_code = "Authorization code obtained from browser after user authorization";
-    let credentials = session.handle_callback(auth_code).await?;
+    let credentials = oauth_state.handle_callback(auth_code).await?;
     
     println!("Authorization successful, access token: {}", credentials.access_token);
-    
-    Ok(())
-}
+
 ```
 
-### 4. Use Authorized SSE Transport
+### 4. Use Authorized SSE Transport and create client
 
-```rust
-use rmcp::{ServiceExt, model::ClientInfo, transport::create_authorized_transport};
+```rust ignore
+    let transport =
+        match create_authorized_transport(MCP_SSE_URL.to_string(), oauth_state, Some(retry_config))
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Failed to create authorized transport: {}", e);
+                return Err(anyhow::anyhow!("Connection failed: {}", e));
+            }
+        };
 
-async fn connect_with_auth(auth_manager: Arc<AuthorizationManager>) -> anyhow::Result<()> {
-    // Create authorized SSE transport
-    let transport = create_authorized_transport(
-        "https://api.example.com/mcp",
-        auth_manager.clone(),
-        None
-    ).await?;
-    
-    // Create client
+    // Create client and connect to MCP server
     let client_service = ClientInfo::default();
     let client = client_service.serve(transport).await?;
-    
-    // Use client to call APIs
-    let tools = client.peer().list_all_tools().await?;
-    
-    for tool in tools {
-        println!("Tool: {} - {}", tool.name, tool.description);
-    }
-    
-    Ok(())
-}
 ```
 
-### 5. Use Authorized HTTP Client
+### 5. May you can use Authorized HTTP Client after authorized
 
-```rust
-use rmcp::transport::auth::AuthorizedHttpClient;
-
-async fn make_authorized_request(auth_manager: Arc<AuthorizationManager>) -> anyhow::Result<()> {
-    // Create authorized HTTP client
-    let client = AuthorizedHttpClient::new(auth_manager, None);
-    
-    // Send authorized request
-    let response = client.get("https://api.example.com/resources").await?;
-    let resources = response.json::<Vec<Resource>>().await?;
-    
-    println!("Number of resources: {}", resources.len());
-    
-    Ok(())
-}
+```rust ignore
+    let client = oauth_state.to_authorized_http_client().await?;
 ```
 
 ## Complete Example

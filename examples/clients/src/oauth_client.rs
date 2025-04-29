@@ -10,11 +10,7 @@ use axum::{
 use rmcp::{
     ServiceExt,
     model::ClientInfo,
-    transport::{
-        auth::{AuthorizationManager, AuthorizationSession},
-        create_authorized_transport,
-        sse::SseTransportRetryConfig,
-    },
+    transport::{auth::OAuthState, create_authorized_transport, sse::SseTransportRetryConfig},
 };
 use serde::Deserialize;
 use tokio::{
@@ -27,6 +23,7 @@ const MCP_SERVER_URL: &str = "http://localhost:3000/mcp";
 const MCP_REDIRECT_URI: &str = "http://localhost:8080/callback";
 const MCP_SSE_URL: &str = "http://localhost:3000/mcp/sse";
 const CALLBACK_PORT: u16 = 8080;
+const CALLBACK_HTML: &str = include_str!("callback.html");
 
 #[derive(Clone)]
 struct AppState {
@@ -50,31 +47,8 @@ async fn callback_handler(
     if let Some(sender) = state.code_receiver.lock().await.take() {
         let _ = sender.send(params.code);
     }
-
     // Return success page
-    Html(
-        r#"
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>OAuth Authorization Success</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px auto; max-width: 600px; line-height: 1.6; text-align: center; }}
-                h1 {{ color: #4CAF50; }}
-                .container {{ background: #f9f9f9; padding: 20px; border-radius: 5px; border: 1px solid #ddd; }}
-                .icon {{ font-size: 72px; color: #4CAF50; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="icon">✓</div>
-                <h1>Authorization Successful</h1>
-                <p>You have successfully authorized the MCP client. You can now close this window and return to the application.</p>
-            </div>
-        </body>
-        </html>
-        "#.to_string()
-    )
+    Html(CALLBACK_HTML.to_string())
 }
 
 #[tokio::main]
@@ -87,34 +61,7 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-
-    // Get server URL
-    let server_url = MCP_SERVER_URL.to_string();
-    tracing::info!("Using MCP server URL: {}", server_url);
-
-    // Configure retry settings
-    let retry_config = SseTransportRetryConfig {
-        max_times: Some(3),
-        min_duration: Duration::from_secs(1),
-    };
-
-    // Initialize authorization manager
-    let auth_manager = AuthorizationManager::new(&server_url)
-        .await
-        .context("Failed to initialize authorization manager")?;
-    let auth_manager_arc = Arc::new(Mutex::new(auth_manager));
-
-    // Create authorization session
-    let session = AuthorizationSession::new(
-        auth_manager_arc.clone(),
-        &["mcp", "profile", "email"],
-        MCP_REDIRECT_URI,
-    )
-    .await
-    .context("Failed to create authorization session")?;
-
-    let session_arc = Arc::new(session);
-
+    // it is a http server for handling callback
     // Create channel for receiving authorization code
     let (code_sender, code_receiver) = oneshot::channel::<String>();
 
@@ -141,6 +88,24 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Get server URL
+    let server_url = MCP_SERVER_URL.to_string();
+    tracing::info!("Using MCP server URL: {}", server_url);
+
+    // Configure retry settings
+    let retry_config = SseTransportRetryConfig {
+        max_times: Some(3),
+        min_duration: Duration::from_secs(1),
+    };
+    // Initialize oauth state machine
+    let mut oauth_state = OAuthState::new(&server_url, None)
+        .await
+        .context("Failed to initialize oauth state machine")?;
+    oauth_state
+        .start_authorization(&["mcp", "profile", "email"], MCP_REDIRECT_URI)
+        .await
+        .context("Failed to start authorization")?;
+
     // Output authorization URL to user
     let mut output = BufWriter::new(tokio::io::stdout());
     output.write_all(b"\n=== MCP OAuth Client ===\n\n").await?;
@@ -148,7 +113,7 @@ async fn main() -> Result<()> {
         .write_all(b"Please open the following URL in your browser to authorize:\n\n")
         .await?;
     output
-        .write_all(session_arc.get_authorization_url().as_bytes())
+        .write_all(oauth_state.get_authorization_url().await?.as_bytes())
         .await?;
     output
         .write_all(b"\n\nWaiting for browser callback, please do not close this window...\n")
@@ -163,38 +128,29 @@ async fn main() -> Result<()> {
     tracing::info!("Received authorization code: {}", auth_code);
     // Exchange code for access token
     tracing::info!("Exchanging authorization code for access token...");
-    let credentials = match session_arc.handle_callback(&auth_code).await {
-        Ok(creds) => {
-            tracing::info!("Successfully obtained access token");
-            creds
-        }
-        Err(e) => {
-            tracing::error!("Failed to obtain access token: {}", e);
-            return Err(anyhow::anyhow!("Authorization failed: {}", e));
-        }
-    };
-    tracing::info!("Access token: {:?}", credentials);
+    oauth_state
+        .handle_callback(&auth_code)
+        .await
+        .context("Failed to handle callback")?;
+    tracing::info!("Successfully obtained access token");
 
     output
         .write_all(b"\nAuthorization successful! Access token obtained.\n\n")
         .await?;
     output.flush().await?;
 
-    // Create authorized transport
+    // Create authorized transport, this transport is authorized by the oauth state machine
     tracing::info!("Establishing authorized connection to MCP server...");
-    let transport = match create_authorized_transport(
-        MCP_SSE_URL.to_string(),
-        auth_manager_arc,
-        Some(retry_config),
-    )
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("Failed to create authorized transport: {}", e);
-            return Err(anyhow::anyhow!("Connection failed: {}", e));
-        }
-    };
+    let transport =
+        match create_authorized_transport(MCP_SSE_URL.to_string(), oauth_state, Some(retry_config))
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("Failed to create authorized transport: {}", e);
+                return Err(anyhow::anyhow!("Connection failed: {}", e));
+            }
+        };
 
     // Create client and connect to MCP server
     let client_service = ClientInfo::default();
