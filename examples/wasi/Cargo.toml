@@ -1,7 +1,5 @@
-
-
 [package]
-name = "wasi"
+name = "wasi-mcp-example"
 edition = { workspace = true }
 version = { workspace = true }
 authors = { workspace = true }
