@@ -57,8 +57,7 @@ impl App {
 }
 
 fn session_id() -> SessionId {
-    let id = format!("{:016x}", rand::random::<u128>());
-    Arc::from(id)
+    uuid::Uuid::new_v4().to_string().into()
 }
 
 #[derive(Debug, serde::Deserialize)]

@@ -186,7 +186,7 @@ impl<'de> Deserialize<'de> for NumberOrString {
 
 pub type RequestId = NumberOrString;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Hash, Eq)]
 #[serde(transparent)]
 pub struct ProgressToken(pub NumberOrString);
 #[derive(Debug, Clone)]

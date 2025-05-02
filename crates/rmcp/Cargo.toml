@@ -49,10 +49,11 @@ tower-service = { version = "0.3", optional = true }
 # for ws transport
 # tokio-tungstenite ={ version = "0.26", optional = true }
 
-# for sse-server transport
+# for http-server transport
 axum = { version = "0.8", features = [], optional = true }
 rand = { version = "0.9", optional = true }
 tokio-stream = { version = "0.1", optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 
 # macro
 rmcp-macros = { version = "0.1", workspace = true, optional = true }
@@ -70,6 +71,16 @@ transport-sse-server = [
     "transport-async-rw",
     "dep:axum",
     "dep:rand",
+    "dep:tokio-stream",
+    "uuid",
+]
+transport-streamable-http-server = [
+    "transport-streamable-http-server-session",
+    "dep:axum",
+    "uuid",
+]
+transport-streamable-http-server-session = [
+    "transport-async-rw",
     "dep:tokio-stream",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
@@ -99,7 +110,7 @@ path = "tests/test_with_python.rs"
 
 [[test]]
 name = "test_with_js"
-required-features = ["server", "client", "transport-sse-server", "transport-child-process"]
+required-features = ["server", "client", "transport-sse-server", "transport-child-process", "transport-streamable-http-server"]
 path = "tests/test_with_js.rs"
 
 [[test]]

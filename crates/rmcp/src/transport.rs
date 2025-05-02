@@ -76,7 +76,10 @@ pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, Authorized
 
 // #[cfg(feature = "transport-ws")]
 // pub mod ws;
-
+#[cfg(feature = "transport-streamable-http-server-session")]
+pub mod streamable_http_server;
+#[cfg(feature = "transport-streamable-http-server")]
+pub use streamable_http_server::axum::StreamableHttpServer;
 pub trait IntoTransport<R, E, A>: Send + 'static
 where
     R: ServiceRole,
