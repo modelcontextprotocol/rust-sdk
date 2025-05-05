@@ -51,14 +51,14 @@ pub mod io;
 #[cfg(feature = "transport-io")]
 pub use io::stdio;
 
-#[cfg(feature = "transport-sse")]
+#[cfg(feature = "__transport-sse")]
 pub mod sse;
-#[cfg(feature = "transport-sse")]
+#[cfg(feature = "__transport-sse")]
 pub use sse::SseTransport;
 
-#[cfg(all(feature = "transport-sse", feature = "auth"))]
+#[cfg(all(feature = "__transport-sse", feature = "__auth"))]
 pub mod sse_auth;
-#[cfg(all(feature = "transport-sse", feature = "auth"))]
+#[cfg(all(feature = "__transport-sse", feature = "__auth"))]
 pub use sse_auth::{AuthorizedSseClient, create_authorized_transport};
 
 // #[cfg(feature = "tower")]
@@ -69,9 +69,9 @@ pub mod sse_server;
 #[cfg(feature = "transport-sse-server")]
 pub use sse_server::SseServer;
 
-#[cfg(feature = "auth")]
+#[cfg(feature = "__auth")]
 pub mod auth;
-#[cfg(feature = "auth")]
+#[cfg(feature = "__auth")]
 pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient};
 
 // #[cfg(feature = "transport-ws")]
