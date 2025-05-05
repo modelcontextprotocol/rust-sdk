@@ -525,6 +525,7 @@ async fn oauth_authorization_server() -> impl IntoResponse {
         registration_endpoint: format!("http://{}/oauth/register", BIND_ADDRESS),
         issuer: Some(BIND_ADDRESS.to_string()),
         jwks_uri: Some(format!("http://{}/oauth/jwks", BIND_ADDRESS)),
+        additional_fields: HashMap::new(),
     };
     debug!("metadata: {:?}", metadata);
     (StatusCode::OK, Json(metadata))
@@ -567,9 +568,10 @@ async fn oauth_register(
     // return client information
     let response = ClientRegistrationResponse {
         client_id,
-        client_secret,
+        client_secret: Some(client_secret),
         client_name: req.client_name,
         redirect_uris: req.redirect_uris,
+        additional_fields: HashMap::new(),
     };
 
     (StatusCode::CREATED, Json(response)).into_response()
