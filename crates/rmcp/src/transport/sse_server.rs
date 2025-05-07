@@ -19,13 +19,12 @@ use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage},
+    transport::common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
 };
-type SessionId = Arc<str>;
+
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
 pub type TransportReceiver = ReceiverStream<RxJsonRpcMessage<RoleServer>>;
-
-const DEFAULT_AUTO_PING_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 struct App {
@@ -54,10 +53,6 @@ impl App {
             transport_rx,
         )
     }
-}
-
-fn session_id() -> SessionId {
-    uuid::Uuid::new_v4().to_string().into()
 }
 
 #[derive(Debug, serde::Deserialize)]

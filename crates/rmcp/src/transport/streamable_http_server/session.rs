@@ -82,7 +82,7 @@ impl std::str::FromStr for EventId {
     }
 }
 
-pub type SessionId = Arc<str>;
+pub use crate::transport::common::axum::SessionId;
 
 struct CachedTx {
     tx: Sender<ServerSessionMessage>,

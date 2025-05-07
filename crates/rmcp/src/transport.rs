@@ -80,6 +80,10 @@ pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, Authorized
 pub mod streamable_http_server;
 #[cfg(feature = "transport-streamable-http-server")]
 pub use streamable_http_server::axum::StreamableHttpServer;
+
+/// Common use codes
+pub mod common;
+
 pub trait IntoTransport<R, E, A>: Send + 'static
 where
     R: ServiceRole,

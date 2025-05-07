@@ -16,16 +16,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::session::{
-    EventId, HEADER_LAST_EVENT_ID, Session, SessionId, SessionTransport,
-    StreamableHttpMessageReceiver,
+    EventId, HEADER_LAST_EVENT_ID, Session, SessionTransport, StreamableHttpMessageReceiver,
 };
 use crate::{
-    RoleServer, Service, model::ClientJsonRpcMessage,
-    transport::streamable_http_server::session::HEADER_SESSION_ID,
+    RoleServer, Service,
+    model::ClientJsonRpcMessage,
+    transport::{
+        common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
+        streamable_http_server::session::HEADER_SESSION_ID,
+    },
 };
 type SessionManager = Arc<tokio::sync::RwLock<HashMap<SessionId, Session>>>;
-
-const DEFAULT_AUTO_PING_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 struct App {
@@ -48,10 +49,6 @@ impl App {
             transport_rx,
         )
     }
-}
-
-fn session_id() -> SessionId {
-    uuid::Uuid::new_v4().to_string().into()
 }
 
 fn receiver_as_stream(
