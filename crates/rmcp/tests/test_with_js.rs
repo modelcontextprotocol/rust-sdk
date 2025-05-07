@@ -6,7 +6,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
 use common::calculator::Calculator;
 
-const BIND_ADDRESS: &str = "127.0.0.1:8000";
+const SSE_BIND_ADDRESS: &str = "127.0.0.1:8000";
+const STREAMABLE_HTTP_BIND_ADDRESS: &str = "127.0.0.1:8001";
 
 #[tokio::test]
 async fn test_with_js_client() -> anyhow::Result<()> {
@@ -24,7 +25,7 @@ async fn test_with_js_client() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let ct = SseServer::serve(BIND_ADDRESS.parse()?)
+    let ct = SseServer::serve(SSE_BIND_ADDRESS.parse()?)
         .await?
         .with_service(Calculator::default);
 
@@ -83,7 +84,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let ct = StreamableHttpServer::serve(BIND_ADDRESS.parse()?)
+    let ct = StreamableHttpServer::serve(STREAMABLE_HTTP_BIND_ADDRESS.parse()?)
         .await?
         .with_service(Calculator::default);
 
