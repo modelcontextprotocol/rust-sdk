@@ -30,7 +30,7 @@ pub struct Server {}
 impl Server {
     /// This tool is used to get the weather of a city.
     #[tool(name = "get-weather", description = "Get the weather of a city.", vis = )]
-    pub async fn get_weather(&self, #[tool(param)] city: String) -> String {
+    pub async fn get_weather(&self, city: String) -> String {
         drop(city);
         "rain".to_string()
     }

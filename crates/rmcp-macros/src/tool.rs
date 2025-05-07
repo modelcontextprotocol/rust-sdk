@@ -45,6 +45,7 @@ struct ToolFnItemAttrs {
     name: Option<Expr>,
     description: Option<Expr>,
     vis: Option<Visibility>,
+    aggr: bool,
 }
 
 impl Parse for ToolFnItemAttrs {
@@ -52,10 +53,16 @@ impl Parse for ToolFnItemAttrs {
         let mut name = None;
         let mut description = None;
         let mut vis = None;
+        let mut aggr = false;
         while !input.is_empty() {
             let key: Ident = input.parse()?;
+            let key_str = key.to_string();
+            if key_str == AGGREGATED_IDENT {
+                aggr = true;
+                continue;
+            }
             input.parse::<Token![=]>()?;
-            match key.to_string().as_str() {
+            match key_str.as_str() {
                 "name" => {
                     let value: Expr = input.parse()?;
                     name = Some(value);
@@ -82,6 +89,7 @@ impl Parse for ToolFnItemAttrs {
             name,
             description,
             vis,
+            aggr,
         })
     }
 }
@@ -346,29 +354,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                 for attr in raw_attrs {
                     match &attr.meta {
                         syn::Meta::List(meta_list) => {
-                            if meta_list.path.is_ident(TOOL_IDENT) {
-                                let pat_type = pat_type.clone();
-                                let marker = meta_list.parse_args::<ParamMarker>()?;
-                                match marker {
-                                    ParamMarker::Param => {
-                                        let Some(arg_ident) = arg_ident.take() else {
-                                            return Err(syn::Error::new(
-                                                proc_macro2::Span::call_site(),
-                                                "input param must have an ident as name",
-                                            ));
-                                        };
-                                        caught.replace(Caught::Param(ToolFnParamAttrs {
-                                            serde_meta: Vec::new(),
-                                            schemars_meta: Vec::new(),
-                                            ident: arg_ident,
-                                            rust_type: pat_type.ty.clone(),
-                                        }));
-                                    }
-                                    ParamMarker::Aggregated => {
-                                        caught.replace(Caught::Aggregated(pat_type.clone()));
-                                    }
-                                }
-                            } else if meta_list.path.is_ident(SERDE_IDENT) {
+                            if meta_list.path.is_ident(SERDE_IDENT) {
                                 serde_metas.push(meta_list.clone());
                             } else if meta_list.path.is_ident(SCHEMARS_IDENT) {
                                 schemars_metas.push(meta_list.clone());
@@ -380,6 +366,23 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                             pat_type.attrs.push(attr);
                         }
                     }
+                }
+                let pat_type = pat_type.clone();
+                if tool_macro_attrs.fn_item.aggr{
+                    caught.replace(Caught::Aggregated(pat_type.clone()));
+                }else{
+                    let Some(arg_ident) = arg_ident.take() else {
+                        return Err(syn::Error::new(
+                            proc_macro2::Span::call_site(),
+                            "input param must have an ident as name",
+                        ));
+                    };
+                    caught.replace(Caught::Param(ToolFnParamAttrs {
+                        serde_meta: Vec::new(),
+                        schemars_meta: Vec::new(),
+                        ident: arg_ident,
+                        rust_type: pat_type.ty.clone(),
+                    }));
                 }
                 match caught {
                     Some(Caught::Param(mut param)) => {

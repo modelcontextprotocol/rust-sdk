@@ -64,17 +64,16 @@ impl Counter {
     #[tool(description = "Repeat what you say")]
     fn echo(
         &self,
-        #[tool(param)]
         #[schemars(description = "Repeat what you say")]
         saying: String,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(saying)]))
     }
 
-    #[tool(description = "Calculate the sum of two numbers")]
+    #[tool(description = "Calculate the sum of two numbers",aggr)]
     fn sum(
         &self,
-        #[tool(aggr)] StructRequest { a, b }: StructRequest,
+        StructRequest { a, b }: StructRequest,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             (a + b).to_string(),

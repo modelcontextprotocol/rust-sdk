@@ -13,18 +13,16 @@ pub struct SumRequest {
 pub struct Calculator;
 #[tool(tool_box)]
 impl Calculator {
-    #[tool(description = "Calculate the sum of two numbers")]
-    fn sum(&self, #[tool(aggr)] SumRequest { a, b }: SumRequest) -> String {
+    #[tool(description = "Calculate the sum of two numbers",aggr)]
+    fn sum(&self, SumRequest { a, b }: SumRequest) -> String {
         (a + b).to_string()
     }
 
     #[tool(description = "Calculate the sub of two numbers")]
     fn sub(
         &self,
-        #[tool(param)]
         #[schemars(description = "the left hand side number")]
         a: i32,
-        #[tool(param)]
         #[schemars(description = "the right hand side number")]
         b: i32,
     ) -> String {

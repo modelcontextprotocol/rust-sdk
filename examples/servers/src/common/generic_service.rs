@@ -56,7 +56,7 @@ impl<DS: DataService> GenericService<DS> {
     }
 
     #[tool(description = "set memory to service")]
-    pub async fn set_data(&self, #[tool(param)] data: String) -> String {
+    pub async fn set_data(&self, data: String) -> String {
         let new_data = data.clone();
         format!("Current memory: {}", new_data)
     }

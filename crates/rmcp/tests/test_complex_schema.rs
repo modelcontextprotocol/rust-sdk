@@ -30,10 +30,10 @@ impl Demo {
         Self
     }
 
-    #[tool(description = "LLM")]
+    #[tool(description = "LLM",aggr)]
     async fn chat(
         &self,
-        #[tool(aggr)] chat_request: ChatRequest,
+        chat_request: ChatRequest,
     ) -> Result<CallToolResult, McpError> {
         let content = Content::json(chat_request)?;
         Ok(CallToolResult::success(vec![content]))
