@@ -33,5 +33,3 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-await server.close();
-await transport.close();
