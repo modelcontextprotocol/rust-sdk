@@ -1,7 +1,5 @@
 use rmcp::{
-    ServerHandler,
     handler::server::wrapper::Json,
-    model::{ServerCapabilities, ServerInfo},
     schemars, tool,
 };
 
@@ -13,7 +11,7 @@ pub struct SumRequest {
 }
 #[derive(Debug, Clone)]
 pub struct Calculator;
-#[tool(tool_box)]
+#[tool(tool_box,description = "A simple calculator")]
 impl Calculator {
     #[tool(description = "Calculate the sum of two numbers",aggr)]
     fn sum(&self, SumRequest { a, b }: SumRequest) -> String {
@@ -29,16 +27,5 @@ impl Calculator {
         b: i32,
     ) -> Json<i32> {
         Json(a - b)
-    }
-}
-
-#[tool(tool_box)]
-impl ServerHandler for Calculator {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("A simple calculator".into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
     }
 }

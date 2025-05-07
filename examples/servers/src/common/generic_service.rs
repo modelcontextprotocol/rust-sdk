@@ -42,7 +42,7 @@ pub struct GenericService<DS: DataService> {
     data_service: Arc<DS>,
 }
 
-#[tool(tool_box)]
+#[tool(tool_box,description="generic data service")]
 impl<DS: DataService> GenericService<DS> {
     pub fn new(data_service: DS) -> Self {
         Self {
@@ -59,15 +59,5 @@ impl<DS: DataService> GenericService<DS> {
     pub async fn set_data(&self, data: String) -> String {
         let new_data = data.clone();
         format!("Current memory: {}", new_data)
-    }
-}
-
-impl<DS: DataService> ServerHandler for GenericService<DS> {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("generic data service".into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
     }
 }

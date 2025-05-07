@@ -3,18 +3,21 @@ use std::collections::HashSet;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{
-    Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility, parse::Parse,
-    parse_quote, spanned::Spanned,
+    parse::{discouraged::Speculative, Parse}, parse_quote, spanned::Spanned, Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility
 };
 
 #[derive(Default)]
-struct ToolImplItemAttrs {
+pub(crate) struct ToolImplItemAttrs {
     tool_box: Option<Option<Ident>>,
+    default_build: bool,
+    description: Option<Expr>,
 }
 
 impl Parse for ToolImplItemAttrs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut tool_box = None;
+        let mut default = true;
+        let mut description = None;
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             match key.to_string().as_str() {
@@ -24,6 +27,32 @@ impl Parse for ToolImplItemAttrs {
                         input.parse::<Token![=]>()?;
                         let value: Ident = input.parse()?;
                         tool_box = Some(Some(value));
+                    }
+                }
+                "default_build" => {
+                    if input.lookahead1().peek(Token![=]) {
+                        input.parse::<Token![=]>()?;
+                        let value: Expr = input.parse()?;
+                        match value.to_token_stream().to_string().as_str() {
+                            "true" => {
+                                default = true;
+                            }
+                            "false" => {
+                                default = false;
+                            }
+                            _ => {
+                                return Err(syn::Error::new(key.span(), "unknown attribute"));
+                            }
+                        }
+                    } else {
+                        default = true;
+                    }
+                }
+                "description" => {
+                    if input.lookahead1().peek(Token![=]) {
+                        input.parse::<Token![=]>()?;
+                        let value: Expr = input.parse()?;
+                        description = Some(value);
                     }
                 }
                 _ => {
@@ -36,7 +65,11 @@ impl Parse for ToolImplItemAttrs {
             input.parse::<Token![,]>()?;
         }
 
-        Ok(ToolImplItemAttrs { tool_box })
+        Ok(ToolImplItemAttrs {
+            tool_box,
+            default_build: default,
+            description,
+        })
     }
 }
 
@@ -163,14 +196,20 @@ pub enum ToolItem {
 
 impl Parse for ToolItem {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let lookahead = input.lookahead1();
-        if lookahead.peek(Token![impl]) {
-            let item = input.parse::<ItemImpl>()?;
-            Ok(ToolItem::Impl(item))
-        } else {
-            let item = input.parse::<ItemFn>()?;
-            Ok(ToolItem::Fn(item))
+        let fork=input.fork();
+        if let Ok(item) = fork.parse::<ItemImpl>() {
+            input.advance_to(&fork);
+            return Ok(ToolItem::Impl(item));
         }
+        let fork=input.fork();
+        if let Ok(item) = fork.parse::<ItemFn>() {
+            input.advance_to(&fork);
+            return Ok(ToolItem::Fn(item));
+        }
+        Err(syn::Error::new(
+            input.span(),
+            "expected function or impl block",
+        ))
     }
 }
 
@@ -186,7 +225,22 @@ pub(crate) fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenSt
 pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Result<TokenStream> {
     let tool_impl_attr: ToolImplItemAttrs = syn::parse2(attr)?;
     let tool_box_ident = tool_impl_attr.tool_box;
-
+    let mut extend_quote = None;
+    let description = if let Some(expr) = tool_impl_attr.description {
+        // Use explicitly provided description if available
+        expr
+    } else {
+        // Try to extract documentation comments
+        let doc_content = input
+            .attrs
+            .iter()
+            .filter_map(extract_doc_line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse_quote! {
+                #doc_content.trim().to_string()
+        }
+    };
     // get all tool function ident
     let mut tool_fn_idents = Vec::new();
     for item in &input.items {
@@ -288,6 +342,37 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
                     })
                 }
             });
+
+            if tool_impl_attr.default_build {
+                let struct_name = input.self_ty.clone();
+                let generic = &input.generics;
+                let extend = quote! {
+                    impl #generic rmcp::handler::server::ServerHandler for #struct_name {
+                        async fn call_tool(
+                            &self,
+                            request: rmcp::model::CallToolRequestParam,
+                            context: rmcp::service::RequestContext<rmcp::RoleServer>,
+                        ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
+                            self.call_tool_inner(request, context).await
+                        }
+                        async fn list_tools(
+                            &self,
+                            request: Option<rmcp::model::PaginatedRequestParam>,
+                            context: rmcp::service::RequestContext<rmcp::RoleServer>,
+                        ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
+                            self.list_tools_inner(request.unwrap_or_default(), context).await
+                        }
+                        fn get_info(&self) -> rmcp::model::ServerInfo {
+                            rmcp::model::ServerInfo {
+                                instructions: Some(#description.into()),
+                                capabilities: rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+                                ..Default::default()
+                            }
+                        }
+                    }
+                };
+                extend_quote.replace(extend);
+            }
         } else {
             // if there are no generic parameters, use the original tool_box! macro
             let this_type_ident = &input.self_ty;
@@ -296,11 +381,31 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
                     #(#tool_fn_idents),*
                 } #ident);
             ));
+            if tool_impl_attr.default_build{
+                let struct_name = input.self_ty.clone();
+                let generic = &input.generics;
+                let extend = quote! {
+                    impl #generic rmcp::handler::server::ServerHandler for #struct_name {
+                        rmcp::tool_box!(@derive #ident);
+
+                        fn get_info(&self) -> rmcp::model::ServerInfo {
+                            rmcp::model::ServerInfo {
+                                instructions: Some(#description.into()),
+                                capabilities: rmcp::model::ServerCapabilities::builder().enable_tools().build(),
+                                ..Default::default()
+                            }
+                        }
+                    }
+                };
+                extend_quote.replace(extend);
+            }
+            
         }
     }
 
     Ok(quote! {
         #input
+        #extend_quote
     })
 }
 
@@ -441,7 +546,6 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                 .filter_map(extract_doc_line)
                 .collect::<Vec<_>>()
                 .join("\n");
-
             parse_quote! {
                     #doc_content.trim().to_string()
             }
@@ -706,6 +810,7 @@ mod test {
 
         // The output should contain the description from doc comments
         let result_str = result.to_string();
+        println!("result: {:#}", result_str);
         assert!(result_str.contains("This is a test description from doc comments"));
         assert!(result_str.contains("with multiple lines"));
 

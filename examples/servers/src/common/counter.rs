@@ -17,7 +17,7 @@ pub struct StructRequest {
 pub struct Counter {
     counter: Arc<Mutex<i32>>,
 }
-#[tool(tool_box)]
+#[tool(tool_box,default_build=false)]
 impl Counter {
     #[allow(dead_code)]
     pub fn new() -> Self {
