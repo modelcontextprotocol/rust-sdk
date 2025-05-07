@@ -13,9 +13,9 @@ thiserror = "1.0"
 async-trait = "0.1"
 futures = "0.3"
 toml = "0.8"
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = [
+rmcp = {path="../../crates/rmcp", features = [
     "client",
     "transport-child-process",
     "transport-sse",
-], no-default-features = true }
+], default-features = false }
 clap = { version = "4.0", features = ["derive"] }
