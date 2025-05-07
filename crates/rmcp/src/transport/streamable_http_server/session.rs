@@ -120,7 +120,10 @@ impl CachedTx {
         } else {
             self.cache.push_back(message.clone());
         }
-        let _ = self.tx.send(message).await;
+        let _ = self.tx.send(message).await.inspect_err(|e| {
+            let event_id = &e.0.event_id;
+            tracing::trace!(%event_id, "trying to send message in a closed session")
+        });
     }
 
     async fn sync(&mut self, index: usize) -> Result<(), SessionError> {
@@ -211,16 +214,19 @@ pub struct StreamableHttpMessageReceiver {
 
 impl SessionContext {
     fn unregister_resource(&mut self, resource: &ResourceKey) {
-        if let Some(http_key) = self.resource_router.remove(resource) {
-            if let Some(channel) = self.tx_router.get_mut(&http_key) {
+        if let Some(http_request_id) = self.resource_router.remove(resource) {
+            tracing::trace!(?resource, http_request_id, "unregister resource");
+            if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
                 channel.resources.remove(resource);
                 if channel.resources.is_empty() {
-                    self.tx_router.remove(&http_key);
+                    tracing::debug!(http_request_id, "close http request wise channel");
+                    self.tx_router.remove(&http_request_id);
                 }
             }
         }
     }
     fn register_resource(&mut self, resource: ResourceKey, http_request_id: HttpRequestId) {
+        tracing::trace!(?resource, http_request_id, "register resource");
         if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
             channel.resources.insert(resource.clone());
             self.resource_router.insert(resource, http_request_id);
@@ -276,6 +282,7 @@ impl SessionContext {
                 tx: CachedTx::new(tx, Some(http_request_id)),
             },
         );
+        tracing::debug!(http_request_id, "establish new request wise channel");
         Ok(StreamableHttpMessageReceiver {
             http_request_id: Some(http_request_id),
             inner: rx,
@@ -733,6 +740,7 @@ pub fn create_session(id: SessionId, config: SessionConfig) -> (Session, Session
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(config.channel_capacity);
     let (common_tx, _) = tokio::sync::mpsc::channel(config.channel_capacity);
     let common = CachedTx::new_common(common_tx);
+    tracing::info!(session_id = ?id, "create new session");
     let session_context = SessionContext {
         next_http_request_id: 0,
         id,
