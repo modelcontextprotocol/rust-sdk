@@ -227,7 +227,14 @@ async fn delete_handler(
         let session = sm
             .remove(session_id)
             .ok_or((StatusCode::NOT_FOUND, "session not found").into_response())?;
-        session.handle();
+        let cancel_result = session.cancel().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fail to cancel session {session_id}: tokio join error: {e}"),
+            )
+                .into_response()
+        })?;
+        tracing::info!(session_id, ?cancel_result, "session deleted");
         Ok(StatusCode::ACCEPTED)
     } else {
         Err((StatusCode::BAD_REQUEST, "missing session id").into_response())

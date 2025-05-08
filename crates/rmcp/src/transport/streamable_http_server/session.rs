@@ -130,7 +130,7 @@ impl CachedTx {
         let Some(front) = self.cache.front() else {
             return Ok(());
         };
-        let sync_index = index.wrapping_sub(front.event_id.index);
+        let sync_index = index.saturating_sub(front.event_id.index);
         if sync_index > self.cache.len() {
             // invalid index
             return Err(SessionError::InvalidEventId);
@@ -261,7 +261,7 @@ impl SessionContext {
     }
     fn next_http_request_id(&mut self) -> HttpRequestId {
         let id = self.next_http_request_id;
-        self.next_http_request_id = self.next_http_request_id.saturating_add_signed(1);
+        self.next_http_request_id = self.next_http_request_id.wrapping_add(1);
         id
     }
     async fn send_to_service(&self, message: ClientJsonRpcMessage) -> Result<(), SessionError> {
