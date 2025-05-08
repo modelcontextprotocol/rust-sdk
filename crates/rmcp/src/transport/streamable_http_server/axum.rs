@@ -3,7 +3,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, request::Parts},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -20,7 +20,7 @@ use super::session::{
 };
 use crate::{
     RoleServer, Service,
-    model::ClientJsonRpcMessage,
+    model::{ClientJsonRpcMessage, GetExtensions, JsonRpcBatchRequestItem},
     transport::{
         common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
         streamable_http_server::session::HEADER_SESSION_ID,
@@ -68,11 +68,11 @@ fn receiver_as_stream(
 
 async fn post_handler(
     State(app): State<App>,
-    header_map: HeaderMap,
-    Json(message): Json<ClientJsonRpcMessage>,
+    parts: Parts,
+    Json(mut message): Json<ClientJsonRpcMessage>,
 ) -> Result<Response, Response> {
     use futures::StreamExt;
-    if let Some(session_id) = header_map.get(HEADER_SESSION_ID) {
+    if let Some(session_id) = parts.headers.get(HEADER_SESSION_ID).cloned() {
         let session_id = session_id
             .to_str()
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()).into_response())?;
@@ -84,6 +84,31 @@ async fn post_handler(
                 .ok_or((StatusCode::NOT_FOUND, "session not found").into_response())?;
             session.handle().clone()
         };
+        // inject request part
+        match &mut message {
+            ClientJsonRpcMessage::Request(request) => {
+                request.request.extensions_mut().insert(parts);
+            }
+            ClientJsonRpcMessage::Notification(notification) => {
+                notification.notification.extensions_mut().insert(parts);
+            }
+            ClientJsonRpcMessage::BatchRequest(batch_request) => {
+                for request in batch_request {
+                    match request {
+                        JsonRpcBatchRequestItem::Request(request) => {
+                            request.request.extensions_mut().insert(parts.clone());
+                        }
+                        JsonRpcBatchRequestItem::Notification(notification) => {
+                            notification
+                                .notification
+                                .extensions_mut()
+                                .insert(parts.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
         match &message {
             ClientJsonRpcMessage::Request(_) | ClientJsonRpcMessage::BatchRequest(_) => {
                 let receiver = handle.establish_request_wise_channel().await.map_err(|e| {
