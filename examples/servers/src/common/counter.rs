@@ -17,7 +17,7 @@ pub struct StructRequest {
 pub struct Counter {
     counter: Arc<Mutex<i32>>,
 }
-#[tool(tool_box,default_build=false)]
+#[tool(tool_box, default_build = false)]
 impl Counter {
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -64,17 +64,13 @@ impl Counter {
     #[tool(description = "Repeat what you say")]
     fn echo(
         &self,
-        #[schemars(description = "Repeat what you say")]
-        saying: String,
+        #[schemars(description = "Repeat what you say")] saying: String,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(saying)]))
     }
 
-    #[tool(description = "Calculate the sum of two numbers",aggr)]
-    fn sum(
-        &self,
-        StructRequest { a, b }: StructRequest,
-    ) -> Result<CallToolResult, McpError> {
+    #[tool(description = "Calculate the sum of two numbers", aggr)]
+    fn sum(&self, StructRequest { a, b }: StructRequest) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             (a + b).to_string(),
         )]))

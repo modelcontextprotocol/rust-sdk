@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use rmcp::{
-    ServerHandler,
-    model::{ServerCapabilities, ServerInfo},
-    schemars, tool,
-};
+use rmcp::{schemars, tool};
 
 #[allow(dead_code)]
 pub trait DataService: Send + Sync + 'static {
@@ -42,8 +38,9 @@ pub struct GenericService<DS: DataService> {
     data_service: Arc<DS>,
 }
 
-#[tool(tool_box,description="generic data service")]
+#[tool(tool_box, description = "generic data service")]
 impl<DS: DataService> GenericService<DS> {
+    #[allow(dead_code)]
     pub fn new(data_service: DS) -> Self {
         Self {
             data_service: Arc::new(data_service),

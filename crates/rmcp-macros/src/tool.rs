@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{
-    parse::{discouraged::Speculative, Parse}, parse_quote, spanned::Spanned, Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility
+    Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility,
+    parse::{Parse, discouraged::Speculative},
+    parse_quote,
+    spanned::Spanned,
 };
 
 #[derive(Default)]
@@ -196,12 +199,12 @@ pub enum ToolItem {
 
 impl Parse for ToolItem {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let fork=input.fork();
+        let fork = input.fork();
         if let Ok(item) = fork.parse::<ItemImpl>() {
             input.advance_to(&fork);
             return Ok(ToolItem::Impl(item));
         }
-        let fork=input.fork();
+        let fork = input.fork();
         if let Ok(item) = fork.parse::<ItemFn>() {
             input.advance_to(&fork);
             return Ok(ToolItem::Fn(item));
@@ -381,7 +384,7 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
                     #(#tool_fn_idents),*
                 } #ident);
             ));
-            if tool_impl_attr.default_build{
+            if tool_impl_attr.default_build {
                 let struct_name = input.self_ty.clone();
                 let generic = &input.generics;
                 let extend = quote! {
@@ -399,7 +402,6 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
                 };
                 extend_quote.replace(extend);
             }
-            
         }
     }
 
@@ -473,9 +475,9 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                     }
                 }
                 let pat_type = pat_type.clone();
-                if tool_macro_attrs.fn_item.aggr{
+                if tool_macro_attrs.fn_item.aggr {
                     caught.replace(Caught::Aggregated(pat_type.clone()));
-                }else{
+                } else {
                     let Some(arg_ident) = arg_ident.take() else {
                         return Err(syn::Error::new(
                             proc_macro2::Span::call_site(),
