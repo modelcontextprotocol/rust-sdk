@@ -242,7 +242,7 @@ async fn delete_handler(
 }
 
 #[derive(Debug, Clone)]
-pub struct SseServerConfig {
+pub struct StreamableHttpServerConfig {
     pub bind: SocketAddr,
     pub path: String,
     pub ct: CancellationToken,
@@ -252,12 +252,12 @@ pub struct SseServerConfig {
 #[derive(Debug)]
 pub struct StreamableHttpServer {
     transport_rx: tokio::sync::mpsc::UnboundedReceiver<SessionTransport>,
-    pub config: SseServerConfig,
+    pub config: StreamableHttpServerConfig,
 }
 
 impl StreamableHttpServer {
     pub async fn serve(bind: SocketAddr) -> io::Result<Self> {
-        Self::serve_with_config(SseServerConfig {
+        Self::serve_with_config(StreamableHttpServerConfig {
             bind,
             path: "/".to_string(),
             ct: CancellationToken::new(),
@@ -265,28 +265,28 @@ impl StreamableHttpServer {
         })
         .await
     }
-    pub async fn serve_with_config(config: SseServerConfig) -> io::Result<Self> {
-        let (sse_server, service) = Self::new(config);
-        let listener = tokio::net::TcpListener::bind(sse_server.config.bind).await?;
-        let ct = sse_server.config.ct.child_token();
+    pub async fn serve_with_config(config: StreamableHttpServerConfig) -> io::Result<Self> {
+        let (streamable_http_server, service) = Self::new(config);
+        let listener = tokio::net::TcpListener::bind(streamable_http_server.config.bind).await?;
+        let ct = streamable_http_server.config.ct.child_token();
         let server = axum::serve(listener, service).with_graceful_shutdown(async move {
             ct.cancelled().await;
-            tracing::info!("sse server cancelled");
+            tracing::info!("streamable http server cancelled");
         });
         tokio::spawn(
             async move {
                 if let Err(e) = server.await {
-                    tracing::error!(error = %e, "sse server shutdown with error");
+                    tracing::error!(error = %e, "streamable http server shutdown with error");
                 }
             }
-            .instrument(tracing::info_span!("sse-server", bind_address = %sse_server.config.bind)),
+            .instrument(tracing::info_span!("streamable-http-server", bind_address = %streamable_http_server.config.bind)),
         );
-        Ok(sse_server)
+        Ok(streamable_http_server)
     }
 
-    /// Warning: This function creates a new SseServer instance with the provided configuration.
+    /// Warning: This function creates a new StreamableHttpServer instance with the provided configuration.
     /// `App.post_path` may be incorrect if using `Router` as an embedded router.
-    pub fn new(config: SseServerConfig) -> (StreamableHttpServer, Router) {
+    pub fn new(config: StreamableHttpServerConfig) -> (StreamableHttpServer, Router) {
         let (app, transport_rx) =
             App::new(config.sse_keep_alive.unwrap_or(DEFAULT_AUTO_PING_INTERVAL));
         let router = Router::new()
