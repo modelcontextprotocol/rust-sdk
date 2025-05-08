@@ -3,7 +3,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::StatusCode,
+    http::{StatusCode, request::Parts},
     response::{
         Response,
         sse::{Event, KeepAlive, Sse},
@@ -64,7 +64,8 @@ pub struct PostEventQuery {
 async fn post_event_handler(
     State(app): State<App>,
     Query(PostEventQuery { session_id }): Query<PostEventQuery>,
-    Json(message): Json<ClientJsonRpcMessage>,
+    parts: Parts,
+    Json(mut message): Json<ClientJsonRpcMessage>,
 ) -> Result<StatusCode, StatusCode> {
     tracing::debug!(session_id, ?message, "new client message");
     let tx = {
@@ -73,6 +74,7 @@ async fn post_event_handler(
             .ok_or(StatusCode::NOT_FOUND)?
             .clone()
     };
+    message.insert_extension(parts);
     if tx.send(message).await.is_err() {
         tracing::error!("send message error");
         return Err(StatusCode::GONE);

@@ -20,7 +20,7 @@ use super::session::{
 };
 use crate::{
     RoleServer, Service,
-    model::{ClientJsonRpcMessage, GetExtensions, JsonRpcBatchRequestItem},
+    model::ClientJsonRpcMessage,
     transport::{
         common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
         streamable_http_server::session::HEADER_SESSION_ID,
@@ -85,30 +85,7 @@ async fn post_handler(
             session.handle().clone()
         };
         // inject request part
-        match &mut message {
-            ClientJsonRpcMessage::Request(request) => {
-                request.request.extensions_mut().insert(parts);
-            }
-            ClientJsonRpcMessage::Notification(notification) => {
-                notification.notification.extensions_mut().insert(parts);
-            }
-            ClientJsonRpcMessage::BatchRequest(batch_request) => {
-                for request in batch_request {
-                    match request {
-                        JsonRpcBatchRequestItem::Request(request) => {
-                            request.request.extensions_mut().insert(parts.clone());
-                        }
-                        JsonRpcBatchRequestItem::Notification(notification) => {
-                            notification
-                                .notification
-                                .extensions_mut()
-                                .insert(parts.clone());
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
+        message.insert_extension(parts);
         match &message {
             ClientJsonRpcMessage::Request(_) | ClientJsonRpcMessage::BatchRequest(_) => {
                 let receiver = handle.establish_request_wise_channel().await.map_err(|e| {
@@ -153,6 +130,8 @@ async fn post_handler(
     } else {
         // expect initialize message
         let session_id = session_id();
+        // inject request part
+        message.insert_extension(parts);
         let (session, transport) =
             super::session::create_session(session_id.clone(), Default::default());
         let Ok(_) = app.transport_tx.send(transport) else {
