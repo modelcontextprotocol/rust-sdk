@@ -11,6 +11,7 @@ documentation = "https://docs.rs/rmcp"
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -62,9 +63,26 @@ default = ["base64", "macros", "server"]
 client = []
 server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
-__transport-sse = ["dep:reqwest", "dep:sse-stream", "dep:url"]
+
+# reqwest http client
+reqwest = ["dep:reqwest"]
+
+# SSE client
+sse = ["dep:sse-stream"]
+
+__transport-sse = ["reqwest", "sse", "dep:url", "transport-worker"]
+
+transport-worker = ["dep:tokio-stream"]
+
 transport-sse = ["__transport-sse", "reqwest?/rustls-tls"]
 transport-sse-tls-no-provider = ["__transport-sse", "reqwest?/rustls-tls-no-provider"]
+
+# Streamable HTTP client
+__transport-streamable-http-client = ["reqwest", "sse", "transport-worker", "dep:url"]
+transport-streamable-http-client = ["__transport-streamable-http-client", "reqwest?/rustls-tls"]
+transport-streamable-http-client-tls-no-provider = ["__transport-streamable-http-client", "reqwest?/rustls-tls-no-provider"]
+
+
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
 transport-child-process = ["transport-async-rw", "tokio/process"]
@@ -113,7 +131,7 @@ path = "tests/test_with_python.rs"
 
 [[test]]
 name = "test_with_js"
-required-features = ["server", "client", "transport-sse-server", "transport-child-process", "transport-streamable-http-server"]
+required-features = ["server", "client", "transport-sse-server", "transport-child-process", "transport-streamable-http-server", "transport-streamable-http-client"]
 path = "tests/test_with_js.rs"
 
 [[test]]

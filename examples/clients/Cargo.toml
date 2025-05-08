@@ -10,6 +10,7 @@ publish = false
 rmcp = { path = "../../crates/rmcp", features = [
     "client",
     "transport-sse",
+    "transport-streamable-http-client",
     "transport-child-process",
     "tower",
     "auth"
@@ -25,6 +26,7 @@ anyhow = "1.0"
 url = "2.4"
 tower = "0.5"
 axum = "0.8"
+reqwest = "0.12"
 
 [[example]]
 name = "clients_sse"
@@ -33,6 +35,10 @@ path = "src/sse.rs"
 [[example]]
 name = "clients_std_io"
 path = "src/std_io.rs"
+
+[[example]]
+name = "clients_streamable_http"
+path = "src/streamable_http.rs"
 
 [[example]]
 name = "clients_everything_stdio"

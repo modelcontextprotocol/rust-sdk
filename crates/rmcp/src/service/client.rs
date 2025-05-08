@@ -1,4 +1,3 @@
-use futures::{SinkExt, Stream, StreamExt};
 use thiserror::Error;
 
 use super::*;
@@ -38,29 +37,29 @@ pub enum ClientError {
 }
 
 /// Helper function to get the next message from the stream
-async fn expect_next_message<S>(
-    stream: &mut S,
+async fn expect_next_message<T>(
+    transport: &mut T,
     context: &str,
 ) -> Result<ServerJsonRpcMessage, ClientError>
 where
-    S: Stream<Item = ServerJsonRpcMessage> + Unpin,
+    T: Transport<RoleClient>,
 {
-    stream
-        .next()
+    transport
+        .receive()
         .await
         .ok_or_else(|| ClientError::ConnectionClosed(context.to_string()))
         .map_err(|e| ClientError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))
 }
 
 /// Helper function to expect a response from the stream
-async fn expect_response<S>(
-    stream: &mut S,
+async fn expect_response<T>(
+    transport: &mut T,
     context: &str,
 ) -> Result<(ServerResult, RequestId), ClientError>
 where
-    S: Stream<Item = ServerJsonRpcMessage> + Unpin,
+    T: Transport<RoleClient>,
 {
-    let msg = expect_next_message(stream, context).await?;
+    let msg = expect_next_message(transport, context).await?;
 
     match msg {
         ServerJsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => Ok((result, id)),
@@ -123,9 +122,7 @@ where
     T: IntoTransport<RoleClient, E, A>,
     E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
 {
-    let (sink, stream) = transport.into_transport();
-    let mut sink = Box::pin(sink);
-    let mut stream = Box::pin(stream);
+    let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
     // Convert ClientError to std::io::Error, then to E
@@ -143,13 +140,14 @@ where
         params: service.get_info(),
         extensions: Default::default(),
     };
-    sink.send(ClientJsonRpcMessage::request(
-        ClientRequest::InitializeRequest(init_request),
-        id.clone(),
-    ))
-    .await?;
+    transport
+        .send(ClientJsonRpcMessage::request(
+            ClientRequest::InitializeRequest(init_request),
+            id.clone(),
+        ))
+        .await?;
 
-    let (response, response_id) = expect_response(&mut stream, "initialize response")
+    let (response, response_id) = expect_response(&mut transport, "initialize response")
         .await
         .map_err(handle_client_error)?;
 
@@ -173,9 +171,9 @@ where
             extensions: Default::default(),
         }),
     );
-    sink.send(notification).await?;
+    transport.send(notification).await?;
     let (peer, peer_rx) = Peer::new(id_provider, initialize_result);
-    serve_inner(service, (sink, stream), peer, peer_rx, ct).await
+    serve_inner(service, transport, peer, peer_rx, ct).await
 }
 
 macro_rules! method {

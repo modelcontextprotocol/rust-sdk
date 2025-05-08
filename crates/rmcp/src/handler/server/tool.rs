@@ -423,6 +423,7 @@ impl<S> ToolBox<S> {
 }
 
 #[cfg(feature = "macros")]
+#[cfg_attr(docsrs, doc(cfg(feature = "macros")))]
 #[macro_export]
 macro_rules! tool_box {
     (@pin_add $callee: ident, $attr: expr, $f: expr) => {

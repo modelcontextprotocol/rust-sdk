@@ -1,15 +1,41 @@
 //! # Transport
-//! The transport type must implemented [`IntoTransport`] trait, which allow split into a sink and a stream.
+//! The transport type must implemented [`Transport`] trait, which allow it send message concurrently and receive message sequentially.
+//！
+//! ## Standard Transport Types
+//! There are 3 pairs of standard transport types:
 //!
-//! For client, the sink item is [`ClientJsonRpcMessage`](crate::model::ClientJsonRpcMessage) and stream item is [`ServerJsonRpcMessage`](crate::model::ServerJsonRpcMessage)
+//! | transport         | client                                                    | server                                                |
+//! |:-:                |:-:                                                        |:-:                                                    |
+//! | std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
+//! | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::session::create_session`]   |
+//! | sse               | [`sse_client::SseClientTransport`]                        | [`sse_server::SseServer`]                             |
 //!
-//! For server, the sink item is [`ServerJsonRpcMessage`](crate::model::ServerJsonRpcMessage) and stream item is [`ClientJsonRpcMessage`](crate::model::ClientJsonRpcMessage)
+//！## Helper Transport Types
+//! Thers are several helper transport types that can help you to create transport quickly.
 //!
-//! ## These types is automatically implemented [`IntoTransport`] trait
-//! 1. For type that already implement both [`Sink`] and [`Stream`] trait, they are automatically implemented [`IntoTransport`] trait
-//! 2. For tuple of sink `Tx` and stream `Rx`, type `(Tx, Rx)` are automatically implemented [`IntoTransport`] trait
-//! 3. For type that implement both [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`] trait, they are automatically implemented [`IntoTransport`] trait
-//! 4. For tuple of [`tokio::io::AsyncRead`] `R `and [`tokio::io::AsyncWrite`] `W`, type `(R, W)` are automatically implemented [`IntoTransport`] trait
+//! ### [Worker Transport](`worker::WorkerTransport`)
+//! Which allows you to run a worker and process messages in another tokio task.
+//!
+//! ### [Async Read/Write Transport](`async_rw::AsyncRwTransport`)
+//! You need to enable `transport-async-rw` feature to use this transport.
+//!
+//! This transport is used to create a transport from a byte stream which implemented [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`].
+//!
+//! This could be very helpful when you want to create a transport from a byte stream, such as a file or a tcp connection.
+//!
+//! ### [Sink/Stream Transport](`sink_stream::SinkStreamTransport`)
+//! This transport is used to create a transport from a sink and a stream.
+//!
+//! This could be very helpful when you want to create a transport from a duplex object stream, such as a websocket connection.
+//!
+//! ## [IntoTransport](`IntoTransport`) trait
+//! [`IntoTransport`] is a helper trait that implicitly convert a type into a transport type.
+//!
+//! ### These types is automatically implemented [`IntoTransport`] trait
+//! 1. A type that already implement both [`futures::Sink`] and [`futures::Stream`] trait, or a tuple `(Tx, Rx)`  where `Tx` is [`futures::Sink`] and `Rx` is [`futures::Stream`].
+//! 2. A type that implement both [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`] trait. or a tuple `(R, W)` where `R` is [`tokio::io::AsyncRead`] and `W` is [`tokio::io::AsyncWrite`].
+//! 3. A type that implement [Worker](`worker::Worker`) trait.
+//! 4. A type that implement [`Transport`] trait.
 //!
 //! ## Examples
 //!
@@ -38,97 +64,114 @@
 //! }
 //! ```
 
-use futures::{Sink, Stream};
-
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
-#[cfg(feature = "transport-child-process")]
-pub mod child_process;
-#[cfg(feature = "transport-child-process")]
-pub use child_process::TokioChildProcess;
+
+pub mod sink_stream;
 
 #[cfg(feature = "transport-async-rw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
+pub mod async_rw;
+
+#[cfg(feature = "transport-worker")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-worker")))]
+pub mod worker;
+#[cfg(feature = "transport-worker")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-worker")))]
+pub use worker::WorkerTransport;
+
+#[cfg(feature = "transport-child-process")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
+pub mod child_process;
+#[cfg(feature = "transport-child-process")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
+pub use child_process::TokioChildProcess;
+
+#[cfg(feature = "transport-io")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-io")))]
 pub mod io;
 #[cfg(feature = "transport-io")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-io")))]
 pub use io::stdio;
 
 #[cfg(feature = "__transport-sse")]
-pub mod sse;
+#[cfg_attr(docsrs, doc(cfg(feature = "__transport-sse")))]
+pub mod sse_client;
 #[cfg(feature = "__transport-sse")]
-pub use sse::SseTransport;
-
-#[cfg(all(feature = "__transport-sse", feature = "__auth"))]
-pub mod sse_auth;
-#[cfg(all(feature = "__transport-sse", feature = "__auth"))]
-pub use sse_auth::{AuthorizedSseClient, create_authorized_transport};
-
-// #[cfg(feature = "tower")]
-// pub mod tower;
+#[cfg_attr(docsrs, doc(cfg(feature = "__transport-sse")))]
+pub use sse_client::SseClientTransport;
 
 #[cfg(feature = "transport-sse-server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
 pub mod sse_server;
 #[cfg(feature = "transport-sse-server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
 pub use sse_server::SseServer;
 
 #[cfg(feature = "__auth")]
+#[cfg_attr(docsrs, doc(cfg(feature = "__auth")))]
 pub mod auth;
 #[cfg(feature = "__auth")]
+#[cfg_attr(docsrs, doc(cfg(feature = "__auth")))]
 pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient};
 
 // #[cfg(feature = "transport-ws")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-ws")))]
 // pub mod ws;
 #[cfg(feature = "transport-streamable-http-server-session")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server-session")))]
 pub mod streamable_http_server;
 #[cfg(feature = "transport-streamable-http-server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server")))]
 pub use streamable_http_server::axum::StreamableHttpServer;
+
+#[cfg(feature = "__transport-streamable-http-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "__transport-streamable-http-client")))]
+pub mod streamable_http_client;
+#[cfg(feature = "__transport-streamable-http-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "__transport-streamable-http-client")))]
+pub use streamable_http_client::StreamableHttpClientTransport;
 
 /// Common use codes
 pub mod common;
+
+pub trait Transport<R>: Send
+where
+    R: ServiceRole,
+{
+    type Error;
+    /// Send a message to the transport
+    ///
+    /// Notice that the future returned by this function should be `Send` and `'static`.
+    /// It's because the sending message could be executed concurrently.
+    ///
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<R>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static;
+
+    /// Receive a message from the transport, this operation is sequential.
+    fn receive(&mut self) -> impl Future<Output = Option<RxJsonRpcMessage<R>>> + Send;
+
+    /// Close the transport
+    fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
 
 pub trait IntoTransport<R, E, A>: Send + 'static
 where
     R: ServiceRole,
     E: std::error::Error + Send + 'static,
 {
-    fn into_transport(
-        self,
-    ) -> (
-        impl Sink<TxJsonRpcMessage<R>, Error = E> + Send + 'static,
-        impl Stream<Item = RxJsonRpcMessage<R>> + Send + 'static,
-    );
+    fn into_transport(self) -> impl Transport<R, Error = E> + 'static;
 }
 
-pub enum TransportAdapterStreamSink {}
-
-impl<Role, Rx, Tx, E> IntoTransport<Role, E, TransportAdapterStreamSink> for (Tx, Rx)
+pub enum TransportAdapterIdentity {}
+impl<R, T, E> IntoTransport<R, E, TransportAdapterIdentity> for T
 where
-    Role: ServiceRole,
-    Tx: Sink<TxJsonRpcMessage<Role>, Error = E> + Send + 'static,
-    Rx: Stream<Item = RxJsonRpcMessage<Role>> + Send + 'static,
-    E: std::error::Error + Send + 'static,
-{
-    fn into_transport(
-        self,
-    ) -> (
-        impl Sink<TxJsonRpcMessage<Role>, Error = E> + Send + 'static,
-        impl Stream<Item = RxJsonRpcMessage<Role>> + Send + 'static,
-    ) {
-        self
-    }
-}
-
-impl<R, T, E> IntoTransport<R, E, ()> for T
-where
-    T: Stream<Item = RxJsonRpcMessage<R>> + Sink<TxJsonRpcMessage<R>, Error = E> + Send + 'static,
+    T: Transport<R, Error = E> + Send + 'static,
     R: ServiceRole,
     E: std::error::Error + Send + 'static,
 {
-    fn into_transport(
-        self,
-    ) -> (
-        impl Sink<TxJsonRpcMessage<R>, Error = E> + Send + 'static,
-        impl Stream<Item = RxJsonRpcMessage<R>> + Send + 'static,
-    ) {
-        use futures::StreamExt;
-        self.split()
+    fn into_transport(self) -> impl Transport<R, Error = E> + 'static {
+        self
     }
 }
