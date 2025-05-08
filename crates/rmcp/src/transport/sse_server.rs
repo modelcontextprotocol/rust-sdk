@@ -89,6 +89,8 @@ async fn sse_handler(
     use tokio_util::sync::PollSender;
     let (from_client_tx, from_client_rx) = tokio::sync::mpsc::channel(64);
     let (to_client_tx, to_client_rx) = tokio::sync::mpsc::channel(64);
+    let to_client_tx_clone = to_client_tx.clone();
+
     app.txs
         .write()
         .await
@@ -123,6 +125,19 @@ async fn sse_handler(
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }
     }));
+
+    tokio::spawn(async move {
+        // Wait for connection closure
+        to_client_tx_clone.closed().await;
+
+        // Clean up session
+        let session_id = session.clone();
+        let tx_store = app.txs.clone();
+        let mut txs = tx_store.write().await;
+        txs.remove(&session_id);
+        tracing::debug!(%session_id, "Closed session and cleaned up resources");
+    });
+
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(ping_interval)))
 }
 
