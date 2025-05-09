@@ -199,6 +199,7 @@ See [examples](examples/README.md)
 - `transport-sse-server`: Server SSE transport
 - `transport-child-process`: Client stdio transport
 - `transport-sse`: Client sse transport
+- `transport-streamable-http-server` streamable http server transport
 
 ## Related Resources
 

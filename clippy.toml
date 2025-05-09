@@ -1,0 +1,3 @@
+msrv = "1.85"
+too-many-arguments-threshold = 10
+check-private-items = false

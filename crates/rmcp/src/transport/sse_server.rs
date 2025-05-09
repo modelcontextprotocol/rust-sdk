@@ -3,7 +3,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::StatusCode,
+    http::{StatusCode, request::Parts},
     response::{
         Response,
         sse::{Event, KeepAlive, Sse},
@@ -19,13 +19,12 @@ use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage},
+    transport::common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
 };
-type SessionId = Arc<str>;
+
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
 pub type TransportReceiver = ReceiverStream<RxJsonRpcMessage<RoleServer>>;
-
-const DEFAULT_AUTO_PING_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 struct App {
@@ -56,11 +55,6 @@ impl App {
     }
 }
 
-fn session_id() -> SessionId {
-    let id = format!("{:016x}", rand::random::<u128>());
-    Arc::from(id)
-}
-
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostEventQuery {
@@ -70,7 +64,8 @@ pub struct PostEventQuery {
 async fn post_event_handler(
     State(app): State<App>,
     Query(PostEventQuery { session_id }): Query<PostEventQuery>,
-    Json(message): Json<ClientJsonRpcMessage>,
+    parts: Parts,
+    Json(mut message): Json<ClientJsonRpcMessage>,
 ) -> Result<StatusCode, StatusCode> {
     tracing::debug!(session_id, ?message, "new client message");
     let tx = {
@@ -79,6 +74,7 @@ async fn post_event_handler(
             .ok_or(StatusCode::NOT_FOUND)?
             .clone()
     };
+    message.insert_extension(parts);
     if tx.send(message).await.is_err() {
         tracing::error!("send message error");
         return Err(StatusCode::GONE);
