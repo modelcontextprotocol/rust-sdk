@@ -11,6 +11,7 @@ pub struct Config {
     pub mcp: Option<McpConfig>,
     pub model_name: Option<String>,
     pub proxy: Option<bool>,
+    pub support_tool: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

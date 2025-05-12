@@ -2,6 +2,7 @@ openai_key = "key"
 chat_url = "url"
 model_name = "model_name"
 proxy = false
+support_tool = true # if support tool call
 
 [mcp]
 [[mcp.server]]
