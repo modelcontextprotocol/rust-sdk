@@ -17,7 +17,7 @@ use tracing::Instrument;
 
 use crate::{
     RoleServer, Service,
-    model::ClientJsonRpcMessage,
+    model::{ClientJsonRpcMessage, NullSkippingJsonObject},
     service::{RxJsonRpcMessage, TxJsonRpcMessage},
     transport::common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
 };
@@ -122,7 +122,8 @@ async fn sse_handler(
             .data(format!("{post_path}?sessionId={session}")),
     ))
     .chain(ReceiverStream::new(to_client_rx).map(|message| {
-        match serde_json::to_string(&message) {
+        let wrapped_message = NullSkippingJsonObject(message);
+        match serde_json::to_string(&wrapped_message) {
             Ok(bytes) => Ok(Event::default().event("message").data(&bytes)),
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
         }

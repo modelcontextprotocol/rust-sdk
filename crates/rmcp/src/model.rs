@@ -90,6 +90,48 @@ macro_rules! const_string {
     };
 }
 
+// NullSkippingJsonObject for serde, skip the null value
+#[derive(Debug)]
+pub struct NullSkippingJsonObject<T>(pub T);
+
+impl<T: Serialize> Serialize for NullSkippingJsonObject<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut value = serde_json::to_value(&self.0).map_err(serde::ser::Error::custom)?;
+        remove_nulls(&mut value);
+        value.serialize(serializer)
+    }
+}
+
+// clean the null value in the json object
+fn remove_nulls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let null_keys: Vec<String> = map
+                .iter()
+                .filter(|(_, v)| v.is_null())
+                .map(|(k, _)| k.clone())
+                .collect();
+
+            for key in null_keys {
+                map.remove(&key);
+            }
+
+            for (_, v) in map.iter_mut() {
+                remove_nulls(v);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                remove_nulls(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 const_string!(JsonRpcVersion2_0 = "2.0");
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
@@ -1063,6 +1105,19 @@ mod tests {
         }
         let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
+    }
+    #[test]
+    fn test_null_skipping_json_object() {
+        let json = json!({
+            "key": null,
+            "value": "test"
+        });
+        let json_object = json.as_object().unwrap();
+        let string_data_before = serde_json::to_string(json_object).expect("valid json");
+        assert!(string_data_before.contains("\"key\":null"));
+        let message = NullSkippingJsonObject(json_object);
+        let string_data = serde_json::to_string(&message).expect("valid json");
+        assert!(!string_data.contains("\"key\":null"));
     }
 
     #[test]
