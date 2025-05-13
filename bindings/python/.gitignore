@@ -1,0 +1,18 @@
+# Python ignores
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.egg-info/
+build/
+dist/
+.eggs/
+.env
+.venv
+venv/
+ENV/
+
+# Rust ignores
+target/
+Cargo.lock
