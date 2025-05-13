@@ -101,6 +101,8 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v3
 
@@ -130,8 +132,36 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
+      - name: Install lcov
+        run: sudo apt-get update && sudo apt-get install -y lcov bc
+
       - name: Run tests with coverage
-        run: cargo llvm-cov --all-features
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+
+      - name: Extract coverage percentage
+        run: |
+          COVERAGE=$(lcov --summary lcov.info | grep lines | awk '{print $2}' | cut -d% -f1 || echo "0")
+          COLOR="green"
+          LT_50=$(echo "$COVERAGE < 50" | bc -l)
+          LT_75=$(echo "$COVERAGE < 75" | bc -l)
+          if [ "$LT_50" -eq 1 ]; then COLOR="red"
+          elif [ "$LT_75" -eq 1 ]; then COLOR="yellow"
+          fi
+          echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
+          echo "COLOR=$COLOR" >> $GITHUB_ENV
+
+      - name: Update README.md with badge
+        run: |
+          BADGE_URL="https://img.shields.io/badge/coverage-${{ env.COVERAGE }}%25-${{ env.COLOR }}"
+          sed -i "s|!\[Coverage\](.*)|![Coverage]($BADGE_URL)|" README.md
+
+      - name: Commit updated README
+        run: |
+          git config --global user.name 'thaim'
+          git config --global user.email 'thaim@users.noreply.github.com'
+          git add README.md
+          git commit -m "doc: Update coverage badge in README"
+          git push
   
   security_audit:
     name: Security Audit
