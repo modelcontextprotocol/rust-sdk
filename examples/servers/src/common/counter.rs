@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use crate::common::extractor::ReqHeaders;
 use rmcp::{
     Error as McpError, RoleServer, ServerHandler, const_string, model::*, schemars,
     service::RequestContext, tool,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
-
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct StructRequest {
     pub a: i32,
@@ -79,6 +79,18 @@ impl Counter {
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             (a + b).to_string(),
+        )]))
+    }
+    #[tool(description = "Get the request headers")]
+    fn get_headers(&self, ReqHeaders(headers): ReqHeaders) -> Result<CallToolResult, McpError> {
+        let mut header_strings = Vec::new();
+        for (name, value) in headers.iter() {
+            if let Ok(value_str) = value.to_str() {
+                header_strings.push(format!("{}: {}", name, value_str));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            header_strings.join("\n"),
         )]))
     }
 }

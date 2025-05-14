@@ -3,7 +3,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, request::Parts},
+    http::{self, HeaderMap, HeaderValue, StatusCode, request::Parts},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -84,8 +84,8 @@ async fn post_handler(
                 .ok_or((StatusCode::NOT_FOUND, "session not found").into_response())?;
             session.handle().clone()
         };
-        // inject request part
-        message.insert_extension(parts);
+        let headers_to_insert: http::HeaderMap = parts.headers.clone();
+        message.insert_extension(headers_to_insert);
         match &message {
             ClientJsonRpcMessage::Request(_) | ClientJsonRpcMessage::BatchRequest(_) => {
                 let receiver = handle.establish_request_wise_channel().await.map_err(|e| {

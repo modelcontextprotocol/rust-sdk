@@ -80,6 +80,9 @@ impl<'service, S> ToolCallContext<'service, S> {
     pub fn name(&self) -> &str {
         &self.name
     }
+    pub fn request_context(&self) -> &RequestContext<RoleServer> {
+        &self.request_context
+    }
 }
 
 pub trait FromToolCallContextPart<'a, S>: Sized {
