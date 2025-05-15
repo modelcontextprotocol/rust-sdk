@@ -53,24 +53,55 @@ impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
 
 pub enum StreamableHttpPostResponse {
     Accepted,
-    Json(StreamableHttpPostJsonResponse),
-    Sse(BoxedSseStream),
+    Json(ServerJsonRpcMessage, Option<String>),
+    Sse(BoxedSseStream, Option<String>),
 }
 
-pub struct StreamableHttpPostJsonResponse {
-    pub message: ServerJsonRpcMessage,
-    pub session_id: Option<String>,
+impl std::fmt::Debug for StreamableHttpPostResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Accepted => write!(f, "Accepted"),
+            Self::Json(arg0, arg1) => f.debug_tuple("Json").field(arg0).field(arg1).finish(),
+            Self::Sse(_, arg1) => f.debug_tuple("Sse").field(arg1).finish(),
+        }
+    }
 }
 
 impl StreamableHttpPostResponse {
-    pub fn expect_json<E>(self) -> Result<StreamableHttpPostJsonResponse, StreamableHttpError<E>>
+    pub async fn expect_initialized<E>(
+        self,
+    ) -> Result<(ServerJsonRpcMessage, Option<String>), StreamableHttpError<E>>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
         match self {
-            Self::Json(message) => Ok(message),
+            Self::Json(message, session_id) => Ok((message, session_id)),
+            Self::Sse(mut stream, session_id) => {
+                let event =
+                    stream
+                        .next()
+                        .await
+                        .ok_or(StreamableHttpError::UnexpectedServerResponse(
+                            "empty sse stream".into(),
+                        ))??;
+                let message: ServerJsonRpcMessage =
+                    serde_json::from_str(&event.data.unwrap_or_default())?;
+                return Ok((message, session_id));
+            }
             _ => Err(StreamableHttpError::UnexpectedServerResponse(
-                "expected json".into(),
+                "expect initialized, accepted".into(),
+            )),
+        }
+    }
+
+    pub fn expect_json<E>(self) -> Result<ServerJsonRpcMessage, StreamableHttpError<E>>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        match self {
+            Self::Json(message, ..) => Ok(message),
+            got => Err(StreamableHttpError::UnexpectedServerResponse(
+                format!("expect json, got {got:?}").into(),
             )),
         }
     }
@@ -81,8 +112,8 @@ impl StreamableHttpPostResponse {
     {
         match self {
             Self::Accepted => Ok(()),
-            _ => Err(StreamableHttpError::UnexpectedServerResponse(
-                "expected accepted".into(),
+            got => Err(StreamableHttpError::UnexpectedServerResponse(
+                format!("expect accepted, got {got:?}").into(),
             )),
         }
     }
@@ -275,15 +306,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             message: initialize_request,
         } = context.recv_from_handler().await?;
         let _ = responder.send(Ok(()));
-        let StreamableHttpPostJsonResponse {
-            session_id,
-            message,
-        } = self
+        let (message, session_id) = self
             .client
             .post_message(config.uri.clone(), initialize_request, None, None)
             .await
             .map_err(WorkerQuitReason::fatal_context("send initialize request"))?
-            .expect_json::<Self::Error>()
+            .expect_initialized::<Self::Error>()
+            .await
             .map_err(WorkerQuitReason::fatal_context(
                 "process initialize response",
             ))?;
@@ -376,6 +405,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         }
         loop {
             let event = tokio::select! {
+                _ = transport_task_ct.cancelled() => {
+                    tracing::debug!("cancelled");
+                    return Err(WorkerQuitReason::Cancelled);
+                }
                 message = context.recv_from_handler() => {
                     let message = message?;
                     Event::ClientMessage(message)
@@ -411,11 +444,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             tracing::trace!("client message accepted");
                             Ok(())
                         }
-                        Ok(StreamableHttpPostResponse::Json(message)) => {
-                            context.send_to_handler(message.message).await?;
+                        Ok(StreamableHttpPostResponse::Json(message, ..)) => {
+                            context.send_to_handler(message).await?;
                             Ok(())
                         }
-                        Ok(StreamableHttpPostResponse::Sse(stream)) => {
+                        Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
                             streams.spawn(self.clone().execute_sse_stream(
                                 stream,
                                 sse_worker_tx.clone(),

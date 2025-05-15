@@ -1,6 +1,10 @@
 use rmcp::{
     ServiceExt,
-    transport::{SseServer, TokioChildProcess, streamable_http_server::axum::StreamableHttpServer},
+    service::QuitReason,
+    transport::{
+        SseServer, StreamableHttpClientTransport, TokioChildProcess,
+        streamable_http_server::axum::StreamableHttpServer,
+    },
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
@@ -95,5 +99,38 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         .await?;
     assert!(exit_status.success());
     ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
+    let _ = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "debug".to_string().into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .try_init();
+    tokio::process::Command::new("npm")
+        .arg("install")
+        .current_dir("tests/test_with_js")
+        .spawn()?
+        .wait()
+        .await?;
+
+    let transport = StreamableHttpClientTransport::from_uri("http://localhost:8082/mcp");
+
+    let mut server = tokio::process::Command::new("node")
+        .arg("tests/test_with_js/streamable_server.js")
+        .spawn()?;
+
+    let client = ().serve(transport).await?;
+    let resources = client.list_all_resources().await?;
+    tracing::info!("{:#?}", resources);
+    let tools = client.list_all_tools().await?;
+    tracing::info!("{:#?}", tools);
+    let quit_reason = client.cancel().await?;
+    server.kill().await?;
+    assert!(matches!(quit_reason, QuitReason::Cancelled));
     Ok(())
 }

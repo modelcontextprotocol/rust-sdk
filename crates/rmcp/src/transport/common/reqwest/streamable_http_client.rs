@@ -101,24 +101,18 @@ impl StreamableHttpClient for reqwest::Client {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
+        let session_id = response.headers().get(HEADER_SESSION_ID);
+        let session_id = session_id
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
         match content_type {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
                 let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
-                Ok(StreamableHttpPostResponse::Sse(event_stream))
+                Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-                let session_id = response.headers().get(HEADER_SESSION_ID);
-                let session_id = session_id
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
-
                 let message: ServerJsonRpcMessage = response.json().await?;
-                Ok(StreamableHttpPostResponse::Json(
-                    StreamableHttpPostJsonResponse {
-                        message,
-                        session_id,
-                    },
-                ))
+                Ok(StreamableHttpPostResponse::Json(message, session_id))
             }
             _ => {
                 // unexpected content type
