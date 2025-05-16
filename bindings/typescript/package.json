@@ -1,0 +1,16 @@
+{
+  "name": "rmcp-typescript",
+  "version": "0.1.0",
+  "description": "TypeScript/NodeJS native binding for the rmcp Rust SDK (napi-rs)",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "scripts": {
+    "build": "napi build --release",
+    "test": "tsc && node tests/add.test.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

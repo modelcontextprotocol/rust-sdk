@@ -1,0 +1,29 @@
+# TypeScript/Node ignores
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.env
+.env.*
+coverage/
+
+# napi-rs ignores
+*.node
+index.node
+*.d.ts
+artifacts/
+.napi/
+
+# Rust ignores
+target/
+Cargo.lock
+
+# IDE ignores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS ignores
+.DS_Store
+Thumbs.db 
