@@ -58,8 +58,11 @@ impl ChatClient for OpenAIClient {
             println!("API error: {}", error_text);
             return Err(anyhow::anyhow!("API Error: {}", error_text));
         }
-
-        let completion: CompletionResponse = response.json().await?;
+        let text_data = response.text().await?;
+        println!("Received response: {}", text_data);
+        let completion: CompletionResponse = serde_json::from_str(&text_data)
+            .map_err(anyhow::Error::from)
+            .unwrap();
         Ok(completion)
     }
 }

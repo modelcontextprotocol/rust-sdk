@@ -10,6 +10,7 @@ use super::JsonObject;
 /// A tool that can be used by a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Tool {
     /// The name of the tool
     pub name: Cow<'static, str>,
@@ -18,6 +19,7 @@ pub struct Tool {
     pub description: Option<Cow<'static, str>>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Arc<JsonObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotations>,
 }
@@ -32,6 +34,7 @@ pub struct Tool {
 /// received from untrusted servers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ToolAnnotations {
     /// A human-readable title for the tool.
     pub title: Option<String>,

@@ -95,33 +95,42 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|| "gpt-4o-mini".to_string()),
             );
 
-            // build system prompt
-            let mut system_prompt =
-                "you are a assistant, you can help user to complete various tasks. you have the following tools to use:\n".to_string();
+            let support_tool = config.support_tool.unwrap_or(true);
+            let mut system_prompt;
+            // if not support tool call, add tool call format guidance
+            if !support_tool {
+                // build system prompt
+                system_prompt =
+            "you are a assistant, you can help user to complete various tasks. you have the following tools to use:\n".to_string();
 
-            // add tool info to system prompt
-            for tool in session.get_tools() {
-                system_prompt.push_str(&format!(
-                    "\ntool name: {}\ndescription: {}\nparameters: {}\n",
-                    tool.name(),
-                    tool.description(),
-                    serde_json::to_string_pretty(&tool.parameters())
-                        .expect("failed to serialize tool parameters")
-                ));
+                // add tool info to system prompt
+                for tool in session.get_tools() {
+                    system_prompt.push_str(&format!(
+                        "\ntool name: {}\ndescription: {}\nparameters: {}\n",
+                        tool.name(),
+                        tool.description(),
+                        serde_json::to_string_pretty(&tool.parameters())
+                            .expect("failed to serialize tool parameters")
+                    ));
+                }
+
+                // add tool call format guidance
+                system_prompt.push_str(
+                    "\nif you need to call tool, please use the following format:\n\
+            Tool: <tool name>\n\
+            Inputs: <inputs>\n",
+                );
+                println!("system prompt: {}", system_prompt);
+            } else {
+                system_prompt =
+                    "you are a assistant, you can help user to complete various tasks.".to_string();
             }
-
-            // add tool call format guidance
-            system_prompt.push_str(
-                "\nif you need to call tool, please use the following format:\n\
-                Tool: <tool name>\n\
-                Inputs: <inputs>\n",
-            );
 
             // add system prompt
             session.add_system_prompt(system_prompt);
 
             // start chat
-            session.chat().await?;
+            session.chat(support_tool).await?;
         }
     }
 

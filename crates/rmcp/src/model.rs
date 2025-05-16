@@ -87,12 +87,30 @@ macro_rules! const_string {
                 }
             }
         }
+
+        #[cfg(feature = "schemars")]
+        impl schemars::JsonSchema for $name {
+            fn schema_name() -> String {
+                stringify!($name).to_string()
+            }
+
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
+                // Create a schema for a constant value of type String
+                schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                    instance_type: Some(schemars::schema::InstanceType::String.into()),
+                    format: Some("const".to_string()),
+                    const_value: Some(serde_json::Value::String($value.into())),
+                    ..Default::default()
+                })
+            }
+        }
     };
 }
 
 const_string!(JsonRpcVersion2_0 = "2.0");
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProtocolVersion(Cow<'static, str>);
 
 impl Default for ProtocolVersion {
@@ -184,12 +202,40 @@ impl<'de> Deserialize<'de> for NumberOrString {
     }
 }
 
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for NumberOrString {
+    fn schema_name() -> String {
+        "NumberOrString".to_string()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+            subschemas: Some(Box::new(schemars::schema::SubschemaValidation {
+                one_of: Some(vec![
+                    schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                        instance_type: Some(schemars::schema::InstanceType::Number.into()),
+                        ..Default::default()
+                    }),
+                    schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                        instance_type: Some(schemars::schema::InstanceType::String.into()),
+                        ..Default::default()
+                    }),
+                ]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
 pub type RequestId = NumberOrString;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Hash, Eq)]
 #[serde(transparent)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProgressToken(pub NumberOrString);
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Request<M = String, P = JsonObject> {
     pub method: M,
     // #[serde(skip_serializing_if = "Option::is_none")]
@@ -197,6 +243,7 @@ pub struct Request<M = String, P = JsonObject> {
     /// extensions will carry anything possible in the context, including [`Meta`]
     ///
     /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
     pub extensions: Extensions,
 }
 
@@ -210,6 +257,7 @@ impl<M, P> GetExtensions for Request<M, P> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RequestOptionalParam<M = String, P = JsonObject> {
     pub method: M,
     // #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,15 +265,18 @@ pub struct RequestOptionalParam<M = String, P = JsonObject> {
     /// extensions will carry anything possible in the context, including [`Meta`]
     ///
     /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
     pub extensions: Extensions,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RequestNoParam<M = String> {
     pub method: M,
     /// extensions will carry anything possible in the context, including [`Meta`]
     ///
     /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
     pub extensions: Extensions,
 }
 
@@ -238,33 +289,40 @@ impl<M> GetExtensions for RequestNoParam<M> {
     }
 }
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Notification<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
     /// extensions will carry anything possible in the context, including [`Meta`]
     ///
     /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
     pub extensions: Extensions,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NotificationNoParam<M = String> {
     pub method: M,
     /// extensions will carry anything possible in the context, including [`Meta`]
     ///
     /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
     pub extensions: Extensions,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JsonRpcRequest<R = Request> {
     pub jsonrpc: JsonRpcVersion2_0,
     pub id: RequestId,
     #[serde(flatten)]
     pub request: R,
 }
+
 type DefaultResponse = JsonObject;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JsonRpcResponse<R = JsonObject> {
     pub jsonrpc: JsonRpcVersion2_0,
     pub id: RequestId,
@@ -272,6 +330,7 @@ pub struct JsonRpcResponse<R = JsonObject> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JsonRpcError {
     pub jsonrpc: JsonRpcVersion2_0,
     pub id: RequestId,
@@ -279,6 +338,7 @@ pub struct JsonRpcError {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JsonRpcNotification<N = Notification> {
     pub jsonrpc: JsonRpcVersion2_0,
     #[serde(flatten)]
@@ -288,6 +348,7 @@ pub struct JsonRpcNotification<N = Notification> {
 // Standard JSON-RPC error codes
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ErrorCode(pub i32);
 
 impl ErrorCode {
@@ -301,6 +362,7 @@ impl ErrorCode {
 
 /// Error information for JSON-RPC error responses.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ErrorData {
     /// The error type that occurred.
     pub code: ErrorCode,
@@ -348,6 +410,7 @@ impl ErrorData {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum JsonRpcBatchRequestItem<Req, Not> {
     Request(JsonRpcRequest<Req>),
     Notification(JsonRpcNotification<Not>),
@@ -364,6 +427,7 @@ impl<Req, Not> JsonRpcBatchRequestItem<Req, Not> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum JsonRpcBatchResponseItem<Resp> {
     Response(JsonRpcResponse<Resp>),
     Error(JsonRpcError),
@@ -380,6 +444,7 @@ impl<Resp> JsonRpcBatchResponseItem<Resp> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum JsonRpcMessage<Req = Request, Resp = DefaultResponse, Noti = Notification> {
     Request(JsonRpcRequest<Req>),
     Response(JsonRpcResponse<Resp>),
@@ -471,6 +536,7 @@ impl From<EmptyResult> for () {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CancelledNotificationParam {
     pub request_id: RequestId,
     pub reason: Option<String>,
@@ -499,6 +565,7 @@ const_string!(InitializedNotificationMethod = "notifications/initialized");
 pub type InitializedNotification = NotificationNoParam<InitializedNotificationMethod>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InitializeRequestParam {
     pub protocol_version: ProtocolVersion,
     pub capabilities: ClientCapabilities,
@@ -507,6 +574,7 @@ pub struct InitializeRequestParam {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InitializeResult {
     pub protocol_version: ProtocolVersion,
     pub capabilities: ServerCapabilities,
@@ -540,6 +608,7 @@ impl Default for ClientInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Implementation {
     pub name: String,
     pub version: String,
@@ -562,6 +631,7 @@ impl Implementation {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PaginatedRequestParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
@@ -580,6 +650,7 @@ pub type StderrNotification = Notification<StderrNotificationMethod, StderrNotif
 const_string!(ProgressNotificationMethod = "notifications/progress");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
@@ -602,6 +673,7 @@ macro_rules! paginated_result {
     }) => {
         #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
         #[serde(rename_all = "camelCase")]
+        #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub struct $t {
             #[serde(skip_serializing_if = "Option::is_none")]
             pub next_cursor: Option<Cursor>,
@@ -627,11 +699,13 @@ paginated_result!(ListResourceTemplatesResult {
 const_string!(ReadResourceRequestMethod = "resources/read");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReadResourceRequestParam {
     pub uri: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReadResourceResult {
     pub contents: Vec<ResourceContents>,
 }
@@ -645,6 +719,7 @@ pub type ResourceListChangedNotification =
 const_string!(SubscribeRequestMethod = "resources/subscribe");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SubscribeRequestParam {
     pub uri: String,
 }
@@ -653,6 +728,7 @@ pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestPara
 const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct UnsubscribeRequestParam {
     pub uri: String,
 }
@@ -661,6 +737,7 @@ pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeReque
 const_string!(ResourceUpdatedNotificationMethod = "notifications/resources/updated");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResourceUpdatedNotificationParam {
     pub uri: String,
 }
@@ -676,6 +753,7 @@ paginated_result!(ListPromptsResult {
 const_string!(GetPromptRequestMethod = "prompts/get");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GetPromptRequestParam {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -691,6 +769,7 @@ pub type ToolListChangedNotification = NotificationNoParam<ToolListChangedNotifi
 // 日志相关
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy)]
 #[serde(rename_all = "lowercase")] //match spec
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum LoggingLevel {
     Debug,
     Info,
@@ -705,6 +784,7 @@ pub enum LoggingLevel {
 const_string!(SetLevelRequestMethod = "logging/setLevel");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetLevelRequestParam {
     pub level: LoggingLevel,
 }
@@ -713,6 +793,7 @@ pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParam>;
 const_string!(LoggingMessageNotificationMethod = "notifications/message");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LoggingMessageNotificationParam {
     pub level: LoggingLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -727,18 +808,21 @@ pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessag
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum Role {
     User,
     Assistant,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SamplingMessage {
     pub role: Role,
     pub content: Content,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum ContextInclusion {
     #[serde(rename = "allServers")]
     AllServers,
@@ -750,6 +834,7 @@ pub enum ContextInclusion {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateMessageRequestParam {
     pub messages: Vec<SamplingMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -769,6 +854,7 @@ pub struct CreateMessageRequestParam {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ModelPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hints: Option<Vec<ModelHint>>,
@@ -781,6 +867,7 @@ pub struct ModelPreferences {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ModelHint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -788,6 +875,7 @@ pub struct ModelHint {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompleteRequestParam {
     pub r#ref: Reference,
     pub argument: ArgumentInfo,
@@ -797,6 +885,7 @@ pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParam>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompletionInfo {
     pub values: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -807,12 +896,14 @@ pub struct CompletionInfo {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompleteResult {
     pub completion: CompletionInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum Reference {
     #[serde(rename = "ref/resource")]
     Resource(ResourceReference),
@@ -821,11 +912,13 @@ pub enum Reference {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResourceReference {
     pub uri: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptReference {
     pub name: String,
 }
@@ -833,6 +926,7 @@ pub struct PromptReference {
 const_string!(CompleteRequestMethod = "completion/complete");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ArgumentInfo {
     pub name: String,
     pub value: String,
@@ -840,6 +934,7 @@ pub struct ArgumentInfo {
 
 // 根目录相关
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Root {
     pub uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -851,6 +946,7 @@ pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
 }
@@ -860,6 +956,7 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
     pub content: Vec<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -892,6 +989,7 @@ paginated_result!(
 const_string!(CallToolRequestMethod = "tools/call");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolRequestParam {
     pub name: Cow<'static, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -902,6 +1000,7 @@ pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParam>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateMessageResult {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -918,6 +1017,7 @@ impl CreateMessageResult {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GetPromptResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -931,6 +1031,7 @@ macro_rules! ts_union {
     ) => {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
+        #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub enum $U {
             $($V($V),)*
         }

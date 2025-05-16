@@ -1,6 +1,7 @@
 {
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.7.0"
+    "@modelcontextprotocol/sdk": "^1.10",
+    "eventsource-parser": "^3.0.1"
   },
   "type": "module",
   "name": "test_with_ts",
