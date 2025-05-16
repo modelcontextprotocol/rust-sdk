@@ -3,7 +3,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::{StatusCode, request::Parts},
+    http::{self, StatusCode, request::Parts},
     response::{
         Response,
         sse::{Event, KeepAlive, Sse},
@@ -74,7 +74,8 @@ async fn post_event_handler(
             .ok_or(StatusCode::NOT_FOUND)?
             .clone()
     };
-    message.insert_extension(parts);
+    let headers_to_insert: http::HeaderMap = parts.headers.clone();
+    message.insert_extension(headers_to_insert);
     if tx.send(message).await.is_err() {
         tracing::error!("send message error");
         return Err(StatusCode::GONE);
