@@ -132,7 +132,12 @@ impl SseClient<reqwest::Error> for AuthorizedSseClient {
                 .get_access_token()
                 .await
                 .map_err(SseTransportError::<reqwest::Error>::from)?;
-
+            // align message endpoint with sse
+            let session_id = if session_id.starts_with("/") {
+                &session_id[1..]
+            } else {
+                &session_id
+            };
             let uri = sse_url.join(&session_id).map_err(SseTransportError::from)?;
             let request_builder = client
                 .post(uri.as_ref())

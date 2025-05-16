@@ -167,6 +167,12 @@ impl SseClient<reqwest::Error> for ReqwestSseClient {
         let sse_url = self.sse_url.clone();
         let session_id = session_id.to_string();
         Box::pin(async move {
+            // align message endpoint with sse
+            let session_id = if session_id.starts_with("/") {
+                &session_id[1..]
+            } else {
+                &session_id
+            };
             let uri = sse_url.join(&session_id).map_err(SseTransportError::from)?;
             let request_builder = client.post(uri.as_ref()).json(&message);
             request_builder
