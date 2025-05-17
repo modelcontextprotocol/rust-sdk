@@ -128,7 +128,7 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
         .spawn()?;
 
     // waiting for server up
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     let client = ().serve(transport).await?;
     let resources = client.list_all_resources().await?;
