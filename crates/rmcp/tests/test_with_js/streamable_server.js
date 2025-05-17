@@ -101,5 +101,5 @@ app.get('/mcp', handleSessionRequest);
 
 // Handle DELETE requests for session termination
 app.delete('/mcp', handleSessionRequest);
-
-app.listen(8082);
+console.log("Listening on port 8002");
+app.listen(8002);

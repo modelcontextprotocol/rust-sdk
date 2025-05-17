@@ -12,6 +12,7 @@ use common::calculator::Calculator;
 
 const SSE_BIND_ADDRESS: &str = "127.0.0.1:8000";
 const STREAMABLE_HTTP_BIND_ADDRESS: &str = "127.0.0.1:8001";
+const STREAMABLE_HTTP_JS_BIND_ADDRESS: &str = "127.0.0.1:8002";
 
 #[tokio::test]
 async fn test_with_js_client() -> anyhow::Result<()> {
@@ -118,11 +119,16 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let transport = StreamableHttpClientTransport::from_uri("http://localhost:8082/mcp");
+    let transport = StreamableHttpClientTransport::from_uri(format!(
+        "http://{STREAMABLE_HTTP_JS_BIND_ADDRESS}/mcp"
+    ));
 
     let mut server = tokio::process::Command::new("node")
         .arg("tests/test_with_js/streamable_server.js")
         .spawn()?;
+
+    // waiting for server up
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
     let client = ().serve(transport).await?;
     let resources = client.list_all_resources().await?;
