@@ -1,7 +1,7 @@
 // TypeScript SSE client example for rmcp_typescript
 // Closely mirrors the structure and flow of sse.rs from the core Rust SDK
 
-import { JsTransport, JsTransportEnum, JsClientInfo, JsImplementation } from '../../index';
+import { JsTransport, JsSseTransport, JsClientInfo, JsImplementation, JsClientCapabilities, JsExperimentalCapabilities, JsRootsCapabilities, JsClient } from 'rmcp-typescript';
 
 // TODO: Replace 'any' with proper types from WASM/SDK when available
 // type ClientCapabilities = any;
@@ -13,52 +13,41 @@ async function main() {
 
   // Step 2: Create transport
   const sseEndpoint = 'http://localhost:8000/sse';
-  const transport = new JsTransport(JsTransportEnum.SSE, sseEndpoint);
+  const sseTransport = await JsSseTransport.start(sseEndpoint);
+  console.log('sseTransport:', sseTransport);
+  const transport = JsTransport.fromSse(sseTransport);
+  console.log('transport:', transport.kind);
 
   // Step 3: Define client info (mirror Rust structure)
-  const clientInfo: JsClientInfo = {
-    protocolVersion: '2024-11-05', // TODO: Use ProtocolVersion.latest() if available
-    capabilities: {}, // TODO: Use proper ClientCapabilities
-    clientInfo: {
-      name: 'typescript-sse-client',
-      version: '0.0.1',
-    },
-  };
+  const experimental = JsExperimentalCapabilities.new({});
+  const roots = new JsRootsCapabilities();
+  const sampling = null;
+  console.log('JsClientCapabilities.new args:', { experimental, roots, sampling });
+  const clientInfo = new JsClientInfo(
+    '2024-11-05',
+    new JsClientCapabilities(experimental, roots, sampling),
+    new JsImplementation('typescript-sse-client', '0.0.1')
+  );
 
   try {
-    // Step 4: Connect and serve (stub for now)
-    transport.start(
-      (data: string) => {
-        console.log('Received SSE message:', data);
-        // TODO: Parse and handle protocol messages here (initialize, tool list, etc.)
-      },
-      (err: Event) => {
-        console.error('SSE error:', err);
-      }
-    );
-
-    // TODO: Replace with real async/await protocol flow when WASM/SDK methods are available
-    // Example (pseudo-code):
-    /*
-    const client = await clientInfo.serve(transport);
+    // Step 4: Start the client and get peer info
+    const clientObj = await clientInfo.serve(transport);
+    const client = clientObj.inner as JsClient;
     const serverInfo = client.peerInfo();
     console.info('Connected to server:', serverInfo);
 
-    const tools = await client.listTools({});
+    // Step 5: List available tools
+    const tools = await client.listAllTools();
     console.info('Available tools:', tools);
 
-    const toolResult = await client.callTool({
-      name: 'increment',
-      arguments: {},
-    });
-    console.info('Tool result:', toolResult);
+    // Step 6: Call a tool (example)
+    
+    const result = await client.callTool("increment", {});
+    console.info('Tool result:', result);
 
-    await client.cancel();
-    */
 
-    // For now, keep connection open for demonstration
+    // Keep connection open for demonstration
     setTimeout(() => {
-      transport.close();
       console.info('Connection closed.');
     }, 10000);
 

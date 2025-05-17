@@ -26,7 +26,23 @@ pub struct JsRootsCapabilities {
     pub list_changed: Option<bool>,
 }
 
+#[napi]
 impl JsRootsCapabilities {
+    /// Construct a new roots capabilities object.
+    ///
+    /// > **Note:** Any extra parameters (such as environment/context) are injected by napi and should NOT be passed by the TypeScript user.
+    ///
+    /// # Example (TypeScript)
+    /// ```typescript
+    /// const roots = new JsRootsCapabilities();
+    /// ```
+    #[napi(constructor)]
+    pub fn new() -> JsRootsCapabilities {
+        JsRootsCapabilities {
+            list_changed: None,
+        }
+    }
+
     pub fn to_rust(&self) -> RootsCapabilities {
         RootsCapabilities {
             list_changed: self.list_changed,
@@ -41,9 +57,11 @@ impl JsRootsCapabilities {
 
 impl FromNapiValue for JsRootsCapabilities {
     unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> Result<Self> {
-        let obj = Object::from_napi_value(env, napi_val)?;
-        let list_changed = obj.get("list_changed")?;
-        Ok(JsRootsCapabilities { list_changed })
+        unsafe {
+            let obj = Object::from_napi_value(env, napi_val)?;
+            let list_changed = obj.get("list_changed")?;
+            Ok(JsRootsCapabilities { list_changed })
+        }
     }
 }
 
@@ -56,6 +74,14 @@ pub struct JsExperimentalCapabilities {
 
 #[napi]
 impl JsExperimentalCapabilities {
+    /// Construct new experimental capabilities from a JSON object.
+    ///
+    /// > **Note:** Any extra parameters (such as environment/context) are injected by napi and should NOT be passed by the TypeScript user.
+    ///
+    /// # Example (TypeScript)
+    /// ```typescript
+    /// const experimental = JsExperimentalCapabilities.new({});
+    /// ```
     #[napi(factory, ts_type = "Record<string, Record<string, any>>")]
     pub fn new(value: serde_json::Value) -> JsExperimentalCapabilities {
         let inner: BTreeMap<String, serde_json::Map<String, serde_json::Value>> = serde_json::from_value(value).unwrap_or_default();
@@ -81,8 +107,10 @@ impl JsExperimentalCapabilities {
 
 impl FromNapiValue for JsExperimentalCapabilities {
     unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> Result<Self> {
-        let value = serde_json::Value::from_napi_value(env, napi_val)?;
-        Ok(Self::from_js(value))
+        unsafe {
+            let value = serde_json::Value::from_napi_value(env, napi_val)?;
+            Ok(Self::from_js(value))
+        }
     }
 }
 
@@ -96,12 +124,23 @@ pub struct JsClientCapabilities {
 
 #[napi]
 impl JsClientCapabilities {
-    #[napi(factory)]
+    /// Construct a new client capabilities object.
+    ///
+    /// > **Note:** Any extra parameters (such as environment/context) are injected by napi and should NOT be passed by the TypeScript user.
+    ///
+    /// # Example (TypeScript)
+    /// ```typescript
+    /// const capabilities = new JsClientCapabilities(experimental, roots, null);
+    /// ```
+    #[napi(constructor)]
     pub fn new(
         experimental: JsExperimentalCapabilities,
         roots: JsRootsCapabilities,
         sampling: Option<serde_json::Value>,
     ) -> JsClientCapabilities {
+        println!("JsClientCapabilities::new received experimental: {:?}", experimental);
+        println!("JsClientCapabilities::new received roots: {:?}", roots);
+        println!("JsClientCapabilities::new received sampling: {:?}", sampling);
         JsClientCapabilities { experimental, roots, sampling }
     }
 }

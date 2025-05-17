@@ -1,33 +1,58 @@
-// Service interface for rmcp_typescript binding
-// Add #[wasm_bindgen] wrappers as needed for TS/JS
+//! Service interface for rmcp_typescript binding.
+//!
+//! This module provides the main service interface (`JsClient`) for interacting with the RMCP SDK from TypeScript/JavaScript.
+//! It exposes methods for retrieving server info, listing tools, and invoking tools, and is designed for use with Node.js via `napi` bindings.
+//!
+//! # Example (TypeScript)
+//!
+//! ```typescript
+//! import { JsClient } from 'rmcp-typescript';
+//! const client = new JsClient();
+//! // await client.listAllTools();
+//! // await client.callTool('toolName', { ... });
+//! ```
 
-use napi::bindgen_prelude::*;
+
 use napi_derive::napi;
 use serde_json;
 use rmcp::service::RoleClient;
 use rmcp::service::Peer;
 use std::sync::Arc;
-use crate::model::{JsClientInfo, JsInfo};
+use crate::model::{JsInfo};
+use rmcp::model::CallToolRequestParam;
 
+/// Main client object for interacting with RMCP services from TypeScript/JavaScript.
+///
+/// Provides methods for retrieving server info, listing tools, and invoking tools.
 #[napi]
 #[derive(Clone)]
-pub struct JsPeer {
+pub struct JsClient {
     #[napi(skip)]
     pub inner: Option<Arc<Peer<RoleClient>>>,
 }
 
 #[napi]
-impl JsPeer {
+impl JsClient {
     #[napi(constructor)]
-    pub fn new() -> JsPeer {
-        JsPeer { inner: None }
+    pub fn new() -> JsClient {
+        JsClient { inner: None }
     }
 
+    /// Set the internal peer for this client (used internally after connecting).
     pub fn set_inner(&mut self, inner: Arc<Peer<RoleClient>>) {
         self.inner = Some(inner);
     }
 
     #[napi]
+    /// Retrieve information about the connected server.
+    ///
+    /// > **Note:** Any extra parameters (such as environment/context) are injected by napi and should NOT be passed by the TypeScript user.
+    ///
+    /// # Example (TypeScript)
+    /// ```typescript
+    /// const info = await client.peerInfo();
+    /// console.log(info.name, info.version);
+    /// ```
     pub fn peer_info(&self) -> napi::Result<JsInfo> {
         match &self.inner {
             Some(peer) => {
@@ -39,6 +64,15 @@ impl JsPeer {
     }
 
     #[napi]
+    /// List all available tools on the server.
+    ///
+    /// > **Note:** Any extra parameters (such as environment/context) are injected by napi and should NOT be passed by the TypeScript user.
+    ///
+    /// # Example (TypeScript)
+    /// ```typescript
+    /// const tools = await client.listAllTools();
+    /// console.log(tools);
+    /// ```
     pub async fn list_all_tools(&self) -> napi::Result<serde_json::Value> {
         match &self.inner {
             Some(peer) => {
@@ -56,10 +90,23 @@ impl JsPeer {
     }
 
     #[napi]
+    /// Invoke a tool by name on the server.
+    ///
+    /// # Arguments
+    /// * `name` - The tool name to invoke.
+    /// * `arguments` - Optional arguments for the tool as a JSON object.
+    ///
+    /// > **Note:** Any extra parameters (such as environment/context) are injected by napi and should NOT be passed by the TypeScript user.
+    ///
+    /// # Example (TypeScript)
+    /// ```typescript
+    /// const result = await client.callTool('increment', { value: 1 });
+    /// console.log(result);
+    /// ```
     pub async fn call_tool(&self, name: String, arguments: Option<serde_json::Value>) -> napi::Result<serde_json::Value> {
         match &self.inner {
             Some(peer) => {
-                let param = rmcp::model::CallToolRequestParam {
+                let param = CallToolRequestParam {
                     name: name.into(),
                     arguments: arguments.and_then(|v| v.as_object().cloned()),
                 };
