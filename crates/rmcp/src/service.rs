@@ -554,8 +554,6 @@ where
     let peer_return: Peer<R> = peer.clone();
     let handle = tokio::spawn(async move {
         let mut transport = transport.into_transport();
-        // let mut sink = std::pin::pin!(sink);
-        // let mut stream = std::pin::pin!(stream);
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult<E>>::new();
         #[derive(Debug)]

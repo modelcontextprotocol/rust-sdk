@@ -233,7 +233,7 @@ async fn delete_handler(
             )
                 .into_response()
         })?;
-        tracing::info!(session_id, "session deleted");
+        tracing::debug!(session_id, "session deleted");
         Ok(StatusCode::ACCEPTED)
     } else {
         Err((StatusCode::BAD_REQUEST, "missing session id").into_response())

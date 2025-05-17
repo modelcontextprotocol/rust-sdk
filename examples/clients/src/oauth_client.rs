@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -13,7 +13,6 @@ use rmcp::{
     transport::{
         SseClientTransport,
         auth::{AuthClient, OAuthState},
-        common::sse::SseRetryConfig,
         sse_client::SseClientConfig,
     },
 };
@@ -97,11 +96,6 @@ async fn main() -> Result<()> {
     let server_url = MCP_SERVER_URL.to_string();
     tracing::info!("Using MCP server URL: {}", server_url);
 
-    // Configure retry settings
-    let retry_config = SseRetryConfig {
-        max_times: Some(3),
-        min_duration: Duration::from_secs(1),
-    };
     // Initialize oauth state machine
     let mut oauth_state = OAuthState::new(&server_url, None)
         .await
@@ -150,13 +144,14 @@ async fn main() -> Result<()> {
         .into_authorization_manager()
         .ok_or_else(|| anyhow::anyhow!("Failed to get authorization manager"))?;
     let client = AuthClient::new(reqwest::Client::default(), am);
-    let transport = SseClientTransport::with_client(
+    let transport = SseClientTransport::start_with_client(
         client,
         SseClientConfig {
             uri: MCP_SSE_URL.into(),
-            retry_config,
+            ..Default::default()
         },
-    );
+    )
+    .await?;
 
     // Create client and connect to MCP server
     let client_service = ClientInfo::default();

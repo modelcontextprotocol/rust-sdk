@@ -10,9 +10,9 @@ pub mod http_header;
 #[cfg_attr(docsrs, doc(cfg(feature = "reqwest")))]
 mod reqwest;
 
-#[cfg(feature = "sse")]
-#[cfg_attr(docsrs, doc(cfg(feature = "sse")))]
-pub mod sse;
+#[cfg(feature = "client-side-sse")]
+#[cfg_attr(docsrs, doc(cfg(feature = "client-side-sse")))]
+pub mod client_side_sse;
 
 #[cfg(feature = "auth")]
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]

@@ -1,16 +1,19 @@
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use futures::{StreamExt, stream::BoxStream};
+use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 pub use sse_stream::Error as SseError;
 use sse_stream::Sse;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use super::common::sse::SseRetryConfig;
+use super::common::client_side_sse::{ExponentialBackoff, SseRetryPolicy, SseStreamReconnect};
 use crate::{
     RoleClient,
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
-    transport::worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
+    transport::{
+        common::client_side_sse::SseAutoReconnectStream,
+        worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
+    },
 };
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
@@ -86,7 +89,7 @@ impl StreamableHttpPostResponse {
                         ))??;
                 let message: ServerJsonRpcMessage =
                     serde_json::from_str(&event.data.unwrap_or_default())?;
-                return Ok((message, session_id));
+                Ok((message, session_id))
             }
             _ => Err(StreamableHttpError::UnexpectedServerResponse(
                 "expect initialized, accepted".into(),
@@ -155,6 +158,29 @@ pub struct RetryConfig {
     pub max_times: Option<usize>,
     pub min_duration: Duration,
 }
+
+struct StreamableHttpClientReconnect<C> {
+    pub client: C,
+    pub session_id: Arc<str>,
+    pub uri: Arc<str>,
+}
+
+impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconnect<C> {
+    type Error = StreamableHttpError<C::Error>;
+    type Future = BoxFuture<'static, Result<BoxedSseStream, Self::Error>>;
+    fn retry_connection(&mut self, last_event_id: Option<&str>) -> Self::Future {
+        let client = self.client.clone();
+        let uri = self.uri.clone();
+        let session_id = self.session_id.clone();
+        let last_event_id = last_event_id.map(|s| s.to_owned());
+        Box::pin(async move {
+            client
+                .get_stream(uri, session_id, last_event_id, None)
+                .await
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StreamableHttpClientWorker<C: StreamableHttpClient> {
     pub client: C,
@@ -167,7 +193,7 @@ impl<C: StreamableHttpClient + Default> StreamableHttpClientWorker<C> {
             client: C::default(),
             config: StreamableHttpClientTransportConfig {
                 uri: url.into(),
-                retry_config: SseRetryConfig::default(),
+                retry_config: Arc::new(ExponentialBackoff::default()),
                 channel_buffer_capacity: 16,
             },
         }
@@ -182,17 +208,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 
 impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     async fn execute_sse_stream(
-        self,
-        sse_stream: BoxedSseStream,
+        sse_stream: SseAutoReconnectStream<StreamableHttpClientReconnect<C>>,
         sse_worker_tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
-        session_id: Arc<str>,
         ct: CancellationToken,
     ) -> Result<(), StreamableHttpError<C::Error>> {
-        let mut sse_stream = sse_stream;
-        let mut retry_interval = self.config.retry_config.min_duration;
-        let mut last_event_id = None;
+        let mut sse_stream = std::pin::pin!(sse_stream);
         loop {
-            let event = tokio::select! {
+            let message = tokio::select! {
                 event = sse_stream.next() => {
                     event
                 }
@@ -201,70 +223,14 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                     break;
                 }
             };
-            let next_sse = match event {
-                Some(Ok(next_sse)) => next_sse,
-                Some(Err(e)) => {
-                    tracing::warn!("sse stream error: {e}");
-                    let mut retry_times = 0;
-                    'retry_loop: loop {
-                        tracing::debug!("sse stream error: {e}, retrying in {:?}", retry_interval);
-                        tokio::time::sleep(retry_interval).await;
-                        let retry_result = self
-                            .client
-                            .get_stream(
-                                self.config.uri.clone(),
-                                session_id.clone(),
-                                last_event_id.clone(),
-                                None,
-                            )
-                            .await;
-                        retry_times += 1;
-                        match retry_result {
-                            Ok(new_stream) => {
-                                sse_stream = new_stream;
-                                break 'retry_loop;
-                            }
-                            Err(e) => {
-                                if retry_times
-                                    >= self.config.retry_config.max_times.unwrap_or(usize::MAX)
-                                {
-                                    tracing::error!(
-                                        "sse stream error: {e}, max retry times reached"
-                                    );
-                                    return Err(e);
-                                } else {
-                                    continue 'retry_loop;
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
-                None => {
-                    tracing::debug!("sse stream terminated");
-                    break;
-                }
+            let Some(message) = message.transpose()? else {
+                break;
             };
-            // set the retry interval
-            if let Some(server_retry_interval) = next_sse.retry {
-                retry_interval = retry_interval.min(Duration::from_millis(server_retry_interval));
-            }
 
-            if let Some(data) = next_sse.data {
-                match serde_json::from_slice::<ServerJsonRpcMessage>(data.as_bytes()) {
-                    Err(e) => tracing::warn!("failed to deserialize server message: {e}"),
-                    Ok(message) => {
-                        let yield_result = sse_worker_tx.send(message).await;
-                        if yield_result.is_err() {
-                            tracing::trace!("streamable http transport worker dropped, exiting");
-                            break;
-                        }
-                    }
-                };
-            }
-
-            if let Some(id) = next_sse.id {
-                last_event_id = Some(id);
+            let yield_result = sse_worker_tx.send(message).await;
+            if yield_result.is_err() {
+                tracing::trace!("streamable http transport worker dropped, exiting");
+                break;
             }
         }
         Ok(())
@@ -293,11 +259,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let channel_buffer_capacity = self.config.channel_buffer_capacity;
         let (sse_worker_tx, mut sse_worker_rx) =
             tokio::sync::mpsc::channel::<ServerJsonRpcMessage>(channel_buffer_capacity);
-        // let super::worker::WorkerContext {
-        //     to_handler_tx,
-        //     mut from_handler_rx,
-        //     cancellation_token: transport_task_ct,
-        // } = context;
         let config = self.config.clone();
         let transport_task_ct = context.cancellation_token.clone();
         let _drop_guard = transport_task_ct.clone().drop_guard();
@@ -385,15 +346,25 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             .await
         {
             Ok(stream) => {
-                streams.spawn(self.clone().execute_sse_stream(
+                let sse_stream = SseAutoReconnectStream::new(
                     stream,
+                    StreamableHttpClientReconnect {
+                        client: self.client.clone(),
+                        session_id: session_id.clone(),
+                        uri: config.uri.clone(),
+                    },
+                    self.config.retry_config.clone(),
+                );
+                streams.spawn(Self::execute_sse_stream(
+                    sse_stream,
                     sse_worker_tx.clone(),
-                    session_id.clone(),
                     transport_task_ct.child_token(),
                 ));
                 tracing::debug!("got common stream");
             }
-            Err(StreamableHttpError::SeverDoesNotSupportSse) => {}
+            Err(StreamableHttpError::SeverDoesNotSupportSse) => {
+                tracing::debug!("server doesn't support sse, skip common stream");
+            }
             Err(e) => {
                 // fail to get common stream
                 tracing::error!("fail to get common stream: {e}");
@@ -449,10 +420,18 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                         Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
-                            streams.spawn(self.clone().execute_sse_stream(
+                            let sse_stream = SseAutoReconnectStream::new(
                                 stream,
+                                StreamableHttpClientReconnect {
+                                    client: self.client.clone(),
+                                    session_id: session_id.clone(),
+                                    uri: config.uri.clone(),
+                                },
+                                self.config.retry_config.clone(),
+                            );
+                            streams.spawn(Self::execute_sse_stream(
+                                sse_stream,
                                 sse_worker_tx.clone(),
-                                session_id.clone(),
                                 transport_task_ct.child_token(),
                             ));
                             tracing::trace!("got new sse stream");
@@ -489,7 +468,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
 #[derive(Debug, Clone)]
 pub struct StreamableHttpClientTransportConfig {
     pub uri: Arc<str>,
-    pub retry_config: SseRetryConfig,
+    pub retry_config: Arc<dyn SseRetryPolicy>,
     pub channel_buffer_capacity: usize,
 }
 
@@ -506,7 +485,7 @@ impl Default for StreamableHttpClientTransportConfig {
     fn default() -> Self {
         Self {
             uri: "localhost".into(),
-            retry_config: SseRetryConfig::default(),
+            retry_config: Arc::new(ExponentialBackoff::default()),
             channel_buffer_capacity: 16,
         }
     }

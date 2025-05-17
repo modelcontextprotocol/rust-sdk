@@ -36,8 +36,10 @@ impl SseClient for reqwest::Client {
         uri: std::sync::Arc<str>,
         last_event_id: Option<String>,
         auth_token: Option<String>,
-    ) -> Result<crate::transport::common::sse::BoxedSseResponse, SseTransportError<Self::Error>>
-    {
+    ) -> Result<
+        crate::transport::common::client_side_sse::BoxedSseResponse,
+        SseTransportError<Self::Error>,
+    > {
         let mut request_builder = self
             .get(uri.as_ref())
             .header(ACCEPT, EVENT_STREAM_MIME_TYPE);
@@ -65,13 +67,16 @@ impl SseClient for reqwest::Client {
 }
 
 impl SseClientTransport<reqwest::Client> {
-    pub fn from_uri(uri: impl Into<Arc<str>>) -> Self {
-        SseClientTransport::with_client(
+    pub async fn start(
+        uri: impl Into<Arc<str>>,
+    ) -> Result<Self, SseTransportError<reqwest::Error>> {
+        SseClientTransport::start_with_client(
             reqwest::Client::default(),
             SseClientConfig {
                 uri: uri.into(),
                 ..Default::default()
             },
         )
+        .await
     }
 }

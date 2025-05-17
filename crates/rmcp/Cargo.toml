@@ -39,7 +39,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
 ], optional = true }
-sse-stream = { version = "0.1.3", optional = true }
+sse-stream = { version = "0.1.4", optional = true }
 url = { version = "2.4", optional = true }
 
 # For tower compatibility
@@ -68,9 +68,9 @@ macros = ["dep:rmcp-macros", "dep:paste"]
 reqwest = ["dep:reqwest"]
 
 # SSE client
-sse = ["dep:sse-stream"]
+client-side-sse = ["dep:sse-stream"]
 
-__transport-sse = ["reqwest", "sse", "dep:url", "transport-worker"]
+__transport-sse = ["reqwest", "client-side-sse", "dep:url", "transport-worker"]
 
 transport-worker = ["dep:tokio-stream"]
 
@@ -78,7 +78,7 @@ transport-sse = ["__transport-sse", "reqwest?/rustls-tls"]
 transport-sse-tls-no-provider = ["__transport-sse", "reqwest?/rustls-tls-no-provider"]
 
 # Streamable HTTP client
-__transport-streamable-http-client = ["reqwest", "sse", "transport-worker", "dep:url"]
+__transport-streamable-http-client = ["reqwest", "client-side-sse", "transport-worker", "dep:url"]
 transport-streamable-http-client = ["__transport-streamable-http-client", "reqwest?/rustls-tls"]
 transport-streamable-http-client-tls-no-provider = ["__transport-streamable-http-client", "reqwest?/rustls-tls-no-provider"]
 

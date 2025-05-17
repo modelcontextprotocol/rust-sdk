@@ -39,11 +39,6 @@ impl WorkerQuitReason {
         }
     }
 }
-// #[derive(Debug, Clone)]
-// pub enum WorkerQuitReason {
-//     Cancelled,
-//     TransportTerminated,
-// }
 
 pub trait Worker: Sized + Send + 'static {
     type Error: std::error::Error + Send + Sync + 'static;

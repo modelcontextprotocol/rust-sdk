@@ -28,8 +28,10 @@ where
         uri: std::sync::Arc<str>,
         last_event_id: Option<String>,
         mut auth_token: Option<String>,
-    ) -> Result<crate::transport::common::sse::BoxedSseResponse, SseTransportError<Self::Error>>
-    {
+    ) -> Result<
+        crate::transport::common::client_side_sse::BoxedSseResponse,
+        SseTransportError<Self::Error>,
+    > {
         if auth_token.is_none() {
             auth_token = Some(self.get_access_token().await?);
         }
