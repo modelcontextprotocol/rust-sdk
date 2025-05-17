@@ -44,7 +44,7 @@ use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 #[cfg(feature = "transport-child-process")]
 pub mod child_process;
 #[cfg(feature = "transport-child-process")]
-pub use child_process::TokioChildProcess;
+pub use child_process::{ConfigureCommandExt, TokioChildProcess};
 
 #[cfg(feature = "transport-async-rw")]
 pub mod io;

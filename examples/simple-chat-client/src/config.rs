@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, process::Stdio};
 
 use anyhow::Result;
-use rmcp::{RoleClient, ServiceExt, service::RunningService};
+use rmcp::{RoleClient, ServiceExt, service::RunningService, transport::ConfigureCommandExt};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,11 +54,12 @@ impl McpServerTransportConfig {
                 envs,
             } => {
                 let transport = rmcp::transport::child_process::TokioChildProcess::new(
-                    tokio::process::Command::new(command)
-                        .args(args)
-                        .envs(envs)
-                        .stderr(Stdio::inherit())
-                        .stdout(Stdio::inherit()),
+                    tokio::process::Command::new(command).configure(|cmd| {
+                        cmd.args(args)
+                            .envs(envs)
+                            .stderr(Stdio::inherit())
+                            .stdout(Stdio::inherit());
+                    }),
                 )?;
                 ().serve(transport).await?
             }

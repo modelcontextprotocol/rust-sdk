@@ -1,5 +1,9 @@
 use anyhow::Result;
-use rmcp::{model::CallToolRequestParam, service::ServiceExt, transport::TokioChildProcess};
+use rmcp::{
+    model::CallToolRequestParam,
+    service::ServiceExt,
+    transport::{ConfigureCommandExt, TokioChildProcess},
+};
 use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -14,17 +18,14 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
     let service = ()
-        .serve(TokioChildProcess::new(
-            Command::new("uvx").arg("mcp-server-git"),
-        )?)
+        .serve(TokioChildProcess::new(Command::new("uvx").configure(
+            |cmd| {
+                cmd.arg("mcp-server-git");
+            },
+        ))?)
         .await?;
 
-    // or
-    // serve_client(
-    //     (),
-    //     TokioChildProcess::new(Command::new("uvx").arg("mcp-server-git"))?,
-    // )
-    // .await?;
+    // or serve_client((), TokioChildProcess::new(cmd)?).await?;
 
     // Initialize
     let server_info = service.peer_info();

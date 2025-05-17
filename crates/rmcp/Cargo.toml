@@ -44,6 +44,8 @@ url = { version = "2.4", optional = true }
 # For tower compatibility
 tower-service = { version = "0.3", optional = true }
 
+# for child process transport
+process-wrap = { version = "8.2", features = ["tokio1"], optional = true}
 
 # for ws transport
 # tokio-tungstenite ={ version = "0.26", optional = true }
@@ -67,7 +69,11 @@ transport-sse = ["__transport-sse", "reqwest?/rustls-tls"]
 transport-sse-tls-no-provider = ["__transport-sse", "reqwest?/rustls-tls-no-provider"]
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
-transport-child-process = ["transport-async-rw", "tokio/process"]
+transport-child-process = [
+    "transport-async-rw",
+    "tokio/process",
+    "dep:process-wrap",
+]
 transport-sse-server = [
     "transport-async-rw",
     "dep:axum",

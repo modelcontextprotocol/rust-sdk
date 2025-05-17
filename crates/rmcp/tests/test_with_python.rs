@@ -1,6 +1,6 @@
 use rmcp::{
     ServiceExt,
-    transport::{SseServer, TokioChildProcess},
+    transport::{ConfigureCommandExt, SseServer, TokioChildProcess},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
@@ -54,11 +54,9 @@ async fn test_with_python_server() -> anyhow::Result<()> {
         .spawn()?
         .wait()
         .await?;
-    let transport = TokioChildProcess::new(
-        tokio::process::Command::new("uv")
-            .arg("run")
-            .arg("tests/test_with_python/server.py"),
-    )?;
+    let transport = TokioChildProcess::new(tokio::process::Command::new("uv").configure(|cmd| {
+        cmd.arg("run").arg("tests/test_with_python/server.py");
+    }))?;
 
     let client = ().serve(transport).await?;
     let resources = client.list_all_resources().await?;
