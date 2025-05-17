@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const transport = new SSEClientTransport(new URL(`http://127.0.0.1:8000/sse`));
+const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:8001/`));
 
 const client = new Client(
   {
@@ -26,4 +26,3 @@ console.log(templates);
 const prompts = await client.listPrompts();
 console.log(prompts);
 await client.close();
-await transport.close();

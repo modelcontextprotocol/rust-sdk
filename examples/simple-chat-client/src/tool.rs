@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::{
-    model::{CallToolRequestParam, Tool as McpTool},
+    model::{CallToolRequestParam, CallToolResult, Tool as McpTool},
     service::ServerSink,
 };
 use serde_json::Value;
@@ -18,7 +18,7 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> String;
     fn description(&self) -> String;
     fn parameters(&self) -> Value;
-    async fn call(&self, args: Value) -> Result<String>;
+    async fn call(&self, args: Value) -> Result<CallToolResult>;
 }
 
 pub struct McpToolAdapter {
@@ -50,12 +50,12 @@ impl Tool for McpToolAdapter {
         serde_json::to_value(&self.tool.input_schema).unwrap_or(serde_json::json!({}))
     }
 
-    async fn call(&self, args: Value) -> Result<String> {
+    async fn call(&self, args: Value) -> Result<CallToolResult> {
         let arguments = match args {
             Value::Object(map) => Some(map),
             _ => None,
         };
-
+        println!("arguments: {:?}", arguments);
         let call_result = self
             .server
             .call_tool(CallToolRequestParam {
@@ -63,9 +63,8 @@ impl Tool for McpToolAdapter {
                 arguments,
             })
             .await?;
-        let result = serde_json::to_string(&call_result).unwrap();
 
-        Ok(result)
+        Ok(call_result)
     }
 }
 #[derive(Default)]

@@ -192,6 +192,7 @@ See [examples](examples/README.md)
 - `client`: use client side sdk
 - `server`: use server side sdk
 - `macros`: macros default
+- `schemars`: implement `JsonSchema` for all model structs
 
 ### Transports
 
@@ -199,6 +200,7 @@ See [examples](examples/README.md)
 - `transport-sse-server`: Server SSE transport
 - `transport-child-process`: Client stdio transport
 - `transport-sse`: Client sse transport
+- `transport-streamable-http-server` streamable http server transport
 
 ## Related Resources
 

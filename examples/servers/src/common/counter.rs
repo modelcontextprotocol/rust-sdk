@@ -17,6 +17,7 @@ pub struct StructRequest {
 pub struct Counter {
     counter: Arc<Mutex<i32>>,
 }
+
 #[tool(tool_box)]
 impl Counter {
     #[allow(dead_code)]
@@ -193,5 +194,18 @@ impl ServerHandler for Counter {
             next_cursor: None,
             resource_templates: Vec::new(),
         })
+    }
+
+    async fn initialize(
+        &self,
+        _request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, McpError> {
+        if let Some(http_request_part) = context.extensions.get::<axum::http::request::Parts>() {
+            let initialize_headers = &http_request_part.headers;
+            let initialize_uri = &http_request_part.uri;
+            tracing::info!(?initialize_headers, %initialize_uri, "initialize from http server");
+        }
+        Ok(self.get_info())
     }
 }

@@ -9,7 +9,7 @@ After configuring the config file, you can run the example:
 ```bash
 ./simple_chat --help                                                       # show help info
 ./simple_chat config > config.toml                                         # output default config to file
-./simple_chat chat --config my_config.toml                                 # start chat with specified config
-./simple_chat chat --config my_config.toml --model gpt-4o-mini             # start chat with specified model
+./simple_chat --config my_config.toml chat                                 # start chat with specified config
+./simple_chat --config my_config.toml --model gpt-4o-mini chat             # start chat with specified model
 ``` 
 

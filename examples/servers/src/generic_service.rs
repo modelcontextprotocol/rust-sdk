@@ -13,6 +13,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let io = (tokio::io::stdin(), tokio::io::stdout());
 
-    serve_server(generic_service, io).await?.waiting().await?;
+    serve_server(generic_service, io).await?;
     Ok(())
 }

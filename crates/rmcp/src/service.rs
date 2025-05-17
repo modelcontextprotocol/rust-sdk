@@ -591,7 +591,7 @@ where
                 }
             };
 
-            tracing::debug!(?evt, "new event");
+            tracing::trace!(?evt, "new event");
             match evt {
                 // response and error
                 Event::ToSink(m) => {
@@ -657,7 +657,7 @@ where
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
                     id, request, ..
                 })) => {
-                    tracing::info!(%id, ?request, "received request");
+                    tracing::debug!(%id, ?request, "received request");
                     {
                         let service = shared_service.clone();
                         let sink = sink_proxy_tx.clone();
@@ -675,7 +675,7 @@ where
                             let result = service.handle_request(request, context).await;
                             let response = match result {
                                 Ok(result) => {
-                                    tracing::info!(%id, ?result, "response message");
+                                    tracing::debug!(%id, ?result, "response message");
                                     JsonRpcMessage::response(result, id)
                                 }
                                 Err(error) => {

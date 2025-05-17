@@ -5,6 +5,7 @@ use super::Annotated;
 /// Represents a resource in the extension with metadata
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawResource {
     /// URI representing the resource location (e.g., "file:///path/to/file" or "str:///content")
     pub uri: String,
@@ -28,6 +29,7 @@ pub type Resource = Annotated<RawResource>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawResourceTemplate {
     pub uri_template: String,
     pub name: String,
@@ -41,6 +43,7 @@ pub type ResourceTemplate = Annotated<RawResourceTemplate>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum ResourceContents {
     TextResourceContents {
         uri: String,

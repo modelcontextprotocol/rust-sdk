@@ -8,12 +8,14 @@ use super::{AnnotateAble, Annotated, resource::ResourceContents};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawTextContent {
     pub text: String,
 }
 pub type TextContent = Annotated<RawTextContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawImageContent {
     /// The base64-encoded image
     pub data: String,
@@ -23,6 +25,7 @@ pub struct RawImageContent {
 pub type ImageContent = Annotated<RawImageContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawEmbeddedResource {
     pub resource: ResourceContents,
 }
@@ -39,6 +42,7 @@ impl EmbeddedResource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawAudioContent {
     pub data: String,
     pub mime_type: String,
@@ -48,6 +52,7 @@ pub type AudioContent = Annotated<RawAudioContent>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),

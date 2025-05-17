@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    ClientNotification, ClientRequest, Extensions, JsonObject, NumberOrString, ProgressToken,
-    ServerNotification, ServerRequest,
+    ClientNotification, ClientRequest, Extensions, JsonObject, JsonRpcMessage, NumberOrString,
+    ProgressToken, ServerNotification, ServerRequest,
 };
 
 pub trait GetMeta {
@@ -151,5 +151,44 @@ impl Deref for Meta {
 impl DerefMut for Meta {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl<Req, Resp, Noti> JsonRpcMessage<Req, Resp, Noti>
+where
+    Req: GetExtensions,
+    Noti: GetExtensions,
+{
+    pub fn insert_extension<T: Clone + Send + Sync + 'static>(&mut self, value: T) {
+        match self {
+            JsonRpcMessage::Request(json_rpc_request) => {
+                json_rpc_request.request.extensions_mut().insert(value);
+            }
+            JsonRpcMessage::Notification(json_rpc_notification) => {
+                json_rpc_notification
+                    .notification
+                    .extensions_mut()
+                    .insert(value);
+            }
+            JsonRpcMessage::BatchRequest(json_rpc_batch_request_items) => {
+                for item in json_rpc_batch_request_items {
+                    match item {
+                        super::JsonRpcBatchRequestItem::Request(json_rpc_request) => {
+                            json_rpc_request
+                                .request
+                                .extensions_mut()
+                                .insert(value.clone());
+                        }
+                        super::JsonRpcBatchRequestItem::Notification(json_rpc_notification) => {
+                            json_rpc_notification
+                                .notification
+                                .extensions_mut()
+                                .insert(value.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
