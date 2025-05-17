@@ -56,7 +56,7 @@ tokio-stream = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 
 # macro
-rmcp-macros = { version = "0.1", workspace = true, optional = true }
+rmcp-macros = { workspace = true, optional = true }
 
 [features]
 default = ["base64", "macros", "server"]
