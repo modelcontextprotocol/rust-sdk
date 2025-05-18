@@ -45,18 +45,24 @@ use tokio::io::{stdin, stdout};
 let transport = (stdin(), stdout());
 ```
 
-The transport type must implemented [`IntoTransport`](crate::transport::IntoTransport) trait, which allow split into a sink and a stream.
+#### Transport
+The transport type must implemented [`Transport`] trait, which allow it send message concurrently and receive message sequentially.
+There are 3 pairs of standard transport types:
 
-For client, the sink item is [`ClientJsonRpcMessage`](crate::model::ClientJsonRpcMessage) and stream item is [`ServerJsonRpcMessage`](crate::model::ServerJsonRpcMessage)
+| transport         | client                                                    | server                                                |
+|:-:                |:-:                                                        |:-:                                                    |
+| std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
+| streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::session::create_session`]   |
+| sse               | [`sse_client::SseClientTransport`]                        | [`sse_server::SseServer`]                             |
 
-For server, the sink item is [`ServerJsonRpcMessage`](crate::model::ServerJsonRpcMessage) and stream item is [`ClientJsonRpcMessage`](crate::model::ClientJsonRpcMessage)
+#### [IntoTransport](`IntoTransport`) trait
+[`IntoTransport`] is a helper trait that implicitly convert a type into a transport type.
 
-##### These types is automatically implemented [`IntoTransport`](crate::transport::IntoTransport) trait
-
-1. The types that already implement both [`Sink`](futures::Sink) and [`Stream`](futures::Stream) trait.
-2. A tuple of sink `Tx` and stream `Rx`: `(Tx, Rx)`.
-3. The type that implement both [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`] trait.
-4. A tuple of [`tokio::io::AsyncRead`] `R `and [`tokio::io::AsyncWrite`] `W`: `(R, W)`.
+These types is automatically implemented [`IntoTransport`] trait
+1. A type that already implement both [`futures::Sink`] and [`futures::Stream`] trait, or a tuple `(Tx, Rx)`  where `Tx` is [`futures::Sink`] and `Rx` is [`futures::Stream`].
+2. A type that implement both [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`] trait. or a tuple `(R, W)` where `R` is [`tokio::io::AsyncRead`] and `W` is [`tokio::io::AsyncWrite`].
+3. A type that implement [Worker](`worker::Worker`) trait.
+4. A type that implement [`Transport`] trait.
 
 For example, you can see how we build a transport through TCP stream or http upgrade so easily. [examples](examples/README.md)
 </details>
@@ -192,13 +198,17 @@ See [examples](examples/README.md)
 - `client`: use client side sdk
 - `server`: use server side sdk
 - `macros`: macros default
+- `schemars`: implement `JsonSchema` for all model structs
 
-### Transports
+#### Transports
 
 - `transport-io`: Server stdio transport
 - `transport-sse-server`: Server SSE transport
 - `transport-child-process`: Client stdio transport
-- `transport-sse`: Client sse transport
+- `transport-sse-client`: Client sse transport
+- `transport-streamable-http-server` streamable http server transport
+- `transport-streamable-client-server` streamable http server transport
+
 
 ## Related Resources
 

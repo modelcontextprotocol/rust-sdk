@@ -1,4 +1,3 @@
-use futures::{SinkExt, StreamExt};
 use thiserror::Error;
 
 use super::*;
@@ -81,42 +80,42 @@ where
 }
 
 /// Helper function to get the next message from the stream
-async fn expect_next_message<S>(
-    stream: &mut S,
+async fn expect_next_message<T>(
+    transport: &mut T,
     context: &str,
 ) -> Result<ClientJsonRpcMessage, ServerError>
 where
-    S: StreamExt<Item = ClientJsonRpcMessage> + Unpin,
+    T: Transport<RoleServer>,
 {
-    stream
-        .next()
+    transport
+        .receive()
         .await
         .ok_or_else(|| ServerError::ConnectionClosed(context.to_string()))
 }
 
 /// Helper function to expect a request from the stream
-async fn expect_request<S>(
-    stream: &mut S,
+async fn expect_request<T>(
+    transport: &mut T,
     context: &str,
 ) -> Result<(ClientRequest, RequestId), ServerError>
 where
-    S: StreamExt<Item = ClientJsonRpcMessage> + Unpin,
+    T: Transport<RoleServer>,
 {
-    let msg = expect_next_message(stream, context).await?;
+    let msg = expect_next_message(transport, context).await?;
     let msg_clone = msg.clone();
     msg.into_request()
         .ok_or(ServerError::ExpectedInitRequest(Some(msg_clone)))
 }
 
 /// Helper function to expect a notification from the stream
-async fn expect_notification<S>(
-    stream: &mut S,
+async fn expect_notification<T>(
+    transport: &mut T,
     context: &str,
 ) -> Result<ClientNotification, ServerError>
 where
-    S: StreamExt<Item = ClientJsonRpcMessage> + Unpin,
+    T: Transport<RoleServer>,
 {
-    let msg = expect_next_message(stream, context).await?;
+    let msg = expect_next_message(transport, context).await?;
     let msg_clone = msg.clone();
     msg.into_notification()
         .ok_or(ServerError::ExpectedInitNotification(Some(msg_clone)))
@@ -132,9 +131,7 @@ where
     T: IntoTransport<RoleServer, E, A>,
     E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
 {
-    let (sink, stream) = transport.into_transport();
-    let mut sink = Box::pin(sink);
-    let mut stream = Box::pin(stream);
+    let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
     // Convert ServerError to std::io::Error, then to E
@@ -146,7 +143,7 @@ where
     };
 
     // Get initialize request
-    let (request, id) = expect_request(&mut stream, "initialized request")
+    let (request, id) = expect_request(&mut transport, "initialized request")
         .await
         .map_err(handle_server_error)?;
 
@@ -173,7 +170,8 @@ where
             ));
         }
         Err(e) => {
-            sink.send(ServerJsonRpcMessage::error(e.clone(), id))
+            transport
+                .send(ServerJsonRpcMessage::error(e.clone(), id))
                 .await?;
             return Err(handle_server_error(ServerError::InitializeFailed(e)));
         }
@@ -190,14 +188,15 @@ where
         _ => init_response.protocol_version,
     };
     init_response.protocol_version = protocol_version;
-    sink.send(ServerJsonRpcMessage::response(
-        ServerResult::InitializeResult(init_response),
-        id,
-    ))
-    .await?;
+    transport
+        .send(ServerJsonRpcMessage::response(
+            ServerResult::InitializeResult(init_response),
+            id,
+        ))
+        .await?;
 
     // Wait for initialize notification
-    let notification = expect_notification(&mut stream, "initialize notification")
+    let notification = expect_notification(&mut transport, "initialize notification")
         .await
         .map_err(handle_server_error)?;
     let ClientNotification::InitializedNotification(_) = notification else {
@@ -207,7 +206,7 @@ where
     };
     let _ = service.handle_notification(notification).await;
     // Continue processing service
-    serve_inner(service, (sink, stream), peer, peer_rx, ct).await
+    serve_inner(service, transport, peer, peer_rx, ct).await
 }
 
 macro_rules! method {

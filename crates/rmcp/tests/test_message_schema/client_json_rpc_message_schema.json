@@ -1,0 +1,1128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JsonRpcMessage_for_ClientRequest_and_ClientResult_and_ClientNotification",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/JsonRpcRequest_for_ClientRequest"
+    },
+    {
+      "$ref": "#/definitions/JsonRpcResponse_for_ClientResult"
+    },
+    {
+      "$ref": "#/definitions/JsonRpcNotification_for_ClientNotification"
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonRpcBatchRequestItem_for_ClientRequest_and_ClientNotification"
+      }
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonRpcBatchResponseItem_for_ClientResult"
+      }
+    },
+    {
+      "$ref": "#/definitions/JsonRpcError"
+    }
+  ],
+  "definitions": {
+    "Annotated_for_RawContent": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "mimeType",
+            "type"
+          ],
+          "properties": {
+            "data": {
+              "description": "The base64-encoded image",
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource",
+            "type"
+          ],
+          "properties": {
+            "resource": {
+              "$ref": "#/definitions/ResourceContents"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "resource"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "mimeType",
+            "type"
+          ],
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "data": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "audio"
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Annotations": {
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Role"
+          }
+        },
+        "priority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "ArgumentInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "CallToolRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tools/call"
+    },
+    "CallToolRequestParam": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "arguments": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "CancelledNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/cancelled"
+    },
+    "CancelledNotificationParam": {
+      "type": "object",
+      "required": [
+        "requestId"
+      ],
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      }
+    },
+    "ClientCapabilities": {
+      "title": "Builder",
+      "description": "```rust # use rmcp::model::ClientCapabilities; let cap = ClientCapabilities::builder() .enable_experimental() .enable_roots() .enable_roots_list_changed() .build(); ```",
+      "type": "object",
+      "properties": {
+        "experimental": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "roots": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RootsCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "ClientResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CreateMessageResult"
+        },
+        {
+          "$ref": "#/definitions/ListRootsResult"
+        },
+        {
+          "$ref": "#/definitions/EmptyObject"
+        }
+      ]
+    },
+    "CompleteRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "completion/complete"
+    },
+    "CompleteRequestParam": {
+      "type": "object",
+      "required": [
+        "argument",
+        "ref"
+      ],
+      "properties": {
+        "argument": {
+          "$ref": "#/definitions/ArgumentInfo"
+        },
+        "ref": {
+          "$ref": "#/definitions/Reference"
+        }
+      }
+    },
+    "CreateMessageResult": {
+      "type": "object",
+      "required": [
+        "content",
+        "model",
+        "role"
+      ],
+      "properties": {
+        "content": {
+          "$ref": "#/definitions/Annotated_for_RawContent"
+        },
+        "model": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "stopReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "EmptyObject": {
+      "type": "object"
+    },
+    "ErrorData": {
+      "description": "Error information for JSON-RPC error responses.",
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "description": "The error type that occurred.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "data": {
+          "description": "Additional information about the error. The value of this member is defined by the sender (e.g. detailed error information, nested errors etc.)."
+        },
+        "message": {
+          "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
+          "type": "string"
+        }
+      }
+    },
+    "GetPromptRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "prompts/get"
+    },
+    "GetPromptRequestParam": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "arguments": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "Implementation": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "InitializeRequestParam": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "clientInfo",
+        "protocolVersion"
+      ],
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/ClientCapabilities"
+        },
+        "clientInfo": {
+          "$ref": "#/definitions/Implementation"
+        },
+        "protocolVersion": {
+          "$ref": "#/definitions/ProtocolVersion"
+        }
+      }
+    },
+    "InitializeResultMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "initialize"
+    },
+    "InitializedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/initialized"
+    },
+    "JsonRpcBatchRequestItem_for_ClientRequest_and_ClientNotification": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/JsonRpcRequest_for_ClientRequest"
+        },
+        {
+          "$ref": "#/definitions/JsonRpcNotification_for_ClientNotification"
+        }
+      ]
+    },
+    "JsonRpcBatchResponseItem_for_ClientResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse_for_ClientResult"
+        },
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ]
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "required": [
+        "error",
+        "id",
+        "jsonrpc"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ErrorData"
+        },
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      }
+    },
+    "JsonRpcNotification_for_ClientNotification": {
+      "type": "object",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam"
+        },
+        {
+          "$ref": "#/definitions/Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam_for_InitializedNotificationMethod"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam_for_RootsListChangedNotificationMethod"
+        }
+      ],
+      "required": [
+        "jsonrpc"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      }
+    },
+    "JsonRpcRequest_for_ClientRequest": {
+      "type": "object",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestNoParam_for_PingRequestMethod"
+        },
+        {
+          "$ref": "#/definitions/Request_for_InitializeResultMethod_and_InitializeRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_CompleteRequestMethod_and_CompleteRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_SetLevelRequestMethod_and_SetLevelRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_GetPromptRequestMethod_and_GetPromptRequestParam"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam_for_ListPromptsRequestMethod_and_PaginatedRequestParam"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam_for_ListResourcesRequestMethod_and_PaginatedRequestParam"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam_for_ListResourceTemplatesRequestMethod_and_PaginatedRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_ReadResourceRequestMethod_and_ReadResourceRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_SubscribeRequestMethod_and_SubscribeRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_UnsubscribeRequestMethod_and_UnsubscribeRequestParam"
+        },
+        {
+          "$ref": "#/definitions/Request_for_CallToolRequestMethod_and_CallToolRequestParam"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam_for_ListToolsRequestMethod_and_PaginatedRequestParam"
+        }
+      ],
+      "required": [
+        "id",
+        "jsonrpc"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      }
+    },
+    "JsonRpcResponse_for_ClientResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        },
+        "result": {
+          "$ref": "#/definitions/ClientResult"
+        }
+      }
+    },
+    "JsonRpcVersion2_0": {
+      "type": "string",
+      "format": "const",
+      "const": "2.0"
+    },
+    "ListPromptsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "prompts/list"
+    },
+    "ListResourceTemplatesRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/templates/list"
+    },
+    "ListResourcesRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/list"
+    },
+    "ListRootsResult": {
+      "type": "object",
+      "required": [
+        "roots"
+      ],
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Root"
+          }
+        }
+      }
+    },
+    "ListToolsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tools/list"
+    },
+    "LoggingLevel": {
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "notice",
+        "warning",
+        "error",
+        "critical",
+        "alert",
+        "emergency"
+      ]
+    },
+    "NotificationNoParam_for_InitializedNotificationMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/InitializedNotificationMethod"
+        }
+      }
+    },
+    "NotificationNoParam_for_RootsListChangedNotificationMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/RootsListChangedNotificationMethod"
+        }
+      }
+    },
+    "Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CancelledNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CancelledNotificationParam"
+        }
+      }
+    },
+    "Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ProgressNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ProgressNotificationParam"
+        }
+      }
+    },
+    "NumberOrString": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "PaginatedRequestParam": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PingRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "ping"
+    },
+    "ProgressNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/progress"
+    },
+    "ProgressNotificationParam": {
+      "type": "object",
+      "required": [
+        "progress",
+        "progressToken"
+      ],
+      "properties": {
+        "message": {
+          "description": "An optional message describing the current progress.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "progressToken": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "total": {
+          "description": "Total number of items to process (or total progress required), if known",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ProtocolVersion": {
+      "type": "string"
+    },
+    "ReadResourceRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/read"
+    },
+    "ReadResourceRequestParam": {
+      "type": "object",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "Reference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "uri"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ref/resource"
+              ]
+            },
+            "uri": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "type"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "ref/prompt"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "RequestNoParam_for_PingRequestMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PingRequestMethod"
+        }
+      }
+    },
+    "RequestOptionalParam_for_ListPromptsRequestMethod_and_PaginatedRequestParam": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListPromptsRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RequestOptionalParam_for_ListResourceTemplatesRequestMethod_and_PaginatedRequestParam": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListResourceTemplatesRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RequestOptionalParam_for_ListResourcesRequestMethod_and_PaginatedRequestParam": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListResourcesRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RequestOptionalParam_for_ListToolsRequestMethod_and_PaginatedRequestParam": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListToolsRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Request_for_CallToolRequestMethod_and_CallToolRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CallToolRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CallToolRequestParam"
+        }
+      }
+    },
+    "Request_for_CompleteRequestMethod_and_CompleteRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CompleteRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CompleteRequestParam"
+        }
+      }
+    },
+    "Request_for_GetPromptRequestMethod_and_GetPromptRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetPromptRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetPromptRequestParam"
+        }
+      }
+    },
+    "Request_for_InitializeResultMethod_and_InitializeRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/InitializeResultMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/InitializeRequestParam"
+        }
+      }
+    },
+    "Request_for_ReadResourceRequestMethod_and_ReadResourceRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ReadResourceRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ReadResourceRequestParam"
+        }
+      }
+    },
+    "Request_for_SetLevelRequestMethod_and_SetLevelRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SetLevelRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SetLevelRequestParam"
+        }
+      }
+    },
+    "Request_for_SubscribeRequestMethod_and_SubscribeRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SubscribeRequestParam"
+        }
+      }
+    },
+    "Request_for_UnsubscribeRequestMethod_and_UnsubscribeRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/UnsubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/UnsubscribeRequestParam"
+        }
+      }
+    },
+    "ResourceContents": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "uri"
+          ],
+          "properties": {
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "blob",
+            "uri"
+          ],
+          "properties": {
+            "blob": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uri": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "Root": {
+      "type": "object",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "RootsCapabilities": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "RootsListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/roots/list_changed"
+    },
+    "SetLevelRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "logging/setLevel"
+    },
+    "SetLevelRequestParam": {
+      "type": "object",
+      "required": [
+        "level"
+      ],
+      "properties": {
+        "level": {
+          "$ref": "#/definitions/LoggingLevel"
+        }
+      }
+    },
+    "SubscribeRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/subscribe"
+    },
+    "SubscribeRequestParam": {
+      "type": "object",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "UnsubscribeRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/unsubscribe"
+    },
+    "UnsubscribeRequestParam": {
+      "type": "object",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

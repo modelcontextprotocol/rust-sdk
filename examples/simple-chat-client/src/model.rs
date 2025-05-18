@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct Message {
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 impl Message {
@@ -11,6 +13,7 @@ impl Message {
         Self {
             role: "system".to_string(),
             content: content.to_string(),
+            tool_calls: None,
         }
     }
 
@@ -18,6 +21,7 @@ impl Message {
         Self {
             role: "user".to_string(),
             content: content.to_string(),
+            tool_calls: None,
         }
     }
 
@@ -25,6 +29,7 @@ impl Message {
         Self {
             role: "assistant".to_string(),
             content: content.to_string(),
+            tool_calls: None,
         }
     }
 }
@@ -62,10 +67,17 @@ pub struct Choice {
     pub finish_reason: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub _type: String,
+    pub function: ToolFunction,
+}
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolFunction {
     pub name: String,
-    pub arguments: serde_json::Value,
+    pub arguments: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

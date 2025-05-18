@@ -1,12 +1,11 @@
-use futures::{Sink, Stream};
 use process_wrap::tokio::{TokioChildWrapper, TokioCommandWrap};
 use tokio::{
     io::AsyncRead,
     process::{ChildStdin, ChildStdout},
 };
 
-use super::IntoTransport;
-use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
+use super::{IntoTransport, Transport};
+use crate::service::ServiceRole;
 
 pub(crate) fn child_process(
     mut child: Box<dyn TokioChildWrapper>,
@@ -94,13 +93,8 @@ impl TokioChildProcess {
 }
 
 impl<R: ServiceRole> IntoTransport<R, std::io::Error, ()> for TokioChildProcess {
-    fn into_transport(
-        self,
-    ) -> (
-        impl Sink<TxJsonRpcMessage<R>, Error = std::io::Error> + Send + 'static,
-        impl Stream<Item = RxJsonRpcMessage<R>> + Send + 'static,
-    ) {
-        IntoTransport::<R, std::io::Error, super::io::TransportAdapterAsyncRW>::into_transport(
+    fn into_transport(self) -> impl Transport<R, Error = std::io::Error> + 'static {
+        IntoTransport::<R, std::io::Error, super::async_rw::TransportAdapterAsyncRW>::into_transport(
             self.split(),
         )
     }

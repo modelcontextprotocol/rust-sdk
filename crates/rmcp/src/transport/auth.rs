@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -12,8 +13,41 @@ use oauth2::{
 use reqwest::{Client as HttpClient, IntoUrl, StatusCode, Url, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error};
+
+/// sse client with oauth2 authorization
+#[derive(Clone)]
+pub struct AuthClient<C> {
+    pub http_client: C,
+    pub auth_manager: Arc<Mutex<AuthorizationManager>>,
+}
+
+impl<C: std::fmt::Debug> std::fmt::Debug for AuthClient<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizedClient")
+            .field("http_client", &self.http_client)
+            .field("auth_manager", &"...")
+            .finish()
+    }
+}
+
+impl<C> AuthClient<C> {
+    /// create new authorized sse client
+    pub fn new(http_client: C, auth_manager: AuthorizationManager) -> Self {
+        Self {
+            http_client,
+            auth_manager: Arc::new(Mutex::new(auth_manager)),
+        }
+    }
+}
+
+impl<C> AuthClient<C> {
+    pub fn get_access_token(&self) -> impl Future<Output = Result<String, AuthError>> + Send {
+        let auth_manager = self.auth_manager.clone();
+        async move { auth_manager.lock().await.get_access_token().await }
+    }
+}
 
 /// Auth error
 #[derive(Debug, Error)]
@@ -70,6 +104,9 @@ pub struct AuthorizationMetadata {
     pub issuer: Option<String>,
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
+    // allow additional fields
+    #[serde(flatten)]
+    pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
 /// oauth2 client config
@@ -100,6 +137,7 @@ type OAuthClient = oauth2::Client<
     oauth2::EndpointNotSet,
     oauth2::EndpointSet,
 >;
+type Credentials = (String, Option<OAuthTokenResponse>);
 
 /// oauth2 auth manager
 pub struct AuthorizationManager {
@@ -124,9 +162,12 @@ pub struct ClientRegistrationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientRegistrationResponse {
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret: Option<String>,
     pub client_name: String,
     pub redirect_uris: Vec<String>,
+    // allow additional fields
+    #[serde(flatten)]
+    pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
 impl AuthorizationManager {
@@ -191,8 +232,20 @@ impl AuthorizationManager {
                 issuer: None,
                 jwks_uri: None,
                 scopes_supported: None,
+                additional_fields: HashMap::new(),
             })
         }
+    }
+
+    /// get client id and credentials
+    pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
+        let credentials = self.credentials.read().await;
+        let client_id = self
+            .oauth_client
+            .as_ref()
+            .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?
+            .client_id();
+        Ok((client_id.to_string(), credentials.clone()))
     }
 
     /// configure oauth2 client with client credentials
@@ -287,6 +340,7 @@ impl AuthorizationManager {
                 status, error_text
             )));
         }
+
         debug!("registration response: {:?}", response);
         let reg_response = match response.json::<ClientRegistrationResponse>().await {
             Ok(response) => response,
@@ -301,13 +355,25 @@ impl AuthorizationManager {
 
         let config = OAuthClientConfig {
             client_id: reg_response.client_id,
-            client_secret: Some(reg_response.client_secret),
+            client_secret: reg_response.client_secret,
             redirect_uri: redirect_uri.to_string(),
             scopes: vec![],
         };
 
         self.configure_client(config.clone())?;
         Ok(config)
+    }
+
+    /// use provided client id to configure oauth2 client instead of dynamic registration
+    /// this is useful when you have a stored client id from previous registration
+    pub fn configure_client_id(&mut self, client_id: &str) -> Result<(), AuthError> {
+        let config = OAuthClientConfig {
+            client_id: client_id.to_string(),
+            client_secret: None,
+            scopes: vec![],
+            redirect_uri: self.base_url.to_string(),
+        };
+        self.configure_client(config)
     }
 
     /// generate authorization url
@@ -513,6 +579,11 @@ impl AuthorizationSession {
         })
     }
 
+    /// get client_id and credentials
+    pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
+        self.auth_manager.get_credentials().await
+    }
+
     /// get authorization url
     pub fn get_authorization_url(&self) -> &str {
         &self.auth_url
@@ -590,7 +661,52 @@ impl OAuthState {
         if let Some(client) = client {
             manager.with_client(client)?;
         }
+
         Ok(OAuthState::Unauthorized(manager))
+    }
+
+    /// Get client_id and OAuth credentials
+    pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
+        // return client_id and credentials
+        match self {
+            OAuthState::Unauthorized(manager) | OAuthState::Authorized(manager) => {
+                manager.get_credentials().await
+            }
+            OAuthState::Session(session) => session.get_credentials().await,
+            OAuthState::AuthorizedHttpClient(client) => client.auth_manager.get_credentials().await,
+        }
+    }
+
+    /// Manually set credentials and move into authorized state
+    /// Useful if you're caching credentials externally and wish to reuse them
+    pub async fn set_credentials(
+        &mut self,
+        client_id: &str,
+        credentials: OAuthTokenResponse,
+    ) -> Result<(), AuthError> {
+        if let OAuthState::Unauthorized(manager) = self {
+            let mut manager = std::mem::replace(
+                manager,
+                AuthorizationManager::new("http://localhost").await?,
+            );
+
+            // write credentials
+            *manager.credentials.write().await = Some(credentials);
+
+            // discover metadata
+            let metadata = manager.discover_metadata().await?;
+            manager.metadata = Some(metadata);
+
+            // set client id and secret
+            manager.configure_client_id(client_id)?;
+
+            *self = OAuthState::Authorized(manager);
+            Ok(())
+        } else {
+            Err(AuthError::InternalError(
+                "Cannot set credentials in this state".to_string(),
+            ))
+        }
     }
 
     /// start authorization
@@ -713,6 +829,13 @@ impl OAuthState {
             OAuthState::AuthorizedHttpClient(_) => {
                 Err(AuthError::InternalError("Already authorized".to_string()))
             }
+        }
+    }
+
+    pub fn into_authorization_manager(self) -> Option<AuthorizationManager> {
+        match self {
+            OAuthState::Authorized(manager) => Some(manager),
+            _ => None,
         }
     }
 }

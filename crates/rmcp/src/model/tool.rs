@@ -10,6 +10,7 @@ use super::JsonObject;
 /// A tool that can be used by a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Tool {
     /// The name of the tool
     pub name: Cow<'static, str>,
@@ -18,6 +19,7 @@ pub struct Tool {
     pub description: Option<Cow<'static, str>>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Arc<JsonObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotations>,
 }
@@ -32,13 +34,16 @@ pub struct Tool {
 /// received from untrusted servers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ToolAnnotations {
     /// A human-readable title for the tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
     /// If true, the tool does not modify its environment.
     ///
     /// Default: false
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub read_only_hint: Option<bool>,
 
     /// If true, the tool may perform destructive updates to its environment.
@@ -48,6 +53,7 @@ pub struct ToolAnnotations {
     ///
     /// Default: true
     /// A human-readable description of the tool's purpose.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub destructive_hint: Option<bool>,
 
     /// If true, calling the tool repeatedly with the same arguments
@@ -56,6 +62,7 @@ pub struct ToolAnnotations {
     /// (This property is meaningful only when `readOnlyHint == false`)
     ///
     /// Default: false.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotent_hint: Option<bool>,
 
     /// If true, this tool may interact with an "open world" of external
@@ -64,6 +71,7 @@ pub struct ToolAnnotations {
     /// of a memory tool is not.
     ///
     /// Default: true
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub open_world_hint: Option<bool>,
 }
 
