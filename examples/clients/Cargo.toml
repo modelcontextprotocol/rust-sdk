@@ -9,7 +9,8 @@ publish = false
 [dependencies]
 rmcp = { path = "../../crates/rmcp", features = [
     "client",
-    "transport-sse",
+    "transport-sse-client",
+    "reqwest",
     "transport-streamable-http-client",
     "transport-child-process",
     "tower",

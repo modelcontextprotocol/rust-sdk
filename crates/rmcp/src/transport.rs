@@ -93,11 +93,11 @@ pub mod io;
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-io")))]
 pub use io::stdio;
 
-#[cfg(feature = "__transport-sse")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__transport-sse")))]
+#[cfg(feature = "transport-sse-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-client")))]
 pub mod sse_client;
-#[cfg(feature = "__transport-sse")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__transport-sse")))]
+#[cfg(feature = "transport-sse-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-client")))]
 pub use sse_client::SseClientTransport;
 
 #[cfg(feature = "transport-sse-server")]
@@ -107,15 +107,15 @@ pub mod sse_server;
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
 pub use sse_server::SseServer;
 
-#[cfg(feature = "__auth")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__auth")))]
+#[cfg(feature = "auth")]
+#[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub mod auth;
-#[cfg(feature = "__auth")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__auth")))]
+#[cfg(feature = "auth")]
+#[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient};
 
 // #[cfg(feature = "transport-ws")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-ws")))]
+// #[cfg_attr(docsrs, doc(cfg(feature = "transport-ws")))]
 // pub mod ws;
 #[cfg(feature = "transport-streamable-http-server-session")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server-session")))]
@@ -124,11 +124,11 @@ pub mod streamable_http_server;
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server")))]
 pub use streamable_http_server::axum::StreamableHttpServer;
 
-#[cfg(feature = "__transport-streamable-http-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__transport-streamable-http-client")))]
+#[cfg(feature = "transport-streamable-http-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]
 pub mod streamable_http_client;
-#[cfg(feature = "__transport-streamable-http-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__transport-streamable-http-client")))]
+#[cfg(feature = "transport-streamable-http-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]
 pub use streamable_http_client::StreamableHttpClientTransport;
 
 /// Common use codes

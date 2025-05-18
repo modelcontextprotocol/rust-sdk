@@ -45,7 +45,8 @@ impl McpServerTransportConfig {
     pub async fn start(&self) -> Result<RunningService<RoleClient, ()>> {
         let client = match self {
             McpServerTransportConfig::Sse { url } => {
-                let transport = rmcp::transport::sse::SseTransport::start(url).await?;
+                let transport =
+                    rmcp::transport::sse_client::SseClientTransport::start(url.to_owned()).await?;
                 ().serve(transport).await?
             }
             McpServerTransportConfig::Stdio {

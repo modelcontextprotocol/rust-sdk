@@ -26,16 +26,10 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     Client(E),
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,
-    #[error("Url error: {0}")]
-    Url(#[from] url::ParseError),
     #[error("Unexpected content type: {0:?}")]
     UnexpectedContentType(Option<HeaderValue>),
-    #[error("Tokio join error: {0}")]
-    TokioJoinError(#[from] tokio::task::JoinError),
-    #[error("Transport terminated")]
-    TransportTerminated,
-    #[cfg(feature = "__auth")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "__auth")))]
+    #[cfg(feature = "auth")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
 }

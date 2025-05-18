@@ -42,8 +42,8 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Deserialize(#[from] serde_json::Error),
     #[error("Transport channel closed")]
     TransportChannelClosed,
-    #[cfg(feature = "__auth")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "__auth")))]
+    #[cfg(feature = "auth")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
 }

@@ -1,7 +1,7 @@
-#[cfg(feature = "__transport-streamable-http-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__transport-streamable-http-client")))]
+#[cfg(feature = "transport-streamable-http-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]
 mod streamable_http_client;
 
-#[cfg(feature = "__transport-sse")]
-#[cfg_attr(docsrs, doc(cfg(feature = "__transport-sse")))]
+#[cfg(feature = "transport-sse-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-client")))]
 mod sse_client;

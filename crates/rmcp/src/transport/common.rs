@@ -6,7 +6,7 @@ pub mod axum;
 
 pub mod http_header;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "__reqwest")]
 #[cfg_attr(docsrs, doc(cfg(feature = "reqwest")))]
 mod reqwest;
 

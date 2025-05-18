@@ -65,22 +65,26 @@ server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
 
 # reqwest http client
-reqwest = ["dep:reqwest"]
+__reqwest = ["dep:reqwest"]
 
+reqwest = ["__reqwest", "reqwest?/rustls-tls"]
+
+reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
+
+axum = ["dep:axum"]
 # SSE client
 client-side-sse = ["dep:sse-stream"]
 
-__transport-sse = ["reqwest", "client-side-sse", "dep:url", "transport-worker"]
+transport-sse-client = ["client-side-sse", "transport-worker"]
 
 transport-worker = ["dep:tokio-stream"]
 
-transport-sse = ["__transport-sse", "reqwest?/rustls-tls"]
-transport-sse-tls-no-provider = ["__transport-sse", "reqwest?/rustls-tls-no-provider"]
 
 # Streamable HTTP client
-__transport-streamable-http-client = ["reqwest", "client-side-sse", "transport-worker", "dep:url"]
-transport-streamable-http-client = ["__transport-streamable-http-client", "reqwest?/rustls-tls"]
-transport-streamable-http-client-tls-no-provider = ["__transport-streamable-http-client", "reqwest?/rustls-tls-no-provider"]
+transport-streamable-http-client = [
+    "client-side-sse",
+    "transport-worker",
+]
 
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
@@ -88,14 +92,14 @@ transport-io = ["transport-async-rw", "tokio/io-std"]
 transport-child-process = ["transport-async-rw", "tokio/process"]
 transport-sse-server = [
     "transport-async-rw",
-    "dep:axum",
+    "axum",
     "dep:rand",
     "dep:tokio-stream",
     "uuid",
 ]
 transport-streamable-http-server = [
     "transport-streamable-http-server-session",
-    "dep:axum",
+    "axum",
     "uuid",
 ]
 transport-streamable-http-server-session = [
@@ -104,9 +108,7 @@ transport-streamable-http-server-session = [
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
-__auth = ["dep:oauth2", "dep:reqwest", "dep:url"]
-auth = ["__auth", "reqwest?/rustls-tls"]
-auth-tls-no-provider = ["auth", "reqwest?/rustls-tls-no-provider"]
+auth = ["dep:oauth2", "__reqwest", "dep:url"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
@@ -127,12 +129,26 @@ path = "tests/test_tool_macros.rs"
 
 [[test]]
 name = "test_with_python"
-required-features = ["server", "client", "transport-sse-server", "transport-sse", "transport-child-process"]
+required-features = [
+    "server",
+    "client",
+    "transport-sse-server",
+    "transport-sse-client",
+    "transport-child-process",
+]
 path = "tests/test_with_python.rs"
 
 [[test]]
 name = "test_with_js"
-required-features = ["server", "client", "transport-sse-server", "transport-child-process", "transport-streamable-http-server", "transport-streamable-http-client"]
+required-features = [
+    "server",
+    "client",
+    "transport-sse-server",
+    "transport-child-process",
+    "transport-streamable-http-server",
+    "transport-streamable-http-client",
+    "__reqwest",
+]
 path = "tests/test_with_js.rs"
 
 [[test]]
@@ -154,4 +170,3 @@ path = "tests/test_message_protocol.rs"
 name = "test_message_schema"
 required-features = ["server", "client", "schemars"]
 path = "tests/test_message_schema.rs"
-
