@@ -13,8 +13,41 @@ use oauth2::{
 use reqwest::{Client as HttpClient, IntoUrl, StatusCode, Url, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error};
+
+/// sse client with oauth2 authorization
+#[derive(Clone)]
+pub struct AuthClient<C> {
+    pub http_client: C,
+    pub auth_manager: Arc<Mutex<AuthorizationManager>>,
+}
+
+impl<C: std::fmt::Debug> std::fmt::Debug for AuthClient<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizedClient")
+            .field("http_client", &self.http_client)
+            .field("auth_manager", &"...")
+            .finish()
+    }
+}
+
+impl<C> AuthClient<C> {
+    /// create new authorized sse client
+    pub fn new(http_client: C, auth_manager: AuthorizationManager) -> Self {
+        Self {
+            http_client,
+            auth_manager: Arc::new(Mutex::new(auth_manager)),
+        }
+    }
+}
+
+impl<C> AuthClient<C> {
+    pub fn get_access_token(&self) -> impl Future<Output = Result<String, AuthError>> + Send {
+        let auth_manager = self.auth_manager.clone();
+        async move { auth_manager.lock().await.get_access_token().await }
+    }
+}
 
 /// Auth error
 #[derive(Debug, Error)]
@@ -796,6 +829,13 @@ impl OAuthState {
             OAuthState::AuthorizedHttpClient(_) => {
                 Err(AuthError::InternalError("Already authorized".to_string()))
             }
+        }
+    }
+
+    pub fn into_authorization_manager(self) -> Option<AuthorizationManager> {
+        match self {
+            OAuthState::Authorized(manager) => Some(manager),
+            _ => None,
         }
     }
 }

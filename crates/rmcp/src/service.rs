@@ -1,4 +1,4 @@
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 
 use crate::{
@@ -9,20 +9,26 @@ use crate::{
         JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta, NumberOrString, ProgressToken,
         RequestId, ServerJsonRpcMessage,
     },
-    transport::IntoTransport,
+    transport::{IntoTransport, Transport},
 };
 #[cfg(feature = "client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 mod client;
 #[cfg(feature = "client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 pub use client::*;
 #[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 mod server;
 #[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub use server::*;
 #[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 mod tower;
 use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use tower::*;
 use tracing::instrument;
 #[derive(Error, Debug)]
@@ -30,8 +36,10 @@ use tracing::instrument;
 pub enum ServiceError {
     #[error("Mcp error: {0}")]
     McpError(McpError),
-    #[error("Transport error: {0}")]
-    Transport(std::io::Error),
+    #[error("Transport send error: {0}")]
+    TransportSend(Box<dyn std::error::Error + Send + Sync>),
+    #[error("Transport closed")]
+    TransportClosed,
     #[error("Unexpected response type")]
     UnexpectedResponse,
     #[error("task cancelled for reason {}", reason.as_deref().unwrap_or("<unknown>"))]
@@ -92,8 +100,6 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
         &self,
         notification: R::PeerNot,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_;
-    fn get_peer(&self) -> Option<Peer<R>>;
-    fn set_peer(&mut self, peer: Peer<R>);
     fn get_info(&self) -> R::Info;
 }
 
@@ -142,14 +148,6 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
         DynService::handle_notification(self.as_ref(), notification)
     }
 
-    fn get_peer(&self) -> Option<Peer<R>> {
-        DynService::get_peer(self.as_ref())
-    }
-
-    fn set_peer(&mut self, peer: Peer<R>) {
-        DynService::set_peer(self.as_mut(), peer)
-    }
-
     fn get_info(&self) -> R::Info {
         DynService::get_info(self.as_ref())
     }
@@ -162,8 +160,6 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         context: RequestContext<R>,
     ) -> BoxFuture<Result<R::Resp, McpError>>;
     fn handle_notification(&self, notification: R::PeerNot) -> BoxFuture<Result<(), McpError>>;
-    fn get_peer(&self) -> Option<Peer<R>>;
-    fn set_peer(&mut self, peer: Peer<R>);
     fn get_info(&self) -> R::Info;
 }
 
@@ -177,12 +173,6 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
     fn handle_notification(&self, notification: R::PeerNot) -> BoxFuture<Result<(), McpError>> {
         Box::pin(self.handle_notification(notification))
-    }
-    fn get_peer(&self) -> Option<Peer<R>> {
-        self.get_peer()
-    }
-    fn set_peer(&mut self, peer: Peer<R>) {
-        self.set_peer(peer)
     }
     fn get_info(&self) -> R::Info {
         self.get_info()
@@ -249,9 +239,7 @@ impl<R: ServiceRole> RequestHandle<R> {
     pub async fn await_response(self) -> Result<R::PeerResp, ServiceError> {
         if let Some(timeout) = self.options.timeout {
             let timeout_result = tokio::time::timeout(timeout, async move {
-                self.rx
-                    .await
-                    .map_err(|_e| ServiceError::Transport(std::io::Error::other("disconnected")))?
+                self.rx.await.map_err(|_e| ServiceError::TransportClosed)?
             })
             .await;
             match timeout_result {
@@ -272,9 +260,7 @@ impl<R: ServiceRole> RequestHandle<R> {
                 }
             }
         } else {
-            self.rx
-                .await
-                .map_err(|_e| ServiceError::Transport(std::io::Error::other("disconnected")))?
+            self.rx.await.map_err(|_e| ServiceError::TransportClosed)?
         }
     }
 
@@ -367,12 +353,8 @@ impl<R: ServiceRole> Peer<R> {
                 responder,
             })
             .await
-            .map_err(|_m| {
-                ServiceError::Transport(std::io::Error::other("disconnected: receiver dropped"))
-            })?;
-        receiver.await.map_err(|_e| {
-            ServiceError::Transport(std::io::Error::other("disconnected: responder dropped"))
-        })?
+            .map_err(|_m| ServiceError::TransportClosed)?;
+        receiver.await.map_err(|_e| ServiceError::TransportClosed)?
     }
     pub async fn send_request(&self, request: R::Req) -> Result<R::PeerResp, ServiceError> {
         self.send_request_with_option(request, PeerRequestOptions::no_options())
@@ -410,7 +392,7 @@ impl<R: ServiceRole> Peer<R> {
                 responder,
             })
             .await
-            .map_err(|_m| ServiceError::Transport(std::io::Error::other("disconnected")))?;
+            .map_err(|_m| ServiceError::TransportClosed)?;
         Ok(RequestHandle {
             id,
             rx: receiver,
@@ -421,6 +403,10 @@ impl<R: ServiceRole> Peer<R> {
     }
     pub fn peer_info(&self) -> &R::PeerInfo {
         &self.info
+    }
+
+    pub fn is_transport_closed(&self) -> bool {
+        self.tx.is_closed()
     }
 }
 
@@ -459,10 +445,11 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug)]
 pub enum QuitReason {
     Cancelled,
     Closed,
+    JoinError(tokio::task::JoinError),
 }
 
 /// Request execution context
@@ -511,7 +498,7 @@ where
 
 #[instrument(skip_all)]
 async fn serve_inner<R, S, T, E, A>(
-    mut service: S,
+    service: S,
     transport: T,
     peer: Peer<R>,
     mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
@@ -523,7 +510,6 @@ where
     T: IntoTransport<R, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
-    use futures::{SinkExt, StreamExt};
     const SINK_PROXY_BUFFER_SIZE: usize = 64;
     let (sink_proxy_tx, mut sink_proxy_rx) =
         tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
@@ -534,8 +520,8 @@ where
         tracing::info!(?peer_info, "Service initialized as server");
     }
 
-    service.set_peer(peer.clone());
-    let mut local_responder_pool = HashMap::new();
+    let mut local_responder_pool =
+        HashMap::<RequestId, Responder<Result<R::PeerResp, ServiceError>>>::new();
     let mut local_ct_pool = HashMap::<RequestId, CancellationToken>::new();
     let shared_service = Arc::new(service);
     // for return
@@ -546,29 +532,42 @@ where
     let serve_loop_ct = ct.child_token();
     let peer_return: Peer<R> = peer.clone();
     let handle = tokio::spawn(async move {
-        let (mut sink, mut stream) = transport.into_transport();
-        let mut sink = std::pin::pin!(sink);
-        let mut stream = std::pin::pin!(stream);
+        let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
+        let mut send_task_set = tokio::task::JoinSet::<SendTaskResult<E>>::new();
         #[derive(Debug)]
-        enum Event<P, R, T> {
-            ProxyMessage(P),
-            PeerMessage(R),
-            ToSink(T),
+        enum SendTaskResult<E> {
+            Request {
+                id: RequestId,
+                result: Result<(), E>,
+            },
+            Notification {
+                responder: Responder<Result<(), ServiceError>>,
+                cancellation_param: Option<CancelledNotificationParam>,
+                result: Result<(), E>,
+            },
         }
+        #[derive(Debug)]
+        enum Event<R: ServiceRole, E> {
+            ProxyMessage(PeerSinkMessage<R>),
+            PeerMessage(RxJsonRpcMessage<R>),
+            ToSink(TxJsonRpcMessage<R>),
+            SendTaskResult(SendTaskResult<E>),
+        }
+
         let quit_reason = loop {
             let evt = if let Some(m) = batch_messages.pop_front() {
                 Event::PeerMessage(m)
             } else {
                 tokio::select! {
-                    m = sink_proxy_rx.recv() => {
+                    m = sink_proxy_rx.recv(), if !sink_proxy_rx.is_closed() => {
                         if let Some(m) = m {
                             Event::ToSink(m)
                         } else {
                             continue
                         }
                     }
-                    m = stream.next() => {
+                    m = transport.receive() => {
                         if let Some(m) = m {
                             Event::PeerMessage(m)
                         } else {
@@ -577,11 +576,26 @@ where
                             break QuitReason::Closed
                         }
                     }
-                    m = peer_rx.recv() => {
+                    m = peer_rx.recv(), if !peer_rx.is_closed() => {
                         if let Some(m) = m {
                             Event::ProxyMessage(m)
                         } else {
                             continue
+                        }
+                    }
+                    m = send_task_set.join_next(), if !send_task_set.is_empty() => {
+                        let Some(result) = m else {
+                            continue
+                        };
+                        match result {
+                            Err(e) => {
+                                // join error, which is serious, we should quit.
+                                tracing::error!(%e, "send request task encounter a tokio join error");
+                                break QuitReason::JoinError(e)
+                            }
+                            Ok(result) => {
+                                Event::SendTaskResult(result)
+                            }
                         }
                     }
                     _ = serve_loop_ct.cancelled() => {
@@ -593,6 +607,33 @@ where
 
             tracing::trace!(?evt, "new event");
             match evt {
+                Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
+                    if let Err(e) = result {
+                        if let Some(responder) = local_responder_pool.remove(&id) {
+                            let _ = responder.send(Err(ServiceError::TransportSend(Box::new(e))));
+                        }
+                    }
+                }
+                Event::SendTaskResult(SendTaskResult::Notification {
+                    responder,
+                    result,
+                    cancellation_param,
+                }) => {
+                    let response = if let Err(e) = result {
+                        Err(ServiceError::TransportSend(Box::new(e)))
+                    } else {
+                        Ok(())
+                    };
+                    let _ = responder.send(response);
+                    if let Some(param) = cancellation_param {
+                        if let Some(responder) = local_responder_pool.remove(&param.request_id) {
+                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
+                            let _response_result = responder.send(Err(ServiceError::Cancelled {
+                                reason: param.reason.clone(),
+                            }));
+                        }
+                    }
+                }
                 // response and error
                 Event::ToSink(m) => {
                     if let Some(id) = match &m {
@@ -603,10 +644,13 @@ where
                         if let Some(ct) = local_ct_pool.remove(id) {
                             ct.cancel();
                         }
-                        let send_result = sink.send(m).await;
-                        if let Err(error) = send_result {
-                            tracing::error!(%error, "fail to response message");
-                        }
+                        let send = transport.send(m);
+                        tokio::spawn(async move {
+                            let send_result = send.await;
+                            if let Err(error) = send_result {
+                                tracing::error!(%error, "fail to response message");
+                            }
+                        });
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Request {
@@ -615,14 +659,11 @@ where
                     responder,
                 }) => {
                     local_responder_pool.insert(id.clone(), responder);
-                    let send_result = sink
-                        .send(JsonRpcMessage::request(request, id.clone()))
-                        .await;
-                    if let Err(e) = send_result {
-                        if let Some(responder) = local_responder_pool.remove(&id) {
-                            let _ = responder
-                                .send(Err(ServiceError::Transport(std::io::Error::other(e))));
-                        }
+                    let send = transport.send(JsonRpcMessage::request(request, id.clone()));
+                    {
+                        let id = id.clone();
+                        send_task_set
+                            .spawn(send.map(move |r| SendTaskResult::Request { id, result: r }));
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Notification {
@@ -638,21 +679,12 @@ where
                         }
                         Err(notification) => notification,
                     };
-                    let send_result = sink.send(JsonRpcMessage::notification(notification)).await;
-                    let response = if let Err(e) = send_result {
-                        Err(ServiceError::Transport(std::io::Error::other(e)))
-                    } else {
-                        Ok(())
-                    };
-                    let _ = responder.send(response);
-                    if let Some(param) = cancellation_param {
-                        if let Some(responder) = local_responder_pool.remove(&param.request_id) {
-                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
-                            let _response_result = responder.send(Err(ServiceError::Cancelled {
-                                reason: param.reason.clone(),
-                            }));
-                        }
-                    }
+                    let send = transport.send(JsonRpcMessage::notification(notification));
+                    send_task_set.spawn(send.map(move |result| SendTaskResult::Notification {
+                        responder,
+                        cancellation_param,
+                        result,
+                    }));
                 }
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
                     id, request, ..
@@ -749,7 +781,7 @@ where
                 }
             }
         };
-        let sink_close_result = sink.close().await;
+        let sink_close_result = transport.close().await;
         if let Err(e) = sink_close_result {
             tracing::error!(%e, "fail to close sink");
         }

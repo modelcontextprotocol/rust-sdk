@@ -89,14 +89,6 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         Ok(())
     }
 
-    fn get_peer(&self) -> Option<Peer<RoleServer>> {
-        self.get_peer()
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleServer>) {
-        self.set_peer(peer);
-    }
-
     fn get_info(&self) -> <RoleServer as ServiceRole>::Info {
         self.get_info()
     }
