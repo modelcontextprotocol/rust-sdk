@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rmcp::{model::CallToolRequestParam, service::ServiceExt, transport::TokioChildProcess};
+use rmcp::{
+    model::CallToolRequestParam,
+    service::ServiceExt,
+    transport::{ConfigureCommandExt, TokioChildProcess},
+};
 use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -20,9 +24,11 @@ async fn main() -> Result<()> {
     for idx in 0..10 {
         let service = ()
             .into_dyn()
-            .serve(TokioChildProcess::new(
-                Command::new("uvx").arg("mcp-server-git"),
-            )?)
+            .serve(TokioChildProcess::new(Command::new("uvx").configure(
+                |cmd| {
+                    cmd.arg("mcp-client-git");
+                },
+            ))?)
             .await?;
         client_list.insert(idx, service);
     }

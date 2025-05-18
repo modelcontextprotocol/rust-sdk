@@ -1,4 +1,10 @@
-use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    io,
+    net::{Ipv6Addr, SocketAddr, SocketAddrV6},
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
     Json, Router,
@@ -15,30 +21,28 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use super::session::{
-    EventId, HEADER_LAST_EVENT_ID, Session, SessionTransport, StreamableHttpMessageReceiver,
-};
+use super::session::{EventId, SessionHandle, SessionWorker, StreamableHttpMessageReceiver};
 use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
-    transport::{
-        common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
-        streamable_http_server::session::HEADER_SESSION_ID,
+    transport::common::{
+        axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
+        http_header::{HEADER_LAST_EVENT_ID, HEADER_SESSION_ID},
     },
 };
-type SessionManager = Arc<tokio::sync::RwLock<HashMap<SessionId, Session>>>;
+type SessionManager = Arc<tokio::sync::RwLock<HashMap<SessionId, SessionHandle>>>;
 
 #[derive(Clone)]
 struct App {
     session_manager: SessionManager,
-    transport_tx: tokio::sync::mpsc::UnboundedSender<SessionTransport>,
+    transport_tx: tokio::sync::mpsc::UnboundedSender<SessionWorker>,
     sse_ping_interval: Duration,
 }
 
 impl App {
     pub fn new(
         sse_ping_interval: Duration,
-    ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<SessionTransport>) {
+    ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<SessionWorker>) {
         let (transport_tx, transport_rx) = tokio::sync::mpsc::unbounded_channel();
         (
             Self {
@@ -82,7 +86,7 @@ async fn post_handler(
             let session = sm
                 .get(session_id)
                 .ok_or((StatusCode::NOT_FOUND, "session not found").into_response())?;
-            session.handle().clone()
+            session.clone()
         };
         // inject request part
         message.insert_extension(parts);
@@ -138,7 +142,7 @@ async fn post_handler(
             return Err((StatusCode::GONE, "session terminated").into_response());
         };
 
-        let response = session.handle().initialize(message).await.map_err(|e| {
+        let response = session.initialize(message).await.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("fail to initialize: {e}"),
@@ -169,21 +173,24 @@ async fn get_handler(
         let last_event_id = header_map
             .get(HEADER_LAST_EVENT_ID)
             .and_then(|v| v.to_str().ok());
-        match last_event_id {
-            Some(last_event_id) => {
-                let last_event_id = last_event_id.parse::<EventId>().map_err(|e| {
-                    (StatusCode::BAD_REQUEST, format!("invalid event_id {e}")).into_response()
-                })?;
-                let sm = app.session_manager.read().await;
-                let session = sm.get(session_id).ok_or_else(|| {
+        let session = {
+            let sm = app.session_manager.read().await;
+            sm.get(session_id)
+                .ok_or_else(|| {
                     (
                         StatusCode::NOT_FOUND,
                         format!("session {session_id} not found"),
                     )
                         .into_response()
+                })?
+                .clone()
+        };
+        match last_event_id {
+            Some(last_event_id) => {
+                let last_event_id = last_event_id.parse::<EventId>().map_err(|e| {
+                    (StatusCode::BAD_REQUEST, format!("invalid event_id {e}")).into_response()
                 })?;
-                let handle = session.handle();
-                let receiver = handle.resume(last_event_id).await.map_err(|e| {
+                let receiver = session.resume(last_event_id).await.map_err(|e| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("resume error {e}"),
@@ -194,16 +201,7 @@ async fn get_handler(
                 Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(app.sse_ping_interval)))
             }
             None => {
-                let sm = app.session_manager.read().await;
-                let session = sm.get(session_id).ok_or_else(|| {
-                    (
-                        StatusCode::NOT_FOUND,
-                        format!("session {session_id} not found"),
-                    )
-                        .into_response()
-                })?;
-                let handle = session.handle();
-                let receiver = handle.establish_common_channel().await.map_err(|e| {
+                let receiver = session.establish_common_channel().await.map_err(|e| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("establish common channel error {e}"),
@@ -227,18 +225,19 @@ async fn delete_handler(
         let session_id = session_id
             .to_str()
             .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()).into_response())?;
-        let mut sm = app.session_manager.write().await;
-        let session = sm
-            .remove(session_id)
-            .ok_or((StatusCode::NOT_FOUND, "session not found").into_response())?;
-        let cancel_result = session.cancel().await.map_err(|e| {
+        let session = {
+            let mut sm = app.session_manager.write().await;
+            sm.remove(session_id)
+                .ok_or((StatusCode::NOT_FOUND, "session not found").into_response())?
+        };
+        session.close().await.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("fail to cancel session {session_id}: tokio join error: {e}"),
             )
                 .into_response()
         })?;
-        tracing::info!(session_id, ?cancel_result, "session deleted");
+        tracing::debug!(session_id, "session deleted");
         Ok(StatusCode::ACCEPTED)
     } else {
         Err((StatusCode::BAD_REQUEST, "missing session id").into_response())
@@ -252,10 +251,20 @@ pub struct StreamableHttpServerConfig {
     pub ct: CancellationToken,
     pub sse_keep_alive: Option<Duration>,
 }
+impl Default for StreamableHttpServerConfig {
+    fn default() -> Self {
+        Self {
+            bind: SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 80, 0, 0)),
+            path: "/".to_string(),
+            ct: CancellationToken::new(),
+            sse_keep_alive: None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct StreamableHttpServer {
-    transport_rx: tokio::sync::mpsc::UnboundedReceiver<SessionTransport>,
+    transport_rx: tokio::sync::mpsc::UnboundedReceiver<SessionWorker>,
     pub config: StreamableHttpServerConfig,
 }
 
@@ -263,9 +272,7 @@ impl StreamableHttpServer {
     pub async fn serve(bind: SocketAddr) -> io::Result<Self> {
         Self::serve_with_config(StreamableHttpServerConfig {
             bind,
-            path: "/".to_string(),
-            ct: CancellationToken::new(),
-            sse_keep_alive: None,
+            ..Default::default()
         })
         .await
     }
@@ -333,7 +340,7 @@ impl StreamableHttpServer {
         self.config.ct.cancel();
     }
 
-    pub async fn next_transport(&mut self) -> Option<SessionTransport> {
+    pub async fn next_transport(&mut self) -> Option<SessionWorker> {
         self.transport_rx.recv().await
     }
 }

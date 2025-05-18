@@ -1,0 +1,1490 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JsonRpcMessage_for_ServerRequest_and_ServerResult_and_ServerNotification",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/JsonRpcRequest_for_ServerRequest"
+    },
+    {
+      "$ref": "#/definitions/JsonRpcResponse_for_ServerResult"
+    },
+    {
+      "$ref": "#/definitions/JsonRpcNotification_for_ServerNotification"
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonRpcBatchRequestItem_for_ServerRequest_and_ServerNotification"
+      }
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/JsonRpcBatchResponseItem_for_ServerResult"
+      }
+    },
+    {
+      "$ref": "#/definitions/JsonRpcError"
+    }
+  ],
+  "definitions": {
+    "Annotated_for_RawContent": {
+      "type": "object",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "mimeType",
+            "type"
+          ],
+          "properties": {
+            "data": {
+              "description": "The base64-encoded image",
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "resource",
+            "type"
+          ],
+          "properties": {
+            "resource": {
+              "$ref": "#/definitions/ResourceContents"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "resource"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "data",
+            "mimeType",
+            "type"
+          ],
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "data": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "audio"
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Annotated_for_RawEmbeddedResource": {
+      "type": "object",
+      "required": [
+        "resource"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "$ref": "#/definitions/ResourceContents"
+        }
+      }
+    },
+    "Annotated_for_RawResource": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "required": [
+        "name",
+        "uri"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      }
+    },
+    "Annotated_for_RawResourceTemplate": {
+      "type": "object",
+      "required": [
+        "name",
+        "uriTemplate"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "uriTemplate": {
+          "type": "string"
+        }
+      }
+    },
+    "Annotations": {
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Role"
+          }
+        },
+        "priority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "CallToolResult": {
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated_for_RawContent"
+          }
+        },
+        "isError": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "CancelledNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/cancelled"
+    },
+    "CancelledNotificationParam": {
+      "type": "object",
+      "required": [
+        "requestId"
+      ],
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      }
+    },
+    "CompleteResult": {
+      "type": "object",
+      "required": [
+        "completion"
+      ],
+      "properties": {
+        "completion": {
+          "$ref": "#/definitions/CompletionInfo"
+        }
+      }
+    },
+    "CompletionInfo": {
+      "type": "object",
+      "required": [
+        "values"
+      ],
+      "properties": {
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ContextInclusion": {
+      "type": "string",
+      "enum": [
+        "allServers",
+        "none",
+        "thisServer"
+      ]
+    },
+    "CreateMessageRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "sampling/createMessage"
+    },
+    "CreateMessageRequestParam": {
+      "type": "object",
+      "required": [
+        "maxTokens",
+        "messages"
+      ],
+      "properties": {
+        "includeContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextInclusion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxTokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessage"
+          }
+        },
+        "metadata": true,
+        "modelPreferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelPreferences"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stopSequences": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "systemPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "temperature": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      }
+    },
+    "EmptyObject": {
+      "type": "object"
+    },
+    "ErrorData": {
+      "description": "Error information for JSON-RPC error responses.",
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "description": "The error type that occurred.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "data": {
+          "description": "Additional information about the error. The value of this member is defined by the sender (e.g. detailed error information, nested errors etc.)."
+        },
+        "message": {
+          "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
+          "type": "string"
+        }
+      }
+    },
+    "GetPromptResult": {
+      "type": "object",
+      "required": [
+        "messages"
+      ],
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PromptMessage"
+          }
+        }
+      }
+    },
+    "Implementation": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "InitializeResult": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "protocolVersion",
+        "serverInfo"
+      ],
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/ServerCapabilities"
+        },
+        "instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protocolVersion": {
+          "$ref": "#/definitions/ProtocolVersion"
+        },
+        "serverInfo": {
+          "$ref": "#/definitions/Implementation"
+        }
+      }
+    },
+    "JsonRpcBatchRequestItem_for_ServerRequest_and_ServerNotification": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/JsonRpcRequest_for_ServerRequest"
+        },
+        {
+          "$ref": "#/definitions/JsonRpcNotification_for_ServerNotification"
+        }
+      ]
+    },
+    "JsonRpcBatchResponseItem_for_ServerResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse_for_ServerResult"
+        },
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ]
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "required": [
+        "error",
+        "id",
+        "jsonrpc"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ErrorData"
+        },
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      }
+    },
+    "JsonRpcNotification_for_ServerNotification": {
+      "type": "object",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam"
+        },
+        {
+          "$ref": "#/definitions/Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam"
+        },
+        {
+          "$ref": "#/definitions/Notification_for_LoggingMessageNotificationMethod_and_LoggingMessageNotificationParam"
+        },
+        {
+          "$ref": "#/definitions/Notification_for_ResourceUpdatedNotificationMethod_and_ResourceUpdatedNotificationParam"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam_for_ResourceListChangedNotificationMethod"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam_for_ToolListChangedNotificationMethod"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam_for_PromptListChangedNotificationMethod"
+        }
+      ],
+      "required": [
+        "jsonrpc"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      }
+    },
+    "JsonRpcRequest_for_ServerRequest": {
+      "type": "object",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestNoParam_for_PingRequestMethod"
+        },
+        {
+          "$ref": "#/definitions/Request_for_CreateMessageRequestMethod_and_CreateMessageRequestParam"
+        },
+        {
+          "$ref": "#/definitions/RequestNoParam_for_ListRootsRequestMethod"
+        }
+      ],
+      "required": [
+        "id",
+        "jsonrpc"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        }
+      }
+    },
+    "JsonRpcResponse_for_ServerResult": {
+      "type": "object",
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "jsonrpc": {
+          "$ref": "#/definitions/JsonRpcVersion2_0"
+        },
+        "result": {
+          "$ref": "#/definitions/ServerResult"
+        }
+      }
+    },
+    "JsonRpcVersion2_0": {
+      "type": "string",
+      "format": "const",
+      "const": "2.0"
+    },
+    "ListPromptsResult": {
+      "type": "object",
+      "required": [
+        "prompts"
+      ],
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Prompt"
+          }
+        }
+      }
+    },
+    "ListResourceTemplatesResult": {
+      "type": "object",
+      "required": [
+        "resourceTemplates"
+      ],
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resourceTemplates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated_for_RawResourceTemplate"
+          }
+        }
+      }
+    },
+    "ListResourcesResult": {
+      "type": "object",
+      "required": [
+        "resources"
+      ],
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated_for_RawResource"
+          }
+        }
+      }
+    },
+    "ListRootsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "roots/list"
+    },
+    "ListToolsResult": {
+      "type": "object",
+      "required": [
+        "tools"
+      ],
+      "properties": {
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Tool"
+          }
+        }
+      }
+    },
+    "LoggingLevel": {
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "notice",
+        "warning",
+        "error",
+        "critical",
+        "alert",
+        "emergency"
+      ]
+    },
+    "LoggingMessageNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/message"
+    },
+    "LoggingMessageNotificationParam": {
+      "type": "object",
+      "required": [
+        "data",
+        "level"
+      ],
+      "properties": {
+        "data": true,
+        "level": {
+          "$ref": "#/definitions/LoggingLevel"
+        },
+        "logger": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ModelHint": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ModelPreferences": {
+      "type": "object",
+      "properties": {
+        "costPriority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "hints": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/ModelHint"
+          }
+        },
+        "intelligencePriority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "speedPriority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      }
+    },
+    "NotificationNoParam_for_PromptListChangedNotificationMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PromptListChangedNotificationMethod"
+        }
+      }
+    },
+    "NotificationNoParam_for_ResourceListChangedNotificationMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ResourceListChangedNotificationMethod"
+        }
+      }
+    },
+    "NotificationNoParam_for_ToolListChangedNotificationMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ToolListChangedNotificationMethod"
+        }
+      }
+    },
+    "Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CancelledNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CancelledNotificationParam"
+        }
+      }
+    },
+    "Notification_for_LoggingMessageNotificationMethod_and_LoggingMessageNotificationParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/LoggingMessageNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/LoggingMessageNotificationParam"
+        }
+      }
+    },
+    "Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ProgressNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ProgressNotificationParam"
+        }
+      }
+    },
+    "Notification_for_ResourceUpdatedNotificationMethod_and_ResourceUpdatedNotificationParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ResourceUpdatedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ResourceUpdatedNotificationParam"
+        }
+      }
+    },
+    "NumberOrString": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "PingRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "ping"
+    },
+    "ProgressNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/progress"
+    },
+    "ProgressNotificationParam": {
+      "type": "object",
+      "required": [
+        "progress",
+        "progressToken"
+      ],
+      "properties": {
+        "message": {
+          "description": "An optional message describing the current progress.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "progressToken": {
+          "$ref": "#/definitions/NumberOrString"
+        },
+        "total": {
+          "description": "Total number of items to process (or total progress required), if known",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Prompt": {
+      "description": "A prompt that can be used to generate text from a model",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "arguments": {
+          "description": "Optional arguments that can be passed to customize the prompt",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PromptArgument"
+          }
+        },
+        "description": {
+          "description": "Optional description of what the prompt does",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name of the prompt",
+          "type": "string"
+        }
+      }
+    },
+    "PromptArgument": {
+      "description": "Represents a prompt argument that can be passed to customize the prompt",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "description": {
+          "description": "A description of what the argument is used for",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The name of the argument",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether this argument is required",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "PromptListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/prompts/list_changed"
+    },
+    "PromptMessage": {
+      "description": "A message in a prompt conversation",
+      "type": "object",
+      "required": [
+        "content",
+        "role"
+      ],
+      "properties": {
+        "content": {
+          "description": "The content of the message",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PromptMessageContent"
+            }
+          ]
+        },
+        "role": {
+          "description": "The role of the message sender",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PromptMessageRole"
+            }
+          ]
+        }
+      }
+    },
+    "PromptMessageContent": {
+      "description": "Content types that can be included in prompt messages",
+      "oneOf": [
+        {
+          "description": "Plain text content",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Image content with base64-encoded data",
+          "type": "object",
+          "required": [
+            "data",
+            "mimeType",
+            "type"
+          ],
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "data": {
+              "description": "The base64-encoded image",
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Embedded server-side resource",
+          "type": "object",
+          "required": [
+            "resource",
+            "type"
+          ],
+          "properties": {
+            "resource": {
+              "$ref": "#/definitions/Annotated_for_RawEmbeddedResource"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "resource"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PromptMessageRole": {
+      "description": "Represents the role of a message sender in a prompt conversation",
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "PromptsCapability": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "ProtocolVersion": {
+      "type": "string"
+    },
+    "ReadResourceResult": {
+      "type": "object",
+      "required": [
+        "contents"
+      ],
+      "properties": {
+        "contents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResourceContents"
+          }
+        }
+      }
+    },
+    "RequestNoParam_for_ListRootsRequestMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListRootsRequestMethod"
+        }
+      }
+    },
+    "RequestNoParam_for_PingRequestMethod": {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PingRequestMethod"
+        }
+      }
+    },
+    "Request_for_CreateMessageRequestMethod_and_CreateMessageRequestParam": {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CreateMessageRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CreateMessageRequestParam"
+        }
+      }
+    },
+    "ResourceContents": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "text",
+            "uri"
+          ],
+          "properties": {
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "blob",
+            "uri"
+          ],
+          "properties": {
+            "blob": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uri": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "ResourceListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/resources/list_changed"
+    },
+    "ResourceUpdatedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/resources/updated"
+    },
+    "ResourceUpdatedNotificationParam": {
+      "type": "object",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "ResourcesCapability": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "subscribe": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "SamplingMessage": {
+      "type": "object",
+      "required": [
+        "content",
+        "role"
+      ],
+      "properties": {
+        "content": {
+          "$ref": "#/definitions/Annotated_for_RawContent"
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        }
+      }
+    },
+    "ServerCapabilities": {
+      "title": "Builder",
+      "description": "```rust # use rmcp::model::ServerCapabilities; let cap = ServerCapabilities::builder() .enable_logging() .enable_experimental() .enable_prompts() .enable_resources() .enable_tools() .enable_tool_list_changed() .build(); ```",
+      "type": "object",
+      "properties": {
+        "completions": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "experimental": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "logging": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "prompts": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PromptsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resources": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourcesCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ServerResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/InitializeResult"
+        },
+        {
+          "$ref": "#/definitions/CompleteResult"
+        },
+        {
+          "$ref": "#/definitions/GetPromptResult"
+        },
+        {
+          "$ref": "#/definitions/ListPromptsResult"
+        },
+        {
+          "$ref": "#/definitions/ListResourcesResult"
+        },
+        {
+          "$ref": "#/definitions/ListResourceTemplatesResult"
+        },
+        {
+          "$ref": "#/definitions/ReadResourceResult"
+        },
+        {
+          "$ref": "#/definitions/CallToolResult"
+        },
+        {
+          "$ref": "#/definitions/ListToolsResult"
+        },
+        {
+          "$ref": "#/definitions/EmptyObject"
+        }
+      ]
+    },
+    "Tool": {
+      "description": "A tool that can be used by a model.",
+      "type": "object",
+      "required": [
+        "inputSchema",
+        "name"
+      ],
+      "properties": {
+        "annotations": {
+          "description": "Optional additional tool information.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolAnnotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "A description of what the tool does",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputSchema": {
+          "description": "A JSON Schema object defining the expected parameters for the tool",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "The name of the tool",
+          "type": "string"
+        }
+      }
+    },
+    "ToolAnnotations": {
+      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
+      "type": "object",
+      "properties": {
+        "destructiveHint": {
+          "description": "If true, the tool may perform destructive updates to its environment. If false, the tool performs only additive updates.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: true A human-readable description of the tool's purpose.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "idempotentHint": {
+          "description": "If true, calling the tool repeatedly with the same arguments will have no additional effect on the its environment.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: false.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "openWorldHint": {
+          "description": "If true, this tool may interact with an \"open world\" of external entities. If false, the tool's domain of interaction is closed. For example, the world of a web search tool is open, whereas that of a memory tool is not.\n\nDefault: true",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "readOnlyHint": {
+          "description": "If true, the tool does not modify its environment.\n\nDefault: false",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "A human-readable title for the tool.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ToolListChangedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/tools/list_changed"
+    },
+    "ToolsCapability": {
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

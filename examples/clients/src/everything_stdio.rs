@@ -3,7 +3,7 @@ use rmcp::{
     ServiceExt,
     model::{CallToolRequestParam, GetPromptRequestParam, ReadResourceRequestParam},
     object,
-    transport::TokioChildProcess,
+    transport::{ConfigureCommandExt, TokioChildProcess},
 };
 use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -21,11 +21,11 @@ async fn main() -> Result<()> {
 
     // Start server
     let service = ()
-        .serve(TokioChildProcess::new(
-            Command::new("npx")
-                .arg("-y")
-                .arg("@modelcontextprotocol/server-everything"),
-        )?)
+        .serve(TokioChildProcess::new(Command::new("npx").configure(
+            |cmd| {
+                cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
+            },
+        ))?)
         .await?;
 
     // Initialize

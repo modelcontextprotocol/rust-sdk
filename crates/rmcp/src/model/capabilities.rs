@@ -8,6 +8,7 @@ pub type ExperimentalCapabilities = BTreeMap<String, JsonObject>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
@@ -15,6 +16,7 @@ pub struct PromptsCapability {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResourcesCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<bool>,
@@ -24,6 +26,7 @@ pub struct ResourcesCapability {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ToolsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
@@ -31,6 +34,7 @@ pub struct ToolsCapability {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RootsCapabilities {
     pub list_changed: Option<bool>,
 }
@@ -46,6 +50,7 @@ pub struct RootsCapabilities {
 ///     .build();
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ClientCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
@@ -70,6 +75,7 @@ pub struct ClientCapabilities {
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
