@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use thiserror::Error;
 
 use super::*;
@@ -6,9 +8,9 @@ use crate::model::{
     ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
     CreateMessageRequestParam, CreateMessageResult, ErrorData, ListRootsRequest, ListRootsResult,
     LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
-    ProgressNotificationParam, PromptListChangedNotification, ResourceListChangedNotification,
-    ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo, ServerNotification,
-    ServerRequest, ServerResult, ToolListChangedNotification,
+    ProgressNotificationParam, PromptListChangedNotification, ProtocolVersion,
+    ResourceListChangedNotification, ResourceUpdatedNotification, ResourceUpdatedNotificationParam,
+    ServerInfo, ServerNotification, ServerRequest, ServerResult, ToolListChangedNotification,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -23,6 +25,8 @@ impl ServiceRole for RoleServer {
     type PeerNot = ClientNotification;
     type Info = ServerInfo;
     type PeerInfo = ClientInfo;
+
+    type InitializeError<E> = ServerInitializeError<E>;
     const IS_CLIENT: bool = false;
 }
 
@@ -30,12 +34,12 @@ impl ServiceRole for RoleServer {
 ///
 /// if you want to handle the error, you can use `serve_server_with_ct` or `serve_server` with `Result<RunningService<RoleServer, S>, ServerError>`
 #[derive(Error, Debug)]
-pub enum ServerError {
+pub enum ServerInitializeError<E> {
     #[error("expect initialized request, but received: {0:?}")]
-    ExpectedInitRequest(Option<ClientJsonRpcMessage>),
+    ExpectedInitializeRequest(Option<ClientJsonRpcMessage>),
 
     #[error("expect initialized notification, but received: {0:?}")]
-    ExpectedInitNotification(Option<ClientJsonRpcMessage>),
+    ExpectedInitializedNotification(Option<ClientJsonRpcMessage>),
 
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
@@ -46,8 +50,14 @@ pub enum ServerError {
     #[error("initialize failed: {0}")]
     InitializeFailed(ErrorData),
 
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("unsupported protocol version: {0}")]
+    UnsupportedProtocolVersion(ProtocolVersion),
+
+    #[error("Send message error {error}, when {context}")]
+    TransportError {
+        error: E,
+        context: Cow<'static, str>,
+    },
 }
 
 pub type ClientSink = Peer<RoleServer>;
@@ -57,7 +67,7 @@ impl<S: Service<RoleServer>> ServiceExt<RoleServer> for S {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<RoleServer, Self>, E>> + Send
+    ) -> impl Future<Output = Result<RunningService<RoleServer, Self>, ServerInitializeError<E>>> + Send
     where
         T: IntoTransport<RoleServer, E, A>,
         E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
@@ -70,7 +80,7 @@ impl<S: Service<RoleServer>> ServiceExt<RoleServer> for S {
 pub async fn serve_server<S, T, E, A>(
     service: S,
     transport: T,
-) -> Result<RunningService<RoleServer, S>, E>
+) -> Result<RunningService<RoleServer, S>, ServerInitializeError<E>>
 where
     S: Service<RoleServer>,
     T: IntoTransport<RoleServer, E, A>,
@@ -80,52 +90,56 @@ where
 }
 
 /// Helper function to get the next message from the stream
-async fn expect_next_message<T>(
+async fn expect_next_message<T, E>(
     transport: &mut T,
     context: &str,
-) -> Result<ClientJsonRpcMessage, ServerError>
+) -> Result<ClientJsonRpcMessage, ServerInitializeError<E>>
 where
     T: Transport<RoleServer>,
 {
     transport
         .receive()
         .await
-        .ok_or_else(|| ServerError::ConnectionClosed(context.to_string()))
+        .ok_or_else(|| ServerInitializeError::ConnectionClosed(context.to_string()))
 }
 
 /// Helper function to expect a request from the stream
-async fn expect_request<T>(
+async fn expect_request<T, E>(
     transport: &mut T,
     context: &str,
-) -> Result<(ClientRequest, RequestId), ServerError>
+) -> Result<(ClientRequest, RequestId), ServerInitializeError<E>>
 where
     T: Transport<RoleServer>,
 {
     let msg = expect_next_message(transport, context).await?;
     let msg_clone = msg.clone();
     msg.into_request()
-        .ok_or(ServerError::ExpectedInitRequest(Some(msg_clone)))
+        .ok_or(ServerInitializeError::ExpectedInitializeRequest(Some(
+            msg_clone,
+        )))
 }
 
 /// Helper function to expect a notification from the stream
-async fn expect_notification<T>(
+async fn expect_notification<T, E>(
     transport: &mut T,
     context: &str,
-) -> Result<ClientNotification, ServerError>
+) -> Result<ClientNotification, ServerInitializeError<E>>
 where
     T: Transport<RoleServer>,
 {
     let msg = expect_next_message(transport, context).await?;
     let msg_clone = msg.clone();
     msg.into_notification()
-        .ok_or(ServerError::ExpectedInitNotification(Some(msg_clone)))
+        .ok_or(ServerInitializeError::ExpectedInitializedNotification(
+            Some(msg_clone),
+        ))
 }
 
 pub async fn serve_server_with_ct<S, T, E, A>(
     service: S,
     transport: T,
     ct: CancellationToken,
-) -> Result<RunningService<RoleServer, S>, E>
+) -> Result<RunningService<RoleServer, S>, ServerInitializeError<E>>
 where
     S: Service<RoleServer>,
     T: IntoTransport<RoleServer, E, A>,
@@ -134,23 +148,13 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    // Convert ServerError to std::io::Error, then to E
-    let handle_server_error = |e: ServerError| -> E {
-        match e {
-            ServerError::Io(io_err) => io_err.into(),
-            other => std::io::Error::new(std::io::ErrorKind::Other, format!("{}", other)).into(),
-        }
-    };
-
     // Get initialize request
-    let (request, id) = expect_request(&mut transport, "initialized request")
-        .await
-        .map_err(handle_server_error)?;
+    let (request, id) = expect_request(&mut transport, "initialized request").await?;
 
     let ClientRequest::InitializeRequest(peer_info) = &request else {
-        return Err(handle_server_error(ServerError::ExpectedInitRequest(Some(
+        return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
             ClientJsonRpcMessage::request(request, id),
-        ))));
+        )));
     };
     let (peer, peer_rx) = Peer::new(id_provider, peer_info.params.clone());
     let context = RequestContext {
@@ -165,24 +169,24 @@ where
     let mut init_response = match init_response {
         Ok(ServerResult::InitializeResult(init_response)) => init_response,
         Ok(result) => {
-            return Err(handle_server_error(
-                ServerError::UnexpectedInitializeResponse(result),
-            ));
+            return Err(ServerInitializeError::UnexpectedInitializeResponse(result));
         }
         Err(e) => {
             transport
                 .send(ServerJsonRpcMessage::error(e.clone(), id))
-                .await?;
-            return Err(handle_server_error(ServerError::InitializeFailed(e)));
+                .await
+                .map_err(|error| ServerInitializeError::TransportError {
+                    error,
+                    context: "sending error response".into(),
+                })?;
+            return Err(ServerInitializeError::InitializeFailed(e));
         }
     };
-    let protocol_version = match peer_info
-        .params
-        .protocol_version
+    let peer_protocol_version = peer_info.params.protocol_version.clone();
+    let protocol_version = match peer_protocol_version
         .partial_cmp(&init_response.protocol_version)
-        .ok_or(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "unsupported protocol version",
+        .ok_or(ServerInitializeError::UnsupportedProtocolVersion(
+            peer_protocol_version,
         ))? {
         std::cmp::Ordering::Less => peer_info.params.protocol_version.clone(),
         _ => init_response.protocol_version,
@@ -193,20 +197,22 @@ where
             ServerResult::InitializeResult(init_response),
             id,
         ))
-        .await?;
+        .await
+        .map_err(|error| ServerInitializeError::TransportError {
+            error,
+            context: "sending initialize response".into(),
+        })?;
 
     // Wait for initialize notification
-    let notification = expect_notification(&mut transport, "initialize notification")
-        .await
-        .map_err(handle_server_error)?;
+    let notification = expect_notification(&mut transport, "initialize notification").await?;
     let ClientNotification::InitializedNotification(_) = notification else {
-        return Err(handle_server_error(ServerError::ExpectedInitNotification(
+        return Err(ServerInitializeError::ExpectedInitializedNotification(
             Some(ClientJsonRpcMessage::notification(notification)),
-        )));
+        ));
     };
     let _ = service.handle_notification(notification).await;
     // Continue processing service
-    serve_inner(service, transport, peer, peer_rx, ct).await
+    Ok(serve_inner(service, transport, peer, peer_rx, ct).await)
 }
 
 macro_rules! method {

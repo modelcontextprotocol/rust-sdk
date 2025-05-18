@@ -77,6 +77,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     type PeerNot: TryInto<CancelledNotification, Error = Self::PeerNot>
         + From<CancelledNotification>
         + TransferObject;
+    type InitializeError<E>;
     const IS_CLIENT: bool;
     type Info: TransferObject;
     type PeerInfo: TransferObject;
@@ -113,7 +114,7 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn serve<T, E, A>(
         self,
         transport: T,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, E>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError<E>>> + Send
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
@@ -125,7 +126,7 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, E>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError<E>>> + Send
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
@@ -469,7 +470,7 @@ pub async fn serve_directly<R, S, T, E, A>(
     service: S,
     transport: T,
     peer_info: R::PeerInfo,
-) -> Result<RunningService<R, S>, E>
+) -> RunningService<R, S>
 where
     R: ServiceRole,
     S: Service<R>,
@@ -485,7 +486,7 @@ pub async fn serve_directly_with_ct<R, S, T, E, A>(
     transport: T,
     peer_info: R::PeerInfo,
     ct: CancellationToken,
-) -> Result<RunningService<R, S>, E>
+) -> RunningService<R, S>
 where
     R: ServiceRole,
     S: Service<R>,
@@ -503,7 +504,7 @@ async fn serve_inner<R, S, T, E, A>(
     peer: Peer<R>,
     mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
     ct: CancellationToken,
-) -> Result<RunningService<R, S>, E>
+) -> RunningService<R, S>
 where
     R: ServiceRole,
     S: Service<R>,
@@ -788,10 +789,10 @@ where
         tracing::info!(?quit_reason, "serve finished");
         quit_reason
     });
-    Ok(RunningService {
+    RunningService {
         service,
         peer: peer_return,
         handle,
         dg: ct.drop_guard(),
-    })
+    }
 }

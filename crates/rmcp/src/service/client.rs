@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use thiserror::Error;
 
 use super::*;
@@ -19,7 +21,7 @@ use crate::model::{
 ///
 /// if you want to handle the error, you can use `serve_client_with_ct` or `serve_client` with `Result<RunningService<RoleClient, S>, ClientError>`
 #[derive(Error, Debug)]
-pub enum ClientError {
+pub enum ClientInitializeError<E> {
     #[error("expect initialized response, but received: {0:?}")]
     ExpectedInitResponse(Option<ServerJsonRpcMessage>),
 
@@ -32,30 +34,32 @@ pub enum ClientError {
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
 
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("Send message error {error}, when {context}")]
+    TransportError {
+        error: E,
+        context: Cow<'static, str>,
+    },
 }
 
 /// Helper function to get the next message from the stream
-async fn expect_next_message<T>(
+async fn expect_next_message<T, E>(
     transport: &mut T,
     context: &str,
-) -> Result<ServerJsonRpcMessage, ClientError>
+) -> Result<ServerJsonRpcMessage, ClientInitializeError<E>>
 where
     T: Transport<RoleClient>,
 {
     transport
         .receive()
         .await
-        .ok_or_else(|| ClientError::ConnectionClosed(context.to_string()))
-        .map_err(|e| ClientError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))
+        .ok_or_else(|| ClientInitializeError::ConnectionClosed(context.to_string()))
 }
 
 /// Helper function to expect a response from the stream
-async fn expect_response<T>(
+async fn expect_response<T, E>(
     transport: &mut T,
     context: &str,
-) -> Result<(ServerResult, RequestId), ClientError>
+) -> Result<(ServerResult, RequestId), ClientInitializeError<E>>
 where
     T: Transport<RoleClient>,
 {
@@ -63,7 +67,7 @@ where
 
     match msg {
         ServerJsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => Ok((result, id)),
-        _ => Err(ClientError::ExpectedInitResponse(Some(msg))),
+        _ => Err(ClientInitializeError::ExpectedInitResponse(Some(msg))),
     }
 }
 
@@ -79,7 +83,7 @@ impl ServiceRole for RoleClient {
     type PeerNot = ServerNotification;
     type Info = ClientInfo;
     type PeerInfo = ServerInfo;
-
+    type InitializeError<E> = ClientInitializeError<E>;
     const IS_CLIENT: bool = true;
 }
 
@@ -90,7 +94,7 @@ impl<S: Service<RoleClient>> ServiceExt<RoleClient> for S {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<RoleClient, Self>, E>> + Send
+    ) -> impl Future<Output = Result<RunningService<RoleClient, Self>, ClientInitializeError<E>>> + Send
     where
         T: IntoTransport<RoleClient, E, A>,
         E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
@@ -103,7 +107,7 @@ impl<S: Service<RoleClient>> ServiceExt<RoleClient> for S {
 pub async fn serve_client<S, T, E, A>(
     service: S,
     transport: T,
-) -> Result<RunningService<RoleClient, S>, E>
+) -> Result<RunningService<RoleClient, S>, ClientInitializeError<E>>
 where
     S: Service<RoleClient>,
     T: IntoTransport<RoleClient, E, A>,
@@ -116,7 +120,7 @@ pub async fn serve_client_with_ct<S, T, E, A>(
     service: S,
     transport: T,
     ct: CancellationToken,
-) -> Result<RunningService<RoleClient, S>, E>
+) -> Result<RunningService<RoleClient, S>, ClientInitializeError<E>>
 where
     S: Service<RoleClient>,
     T: IntoTransport<RoleClient, E, A>,
@@ -124,14 +128,6 @@ where
 {
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
-
-    // Convert ClientError to std::io::Error, then to E
-    let handle_client_error = |e: ClientError| -> E {
-        match e {
-            ClientError::Io(io_err) => io_err.into(),
-            other => std::io::Error::new(std::io::ErrorKind::Other, format!("{}", other)).into(),
-        }
-    };
 
     // service
     let id = id_provider.next_request_id();
@@ -145,23 +141,23 @@ where
             ClientRequest::InitializeRequest(init_request),
             id.clone(),
         ))
-        .await?;
-
-    let (response, response_id) = expect_response(&mut transport, "initialize response")
         .await
-        .map_err(handle_client_error)?;
+        .map_err(|error| ClientInitializeError::TransportError {
+            error,
+            context: "send initialize request".into(),
+        })?;
+
+    let (response, response_id) = expect_response(&mut transport, "initialize response").await?;
 
     if id != response_id {
-        return Err(handle_client_error(ClientError::ConflictInitResponseId(
+        return Err(ClientInitializeError::ConflictInitResponseId(
             id,
             response_id,
-        )));
+        ));
     }
 
     let ServerResult::InitializeResult(initialize_result) = response else {
-        return Err(handle_client_error(ClientError::ExpectedInitResult(Some(
-            response,
-        ))));
+        return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
     };
 
     // send notification
@@ -171,9 +167,15 @@ where
             extensions: Default::default(),
         }),
     );
-    transport.send(notification).await?;
+    transport
+        .send(notification)
+        .await
+        .map_err(|error| ClientInitializeError::TransportError {
+            error,
+            context: "send initialized notification".into(),
+        })?;
     let (peer, peer_rx) = Peer::new(id_provider, initialize_result);
-    serve_inner(service, transport, peer, peer_rx, ct).await
+    Ok(serve_inner(service, transport, peer, peer_rx, ct).await)
 }
 
 macro_rules! method {

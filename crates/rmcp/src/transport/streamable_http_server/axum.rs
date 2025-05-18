@@ -327,7 +327,10 @@ impl StreamableHttpServer {
                 let service = service_provider();
                 let ct = self.config.ct.child_token();
                 tokio::spawn(async move {
-                    let server = service.serve_with_ct(transport, ct).await?;
+                    let server = service
+                        .serve_with_ct(transport, ct)
+                        .await
+                        .map_err(tokio::io::Error::other)?;
                     server.waiting().await?;
                     tokio::io::Result::Ok(())
                 });
