@@ -36,8 +36,10 @@ use tracing::instrument;
 pub enum ServiceError {
     #[error("Mcp error: {0}")]
     McpError(McpError),
-    #[error("Transport error: {0}")]
-    Transport(std::io::Error),
+    #[error("Transport send error: {0}")]
+    TransportSend(Box<dyn std::error::Error + Send + Sync>),
+    #[error("Transport closed")]
+    TransportClosed,
     #[error("Unexpected response type")]
     UnexpectedResponse,
     #[error("task cancelled for reason {}", reason.as_deref().unwrap_or("<unknown>"))]
@@ -98,8 +100,6 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
         &self,
         notification: R::PeerNot,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_;
-    fn get_peer(&self) -> Option<Peer<R>>;
-    fn set_peer(&mut self, peer: Peer<R>);
     fn get_info(&self) -> R::Info;
 }
 
@@ -148,14 +148,6 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
         DynService::handle_notification(self.as_ref(), notification)
     }
 
-    fn get_peer(&self) -> Option<Peer<R>> {
-        DynService::get_peer(self.as_ref())
-    }
-
-    fn set_peer(&mut self, peer: Peer<R>) {
-        DynService::set_peer(self.as_mut(), peer)
-    }
-
     fn get_info(&self) -> R::Info {
         DynService::get_info(self.as_ref())
     }
@@ -168,8 +160,6 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         context: RequestContext<R>,
     ) -> BoxFuture<Result<R::Resp, McpError>>;
     fn handle_notification(&self, notification: R::PeerNot) -> BoxFuture<Result<(), McpError>>;
-    fn get_peer(&self) -> Option<Peer<R>>;
-    fn set_peer(&mut self, peer: Peer<R>);
     fn get_info(&self) -> R::Info;
 }
 
@@ -183,12 +173,6 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
     fn handle_notification(&self, notification: R::PeerNot) -> BoxFuture<Result<(), McpError>> {
         Box::pin(self.handle_notification(notification))
-    }
-    fn get_peer(&self) -> Option<Peer<R>> {
-        self.get_peer()
-    }
-    fn set_peer(&mut self, peer: Peer<R>) {
-        self.set_peer(peer)
     }
     fn get_info(&self) -> R::Info {
         self.get_info()
@@ -255,9 +239,7 @@ impl<R: ServiceRole> RequestHandle<R> {
     pub async fn await_response(self) -> Result<R::PeerResp, ServiceError> {
         if let Some(timeout) = self.options.timeout {
             let timeout_result = tokio::time::timeout(timeout, async move {
-                self.rx
-                    .await
-                    .map_err(|_e| ServiceError::Transport(std::io::Error::other("disconnected")))?
+                self.rx.await.map_err(|_e| ServiceError::TransportClosed)?
             })
             .await;
             match timeout_result {
@@ -278,9 +260,7 @@ impl<R: ServiceRole> RequestHandle<R> {
                 }
             }
         } else {
-            self.rx
-                .await
-                .map_err(|_e| ServiceError::Transport(std::io::Error::other("disconnected")))?
+            self.rx.await.map_err(|_e| ServiceError::TransportClosed)?
         }
     }
 
@@ -373,12 +353,8 @@ impl<R: ServiceRole> Peer<R> {
                 responder,
             })
             .await
-            .map_err(|_m| {
-                ServiceError::Transport(std::io::Error::other("disconnected: receiver dropped"))
-            })?;
-        receiver.await.map_err(|_e| {
-            ServiceError::Transport(std::io::Error::other("disconnected: responder dropped"))
-        })?
+            .map_err(|_m| ServiceError::TransportClosed)?;
+        receiver.await.map_err(|_e| ServiceError::TransportClosed)?
     }
     pub async fn send_request(&self, request: R::Req) -> Result<R::PeerResp, ServiceError> {
         self.send_request_with_option(request, PeerRequestOptions::no_options())
@@ -416,7 +392,7 @@ impl<R: ServiceRole> Peer<R> {
                 responder,
             })
             .await
-            .map_err(|_m| ServiceError::Transport(std::io::Error::other("disconnected")))?;
+            .map_err(|_m| ServiceError::TransportClosed)?;
         Ok(RequestHandle {
             id,
             rx: receiver,
@@ -427,6 +403,10 @@ impl<R: ServiceRole> Peer<R> {
     }
     pub fn peer_info(&self) -> &R::PeerInfo {
         &self.info
+    }
+
+    pub fn is_transport_closed(&self) -> bool {
+        self.tx.is_closed()
     }
 }
 
@@ -518,7 +498,7 @@ where
 
 #[instrument(skip_all)]
 async fn serve_inner<R, S, T, E, A>(
-    mut service: S,
+    service: S,
     transport: T,
     peer: Peer<R>,
     mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
@@ -540,7 +520,6 @@ where
         tracing::info!(?peer_info, "Service initialized as server");
     }
 
-    service.set_peer(peer.clone());
     let mut local_responder_pool =
         HashMap::<RequestId, Responder<Result<R::PeerResp, ServiceError>>>::new();
     let mut local_ct_pool = HashMap::<RequestId, CancellationToken>::new();
@@ -631,8 +610,7 @@ where
                 Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
                     if let Err(e) = result {
                         if let Some(responder) = local_responder_pool.remove(&id) {
-                            let _ = responder
-                                .send(Err(ServiceError::Transport(std::io::Error::other(e))));
+                            let _ = responder.send(Err(ServiceError::TransportSend(Box::new(e))));
                         }
                     }
                 }
@@ -642,7 +620,7 @@ where
                     cancellation_param,
                 }) => {
                     let response = if let Err(e) = result {
-                        Err(ServiceError::Transport(std::io::Error::other(e)))
+                        Err(ServiceError::TransportSend(Box::new(e)))
                     } else {
                         Ok(())
                     };
