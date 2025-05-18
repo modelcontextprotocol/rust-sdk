@@ -113,16 +113,20 @@ impl<C: SseClient> SseClientTransport<C> {
         config: SseClientConfig,
     ) -> Result<Self, SseTransportError<C::Error>> {
         let mut sse_stream = client.get_stream(config.uri.clone(), None, None).await?;
-        // wait the endpoint event
-        let endpoint = loop {
-            let sse = sse_stream
-                .next()
-                .await
-                .ok_or(SseTransportError::UnexpectedEndOfStream)??;
-            let Some("endpoint") = sse.event.as_deref() else {
-                continue;
-            };
-            break sse.data.unwrap_or_default();
+        let endpoint = if let Some(endpoint) = config.use_endpoint.clone() {
+            endpoint
+        } else {
+            // wait the endpoint event
+            loop {
+                let sse = sse_stream
+                    .next()
+                    .await
+                    .ok_or(SseTransportError::UnexpectedEndOfStream)??;
+                let Some("endpoint") = sse.event.as_deref() else {
+                    continue;
+                };
+                break sse.data.unwrap_or_default();
+            }
         };
         let post_uri: Arc<str> = format!(
             "{}/{}",
@@ -151,6 +155,8 @@ impl<C: SseClient> SseClientTransport<C> {
 pub struct SseClientConfig {
     pub uri: Arc<str>,
     pub retry_policy: Arc<dyn SseRetryPolicy>,
+    /// if this is settled, the client will use this endpoint to send message and skip get the endpoint event
+    pub use_endpoint: Option<String>,
 }
 
 impl Default for SseClientConfig {
@@ -158,6 +164,7 @@ impl Default for SseClientConfig {
         Self {
             uri: "".into(),
             retry_policy: Arc::new(super::common::client_side_sse::FixedInterval::default()),
+            use_endpoint: None,
         }
     }
 }
