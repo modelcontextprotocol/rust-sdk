@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ClientHandler, Peer, RoleClient, ServerHandler, ServiceExt,
+    ClientHandler, ServerHandler, ServiceExt,
     handler::server::tool::ToolCallContext,
     model::{CallToolRequestParam, ClientInfo},
     tool,
@@ -242,21 +242,11 @@ fn test_optional_field_schema_generation_via_macro() {
 
 // Define a dummy client handler
 #[derive(Debug, Clone, Default)]
-struct DummyClientHandler {
-    peer: Option<Peer<RoleClient>>,
-}
+struct DummyClientHandler {}
 
 impl ClientHandler for DummyClientHandler {
     fn get_info(&self) -> ClientInfo {
         ClientInfo::default()
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        self.peer = Some(peer);
-    }
-
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        self.peer.clone()
     }
 }
 

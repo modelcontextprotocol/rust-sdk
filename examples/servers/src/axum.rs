@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ct = SseServer::serve(BIND_ADDRESS.parse()?)
         .await?
-        .with_service(Counter::new);
+        .with_service_directly(Counter::new);
 
     tokio::signal::ctrl_c().await?;
     ct.cancel();

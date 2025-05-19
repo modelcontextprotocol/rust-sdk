@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
+use http::Uri;
 use reqwest::header::ACCEPT;
 use sse_stream::SseStream;
 
@@ -15,11 +16,11 @@ impl SseClient for reqwest::Client {
 
     async fn post_message(
         &self,
-        uri: std::sync::Arc<str>,
+        uri: Uri,
         message: crate::model::ClientJsonRpcMessage,
         auth_token: Option<String>,
     ) -> Result<(), SseTransportError<Self::Error>> {
-        let mut request_builder = self.post(uri.as_ref()).json(&message);
+        let mut request_builder = self.post(uri.to_string()).json(&message);
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
@@ -33,7 +34,7 @@ impl SseClient for reqwest::Client {
 
     async fn get_stream(
         &self,
-        uri: std::sync::Arc<str>,
+        uri: Uri,
         last_event_id: Option<String>,
         auth_token: Option<String>,
     ) -> Result<
@@ -41,7 +42,7 @@ impl SseClient for reqwest::Client {
         SseTransportError<Self::Error>,
     > {
         let mut request_builder = self
-            .get(uri.as_ref())
+            .get(uri.to_string())
             .header(ACCEPT, EVENT_STREAM_MIME_TYPE);
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
@@ -73,7 +74,7 @@ impl SseClientTransport<reqwest::Client> {
         SseClientTransport::start_with_client(
             reqwest::Client::default(),
             SseClientConfig {
-                uri: uri.into(),
+                sse_endpoint: uri.into(),
                 ..Default::default()
             },
         )

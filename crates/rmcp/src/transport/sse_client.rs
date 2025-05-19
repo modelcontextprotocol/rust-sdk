@@ -2,6 +2,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use futures::{StreamExt, future::BoxFuture};
+use http::Uri;
 use reqwest::header::HeaderValue;
 use sse_stream::Error as SseError;
 use thiserror::Error;
@@ -32,6 +33,10 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
+    #[error("Invalid uri: {0}")]
+    InvalidUri(#[from] http::uri::InvalidUri),
+    #[error("Invalid uri parts: {0}")]
+    InvalidUriParts(#[from] http::uri::InvalidUriParts),
 }
 
 impl From<reqwest::Error> for SseTransportError<reqwest::Error> {
@@ -44,13 +49,13 @@ pub trait SseClient: Clone + Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
     fn post_message(
         &self,
-        uri: Arc<str>,
+        uri: Uri,
         message: ClientJsonRpcMessage,
         auth_token: Option<String>,
     ) -> impl Future<Output = Result<(), SseTransportError<Self::Error>>> + Send + '_;
     fn get_stream(
         &self,
-        uri: Arc<str>,
+        uri: Uri,
         last_event_id: Option<String>,
         auth_token: Option<String>,
     ) -> impl Future<Output = Result<BoxedSseResponse, SseTransportError<Self::Error>>> + Send + '_;
@@ -58,7 +63,7 @@ pub trait SseClient: Clone + Send + Sync + 'static {
 
 struct SseClientReconnect<C> {
     pub client: C,
-    pub uri: Arc<str>,
+    pub uri: Uri,
 }
 
 impl<C: SseClient> SseStreamReconnect for SseClientReconnect<C> {
@@ -75,7 +80,7 @@ type ServerMessageStream<C> = Pin<Box<SseAutoReconnectStream<SseClientReconnect<
 pub struct SseClientTransport<C: SseClient> {
     client: C,
     config: SseClientConfig,
-    post_uri: Arc<str>,
+    message_endpoint: Uri,
     stream: Option<ServerMessageStream<C>>,
 }
 
@@ -89,7 +94,7 @@ impl<C: SseClient> Transport<RoleClient> for SseClientTransport<C> {
         item: crate::service::TxJsonRpcMessage<RoleClient>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let client = self.client.clone();
-        let uri = self.post_uri.clone();
+        let uri = self.message_endpoint.clone();
         async move { client.post_message(uri, item, None).await }
     }
     async fn close(&mut self) -> Result<(), Self::Error> {
@@ -112,9 +117,11 @@ impl<C: SseClient> SseClientTransport<C> {
         client: C,
         config: SseClientConfig,
     ) -> Result<Self, SseTransportError<C::Error>> {
-        let mut sse_stream = client.get_stream(config.uri.clone(), None, None).await?;
-        let endpoint = if let Some(endpoint) = config.use_endpoint.clone() {
-            endpoint
+        let sse_endpoint = config.sse_endpoint.as_ref().parse::<http::Uri>()?;
+
+        let mut sse_stream = client.get_stream(sse_endpoint.clone(), None, None).await?;
+        let message_endpoint = if let Some(endpoint) = config.use_message_endpoint.clone() {
+            endpoint.parse::<http::Uri>()?
         } else {
             // wait the endpoint event
             loop {
@@ -125,27 +132,29 @@ impl<C: SseClient> SseClientTransport<C> {
                 let Some("endpoint") = sse.event.as_deref() else {
                     continue;
                 };
-                break sse.data.unwrap_or_default();
+                let sse_endpoint = sse.data.unwrap_or_default();
+                break sse_endpoint.parse::<http::Uri>()?;
             }
         };
-        let post_uri: Arc<str> = format!(
-            "{}/{}",
-            config.uri.trim_end_matches("/"),
-            endpoint.trim_start_matches("/")
-        )
-        .into();
+
+        // sse: <authority><sse_pq> -> <authority><message_pq>
+        let message_endpoint = {
+            let mut sse_endpoint_parts = sse_endpoint.clone().into_parts();
+            sse_endpoint_parts.path_and_query = message_endpoint.into_parts().path_and_query;
+            Uri::from_parts(sse_endpoint_parts)?
+        };
         let stream = Box::pin(SseAutoReconnectStream::new(
             sse_stream,
             SseClientReconnect {
                 client: client.clone(),
-                uri: config.uri.clone(),
+                uri: sse_endpoint.clone(),
             },
             config.retry_policy.clone(),
         ));
         Ok(Self {
             client,
             config,
-            post_uri,
+            message_endpoint,
             stream: Some(stream),
         })
     }
@@ -153,18 +162,29 @@ impl<C: SseClient> SseClientTransport<C> {
 
 #[derive(Debug, Clone)]
 pub struct SseClientConfig {
-    pub uri: Arc<str>,
+    /// client sse endpoint
+    ///
+    /// # How this client resolve the message endpoint
+    /// if sse_endpoint has this format: `<schema><authority?><sse_pq>`,
+    /// then the message endpoint will be `<schema><authority?><message_pq>`.
+    ///
+    /// For example, if you config the sse_endpoint as `http://example.com/some_path/sse`,
+    /// and the server send the message endpoint event as `message?session_id=123`,
+    /// then the message endpoint will be `http://example.com/message`.
+    ///
+    /// This follow the rules of JavaScript's [`new URL(url, base)`](https://developer.mozilla.org/zh-CN/docs/Web/API/URL/URL)
+    pub sse_endpoint: Arc<str>,
     pub retry_policy: Arc<dyn SseRetryPolicy>,
     /// if this is settled, the client will use this endpoint to send message and skip get the endpoint event
-    pub use_endpoint: Option<String>,
+    pub use_message_endpoint: Option<String>,
 }
 
 impl Default for SseClientConfig {
     fn default() -> Self {
         Self {
-            uri: "".into(),
+            sse_endpoint: "".into(),
             retry_policy: Arc::new(super::common::client_side_sse::FixedInterval::default()),
-            use_endpoint: None,
+            use_message_endpoint: None,
         }
     }
 }

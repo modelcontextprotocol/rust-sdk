@@ -1,3 +1,5 @@
+use http::Uri;
+
 use crate::transport::{
     auth::AuthClient,
     sse_client::{SseClient, SseTransportError},
@@ -10,7 +12,7 @@ where
 
     async fn post_message(
         &self,
-        uri: std::sync::Arc<str>,
+        uri: Uri,
         message: crate::model::ClientJsonRpcMessage,
         mut auth_token: Option<String>,
     ) -> Result<(), SseTransportError<Self::Error>> {
@@ -25,7 +27,7 @@ where
 
     async fn get_stream(
         &self,
-        uri: std::sync::Arc<str>,
+        uri: Uri,
         last_event_id: Option<String>,
         mut auth_token: Option<String>,
     ) -> Result<

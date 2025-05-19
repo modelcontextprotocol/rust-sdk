@@ -40,13 +40,14 @@ reqwest = { version = "0.12", default-features = false, features = [
     "stream",
 ], optional = true }
 sse-stream = { version = "0.1.4", optional = true }
+http = { version = "1", optional = true }
 url = { version = "2.4", optional = true }
 
 # For tower compatibility
 tower-service = { version = "0.3", optional = true }
 
 # for child process transport
-process-wrap = { version = "8.2", features = ["tokio1"], optional = true}
+process-wrap = { version = "8.2", features = ["tokio1"], optional = true }
 
 # for ws transport
 # tokio-tungstenite ={ version = "0.26", optional = true }
@@ -75,7 +76,7 @@ reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
 
 axum = ["dep:axum"]
 # SSE client
-client-side-sse = ["dep:sse-stream"]
+client-side-sse = ["dep:sse-stream", "dep:http"]
 
 transport-sse-client = ["client-side-sse", "transport-worker"]
 
@@ -83,10 +84,7 @@ transport-worker = ["dep:tokio-stream"]
 
 
 # Streamable HTTP client
-transport-streamable-http-client = [
-    "client-side-sse",
-    "transport-worker",
-]
+transport-streamable-http-client = ["client-side-sse", "transport-worker"]
 
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
@@ -98,6 +96,7 @@ transport-child-process = [
 ]
 transport-sse-server = [
     "transport-async-rw",
+    "transport-worker",
     "axum",
     "dep:rand",
     "dep:tokio-stream",
@@ -130,7 +129,7 @@ tracing-subscriber = { version = "0.3", features = [
 async-trait = "0.1"
 [[test]]
 name = "test_tool_macros"
-required-features = ["server"]
+required-features = ["server", "client"]
 path = "tests/test_tool_macros.rs"
 
 [[test]]

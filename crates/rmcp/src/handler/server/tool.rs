@@ -86,6 +86,9 @@ impl<'service, S> ToolCallContext<'service, S> {
     pub fn name(&self) -> &str {
         &self.name
     }
+    pub fn request_context(&self) -> &RequestContext<RoleServer> {
+        &self.request_context
+    }
 }
 
 pub trait FromToolCallContextPart<'a, S>: Sized {
@@ -281,6 +284,39 @@ impl<'a, S> FromToolCallContextPart<'a, S> for JsonObject {
     ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
         let object = context.arguments.take().unwrap_or_default();
         Ok((object, context))
+    }
+}
+
+impl<'a, S> FromToolCallContextPart<'a, S> for crate::model::Extensions {
+    fn from_tool_call_context_part(
+        context: ToolCallContext<'a, S>,
+    ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
+        let extensions = context.request_context.extensions.clone();
+        Ok((extensions, context))
+    }
+}
+
+pub struct Extension<T>(pub T);
+
+impl<'a, S, T> FromToolCallContextPart<'a, S> for Extension<T>
+where
+    T: Send + Sync + 'static + Clone,
+{
+    fn from_tool_call_context_part(
+        context: ToolCallContext<'a, S>,
+    ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
+        let extension = context
+            .request_context
+            .extensions
+            .get::<T>()
+            .cloned()
+            .ok_or_else(|| {
+                crate::Error::invalid_params(
+                    format!("missing extension {}", std::any::type_name::<T>()),
+                    None,
+                )
+            })?;
+        Ok((Extension(extension), context))
     }
 }
 

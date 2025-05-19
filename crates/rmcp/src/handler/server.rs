@@ -1,7 +1,7 @@
 use crate::{
     error::Error as McpError,
     model::*,
-    service::{Peer, RequestContext, RoleServer, Service, ServiceRole},
+    service::{RequestContext, RoleServer, Service, ServiceRole},
 };
 
 mod resource;
@@ -108,6 +108,10 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         request: InitializeRequestParam,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        let info = self.get_info();
         std::future::ready(Ok(self.get_info()))
     }
     fn complete(
@@ -208,14 +212,6 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     }
     fn on_roots_list_changed(&self) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
-    }
-
-    fn get_peer(&self) -> Option<Peer<RoleServer>> {
-        None
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleServer>) {
-        drop(peer);
     }
 
     fn get_info(&self) -> ServerInfo {
