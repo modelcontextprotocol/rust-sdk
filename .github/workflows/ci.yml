@@ -108,7 +108,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # install nodejs
       - name: Setup Node.js
@@ -143,12 +143,19 @@ jobs:
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info
 
       - name: Generate coverage badge
-        if: github.ref == 'refs/heads/main'
         uses: GoogleCloudPlatform/lcov-coverage-badge@5857899449990297b622767f36e4fa8d1218acdb
         with:
           file: ./lcov.info
           icon_name: github
-          access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: commit badge
+        run: |
+          mv coverage.svg ./docs/
+          git config user.name "thaim"
+          git config user.email "thaim@users.noreply.github.com"
+          git add ./docs/coverage.svg
+          git commit -m "doc: update coverage"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
   
   security_audit:
     name: Security Audit
