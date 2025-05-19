@@ -96,6 +96,7 @@ transport-child-process = [
 ]
 transport-sse-server = [
     "transport-async-rw",
+    "transport-worker",
     "axum",
     "dep:rand",
     "dep:tokio-stream",
