@@ -109,6 +109,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       # install nodejs
       - name: Setup Node.js
@@ -149,6 +152,7 @@ jobs:
           icon_name: github
 
       - name: commit badge
+        if: github.ref != 'refs/heads/release' || !startsWith(github.ref, 'refs/tags/release')
         run: |
           mv coverage.svg ./docs/
           git config user.name "thaim"
@@ -156,7 +160,7 @@ jobs:
           git add ./docs/coverage.svg
           git commit -m "doc: update coverage"
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          git push origin $CURRENT_BRANCH
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
   
   security_audit:
     name: Security Audit
