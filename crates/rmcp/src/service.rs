@@ -303,7 +303,7 @@ pub struct Peer<R: ServiceRole> {
     tx: mpsc::Sender<PeerSinkMessage<R>>,
     request_id_provider: Arc<dyn RequestIdProvider>,
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
-    info: Arc<R::PeerInfo>,
+    info: Arc<tokio::sync::OnceCell<R::PeerInfo>>,
 }
 
 impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
@@ -333,7 +333,7 @@ impl<R: ServiceRole> Peer<R> {
     const CLIENT_CHANNEL_BUFFER_SIZE: usize = 1024;
     pub(crate) fn new(
         request_id_provider: Arc<dyn RequestIdProvider>,
-        peer_info: R::PeerInfo,
+        peer_info: Option<R::PeerInfo>,
     ) -> (Peer<R>, ProxyOutbound<R>) {
         let (tx, rx) = mpsc::channel(Self::CLIENT_CHANNEL_BUFFER_SIZE);
         (
@@ -341,7 +341,7 @@ impl<R: ServiceRole> Peer<R> {
                 tx,
                 request_id_provider,
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
-                info: peer_info.into(),
+                info: Arc::new(tokio::sync::OnceCell::new_with(peer_info)),
             },
             rx,
         )
@@ -402,8 +402,16 @@ impl<R: ServiceRole> Peer<R> {
             peer: self.clone(),
         })
     }
-    pub fn peer_info(&self) -> &R::PeerInfo {
-        &self.info
+    pub fn peer_info(&self) -> Option<&R::PeerInfo> {
+        self.info.get()
+    }
+
+    pub fn set_peer_info(&self, info: R::PeerInfo) {
+        if self.info.initialized() {
+            tracing::warn!("trying to set peer info, which is already initialized");
+        } else {
+            let _ = self.info.set(info);
+        }
     }
 
     pub fn is_transport_closed(&self) -> bool {
@@ -469,7 +477,7 @@ pub struct RequestContext<R: ServiceRole> {
 pub async fn serve_directly<R, S, T, E, A>(
     service: S,
     transport: T,
-    peer_info: R::PeerInfo,
+    peer_info: Option<R::PeerInfo>,
 ) -> RunningService<R, S>
 where
     R: ServiceRole,
@@ -484,7 +492,7 @@ where
 pub async fn serve_directly_with_ct<R, S, T, E, A>(
     service: S,
     transport: T,
-    peer_info: R::PeerInfo,
+    peer_info: Option<R::PeerInfo>,
     ct: CancellationToken,
 ) -> RunningService<R, S>
 where

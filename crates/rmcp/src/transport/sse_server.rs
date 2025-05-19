@@ -18,7 +18,7 @@ use tracing::Instrument;
 use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
-    service::{RxJsonRpcMessage, TxJsonRpcMessage},
+    service::{RxJsonRpcMessage, TxJsonRpcMessage, serve_directly_with_ct},
     transport::common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
 };
 
@@ -67,7 +67,7 @@ async fn post_event_handler(
     parts: Parts,
     Json(mut message): Json<ClientJsonRpcMessage>,
 ) -> Result<StatusCode, StatusCode> {
-    tracing::debug!(session_id, ?message, "new client message");
+    tracing::debug!(session_id, ?parts, ?message, "new client message");
     let tx = {
         let rg = app.txs.read().await;
         rg.get(session_id.as_str())
@@ -84,9 +84,10 @@ async fn post_event_handler(
 
 async fn sse_handler(
     State(app): State<App>,
+    parts: Parts,
 ) -> Result<Sse<impl Stream<Item = Result<Event, io::Error>>>, Response<String>> {
     let session = session_id();
-    tracing::info!(%session, "sse connection");
+    tracing::info!(%session, ?parts, "sse connection");
     use tokio_stream::{StreamExt, wrappers::ReceiverStream};
     use tokio_util::sync::PollSender;
     let (from_client_tx, from_client_rx) = tokio::sync::mpsc::channel(64);
@@ -292,6 +293,27 @@ impl SseServer {
                         .serve_with_ct(transport, ct)
                         .await
                         .map_err(std::io::Error::other)?;
+                    server.waiting().await?;
+                    tokio::io::Result::Ok(())
+                });
+            }
+        });
+        ct
+    }
+
+    /// This allows you to skip the initialization steps for incoming request.
+    pub fn with_service_directly<S, F>(mut self, service_provider: F) -> CancellationToken
+    where
+        S: Service<RoleServer>,
+        F: Fn() -> S + Send + 'static,
+    {
+        let ct = self.config.ct.clone();
+        tokio::spawn(async move {
+            while let Some(transport) = self.next_transport().await {
+                let service = service_provider();
+                let ct = self.config.ct.child_token();
+                tokio::spawn(async move {
+                    let server = serve_directly_with_ct(service, transport, None, ct).await;
                     server.waiting().await?;
                     tokio::io::Result::Ok(())
                 });

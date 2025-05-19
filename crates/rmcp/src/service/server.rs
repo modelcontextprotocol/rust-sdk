@@ -156,7 +156,7 @@ where
             ClientJsonRpcMessage::request(request, id),
         )));
     };
-    let (peer, peer_rx) = Peer::new(id_provider, peer_info.params.clone());
+    let (peer, peer_rx) = Peer::new(id_provider, Some(peer_info.params.clone()));
     let context = RequestContext {
         ct: ct.child_token(),
         id: id.clone(),

@@ -129,7 +129,7 @@ tracing-subscriber = { version = "0.3", features = [
 async-trait = "0.1"
 [[test]]
 name = "test_tool_macros"
-required-features = ["server"]
+required-features = ["server", "client"]
 path = "tests/test_tool_macros.rs"
 
 [[test]]

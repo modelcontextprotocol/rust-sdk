@@ -1,7 +1,7 @@
 use crate::{
     error::Error as McpError,
     model::*,
-    service::{Peer, RequestContext, RoleClient, Service, ServiceRole},
+    service::{RequestContext, RoleClient, Service, ServiceRole},
 };
 
 impl<H: ClientHandler> Service<RoleClient> for H {
@@ -118,47 +118,16 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         std::future::ready(())
     }
 
-    fn get_peer(&self) -> Option<Peer<RoleClient>>;
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>);
-
     fn get_info(&self) -> ClientInfo {
         ClientInfo::default()
     }
 }
 
-/// Do nothing, just store the peer.
-impl ClientHandler for Option<Peer<RoleClient>> {
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        self.clone()
-    }
+/// Do nothing, with default client info.
+impl ClientHandler for () {}
 
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        *self = Some(peer);
-    }
-}
-
-/// Do nothing, even store the peer.
-impl ClientHandler for () {
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        None
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        drop(peer);
-    }
-}
-
-/// Do nothing, even store the peer.
+/// Do nothing, with a specific client info.
 impl ClientHandler for ClientInfo {
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        None
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        drop(peer);
-    }
-
     fn get_info(&self) -> ClientInfo {
         self.clone()
     }

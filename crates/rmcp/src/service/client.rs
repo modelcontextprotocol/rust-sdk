@@ -174,7 +174,7 @@ where
             error,
             context: "send initialized notification".into(),
         })?;
-    let (peer, peer_rx) = Peer::new(id_provider, initialize_result);
+    let (peer, peer_rx) = Peer::new(id_provider, Some(initialize_result));
     Ok(serve_inner(service, transport, peer, peer_rx, ct).await)
 }
 
