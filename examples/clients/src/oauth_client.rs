@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
     let transport = SseClientTransport::start_with_client(
         client,
         SseClientConfig {
-            uri: MCP_SSE_URL.into(),
+            sse_endpoint: MCP_SSE_URL.into(),
             ..Default::default()
         },
     )
