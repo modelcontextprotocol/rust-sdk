@@ -10,6 +10,7 @@ use super::{
 /// A prompt that can be used to generate text from a model
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Prompt {
     /// The name of the prompt
     pub name: String,
@@ -42,6 +43,7 @@ impl Prompt {
 
 /// Represents a prompt argument that can be passed to customize the prompt
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptArgument {
     /// The name of the argument
     pub name: String,
@@ -56,6 +58,7 @@ pub struct PromptArgument {
 /// Represents the role of a message sender in a prompt conversation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum PromptMessageRole {
     User,
     Assistant,
@@ -64,6 +67,7 @@ pub enum PromptMessageRole {
 /// Content types that can be included in prompt messages
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum PromptMessageContent {
     /// Plain text content
     Text { text: String },
@@ -84,6 +88,7 @@ impl PromptMessageContent {
 
 /// A message in a prompt conversation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptMessage {
     /// The role of the message sender
     pub role: PromptMessageRole,

@@ -53,14 +53,6 @@ impl<H: ClientHandler> Service<RoleClient> for H {
         Ok(())
     }
 
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        self.get_peer()
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        self.set_peer(peer);
-    }
-
     fn get_info(&self) -> <RoleClient as ServiceRole>::Info {
         self.get_info()
     }

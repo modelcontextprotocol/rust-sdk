@@ -5,8 +5,12 @@ on:
     branches: [ main, release ]
     tags:
       - 'release-*'
+    paths-ignore:
+      - "**/coverage.svg"
   pull_request:
     branches: [ main, release ]
+    paths-ignore:
+      - "**/coverage.svg"
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '16'
+          node-version: '20'
           
       - name: Install commitlint
         run: |
@@ -101,6 +105,8 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v3
 
@@ -130,8 +136,19 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
+      - name: Install lcov
+        run: sudo apt-get update && sudo apt-get install -y lcov bc
+
       - name: Run tests with coverage
-        run: cargo llvm-cov --all-features
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+
+      - name: Generate coverage badge
+        if: github.ref == 'refs/heads/main'
+        uses: GoogleCloudPlatform/lcov-coverage-badge@5857899449990297b622767f36e4fa8d1218acdb
+        with:
+          file: ./lcov.info
+          icon_name: github
+          access_token: ${{ secrets.GITHUB_TOKEN }}
   
   security_audit:
     name: Security Audit
@@ -157,15 +174,16 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Generate documentation
         run: |
-          cargo doc --no-deps -p rmcp -p rmcp-macros
+          cargo +nightly doc --no-deps -p rmcp -p rmcp-macros --all-features
         env:
-          RUSTDOCFLAGS: -Dwarnings
+          RUSTDOCFLAGS: --cfg docsrs -Dwarnings
+          RUSTFLAGS: --cfg docsrs 
 
   release:
     name: Release crates

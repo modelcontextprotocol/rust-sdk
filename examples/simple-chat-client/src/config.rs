@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, process::Stdio};
 
 use anyhow::Result;
-use rmcp::{RoleClient, ServiceExt, service::RunningService};
+use rmcp::{RoleClient, ServiceExt, service::RunningService, transport::ConfigureCommandExt};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -11,6 +11,7 @@ pub struct Config {
     pub mcp: Option<McpConfig>,
     pub model_name: Option<String>,
     pub proxy: Option<bool>,
+    pub support_tool: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,7 +45,8 @@ impl McpServerTransportConfig {
     pub async fn start(&self) -> Result<RunningService<RoleClient, ()>> {
         let client = match self {
             McpServerTransportConfig::Sse { url } => {
-                let transport = rmcp::transport::sse::SseTransport::start(url).await?;
+                let transport =
+                    rmcp::transport::sse_client::SseClientTransport::start(url.to_owned()).await?;
                 ().serve(transport).await?
             }
             McpServerTransportConfig::Stdio {
@@ -53,11 +55,12 @@ impl McpServerTransportConfig {
                 envs,
             } => {
                 let transport = rmcp::transport::child_process::TokioChildProcess::new(
-                    tokio::process::Command::new(command)
-                        .args(args)
-                        .envs(envs)
-                        .stderr(Stdio::inherit())
-                        .stdout(Stdio::inherit()),
+                    tokio::process::Command::new(command).configure(|cmd| {
+                        cmd.args(args)
+                            .envs(envs)
+                            .stderr(Stdio::inherit())
+                            .stdout(Stdio::inherit());
+                    }),
                 )?;
                 ().serve(transport).await?
             }

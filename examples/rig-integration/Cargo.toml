@@ -17,7 +17,7 @@ tokio = { version = "1", features = ["full"] }
 rmcp = { path = "../../crates/rmcp", features = [
     "client",
     "transport-child-process",
-    "transport-sse",
+    "transport-sse-client",
 ] }
 anyhow = "1.0"
 serde_json = "1"

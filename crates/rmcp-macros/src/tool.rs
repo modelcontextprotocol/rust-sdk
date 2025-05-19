@@ -2,12 +2,46 @@ use std::collections::HashSet;
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
+use serde_json::json;
 use syn::{
-    Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility,
+    Expr, FnArg, Ident, ItemFn, ItemImpl, MetaList, PatType, Token, Type, Visibility,Lit,
     parse::{Parse, discouraged::Speculative},
     parse_quote,
     spanned::Spanned,
 };
+
+/// Stores tool annotation attributes
+#[derive(Default, Clone)]
+struct ToolAnnotationAttrs(pub serde_json::Map<String, serde_json::Value>);
+
+impl Parse for ToolAnnotationAttrs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut attrs = serde_json::Map::new();
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let value: Lit = input.parse()?;
+            let value = match value {
+                Lit::Str(s) => json!(s.value()),
+                Lit::Bool(b) => json!(b.value),
+                _ => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "annotations must be string or boolean literals",
+                    ));
+                }
+            };
+            attrs.insert(key.to_string(), value);
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(ToolAnnotationAttrs(attrs))
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct ToolImplItemAttrs {
@@ -82,6 +116,7 @@ struct ToolFnItemAttrs {
     description: Option<Expr>,
     vis: Option<Visibility>,
     aggr: bool,
+    annotations: Option<ToolAnnotationAttrs>,
 }
 
 impl Parse for ToolFnItemAttrs {
@@ -90,6 +125,8 @@ impl Parse for ToolFnItemAttrs {
         let mut description = None;
         let mut vis = None;
         let mut aggr = false;
+        let mut annotations = None;
+
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let key_str = key.to_string();
@@ -111,6 +148,13 @@ impl Parse for ToolFnItemAttrs {
                     let value: Visibility = input.parse()?;
                     vis = Some(value);
                 }
+                "annotations" => {
+                    // Parse the annotations as a nested structure
+                    let content;
+                    syn::braced!(content in input);
+                    let value = content.parse()?;
+                    annotations = Some(value);
+                }
                 _ => {
                     return Err(syn::Error::new(key.span(), "unknown attribute"));
                 }
@@ -126,6 +170,7 @@ impl Parse for ToolFnItemAttrs {
             description,
             vis,
             aggr,
+            annotations,
         })
     }
 }
@@ -579,6 +624,17 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
         };
         let input_fn_attrs = &input_fn.attrs;
         let input_fn_vis = &input_fn.vis;
+
+        let annotations_code = if let Some(annotations) = &tool_macro_attrs.fn_item.annotations {
+            let annotations =
+                serde_json::to_string(&annotations.0).expect("failed to serialize annotations");
+            quote! {
+                Some(serde_json::from_str::<rmcp::model::ToolAnnotations>(&#annotations).expect("Could not parse tool annotations"))
+            }
+        } else {
+            quote! { None }
+        };
+
         quote! {
             #(#input_fn_attrs)*
             #input_fn_vis fn #tool_attr_fn_ident() -> rmcp::model::Tool {
@@ -586,7 +642,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                     name: #name.into(),
                     description: Some(#description.into()),
                     input_schema: #schema.into(),
-                    annotations: None
+                    annotations: #annotations_code,
                 }
             }
         }
