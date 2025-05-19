@@ -171,8 +171,8 @@ pub struct SseClientConfig {
     /// For example, if you config the sse_endpoint as `http://example.com/some_path/sse`,
     /// and the server send the message endpoint event as `message?session_id=123`,
     /// then the message endpoint will be `http://example.com/message`.
-    /// 
-    /// This follow the rules of JaveScript's [`new URL(url, base)`](https://developer.mozilla.org/zh-CN/docs/Web/API/URL/URL)
+    ///
+    /// This follow the rules of JavaScript's [`new URL(url, base)`](https://developer.mozilla.org/zh-CN/docs/Web/API/URL/URL)
     pub sse_endpoint: Arc<str>,
     pub retry_policy: Arc<dyn SseRetryPolicy>,
     /// if this is settled, the client will use this endpoint to send message and skip get the endpoint event
