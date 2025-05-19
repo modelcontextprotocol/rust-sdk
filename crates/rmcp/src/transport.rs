@@ -57,7 +57,7 @@
 //!
 //! // create transport from std io
 //! async fn io()  -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = None.serve((tokio::io::stdin(), tokio::io::stdout())).await?;
+//!     let client = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
 //!     let tools = client.peer().list_tools(Default::default()).await?;
 //!     println!("{:?}", tools);
 //!     Ok(())
