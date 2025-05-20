@@ -542,22 +542,22 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
     // generate wrapped tool function
     let tool_call_fn = {
         // wrapper function have the same sig:
-        // async fn #tool_tool_call(context: rmcp::handler::server::tool::ToolCallContext<'_, Self>)
+        // async fn #tool_tool_call(context: rmcp::handler::server::tool::ToolCallContext<Self>)
         //      -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error>
         //
         // and the block part should be like:
         // {
         //      use rmcp::handler::server::tool::*;
-        //      let (t0, context) = <T0>::from_tool_call_context_part(context)?;
-        //      let (t1, context) = <T1>::from_tool_call_context_part(context)?;
+        //      let t0 = <T0>::from_tool_call_context_part(&mut context)?;
+        //      let t1 = <T1>::from_tool_call_context_part(&mut context)?;
         //      ...
-        //      let (tn, context) = <Tn>::from_tool_call_context_part(context)?;
+        //      let tn = <Tn>::from_tool_call_context_part(&mut context)?;
         //      // for params
         //      ... expand helper types here
-        //      let (__rmcp_tool_req, context) = rmcp::model::JsonObject::from_tool_call_context_part(context)?;
+        //      let __rmcp_tool_req = rmcp::model::JsonObject::from_tool_call_context_part(&mut context)?;
         //      let __#TOOL_ToolCallParam { param_0, param_1, param_2, .. } = parse_json_object(__rmcp_tool_req)?;
         //      // for aggr
-        //      let (Parameters(aggr), context) = <Parameters<AggrType>>::from_tool_call_context_part(context)?;
+        //      let Parameters(aggr) = <Parameters<AggrType>>::from_tool_call_context_part(&mut context)?;
         //      Self::#tool_ident(to, param_0, t1, param_1, ..., param_2, tn, aggr).await.into_call_tool_result()
         //
         // }
@@ -584,14 +584,14 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                             let pat = &pat_type.pat;
                             let ty = &pat_type.ty;
                             quote! {
-                                let (#pat, context) = <#ty>::from_tool_call_context_part(context)?;
+                                let #pat = <#ty>::from_tool_call_context_part(&mut context)?;
                             }
                         }
                         FnArg::Receiver(r) => {
                             let ty = r.ty.clone();
                             let pat = receiver_ident();
                             quote! {
-                                let  (#pat, context) = <#ty>::from_tool_call_context_part(context)?;
+                                let  #pat = <#ty>::from_tool_call_context_part(&mut context)?;
                             }
                         }
                     };
@@ -605,7 +605,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             ToolParams::Aggregated { rust_type } => {
                 let PatType { pat, ty, .. } = rust_type;
                 quote! {
-                    let (Parameters(#pat), context) = <Parameters<#ty>>::from_tool_call_context_part(context)?;
+                    let Parameters(#pat) = <Parameters<#ty>>::from_tool_call_context_part(&mut context)?;
                 }
             }
             ToolParams::Params { attrs } => {
@@ -615,7 +615,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
                 let params_ident = attrs.iter().map(|attr| &attr.ident).collect::<Vec<_>>();
                 quote! {
                     #param_type
-                    let (__rmcp_tool_req, context) = rmcp::model::JsonObject::from_tool_call_context_part(context)?;
+                    let __rmcp_tool_req = rmcp::model::JsonObject::from_tool_call_context_part(&mut context)?;
                     let #temp_param_type_name {
                         #(#params_ident,)*
                     } = parse_json_object(__rmcp_tool_req)?;
@@ -669,7 +669,7 @@ pub(crate) fn tool_fn_item(attr: TokenStream, mut input_fn: ItemFn) -> syn::Resu
             .collect::<Vec<_>>();
         quote! {
             #(#raw_fn_attr)*
-            #raw_fn_vis async fn #tool_call_fn_ident(context: rmcp::handler::server::tool::ToolCallContext<'_, Self>)
+            #raw_fn_vis async fn #tool_call_fn_ident(context: rmcp::handler::server::tool::ToolCallContext<Self>)
                 -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
                 use rmcp::handler::server::tool::*;
                 #trivial_arg_extraction_part

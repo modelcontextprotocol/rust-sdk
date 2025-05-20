@@ -12,6 +12,7 @@ use crate::{
     model::{CallToolRequestParam, CallToolResult, ConstString, IntoContents, JsonObject},
     service::RequestContext,
 };
+
 /// A shortcut for generating a JSON schema for a type.
 pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
     let mut settings = schemars::r#gen::SchemaSettings::default();
@@ -64,10 +65,10 @@ pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, cr
     })
 }
 pub struct ToolCallContext<S> {
-    request_context: RequestContext<RoleServer>,
-    service: Arc<S>,
-    name: Cow<'static, str>,
-    arguments: Option<JsonObject>,
+    pub request_context: RequestContext<RoleServer>,
+    pub service: Arc<S>,
+    pub name: Cow<'static, str>,
+    pub arguments: Option<JsonObject>,
 }
 
 impl<S> ToolCallContext<S> {
@@ -168,6 +169,14 @@ pub trait CallToolHandler<S, A> {
 pub type DynCallToolHandler<S> = dyn Fn(ToolCallContext<S>) -> BoxFuture<'static, Result<CallToolResult, crate::Error>>
     + Send
     + Sync;
+
+impl<S> FromToolCallContextPart<S> for Arc<S> {
+    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+        let service = context.service.clone();
+        Ok(service)
+    }
+}
+
 /// Parameter Extractor
 pub struct Parameter<K: ConstString, V>(pub K, pub V);
 
@@ -188,9 +197,7 @@ impl<P: JsonSchema> JsonSchema for Parameters<P> {
 }
 
 impl<S> FromToolCallContextPart<S> for CancellationToken {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
         Ok(context.request_context.ct.clone())
     }
 }
@@ -198,9 +205,7 @@ impl<S> FromToolCallContextPart<S> for CancellationToken {
 pub struct ToolName(pub Cow<'static, str>);
 
 impl<S> FromToolCallContextPart<S> for ToolName {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
         Ok(Self(context.name.clone()))
     }
 }
@@ -210,9 +215,7 @@ where
     K: ConstString,
     V: DeserializeOwned,
 {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
         let arguments = context
             .arguments
             .as_ref()
@@ -312,8 +315,8 @@ impl< S> ToolCallContext<S> {
 pub struct AsyncAdapter<P, Fut, R>(PhantomData<(fn(P) -> Fut, fn(Fut) -> R)>);
 pub struct SyncAdapter<P, R>(PhantomData<fn(P) -> R>);
 
-#[allow(clippy::type_complexity)]
-pub struct AsyncMethodAdapter<P, Fut, R>(PhantomData<(fn(P) -> Fut, fn(Fut) -> R)>);
+// #[allow(clippy::type_complexity)]
+// pub struct AsyncMethodAdapter<P, Fut, R>(PhantomData<(fn(P) -> Fut, fn(Fut) -> R)>);
 pub struct SyncMethodAdapter<P, R>(PhantomData<fn(P) -> R>);
 
 macro_rules! impl_for {
@@ -329,6 +332,33 @@ macro_rules! impl_for {
         impl_for!([$($Tn)* $Tn_1] [$($Rest)*]);
     };
     (@impl $($Tn: ident)*) => {
+        // impl<'s, $($Tn,)* S, F, Fut, R> CallToolHandler<S, AsyncMethodAdapter<($($Tn,)*), Fut, R>> for F
+        // where
+        //     $(
+        //         $Tn: FromToolCallContextPart<S> ,
+        //     )*
+        //     F: FnOnce(&'s S, $($Tn,)*) -> Fut + Send + 'static,
+        //     Fut: Future<Output = R> + Send,
+        //     R: IntoCallToolResult + Send,
+        //     S: Send + Sync + 'static,
+        // {
+        //     type Fut = BoxFuture<'static, Result<CallToolResult, crate::Error>>;
+        //     #[allow(unused_variables, non_snake_case, unused_mut)]
+        //     fn call(
+        //         self,
+        //         mut context: ToolCallContext<S>,
+        //     ) -> Self::Fut {
+        //         Box::pin(async move {
+        //             $(
+        //                 let  $Tn = $Tn::from_tool_call_context_part(&mut context)?;
+        //             )*
+        //             let service = context.service.as_ref();
+        //             self(service, $($Tn,)*).await.into_call_tool_result()
+
+        //         })
+        //     }
+        // }
+
         impl<$($Tn,)* S, F, Fut, R> CallToolHandler<S, AsyncAdapter<($($Tn,)*), Fut, R>> for F
         where
             $(
@@ -340,7 +370,7 @@ macro_rules! impl_for {
             S: Send + Sync,
         {
             type Fut = IntoCallToolResultFut<Fut, R>;
-            #[allow(unused_variables, non_snake_case)]
+            #[allow(unused_variables, non_snake_case, unused_mut)]
             fn call(
                 self,
                 mut context: ToolCallContext<S>,
@@ -361,6 +391,32 @@ macro_rules! impl_for {
             }
         }
 
+        impl<$($Tn,)* S, F, R> CallToolHandler<S, SyncMethodAdapter<($($Tn,)*), R>> for F
+        where
+            $(
+                $Tn: FromToolCallContextPart<S> + ,
+            )*
+            F: FnOnce(&S, $($Tn,)*) -> R + Send + ,
+            R: IntoCallToolResult + Send + ,
+            S: Send + Sync,
+        {
+            type Fut = Ready<Result<CallToolResult, crate::Error>>;
+            #[allow(unused_variables, non_snake_case, unused_mut)]
+            fn call(
+                self,
+                mut context: ToolCallContext<S>,
+            ) -> Self::Fut {
+                $(
+                    let result = $Tn::from_tool_call_context_part(&mut context);
+                    let $Tn = match result {
+                        Ok(value) => value,
+                        Err(e) => return std::future::ready(Err(e)),
+                    };
+                )*
+                std::future::ready(self(context.service.as_ref(), $($Tn,)*).into_call_tool_result())
+            }
+        }
+
         impl<$($Tn,)* S, F, R> CallToolHandler<S, SyncAdapter<($($Tn,)*), R>> for F
         where
             $(
@@ -371,7 +427,7 @@ macro_rules! impl_for {
             S: Send + Sync,
         {
             type Fut = Ready<Result<CallToolResult, crate::Error>>;
-            #[allow(unused_variables, non_snake_case)]
+            #[allow(unused_variables, non_snake_case, unused_mut)]
             fn call(
                 self,
                 mut context: ToolCallContext<S>,
@@ -413,90 +469,87 @@ impl<S: Send + Sync + 'static + Clone> ToolBoxItem<S> {
     }
 }
 
-#[derive(Default)]
-pub struct ToolBox<S> {
-    #[allow(clippy::type_complexity)]
-    pub map: std::collections::HashMap<Cow<'static, str>, ToolBoxItem<S>>,
-}
+// #[derive(Default)]
+// pub struct ToolBox<S> {
+//     #[allow(clippy::type_complexity)]
+//     pub map: std::collections::HashMap<Cow<'static, str>, ToolBoxItem<S>>,
+// }
 
-impl<S> ToolBox<S> {
-    pub fn new() -> Self {
-        Self {
-            map: std::collections::HashMap::new(),
-        }
-    }
-    pub fn add(&mut self, item: ToolBoxItem<S>) {
-        self.map.insert(item.attr.name.clone(), item);
-    }
+// impl<S> ToolBox<S> {
+//     pub fn new() -> Self {
+//         Self {
+//             map: std::collections::HashMap::new(),
+//         }
+//     }
+//     pub fn add(&mut self, item: ToolBoxItem<S>) {
+//         self.map.insert(item.attr.name.clone(), item);
+//     }
 
-    pub fn remove<H, A>(&mut self, name: &str) {
-        self.map.remove(name);
-    }
+//     pub fn remove<H, A>(&mut self, name: &str) {
+//         self.map.remove(name);
+//     }
 
-    pub async fn call(
-        &self,
-        context: ToolCallContext<S>,
-    ) -> Result<CallToolResult, crate::Error> {
-        let item = self
-            .map
-            .get(context.name())
-            .ok_or_else(|| crate::Error::invalid_params("tool not found", None))?;
-        (item.call)(context).await
-    }
+//     pub async fn call(&self, context: ToolCallContext<S>) -> Result<CallToolResult, crate::Error> {
+//         let item = self
+//             .map
+//             .get(context.name())
+//             .ok_or_else(|| crate::Error::invalid_params("tool not found", None))?;
+//         (item.call)(context).await
+//     }
 
-    pub fn list(&self) -> Vec<crate::model::Tool> {
-        self.map.values().map(|item| item.attr.clone()).collect()
-    }
-}
+//     pub fn list(&self) -> Vec<crate::model::Tool> {
+//         self.map.values().map(|item| item.attr.clone()).collect()
+//     }
+// }
 
-#[cfg(feature = "macros")]
-#[cfg_attr(docsrs, doc(cfg(feature = "macros")))]
-#[macro_export]
-macro_rules! tool_box {
-    (@pin_add $callee: ident, $attr: expr, $f: expr) => {
-        $callee.add(ToolBoxItem::new($attr, |context| Box::pin($f(context))));
-    };
-    ($server: ident { $($tool: ident),* $(,)?} ) => {
-        $crate::tool_box!($server { $($tool),* }  tool_box);
-    };
-    ($server: ident { $($tool: ident),* $(,)?} $tool_box: ident) => {
-        fn $tool_box() -> &'static $crate::handler::server::tool::ToolBox<$server> {
-            use $crate::handler::server::tool::{ToolBox, ToolBoxItem};
-            static TOOL_BOX: std::sync::OnceLock<ToolBox<$server>> = std::sync::OnceLock::new();
-            TOOL_BOX.get_or_init(|| {
-                let mut tool_box = ToolBox::new();
-                $crate::paste!{
-                    $(
-                        $crate::tool_box!(@pin_add tool_box, $server::[< $tool _tool_attr>](), $server::[<$tool _tool_call>]);
-                    )*
-                }
-                tool_box
-            })
-        }
-    };
-    (@derive) => {
-        $crate::tool_box!(@derive tool_box);
-    };
+// #[cfg(feature = "macros")]
+// #[cfg_attr(docsrs, doc(cfg(feature = "macros")))]
+// #[macro_export]
+// macro_rules! tool_box {
+//     (@pin_add $callee: ident, $attr: expr, $f: expr) => {
+//         $callee.add(ToolBoxItem::new($attr, |context| Box::pin($f(context))));
+//     };
+//     ($server: ident { $($tool: ident),* $(,)?} ) => {
+//         $crate::tool_box!($server { $($tool),* }  tool_box);
+//     };
+//     ($server: ident { $($tool: ident),* $(,)?} $tool_box: ident) => {
+//         fn $tool_box() -> &'static $crate::handler::server::tool::ToolBox<$server> {
+//             use $crate::handler::server::tool::{ToolBox, ToolBoxItem};
+//             static TOOL_BOX: std::sync::OnceLock<ToolBox<$server>> = std::sync::OnceLock::new();
+//             TOOL_BOX.get_or_init(|| {
+//                 let mut tool_box = ToolBox::new();
+//                 $crate::paste!{
+//                     $(
+//                         $crate::tool_box!(@pin_add tool_box, $server::[< $tool _tool_attr>](), $server::[<$tool _tool_call>]);
+//                     )*
+//                 }
+//                 tool_box
+//             })
+//         }
+//     };
+//     (@derive) => {
+//         $crate::tool_box!(@derive tool_box);
+//     };
 
-    (@derive $tool_box:ident) => {
-        async fn list_tools(
-            &self,
-            _: Option<$crate::model::PaginatedRequestParam>,
-            _: $crate::service::RequestContext<$crate::service::RoleServer>,
-        ) -> Result<$crate::model::ListToolsResult, $crate::Error> {
-            Ok($crate::model::ListToolsResult {
-                next_cursor: None,
-                tools: Self::tool_box().list(),
-            })
-        }
+//     (@derive $tool_box:ident) => {
+//         async fn list_tools(
+//             &self,
+//             _: Option<$crate::model::PaginatedRequestParam>,
+//             _: $crate::service::RequestContext<$crate::service::RoleServer>,
+//         ) -> Result<$crate::model::ListToolsResult, $crate::Error> {
+//             Ok($crate::model::ListToolsResult {
+//                 next_cursor: None,
+//                 tools: Self::tool_box().list(),
+//             })
+//         }
 
-        async fn call_tool(
-            &self,
-            call_tool_request_param: $crate::model::CallToolRequestParam,
-            context: $crate::service::RequestContext<$crate::service::RoleServer>,
-        ) -> Result<$crate::model::CallToolResult, $crate::Error> {
-            let context = $crate::handler::server::tool::ToolCallContext::new(self, call_tool_request_param, context);
-            Self::$tool_box().call(context).await
-        }
-    }
-}
+//         async fn call_tool(
+//             &self,
+//             call_tool_request_param: $crate::model::CallToolRequestParam,
+//             context: $crate::service::RequestContext<$crate::service::RoleServer>,
+//         ) -> Result<$crate::model::CallToolResult, $crate::Error> {
+//             let context = $crate::handler::server::tool::ToolCallContext::new(self, call_tool_request_param, context);
+//             Self::$tool_box().call(context).await
+//         }
+//     }
+// }
