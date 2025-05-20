@@ -5,12 +5,8 @@ on:
     branches: [ main, release ]
     tags:
       - 'release-*'
-    paths-ignore:
-      - "**/coverage.svg"
   pull_request:
     branches: [ main, release ]
-    paths-ignore:
-      - "**/coverage.svg"
 
 env:
   CARGO_TERM_COLOR: always
@@ -136,19 +132,8 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
-      - name: Install lcov
-        run: sudo apt-get update && sudo apt-get install -y lcov bc
-
       - name: Run tests with coverage
-        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
-
-      - name: Generate coverage badge
-        if: github.ref == 'refs/heads/main'
-        uses: GoogleCloudPlatform/lcov-coverage-badge@5857899449990297b622767f36e4fa8d1218acdb
-        with:
-          file: ./lcov.info
-          icon_name: github
-          access_token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo llvm-cov --all-features
   
   security_audit:
     name: Security Audit
