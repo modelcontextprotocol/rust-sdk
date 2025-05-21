@@ -16,6 +16,7 @@ rig-core = "0.10.0"
 tokio = { version = "1", features = ["full"] }
 rmcp = { path = "../../crates/rmcp", features = [
     "client",
+    "reqwest",
     "transport-child-process",
     "transport-sse-client",
 ] }
