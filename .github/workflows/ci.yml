@@ -163,6 +163,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Add target WASI preview 2
+        run: rustup target add wasm32-wasip2
+
       - name: Run tests in examples
         run: |
           # Tests are run for each subdirectory in the example directory.
