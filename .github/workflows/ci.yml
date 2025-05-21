@@ -134,6 +134,53 @@ jobs:
 
       - name: Run tests with coverage
         run: cargo llvm-cov --all-features
+
+  example-test:
+    name: Example test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # install nodejs
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Create venv for python
+        run: uv venv
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests in examples
+        run: |
+          # Tests are run for each subdirectory in the example directory.
+          for dir in examples/*/ ; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              echo "Testing $dir"
+              cargo test --manifest-path "$dir/Cargo.toml" --all-features
+            fi
+          done
+
+      - name: Build examples
+        run: |
+          for dir in examples/*/ ; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              echo "Building $dir"
+              cargo build --manifest-path "$dir/Cargo.toml" --all-features
+            fi
+          done
   
   security_audit:
     name: Security Audit
