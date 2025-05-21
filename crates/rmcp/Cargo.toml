@@ -32,7 +32,7 @@ oauth2 = { version = "5.0", optional = true }
 schemars = { version = "0.8", optional = true, features = ["chrono"] }
 
 # for image encoding
-base64 = { version = "0.21", optional = true }
+base64 = { version = "0.22", optional = true }
 
 # for SSE client
 reqwest = { version = "0.12", default-features = false, features = [
