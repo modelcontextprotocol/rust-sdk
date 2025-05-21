@@ -164,22 +164,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Add target WASI preview 2
-        run: rustup target add wasm32-wasip2
-
-      - name: Run tests in examples
         run: |
-          # Tests are run for each subdirectory in the example directory.
-          for dir in examples/*/ ; do
-            if [ -f "$dir/Cargo.toml" ]; then
-              echo "Testing $dir"
-
-              if [[ "$dir" == *"wasi"* ]]; then
-                cargo test --manifest-path "$dir/Cargo.toml" --all-features --target wasm32-wasip2
-              else
-                cargo test --manifest-path "$dir/Cargo.toml" --all-features
-              fi
-            fi
-          done
+          rustup target add wasm32-wasip2
 
       - name: Build examples
         run: |
@@ -188,14 +174,25 @@ jobs:
               echo "Building $dir"
 
               if [[ "$dir" == *"wasi"* ]]; then
-                echo "Building WASI example with special configuration"
-                cargo build --manifest-path "$dir/Cargo.toml" --all-features --target wasm32-wasip2
+                cargo build --manifest-path "$dir/Cargo.toml" --target wasm32-wasip2
               else
-                cargo build --manifest-path "$dir/Cargo.toml" --all-features
+                cargo build --manifest-path "$dir/Cargo.toml" --all-features --tests
               fi
             fi
           done
-  
+
+      - name: Run tests in examples
+        run: |
+          # Tests are run for each subdirectory in the example directory.
+          for dir in examples/*/ ; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              if [[ "$dir" != *"wasi"* ]]; then
+                echo "Testing $dir"
+                cargo test --manifest-path "$dir/Cargo.toml" --all-features
+              fi
+            fi
+          done
+
   security_audit:
     name: Security Audit
     runs-on: ubuntu-latest
