@@ -5,12 +5,8 @@ on:
     branches: [ main, release ]
     tags:
       - 'release-*'
-    paths-ignore:
-      - "**/coverage.svg"
   pull_request:
     branches: [ main, release ]
-    paths-ignore:
-      - "**/coverage.svg"
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,12 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           
@@ -43,7 +39,7 @@ jobs:
     name: Code Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust fmt
         run: rustup toolchain install nightly --component rustfmt
@@ -55,7 +51,7 @@ jobs:
     name: Lint with Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -77,16 +73,16 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       # install nodejs
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -108,16 +104,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # install nodejs
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -136,19 +132,8 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
-      - name: Install lcov
-        run: sudo apt-get update && sudo apt-get install -y lcov bc
-
       - name: Run tests with coverage
-        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
-
-      - name: Generate coverage badge
-        if: github.ref == 'refs/heads/main'
-        uses: GoogleCloudPlatform/lcov-coverage-badge@5857899449990297b622767f36e4fa8d1218acdb
-        with:
-          file: ./lcov.info
-          icon_name: github
-          access_token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo llvm-cov --all-features
   
   security_audit:
     name: Security Audit
@@ -171,7 +156,7 @@ jobs:
     name: Generate Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly

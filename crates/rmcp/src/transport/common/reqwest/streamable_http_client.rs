@@ -88,8 +88,7 @@ impl StreamableHttpClient for reqwest::Client {
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .post(uri.as_ref())
-            .header(ACCEPT, EVENT_STREAM_MIME_TYPE)
-            .header(ACCEPT, JSON_MIME_TYPE);
+            .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
         if let Some(auth_header) = auth_token {
             request = request.bearer_auth(auth_header);
         }

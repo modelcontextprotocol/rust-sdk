@@ -7,7 +7,7 @@ Wait for the first release.
 <!-- [![Crates.io Version](todo)](todo) -->
 <!-- ![Release status](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg) -->
 <!-- [![docs.rs](todo)](todo) -->
-![Coverage](coverage.svg)
+![Coverage](docs/coverage.svg)
 
 An official rust Model Context Protocol SDK implementation with tokio async runtime.
 
