@@ -169,7 +169,12 @@ jobs:
           for dir in examples/*/ ; do
             if [ -f "$dir/Cargo.toml" ]; then
               echo "Testing $dir"
-              cargo test --manifest-path "$dir/Cargo.toml" --all-features
+
+              if [[ "$dir" == *"wasi"* ]]; then
+                cargo test --manifest-path "$dir/Cargo.toml" --all-features --target wasm32-wasip2
+              else
+                cargo test --manifest-path "$dir/Cargo.toml" --all-features
+              fi
             fi
           done
 
@@ -178,7 +183,13 @@ jobs:
           for dir in examples/*/ ; do
             if [ -f "$dir/Cargo.toml" ]; then
               echo "Building $dir"
-              cargo build --manifest-path "$dir/Cargo.toml" --all-features
+
+              if [[ "$dir" == *"wasi"* ]]; then
+                echo "Building WASI example with special configuration"
+                cargo build --manifest-path "$dir/Cargo.toml" --all-features --target wasm32-wasip2
+              else
+                cargo build --manifest-path "$dir/Cargo.toml" --all-features
+              fi
             fi
           done
   
