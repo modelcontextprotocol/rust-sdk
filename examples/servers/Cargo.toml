@@ -19,7 +19,7 @@ tracing-subscriber = { version = "0.3", features = [
     "fmt",
 ] }
 futures = "0.3"
-rand = { version = "0.8", features = ["std"] }
+rand = { version = "0.9", features = ["std"] }
 axum = { version = "0.8", features = ["macros"] }
 schemars = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json"] }
