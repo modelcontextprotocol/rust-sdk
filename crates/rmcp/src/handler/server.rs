@@ -111,7 +111,6 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
         }
-        let info = self.get_info();
         std::future::ready(Ok(self.get_info()))
     }
     fn complete(
