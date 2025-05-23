@@ -300,9 +300,9 @@ impl Peer<RoleClient> {
         Ok(tools)
     }
 
-    /// A wrapper method for [`Peer<RoleClient>::list_resources`].
+    /// A wrapper method for [`Peer<RoleClient>::list_prompts`].
     ///
-    /// This function will call [`Peer<RoleClient>::list_resources`] multiple times until all resources are listed.
+    /// This function will call [`Peer<RoleClient>::list_prompts`] multiple times until all prompts are listed.
     pub async fn list_all_prompts(&self) -> Result<Vec<crate::model::Prompt>, ServiceError> {
         let mut prompts = Vec::new();
         let mut cursor = None;
