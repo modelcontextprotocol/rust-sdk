@@ -1,7 +1,7 @@
 
 
 [workspace]
-members = ["crates/rmcp", "crates/rmcp-macros", "examples/*"]
+members = [ "bindings/python","crates/rmcp", "crates/rmcp-macros", "examples/*"]
 resolver = "2"
 
 [workspace.dependencies]
