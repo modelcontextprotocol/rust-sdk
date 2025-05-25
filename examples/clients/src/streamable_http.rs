@@ -2,7 +2,7 @@ use anyhow::Result;
 use rmcp::{
     ServiceExt,
     model::{CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation},
-    transport::SseClientTransport,
+    transport::StreamableHttpClientTransport,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let transport = SseClientTransport::start("http://localhost:8000/sse").await?;
+    let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000");
     let client_info = ClientInfo {
         protocol_version: Default::default(),
         capabilities: ClientCapabilities::default(),

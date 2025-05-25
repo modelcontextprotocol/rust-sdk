@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ClientHandler, Peer, RoleClient, ServerHandler, ServiceExt,
+    ClientHandler, ServerHandler, ServiceExt,
     model::{
         ResourceUpdatedNotificationParam, ServerCapabilities, ServerInfo, SubscribeRequestParam,
     },
@@ -49,7 +49,6 @@ impl ServerHandler for Server {
 
 pub struct Client {
     receive_signal: Arc<Notify>,
-    peer: Option<Peer<RoleClient>>,
 }
 
 impl ClientHandler for Client {
@@ -57,14 +56,6 @@ impl ClientHandler for Client {
         let uri = params.uri;
         tracing::info!("Resource updated: {}", uri);
         self.receive_signal.notify_one();
-    }
-
-    fn set_peer(&mut self, peer: Peer<RoleClient>) {
-        self.peer.replace(peer);
-    }
-
-    fn get_peer(&self) -> Option<Peer<RoleClient>> {
-        self.peer.clone()
     }
 }
 
@@ -85,7 +76,6 @@ async fn test_server_notification() -> anyhow::Result<()> {
     });
     let receive_signal = Arc::new(Notify::new());
     let client = Client {
-        peer: Default::default(),
         receive_signal: receive_signal.clone(),
     }
     .serve(client_transport)

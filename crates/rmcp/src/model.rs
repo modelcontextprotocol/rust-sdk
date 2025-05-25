@@ -36,6 +36,7 @@ pub fn object(value: serde_json::Value) -> JsonObject {
 
 /// Use this macro just like [`serde_json::json!`]
 #[cfg(feature = "macros")]
+#[cfg_attr(docsrs, doc(cfg(feature = "macros")))]
 #[macro_export]
 macro_rules! object {
     ({$($tt:tt)*}) => {
@@ -118,6 +119,13 @@ impl Default for ProtocolVersion {
         Self::LATEST
     }
 }
+
+impl std::fmt::Display for ProtocolVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl ProtocolVersion {
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));

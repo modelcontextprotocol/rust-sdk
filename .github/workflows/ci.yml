@@ -18,14 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '20'
           
       - name: Install commitlint
         run: |
@@ -39,7 +39,7 @@ jobs:
     name: Code Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust fmt
         run: rustup toolchain install nightly --component rustfmt
@@ -51,7 +51,7 @@ jobs:
     name: Lint with Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -73,16 +73,16 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       # install nodejs
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -101,17 +101,19 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # install nodejs
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -132,7 +134,63 @@ jobs:
 
       - name: Run tests with coverage
         run: cargo llvm-cov --all-features
-  
+
+  example-test:
+    name: Example test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # install nodejs
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Create venv for python
+        run: uv venv
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Add target WASI preview 2
+        run: |
+          rustup target add wasm32-wasip2
+
+      - name: Build examples
+        run: |
+          for dir in examples/*/ ; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              echo "Building $dir"
+
+              if [[ "$dir" == *"wasi"* ]]; then
+                cargo build --manifest-path "$dir/Cargo.toml" --target wasm32-wasip2
+              else
+                cargo build --manifest-path "$dir/Cargo.toml" --all-features --tests
+              fi
+            fi
+          done
+
+      - name: Run tests in examples
+        run: |
+          # Tests are run for each subdirectory in the example directory.
+          for dir in examples/*/ ; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              if [[ "$dir" != *"wasi"* ]]; then
+                echo "Testing $dir"
+                cargo test --manifest-path "$dir/Cargo.toml" --all-features
+              fi
+            fi
+          done
+
   security_audit:
     name: Security Audit
     runs-on: ubuntu-latest
@@ -154,18 +212,19 @@ jobs:
     name: Generate Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Generate documentation
         run: |
-          cargo doc --no-deps -p rmcp -p rmcp-macros
+          cargo +nightly doc --no-deps -p rmcp -p rmcp-macros --all-features
         env:
-          RUSTDOCFLAGS: -Dwarnings
+          RUSTDOCFLAGS: --cfg docsrs -Dwarnings
+          RUSTFLAGS: --cfg docsrs 
 
   release:
     name: Release crates

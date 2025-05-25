@@ -19,7 +19,7 @@ Enable the auth feature in Cargo.toml:
 
 ```toml
 [dependencies]
-rmcp = { version = "0.1", features = ["auth", "transport-sse"] }
+rmcp = { version = "0.1", features = ["auth", "transport-sse-client"] }
 ```
 
 ### 2. Use OAuthState
