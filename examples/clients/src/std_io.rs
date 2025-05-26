@@ -17,12 +17,17 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    let args = "cargo run --example servers_std_io".to_string();
+    let mut args = args.split_whitespace();
     let service = ()
-        .serve(TokioChildProcess::new(Command::new("uvx").configure(
-            |cmd| {
-                cmd.arg("mcp-server-git");
-            },
-        ))?)
+        .serve(TokioChildProcess::new(
+            Command::new(args.next().unwrap()).configure(|cmd| {
+                while let Some(arg) = args.next() {
+                    cmd.arg(arg);
+                }
+            }),
+        )?)
         .await?;
 
     // or serve_client((), TokioChildProcess::new(cmd)?).await?;

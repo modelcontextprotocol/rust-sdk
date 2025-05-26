@@ -1,0 +1,19 @@
+{
+	"servers": {
+		// "rmcp-servers-stdio": {
+		// 	"type": "stdio",
+		// 	// "command": "/home/pete/.cargo_target/release/examples/servers_std_io",
+		// 	"command": "cargo",
+		// 	"args": ["run", "--example", "servers_std_io"]
+		// },
+		"generic-server": {
+			"type": "stdio",
+			// "command": "/home/pete/.cargo_target/release/examples/servers_std_io",
+			"command": "cargo",
+			"args": ["run",
+			"--manifest-path",
+			"/home/pete/me-ref/rmcp/Cargo.toml",
+			"--example", "servers_std_io"]
+		}
+	}
+}
