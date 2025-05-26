@@ -421,69 +421,21 @@ impl<R: ServiceRole> Peer<R> {
 
 #[derive(Debug)]
 pub struct RunningService<R: ServiceRole, S: Service<R>> {
-    handle: RunningServiceHandle<R, S>,
-    /// cancellation token with drop guard
+    service: Arc<S>,
+    peer: Peer<R>,
+    handle: tokio::task::JoinHandle<QuitReason>,
+    cancellation_token: CancellationToken,
     dg: DropGuard,
 }
 impl<R: ServiceRole, S: Service<R>> Deref for RunningService<R, S> {
     type Target = Peer<R>;
 
     fn deref(&self) -> &Self::Target {
-        self.handle.peer()
+        &self.peer
     }
 }
 
 impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
-    #[inline]
-    pub fn peer(&self) -> &Peer<R> {
-        &self.handle.peer
-    }
-    #[inline]
-    pub fn service(&self) -> &S {
-        self.handle.service.as_ref()
-    }
-    pub async fn waiting(self) -> Result<QuitReason, tokio::task::JoinError> {
-        self.handle.waiting().await
-    }
-    pub async fn cancel(self) -> Result<QuitReason, tokio::task::JoinError> {
-        let RunningService { dg, handle, .. } = self;
-        dg.disarm().cancel();
-        handle.handle.await
-    }
-    /// Split the service into its handle and cancellation token
-    ///
-    /// This lets you trigger the service to cancel while waiting on it on a separate task.
-    pub fn split(self) -> (RunningServiceHandle<R, S>, RunningServiceCancellationToken) {
-        (self.handle, RunningServiceCancellationToken { dg: self.dg })
-    }
-}
-
-#[derive(Debug)]
-pub struct RunningServiceCancellationToken {
-    dg: DropGuard,
-}
-
-impl RunningServiceCancellationToken {
-    pub fn cancel(self) {
-        self.dg.disarm().cancel();
-    }
-}
-
-#[derive(Debug)]
-pub struct RunningServiceHandle<R: ServiceRole, S: Service<R>> {
-    service: Arc<S>,
-    peer: Peer<R>,
-    handle: tokio::task::JoinHandle<QuitReason>,
-}
-impl<R: ServiceRole, S: Service<R>> Deref for RunningServiceHandle<R, S> {
-    type Target = Peer<R>;
-
-    fn deref(&self) -> &Self::Target {
-        self.peer()
-    }
-}
-
-impl<R: ServiceRole, S: Service<R>> RunningServiceHandle<R, S> {
     #[inline]
     pub fn peer(&self) -> &Peer<R> {
         &self.peer
@@ -492,8 +444,27 @@ impl<R: ServiceRole, S: Service<R>> RunningServiceHandle<R, S> {
     pub fn service(&self) -> &S {
         self.service.as_ref()
     }
+    #[inline]
+    pub fn cancellation_token(&self) -> RunningServiceCancellationToken {
+        RunningServiceCancellationToken(self.cancellation_token.clone())
+    }
+    #[inline]
     pub async fn waiting(self) -> Result<QuitReason, tokio::task::JoinError> {
         self.handle.await
+    }
+    pub async fn cancel(self) -> Result<QuitReason, tokio::task::JoinError> {
+        let RunningService { dg, handle, .. } = self;
+        dg.disarm().cancel();
+        handle.await
+    }
+}
+
+// use a wrapper type so we can tweak the implementation if needed
+pub struct RunningServiceCancellationToken(CancellationToken);
+
+impl RunningServiceCancellationToken {
+    pub fn cancel(self) {
+        self.0.cancel();
     }
 }
 
@@ -841,11 +812,10 @@ where
         quit_reason
     });
     RunningService {
-        handle: RunningServiceHandle {
-            service,
-            peer: peer_return,
-            handle,
-        },
+        service,
+        peer: peer_return,
+        handle,
+        cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
     }
 }
