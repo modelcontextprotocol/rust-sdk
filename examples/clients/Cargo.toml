@@ -34,8 +34,8 @@ name = "clients_sse"
 path = "src/sse.rs"
 
 [[example]]
-name = "clients_std_io"
-path = "src/std_io.rs"
+name = "clients_git_stdio"
+path = "src/git_stdio.rs"
 
 [[example]]
 name = "clients_streamable_http"
@@ -50,5 +50,5 @@ name = "clients_collection"
 path = "src/collection.rs"
 
 [[example]]
-name = "oauth_client"
-path = "src/oauth_client.rs"
+name = "clients_oauth_client"
+path = "src/auth/oauth_client.rs"

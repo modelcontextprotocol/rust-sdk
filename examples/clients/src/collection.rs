@@ -1,3 +1,7 @@
+/// This example show how to store multiple clients in a map and call tools on them.
+/// into_dyn() is used to convert the service to a dynamic service.
+/// For example, you can use this to call tools on a service that is running in a different process.
+/// or a service that is running in a different machine.
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -20,7 +24,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let mut client_list = HashMap::new();
+    let mut clients_map = HashMap::new();
     for idx in 0..10 {
         let service = ()
             .into_dyn()
@@ -30,10 +34,10 @@ async fn main() -> Result<()> {
                 },
             ))?)
             .await?;
-        client_list.insert(idx, service);
+        clients_map.insert(idx, service);
     }
 
-    for (_, service) in client_list.iter() {
+    for (_, service) in clients_map.iter() {
         // Initialize
         let _server_info = service.peer_info();
 
@@ -48,7 +52,7 @@ async fn main() -> Result<()> {
             })
             .await?;
     }
-    for (_, service) in client_list {
+    for (_, service) in clients_map {
         service.cancel().await?;
     }
     Ok(())

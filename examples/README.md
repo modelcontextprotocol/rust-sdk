@@ -55,10 +55,7 @@
 
 # Client Examples
 
-- [Client SSE](clients/src/sse.rs), using reqwest and eventsource-client.
-- [Client stdio](clients/src/std_io.rs), using tokio to spawn child process.
-- [Everything](clients/src/everything_stdio.rs), test with `@modelcontextprotocol/server-everything`
-- [Collection](clients/src/collection.rs), How to transpose service into dynamic object, so they will have a same type.
+see [clients/README.md](clients/README.md)
 
 # Server Examples
 

@@ -44,6 +44,7 @@ pub struct GenericService<DS: DataService> {
 
 #[tool(tool_box)]
 impl<DS: DataService> GenericService<DS> {
+    #[allow(dead_code)]
     pub fn new(data_service: DS) -> Self {
         Self {
             data_service: Arc::new(data_service),
@@ -62,6 +63,7 @@ impl<DS: DataService> GenericService<DS> {
     }
 }
 
+#[tool(tool_box)]
 impl<DS: DataService> ServerHandler for GenericService<DS> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
