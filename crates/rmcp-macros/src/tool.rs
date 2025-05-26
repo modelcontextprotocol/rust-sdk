@@ -258,7 +258,7 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
                 input.items.push(parse_quote! {
                     async fn list_tools(
                         &self,
-                        request: rmcp::model::PaginatedRequestParam,
+                        request: Option<rmcp::model::PaginatedRequestParam>,
                         context: rmcp::service::RequestContext<rmcp::RoleServer>,
                     ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
                         self.list_tools_inner(request, context).await
@@ -316,7 +316,7 @@ pub(crate) fn tool_impl_item(attr: TokenStream, mut input: ItemImpl) -> syn::Res
             input.items.push(parse_quote! {
                 async fn list_tools_inner(
                     &self,
-                    _: rmcp::model::PaginatedRequestParam,
+                    _: Option<rmcp::model::PaginatedRequestParam>,
                     _: rmcp::service::RequestContext<rmcp::RoleServer>,
                 ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
                     Ok(rmcp::model::ListToolsResult {
