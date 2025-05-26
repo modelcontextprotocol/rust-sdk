@@ -83,6 +83,8 @@ impl<DS: DataService> GenericServer<DS> {
         self.data_service.get_data()
     }
 }
+#[tool(tool_box)]
+impl<DS: DataService> ServerHandler for GenericServer<DS> {}
 
 #[tokio::test]
 async fn test_tool_macros() {
