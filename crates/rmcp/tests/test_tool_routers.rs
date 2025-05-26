@@ -52,14 +52,14 @@ fn async_function<T>(
     drop(fields)
 }
 
-fn attr_generator_fn<T>() -> ToolRoute<TestHandler<T>> {
+fn attr_generator_fn<S: Send + Sync + 'static>() -> ToolRoute<S> {
     ToolRoute::new(
         Tool::new(
             "sync_method_from_generator_fn",
             "a sync method tool",
             schema_for_type::<Request>(),
         ),
-        TestHandler::sync_method,
+        sync_function,
     )
 }
 
@@ -93,6 +93,5 @@ fn test_tool_router() {
         )
         .with_tool(attr_generator_fn)
         .with_tools(tool_router);
-
     assert_service(router);
 }

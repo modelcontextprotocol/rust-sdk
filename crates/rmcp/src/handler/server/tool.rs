@@ -312,7 +312,7 @@ impl< S> ToolCallContext<S> {
 }
 
 #[allow(clippy::type_complexity)]
-pub struct AsyncAdapter<P, Fut, R>(PhantomData<(fn(P) -> Fut, fn(Fut) -> R)>);
+pub struct AsyncAdapter<P, Fut, R>(PhantomData<fn(P) -> fn(Fut) -> R>);
 pub struct SyncAdapter<P, R>(PhantomData<fn(P) -> R>);
 
 // #[allow(clippy::type_complexity)]
