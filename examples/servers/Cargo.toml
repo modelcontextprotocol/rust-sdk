@@ -27,6 +27,7 @@ chrono = "0.4"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 serde_urlencoded = "0.7"
 askama = { version = "0.14"}
+tower-http = { version = "0.6", features = ["cors"] }
 
 # [dev-dependencies.'cfg(target_arch="linux")'.dependencies]
 

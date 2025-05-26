@@ -21,8 +21,10 @@ use rmcp::transport::{
     sse_server::SseServerConfig,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
@@ -518,6 +520,15 @@ async fn validate_token_middleware(
 
 // handle oauth server metadata request
 async fn oauth_authorization_server() -> impl IntoResponse {
+    let mut additional_fields = HashMap::new();
+    additional_fields.insert(
+        "response_types_supported".into(),
+        Value::Array(vec![Value::String("code".into())]),
+    );
+    additional_fields.insert(
+        "code_challenge_methods_supported".into(),
+        Value::Array(vec![Value::String("S256".into())]),
+    );
     let metadata = AuthorizationMetadata {
         authorization_endpoint: format!("http://{}/oauth/authorize", BIND_ADDRESS),
         token_endpoint: format!("http://{}/oauth/token", BIND_ADDRESS),
@@ -525,7 +536,7 @@ async fn oauth_authorization_server() -> impl IntoResponse {
         registration_endpoint: format!("http://{}/oauth/register", BIND_ADDRESS),
         issuer: Some(BIND_ADDRESS.to_string()),
         jwks_uri: Some(format!("http://{}/oauth/jwks", BIND_ADDRESS)),
-        additional_fields: HashMap::new(),
+        additional_fields,
     };
     debug!("metadata: {:?}", metadata);
     (StatusCode::OK, Json(metadata))
@@ -655,18 +666,33 @@ async fn main() -> Result<()> {
         validate_token_middleware,
     ));
 
+    // Create CORS layer for the oauth authorization server endpoint
+    let cors_layer = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    // Create a sub-router for the oauth authorization server endpoint with CORS
+    let oauth_server_router = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_authorization_server).options(oauth_authorization_server),
+        )
+        .route("/oauth/token", post(oauth_token).options(oauth_token))
+        .route(
+            "/oauth/register",
+            post(oauth_register).options(oauth_register),
+        )
+        .layer(cors_layer)
+        .with_state(oauth_store.clone());
+
     // Create HTTP router with request logging middleware
     let app = Router::new()
         .route("/", get(index))
         .route("/mcp", get(index))
-        .route(
-            "/.well-known/oauth-authorization-server",
-            get(oauth_authorization_server),
-        )
         .route("/oauth/authorize", get(oauth_authorize))
         .route("/oauth/approve", post(oauth_approve))
-        .route("/oauth/token", post(oauth_token))
-        .route("/oauth/register", post(oauth_register))
+        .merge(oauth_server_router) // Merge the CORS-enabled oauth server router
         // .merge(protected_sse_router)
         .with_state(oauth_store.clone())
         .layer(middleware::from_fn(log_request));
