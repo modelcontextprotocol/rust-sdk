@@ -59,8 +59,7 @@ see [clients/README.md](clients/README.md)
 
 # Server Examples
 
-- [Server SSE](servers/src/axum.rs), using axum as web server.
-- [Server stdio](servers/src/std_io.rs), using tokio async io.
+see [servers/README.md](servers/README.md)
 
 # Transport Examples
 

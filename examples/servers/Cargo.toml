@@ -29,37 +29,35 @@ serde_urlencoded = "0.7"
 askama = { version = "0.14"}
 tower-http = { version = "0.6", features = ["cors"] }
 
-# [dev-dependencies.'cfg(target_arch="linux")'.dependencies]
 
 [dev-dependencies]
 tokio-stream = { version = "0.1" }
-# tokio-util = { version = "0.7", features = ["io", "codec"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 
 [[example]]
-name = "servers_std_io"
-path = "src/std_io.rs"
+name = "servers_counter_stdio"
+path = "src/counter_stdio.rs"
 
 [[example]]
-name = "servers_axum"
-path = "src/axum.rs"
+name = "servers_counter_sse"
+path = "src/counter_sse.rs"
 
 [[example]]
-name = "servers_axum_router"
-path = "src/axum_router.rs"
+name = "servers_counter_sse_directly"
+path = "src/counter_sse_directly.rs"
 
 [[example]]
-name = "servers_generic_server"
-path = "src/generic_service.rs"
+name = "servers_memory_stdio"
+path = "src/memory_stdio.rs"
 
 [[example]]
-name = "servers_axum_streamable_http"
-path = "src/axum_streamable_http.rs"
+name = "servers_counter_streamhttp"
+path = "src/counter_streamhttp.rs"
 
 [[example]]
-name = "servers_auth_sse"
-path = "src/auth_sse.rs"
+name = "servers_complex_auth_sse"
+path = "src/complex_auth_sse.rs"
 
 [[example]]
-name = "mcp_oauth_server"
-path = "src/mcp_oauth_server.rs"
+name = "servers_simple_auth_sse"
+path = "src/simple_auth_sse.rs"
