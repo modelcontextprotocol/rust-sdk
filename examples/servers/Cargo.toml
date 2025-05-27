@@ -7,8 +7,20 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rmcp= { path = "../../crates/rmcp", features = ["server", "transport-sse-server", "transport-io", "transport-streamable-http-server", "auth"] }
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "signal"] }
+rmcp = { path = "../../crates/rmcp", features = [
+    "server",
+    "transport-sse-server",
+    "transport-io",
+    "transport-streamable-http-server",
+    "auth",
+] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "io-std",
+    "signal",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -26,9 +38,10 @@ reqwest = { version = "0.12", features = ["json"] }
 chrono = "0.4"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 serde_urlencoded = "0.7"
-askama = { version = "0.14"}
+askama = { version = "0.14" }
 tower-http = { version = "0.6", features = ["cors"] }
-
+hyper = { version = "1" }
+hyper-util = { version = "0", features = ["server"] }
 
 [dev-dependencies]
 tokio-stream = { version = "0.1" }
@@ -61,3 +74,7 @@ path = "src/complex_auth_sse.rs"
 [[example]]
 name = "servers_simple_auth_sse"
 path = "src/simple_auth_sse.rs"
+
+[[example]]
+name = "counter_hyper_streamable_http"
+path = "src/counter_hyper_streamable_http.rs"

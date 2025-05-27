@@ -7,7 +7,7 @@
 //! | transport         | client                                                    | server                                                |
 //! |:-:                |:-:                                                        |:-:                                                    |
 //! | std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
-//! | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::session::create_session`]   |
+//! | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::StreamableHttpService`]     |
 //! | sse               | [`sse_client::SseClientTransport`]                        | [`sse_server::SseServer`]                             |
 //!
 //！## Helper Transport Types
@@ -63,6 +63,8 @@
 //!     Ok(())
 //! }
 //! ```
+
+use std::sync::Arc;
 
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
@@ -122,7 +124,7 @@ pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, Authorized
 pub mod streamable_http_server;
 #[cfg(feature = "transport-streamable-http-server")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server")))]
-pub use streamable_http_server::axum::StreamableHttpServer;
+pub use streamable_http_server::tower::{StreamableHttpServerConfig, StreamableHttpService};
 
 #[cfg(feature = "transport-streamable-http-client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]
@@ -138,7 +140,7 @@ pub trait Transport<R>: Send
 where
     R: ServiceRole,
 {
-    type Error;
+    type Error: std::error::Error + Send + Sync + 'static;
     /// Send a message to the transport
     ///
     /// Notice that the future returned by this function should be `Send` and `'static`.
@@ -169,9 +171,73 @@ impl<R, T, E> IntoTransport<R, E, TransportAdapterIdentity> for T
 where
     T: Transport<R, Error = E> + Send + 'static,
     R: ServiceRole,
-    E: std::error::Error + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn into_transport(self) -> impl Transport<R, Error = E> + 'static {
         self
+    }
+}
+
+/// A transport that can send a single message and then close itself
+pub struct OneshotTransport<R>
+where
+    R: ServiceRole,
+{
+    message: Option<RxJsonRpcMessage<R>>,
+    sender: tokio::sync::mpsc::Sender<TxJsonRpcMessage<R>>,
+    finished_signal: Arc<tokio::sync::Notify>,
+}
+
+impl<R> OneshotTransport<R>
+where
+    R: ServiceRole,
+{
+    pub fn new(
+        message: RxJsonRpcMessage<R>,
+    ) -> (Self, tokio::sync::mpsc::Receiver<TxJsonRpcMessage<R>>) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(16);
+        (
+            Self {
+                message: Some(message),
+                sender,
+                finished_signal: Arc::new(tokio::sync::Notify::new()),
+            },
+            receiver,
+        )
+    }
+}
+
+impl<R> Transport<R> for OneshotTransport<R>
+where
+    R: ServiceRole,
+{
+    type Error = tokio::sync::mpsc::error::SendError<TxJsonRpcMessage<R>>;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<R>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let sender = self.sender.clone();
+        let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_));
+        let signal = self.finished_signal.clone();
+        async move {
+            sender.send(item).await?;
+            if terminate {
+                signal.notify_waiters();
+            }
+            Ok(())
+        }
+    }
+
+    async fn receive(&mut self) -> Option<RxJsonRpcMessage<R>> {
+        if self.message.is_none() {
+            self.finished_signal.notified().await;
+        }
+        self.message.take()
+    }
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.message.take();
+        std::future::ready(Ok(()))
     }
 }

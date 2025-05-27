@@ -1,4 +1,6 @@
-use rmcp::transport::streamable_http_server::axum::StreamableHttpServer;
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpService, session::local::LocalSessionManager,
+};
 use tracing_subscriber::{
     layer::SubscriberExt,
     util::SubscriberInitExt,
@@ -19,11 +21,16 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let ct = StreamableHttpServer::serve(BIND_ADDRESS.parse()?)
-        .await?
-        .with_service(Counter::new);
+    let service = StreamableHttpService::new(
+        Counter::new,
+        LocalSessionManager::default().into(),
+        Default::default(),
+    );
 
-    tokio::signal::ctrl_c().await?;
-    ct.cancel();
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind(BIND_ADDRESS).await?;
+    let _ = axum::serve(tcp_listener, router)
+        .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.unwrap() })
+        .await;
     Ok(())
 }

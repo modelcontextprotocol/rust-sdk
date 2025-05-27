@@ -2,10 +2,14 @@ use rmcp::{
     ServiceExt,
     service::QuitReason,
     transport::{
-        ConfigureCommandExt, SseServer, StreamableHttpClientTransport, TokioChildProcess,
-        streamable_http_server::axum::StreamableHttpServer,
+        ConfigureCommandExt, SseServer, StreamableHttpClientTransport, StreamableHttpServerConfig,
+        TokioChildProcess,
+        streamable_http_server::{
+            session::local::LocalSessionManager, tower::StreamableHttpService,
+        },
     },
 };
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
 use common::calculator::Calculator;
@@ -90,10 +94,26 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let ct = StreamableHttpServer::serve(STREAMABLE_HTTP_BIND_ADDRESS.parse()?)
-        .await?
-        .with_service(Calculator::default);
-
+    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+        StreamableHttpService::new(
+            Calculator::default,
+            Default::default(),
+            StreamableHttpServerConfig {
+                stateful_mode: true,
+                sse_keep_alive: None,
+            },
+        );
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind(STREAMABLE_HTTP_BIND_ADDRESS).await?;
+    let ct = CancellationToken::new();
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
     let exit_status = tokio::process::Command::new("node")
         .arg("tests/test_with_js/streamable_client.js")
         .spawn()?
@@ -101,6 +121,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         .await?;
     assert!(exit_status.success());
     ct.cancel();
+    handle.await?;
     Ok(())
 }
 

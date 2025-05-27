@@ -111,7 +111,7 @@ pub async fn serve_client<S, T, E, A>(
 where
     S: Service<RoleClient>,
     T: IntoTransport<RoleClient, E, A>,
-    E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     serve_client_with_ct(service, transport, Default::default()).await
 }
@@ -124,7 +124,7 @@ pub async fn serve_client_with_ct<S, T, E, A>(
 where
     S: Service<RoleClient>,
     T: IntoTransport<RoleClient, E, A>,
-    E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
@@ -175,7 +175,7 @@ where
             context: "send initialized notification".into(),
         })?;
     let (peer, peer_rx) = Peer::new(id_provider, Some(initialize_result));
-    Ok(serve_inner(service, transport, peer, peer_rx, ct).await)
+    Ok(serve_inner(service, transport, peer, peer_rx, ct))
 }
 
 macro_rules! method {

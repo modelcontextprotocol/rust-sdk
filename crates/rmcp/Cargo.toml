@@ -39,7 +39,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
 ], optional = true }
-sse-stream = { version = "0.2.0", optional = true }
+
+sse-stream = { version = "0.2", optional = true }
+
 http = { version = "1", optional = true }
 url = { version = "2.4", optional = true }
 
@@ -57,7 +59,9 @@ axum = { version = "0.8", features = [], optional = true }
 rand = { version = "0.9", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
-
+http-body = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
+bytes = { version = "1", optional = true }
 # macro
 rmcp-macros = { version = "0.1", workspace = true, optional = true }
 
@@ -74,7 +78,17 @@ reqwest = ["__reqwest", "reqwest?/rustls-tls"]
 
 reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
 
-axum = ["dep:axum"]
+server-side-http = [
+    "uuid",
+    "dep:rand",
+    "dep:tokio-stream",
+    "dep:http",
+    "dep:http-body",
+    "dep:http-body-util",
+    "dep:bytes",
+    "dep:sse-stream",
+    "tower",
+]
 # SSE client
 client-side-sse = ["dep:sse-stream", "dep:http"]
 
@@ -97,15 +111,12 @@ transport-child-process = [
 transport-sse-server = [
     "transport-async-rw",
     "transport-worker",
-    "axum",
-    "dep:rand",
-    "dep:tokio-stream",
-    "uuid",
+    "server-side-http",
+    "dep:axum",
 ]
 transport-streamable-http-server = [
     "transport-streamable-http-server-session",
-    "axum",
-    "uuid",
+    "server-side-http",
 ]
 transport-streamable-http-server-session = [
     "transport-async-rw",

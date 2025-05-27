@@ -19,7 +19,7 @@ use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage, serve_directly_with_ct},
-    transport::common::axum::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
+    transport::common::sever_side_http::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
 };
 
 type TxStore =
@@ -313,7 +313,7 @@ impl SseServer {
                 let service = service_provider();
                 let ct = self.config.ct.child_token();
                 tokio::spawn(async move {
-                    let server = serve_directly_with_ct(service, transport, None, ct).await;
+                    let server = serve_directly_with_ct(service, transport, None, ct);
                     server.waiting().await?;
                     tokio::io::Result::Ok(())
                 });

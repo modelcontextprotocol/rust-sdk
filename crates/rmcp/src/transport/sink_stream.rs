@@ -24,6 +24,7 @@ impl<Role: ServiceRole, Si, St> Transport<Role> for SinkStreamTransport<Si, St>
 where
     St: Send + Stream<Item = RxJsonRpcMessage<Role>> + Unpin,
     Si: Send + Sink<TxJsonRpcMessage<Role>> + Unpin + 'static,
+    Si::Error: std::error::Error + Send + Sync + 'static,
 {
     type Error = Si::Error;
 
@@ -56,7 +57,7 @@ where
     Role: ServiceRole,
     Si: Send + Sink<TxJsonRpcMessage<Role>> + Unpin + 'static,
     St: Send + Stream<Item = RxJsonRpcMessage<Role>> + Unpin + 'static,
-    Si::Error: std::error::Error + Send + 'static,
+    Si::Error: std::error::Error + Send + Sync + 'static,
 {
     fn into_transport(self) -> impl Transport<Role, Error = Si::Error> + 'static {
         SinkStreamTransport::new(self.0, self.1)
@@ -68,7 +69,7 @@ impl<Role, S> IntoTransport<Role, S::Error, TransportAdapterAsyncCombinedRW> for
 where
     Role: ServiceRole,
     S: Sink<TxJsonRpcMessage<Role>> + Stream<Item = RxJsonRpcMessage<Role>> + Send + 'static,
-    S::Error: std::error::Error + Send + 'static,
+    S::Error: std::error::Error + Send + Sync + 'static,
 {
     fn into_transport(self) -> impl Transport<Role, Error = S::Error> + 'static {
         use futures::StreamExt;

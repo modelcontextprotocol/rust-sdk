@@ -488,7 +488,7 @@ pub struct RequestContext<R: ServiceRole> {
 }
 
 /// Use this function to skip initialization process
-pub async fn serve_directly<R, S, T, E, A>(
+pub fn serve_directly<R, S, T, E, A>(
     service: S,
     transport: T,
     peer_info: Option<R::PeerInfo>,
@@ -499,11 +499,11 @@ where
     T: IntoTransport<R, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
-    serve_directly_with_ct(service, transport, peer_info, Default::default()).await
+    serve_directly_with_ct(service, transport, peer_info, Default::default())
 }
 
 /// Use this function to skip initialization process
-pub async fn serve_directly_with_ct<R, S, T, E, A>(
+pub fn serve_directly_with_ct<R, S, T, E, A>(
     service: S,
     transport: T,
     peer_info: Option<R::PeerInfo>,
@@ -516,11 +516,11 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let (peer, peer_rx) = Peer::new(Arc::new(AtomicU32RequestIdProvider::default()), peer_info);
-    serve_inner(service, transport, peer, peer_rx, ct).await
+    serve_inner(service, transport, peer, peer_rx, ct)
 }
 
 #[instrument(skip_all)]
-async fn serve_inner<R, S, T, E, A>(
+fn serve_inner<R, S, T, E, A>(
     service: S,
     transport: T,
     peer: Peer<R>,

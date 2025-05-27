@@ -38,8 +38,15 @@ A minimal server example using stdio transport.
 
 ### Counter Streamable HTTP Server (`counter_streamhttp.rs`)
 
-A server using streamable HTTP transport for MCP communication.
+A server using streamable HTTP transport for MCP communication, with axum.
 
+- Runs on HTTP with streaming capabilities
+- Provides counter tools via HTTP streaming
+- Demonstrates streamable HTTP transport configuration
+
+### Counter Streamable HTTP Server with Hyper (`counter_hyper_streamable_http.rs`)
+
+A server using streamable HTTP transport for MCP communication, with hyper.
 - Runs on HTTP with streaming capabilities
 - Provides counter tools via HTTP streaming
 - Demonstrates streamable HTTP transport configuration
