@@ -115,6 +115,19 @@ impl SessionManager for LocalSessionManager {
         let receiver = handle.resume(last_event_id.parse()?).await?;
         Ok(ReceiverStream::new(receiver.inner))
     }
+
+    async fn accept_message(
+        &self,
+        id: &SessionId,
+        message: ClientJsonRpcMessage,
+    ) -> Result<(), Self::Error> {
+        let sessions = self.sessions.read().await;
+        let handle = sessions
+            .get(id)
+            .ok_or(LocalSessionManagerError::SessionNotFound(id.clone()))?;
+        handle.push_message(message, None).await?;
+        Ok(())
+    }
 }
 
 /// `<index>/request_id>`

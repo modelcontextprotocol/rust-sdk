@@ -97,4 +97,11 @@ impl SessionManager for NeverSessionManager {
             ErrorSessionManagementNotSupported,
         ))
     }
+    fn accept_message(
+        &self,
+        _id: &SessionId,
+        _message: ClientJsonRpcMessage,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        futures::future::ready(Err(ErrorSessionManagementNotSupported))
+    }
 }

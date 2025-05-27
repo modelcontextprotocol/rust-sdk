@@ -33,6 +33,11 @@ pub trait SessionManager: Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<impl Stream<Item = ServerSseMessage> + Send + 'static, Self::Error>,
     > + Send;
+    fn accept_message(
+        &self,
+        id: &SessionId,
+        message: ClientJsonRpcMessage,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn create_standalone_stream(
         &self,
         id: &SessionId,

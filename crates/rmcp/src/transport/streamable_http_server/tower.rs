@@ -271,12 +271,33 @@ where
                         )
                         .expect("valid response"));
                 }
-                let stream = self
-                    .session_manager
-                    .create_stream(&session_id, message)
-                    .await
-                    .map_err(internal_error_response("get session"))?;
-                Ok(sse_stream_response(stream, self.config.sse_keep_alive))
+                match message {
+                    ClientJsonRpcMessage::Request(_) => {
+                        let stream = self
+                            .session_manager
+                            .create_stream(&session_id, message)
+                            .await
+                            .map_err(internal_error_response("get session"))?;
+                        Ok(sse_stream_response(stream, self.config.sse_keep_alive))
+                    }
+                    ClientJsonRpcMessage::Notification(_)
+                    | ClientJsonRpcMessage::Response(_)
+                    | ClientJsonRpcMessage::Error(_) => {
+                        // handle notification
+                        self.session_manager
+                            .accept_message(&session_id, message)
+                            .await
+                            .map_err(internal_error_response("accept message"))?;
+                        Ok(accepted_response())
+                    }
+                    _ => Ok(Response::builder()
+                        .status(http::StatusCode::NOT_IMPLEMENTED)
+                        .body(
+                            Full::new(Bytes::from("Batch requests are not supported yet"))
+                                .boxed_unsync(),
+                        )
+                        .expect("valid response")),
+                }
             } else {
                 let (session_id, transport) = self
                     .session_manager
