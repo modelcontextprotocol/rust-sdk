@@ -16,7 +16,6 @@ async fn main() -> anyhow::Result<()> {
         LocalSessionManager::default().into(),
         Default::default(),
     ));
-    // GET /hello/warp => 200 OK with body "Hello, warp!"
     let listener = tokio::net::TcpListener::bind("[::1]:8080").await?;
     loop {
         let io = tokio::select! {
