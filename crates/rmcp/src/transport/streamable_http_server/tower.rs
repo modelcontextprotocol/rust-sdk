@@ -19,7 +19,7 @@ use crate::{
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
             },
-            sever_side_http::{
+            server_side_http::{
                 BoxResponse, ServerSseMessage, accepted_response, expect_json,
                 internal_error_response, sse_stream_response,
             },
@@ -196,7 +196,7 @@ where
             // create standalone stream
             let stream = self
                 .session_manager
-                .create_stantalone_stream(&session_id)
+                .create_standalone_stream(&session_id)
                 .await
                 .map_err(internal_error_response("create standalone stream"))?;
             Ok(sse_stream_response(stream, self.config.sse_keep_alive))

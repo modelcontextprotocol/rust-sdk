@@ -76,7 +76,7 @@ impl SessionManager for NeverSessionManager {
             ErrorSessionManagementNotSupported,
         ))
     }
-    fn create_stantalone_stream(
+    fn create_standalone_stream(
         &self,
         _id: &SessionId,
     ) -> impl Future<

@@ -19,7 +19,7 @@ use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage, serve_directly_with_ct},
-    transport::common::sever_side_http::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
+    transport::common::server_side_http::{DEFAULT_AUTO_PING_INTERVAL, SessionId, session_id},
 };
 
 type TxStore =

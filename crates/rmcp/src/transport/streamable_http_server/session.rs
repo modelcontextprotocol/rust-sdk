@@ -1,10 +1,10 @@
 use futures::Stream;
 
-pub use crate::transport::common::sever_side_http::SessionId;
+pub use crate::transport::common::server_side_http::SessionId;
 use crate::{
     RoleServer,
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
-    transport::common::sever_side_http::ServerSseMessage,
+    transport::common::server_side_http::ServerSseMessage,
 };
 
 pub mod local;
@@ -33,7 +33,7 @@ pub trait SessionManager: Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<impl Stream<Item = ServerSseMessage> + Send + 'static, Self::Error>,
     > + Send;
-    fn create_stantalone_stream(
+    fn create_standalone_stream(
         &self,
         id: &SessionId,
     ) -> impl Future<

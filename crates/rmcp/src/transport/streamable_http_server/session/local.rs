@@ -23,7 +23,7 @@ use crate::{
     },
     transport::{
         WorkerTransport,
-        common::sever_side_http::{SessionId, session_id},
+        common::server_side_http::{SessionId, session_id},
         worker::{Worker, WorkerContext, WorkerQuitReason, WorkerSendRequest},
     },
 };
@@ -91,7 +91,7 @@ impl SessionManager for LocalSessionManager {
         Ok(ReceiverStream::new(receiver.inner))
     }
 
-    async fn create_stantalone_stream(
+    async fn create_standalone_stream(
         &self,
         id: &SessionId,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + 'static, Self::Error> {
