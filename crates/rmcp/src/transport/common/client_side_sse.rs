@@ -76,6 +76,28 @@ impl SseRetryPolicy for ExponentialBackoff {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NeverRetry;
+
+impl SseRetryPolicy for NeverRetry {
+    fn retry(&self, _current_times: usize) -> Option<Duration> {
+        None
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct NeverReconnect<E> {
+    error: Option<E>,
+}
+
+impl<E: std::error::Error + Send> SseStreamReconnect for NeverReconnect<E> {
+    type Error = E;
+    type Future = futures::future::Ready<Result<BoxedSseResponse, Self::Error>>;
+    fn retry_connection(&mut self, _last_event_id: Option<&str>) -> Self::Future {
+        futures::future::ready(Err(self.error.take().expect("should not be called again")))
+    }
+}
+
 pub(crate) trait SseStreamReconnect {
     type Error: std::error::Error;
     type Future: Future<Output = Result<BoxedSseResponse, Self::Error>> + Send;
@@ -106,6 +128,20 @@ impl<R: SseStreamReconnect> SseAutoReconnectStream<R> {
             last_event_id: None,
             server_retry_interval: None,
             connector,
+            state: SseAutoReconnectStreamState::Connected { stream },
+        }
+    }
+}
+
+impl<E: std::error::Error + Send> SseAutoReconnectStream<NeverReconnect<E>> {
+    pub fn never_reconnect(stream: BoxedSseResponse, error_when_reconnect: E) -> Self {
+        Self {
+            retry_policy: Arc::new(NeverRetry),
+            last_event_id: None,
+            server_retry_interval: None,
+            connector: NeverReconnect {
+                error: Some(error_when_reconnect),
+            },
             state: SseAutoReconnectStreamState::Connected { stream },
         }
     }
