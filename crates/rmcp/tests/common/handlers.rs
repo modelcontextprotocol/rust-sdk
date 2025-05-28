@@ -4,8 +4,9 @@ use std::{
 };
 
 use rmcp::{
-    ClientHandler, Error as McpError, RoleClient, RoleServer, ServerHandler, model::*,
-    service::RequestContext,
+    ClientHandler, Error as McpError, RoleClient, RoleServer, ServerHandler,
+    model::*,
+    service::{NotificationContext, RequestContext},
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -83,6 +84,7 @@ impl ClientHandler for TestClientHandler {
     fn on_logging_message(
         &self,
         params: LoggingMessageNotificationParam,
+        _context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
         let receive_signal = self.receive_signal.clone();
         let received_messages = self.received_messages.clone();

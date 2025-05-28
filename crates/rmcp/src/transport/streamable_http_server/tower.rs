@@ -10,7 +10,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use super::session::SessionManager;
 use crate::{
     RoleServer,
-    model::ClientJsonRpcMessage,
+    model::{ClientJsonRpcMessage, GetExtensions},
     serve_server,
     service::serve_directly,
     transport::{
@@ -243,7 +243,7 @@ where
 
         // json deserialize request body
         let (part, body) = request.into_parts();
-        let message = match expect_json(body).await {
+        let mut message = match expect_json(body).await {
             Ok(message) => message,
             Err(response) => return Ok(response),
         };
@@ -271,6 +271,20 @@ where
                         )
                         .expect("valid response"));
                 }
+
+                // inject request part to extensions
+                match &mut message {
+                    ClientJsonRpcMessage::Request(req) => {
+                        req.request.extensions_mut().insert(part);
+                    }
+                    ClientJsonRpcMessage::Notification(not) => {
+                        not.notification.extensions_mut().insert(part);
+                    }
+                    _ => {
+                        // skip
+                    }
+                }
+
                 match message {
                     ClientJsonRpcMessage::Request(_) => {
                         let stream = self
@@ -379,11 +393,8 @@ where
                         self.config.sse_keep_alive,
                     ))
                 }
-                ClientJsonRpcMessage::Notification(notification) => {
-                    service
-                        .handle_notification(notification.notification)
-                        .await
-                        .map_err(internal_error_response("handle notification"))?;
+                ClientJsonRpcMessage::Notification(_notification) => {
+                    // ignore
                     Ok(accepted_response())
                 }
                 ClientJsonRpcMessage::Response(_json_rpc_response) => Ok(accepted_response()),

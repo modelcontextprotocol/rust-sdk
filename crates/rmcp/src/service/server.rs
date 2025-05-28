@@ -210,7 +210,12 @@ where
             Some(ClientJsonRpcMessage::notification(notification)),
         ));
     };
-    let _ = service.handle_notification(notification).await;
+    let context = NotificationContext {
+        meta: notification.get_meta().clone(),
+        extensions: notification.extensions().clone(),
+        peer: peer.clone(),
+    };
+    let _ = service.handle_notification(notification, context).await;
     // Continue processing service
     Ok(serve_inner(service, transport, peer, peer_rx, ct))
 }

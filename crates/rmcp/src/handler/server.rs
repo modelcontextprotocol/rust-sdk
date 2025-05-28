@@ -1,7 +1,7 @@
 use crate::{
     error::Error as McpError,
     model::*,
-    service::{RequestContext, RoleServer, Service, ServiceRole},
+    service::{NotificationContext, RequestContext, RoleServer, Service, ServiceRole},
 };
 
 mod resource;
@@ -71,19 +71,20 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_notification(
         &self,
         notification: <RoleServer as ServiceRole>::PeerNot,
+        context: NotificationContext<RoleServer>,
     ) -> Result<(), McpError> {
         match notification {
             ClientNotification::CancelledNotification(notification) => {
-                self.on_cancelled(notification.params).await
+                self.on_cancelled(notification.params, context).await
             }
             ClientNotification::ProgressNotification(notification) => {
-                self.on_progress(notification.params).await
+                self.on_progress(notification.params, context).await
             }
             ClientNotification::InitializedNotification(_notification) => {
-                self.on_initialized().await
+                self.on_initialized(context).await
             }
             ClientNotification::RootsListChangedNotification(_notification) => {
-                self.on_roots_list_changed().await
+                self.on_roots_list_changed(context).await
             }
         };
         Ok(())
@@ -196,20 +197,28 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     fn on_cancelled(
         &self,
         notification: CancelledNotificationParam,
+        context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
     fn on_progress(
         &self,
         notification: ProgressNotificationParam,
+        context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
-    fn on_initialized(&self) -> impl Future<Output = ()> + Send + '_ {
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
         tracing::info!("client initialized");
         std::future::ready(())
     }
-    fn on_roots_list_changed(&self) -> impl Future<Output = ()> + Send + '_ {
+    fn on_roots_list_changed(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
 

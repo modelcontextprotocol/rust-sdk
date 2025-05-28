@@ -1,7 +1,7 @@
 use crate::{
     error::Error as McpError,
     model::*,
-    service::{RequestContext, RoleClient, Service, ServiceRole},
+    service::{NotificationContext, RequestContext, RoleClient, Service, ServiceRole},
 };
 
 impl<H: ClientHandler> Service<RoleClient> for H {
@@ -26,28 +26,29 @@ impl<H: ClientHandler> Service<RoleClient> for H {
     async fn handle_notification(
         &self,
         notification: <RoleClient as ServiceRole>::PeerNot,
+        context: NotificationContext<RoleClient>,
     ) -> Result<(), McpError> {
         match notification {
             ServerNotification::CancelledNotification(notification) => {
-                self.on_cancelled(notification.params).await
+                self.on_cancelled(notification.params, context).await
             }
             ServerNotification::ProgressNotification(notification) => {
-                self.on_progress(notification.params).await
+                self.on_progress(notification.params, context).await
             }
             ServerNotification::LoggingMessageNotification(notification) => {
-                self.on_logging_message(notification.params).await
+                self.on_logging_message(notification.params, context).await
             }
             ServerNotification::ResourceUpdatedNotification(notification) => {
-                self.on_resource_updated(notification.params).await
+                self.on_resource_updated(notification.params, context).await
             }
             ServerNotification::ResourceListChangedNotification(_notification_no_param) => {
-                self.on_resource_list_changed().await
+                self.on_resource_list_changed(context).await
             }
             ServerNotification::ToolListChangedNotification(_notification_no_param) => {
-                self.on_tool_list_changed().await
+                self.on_tool_list_changed(context).await
             }
             ServerNotification::PromptListChangedNotification(_notification_no_param) => {
-                self.on_prompt_list_changed().await
+                self.on_prompt_list_changed(context).await
             }
         };
         Ok(())
@@ -87,34 +88,47 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     fn on_cancelled(
         &self,
         params: CancelledNotificationParam,
+        context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
     fn on_progress(
         &self,
         params: ProgressNotificationParam,
+        context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
     fn on_logging_message(
         &self,
         params: LoggingMessageNotificationParam,
+        context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
     fn on_resource_updated(
         &self,
         params: ResourceUpdatedNotificationParam,
+        context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
-    fn on_resource_list_changed(&self) -> impl Future<Output = ()> + Send + '_ {
+    fn on_resource_list_changed(
+        &self,
+        context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
-    fn on_tool_list_changed(&self) -> impl Future<Output = ()> + Send + '_ {
+    fn on_tool_list_changed(
+        &self,
+        context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
-    fn on_prompt_list_changed(&self) -> impl Future<Output = ()> + Send + '_ {
+    fn on_prompt_list_changed(
+        &self,
+        context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
 
