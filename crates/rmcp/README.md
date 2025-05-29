@@ -146,6 +146,39 @@ let service = client.serve(transport).await?;
 
 
 
+## Access with peer interface when handling message
+
+You can get the [`Peer`](crate::service::Peer) struct from [`NotificationContext`](crate::service::NotificationContext) and [`RequestContext`](crate::service::RequestContext).
+
+```rust, ignore
+# use rmcp::{
+#     ServerHandler,
+#     model::{LoggingLevel, LoggingMessageNotificationParam, ProgressNotificationParam},
+#     service::{NotificationContext, RoleServer},
+# };
+# pub struct Handler;
+
+impl ServerHandler for Handler {
+    async fn on_progress(
+        &self,
+        notification: ProgressNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) {
+        let peer = context.peer;
+        let _ = peer
+            .notify_logging_message(LoggingMessageNotificationParam {
+                level: LoggingLevel::Info,
+                logger: None,
+                data: serde_json::json!({
+                    "message": format!("Progress: {}", notification.progress),
+                }),
+            })
+            .await;
+    }
+}
+```
+
+
 ## Manage Multi Services
 
 For many cases you need to manage several service in a collection, you can call `into_dyn` to convert services into the same type.

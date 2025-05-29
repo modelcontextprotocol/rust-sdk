@@ -49,7 +49,7 @@ pub struct Extensions {
 impl Extensions {
     /// Create an empty `Extensions`.
     #[inline]
-    pub fn new() -> Extensions {
+    pub const fn new() -> Extensions {
         Extensions { map: None }
     }
 

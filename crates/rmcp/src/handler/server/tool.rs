@@ -320,6 +320,42 @@ where
     }
 }
 
+impl<'a, S> FromToolCallContextPart<'a, S> for crate::Peer<RoleServer> {
+    fn from_tool_call_context_part(
+        context: ToolCallContext<'a, S>,
+    ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
+        let peer = context.request_context.peer.clone();
+        Ok((peer, context))
+    }
+}
+
+impl<'a, S> FromToolCallContextPart<'a, S> for crate::model::Meta {
+    fn from_tool_call_context_part(
+        mut context: ToolCallContext<'a, S>,
+    ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
+        let mut meta = crate::model::Meta::default();
+        std::mem::swap(&mut meta, &mut context.request_context.meta);
+        Ok((meta, context))
+    }
+}
+
+pub struct RequestId(pub crate::model::RequestId);
+impl<'a, S> FromToolCallContextPart<'a, S> for RequestId {
+    fn from_tool_call_context_part(
+        context: ToolCallContext<'a, S>,
+    ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
+        Ok((RequestId(context.request_context.id.clone()), context))
+    }
+}
+
+impl<'a, S> FromToolCallContextPart<'a, S> for RequestContext<RoleServer> {
+    fn from_tool_call_context_part(
+        context: ToolCallContext<'a, S>,
+    ) -> Result<(Self, ToolCallContext<'a, S>), crate::Error> {
+        Ok((context.request_context.clone(), context))
+    }
+}
+
 impl<'s, S> ToolCallContext<'s, S> {
     pub fn invoke<H, A>(self, h: H) -> H::Fut
     where

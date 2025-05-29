@@ -76,7 +76,9 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     type PeerResp: TransferObject;
     type PeerNot: TryInto<CancelledNotification, Error = Self::PeerNot>
         + From<CancelledNotification>
-        + TransferObject;
+        + TransferObject
+        + GetMeta
+        + GetExtensions;
     type InitializeError<E>;
     const IS_CLIENT: bool;
     type Info: TransferObject;
@@ -100,6 +102,7 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
     fn handle_notification(
         &self,
         notification: R::PeerNot,
+        context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_;
     fn get_info(&self) -> R::Info;
 }
@@ -145,8 +148,9 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
     fn handle_notification(
         &self,
         notification: R::PeerNot,
+        context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        DynService::handle_notification(self.as_ref(), notification)
+        DynService::handle_notification(self.as_ref(), notification, context)
     }
 
     fn get_info(&self) -> R::Info {
@@ -160,7 +164,11 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         request: R::PeerReq,
         context: RequestContext<R>,
     ) -> BoxFuture<Result<R::Resp, McpError>>;
-    fn handle_notification(&self, notification: R::PeerNot) -> BoxFuture<Result<(), McpError>>;
+    fn handle_notification(
+        &self,
+        notification: R::PeerNot,
+        context: NotificationContext<R>,
+    ) -> BoxFuture<Result<(), McpError>>;
     fn get_info(&self) -> R::Info;
 }
 
@@ -172,8 +180,12 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     ) -> BoxFuture<Result<R::Resp, McpError>> {
         Box::pin(self.handle_request(request, context))
     }
-    fn handle_notification(&self, notification: R::PeerNot) -> BoxFuture<Result<(), McpError>> {
-        Box::pin(self.handle_notification(notification))
+    fn handle_notification(
+        &self,
+        notification: R::PeerNot,
+        context: NotificationContext<R>,
+    ) -> BoxFuture<Result<(), McpError>> {
+        Box::pin(self.handle_notification(notification, context))
     }
     fn get_info(&self) -> R::Info {
         self.get_info()
@@ -487,6 +499,15 @@ pub struct RequestContext<R: ServiceRole> {
     pub peer: Peer<R>,
 }
 
+/// Request execution context
+#[derive(Debug, Clone)]
+pub struct NotificationContext<R: ServiceRole> {
+    pub meta: Meta,
+    pub extensions: Extensions,
+    /// An interface to fetch the remote client or server
+    pub peer: Peer<R>,
+}
+
 /// Use this function to skip initialization process
 pub fn serve_directly<R, S, T, E, A>(
     service: S,
@@ -710,7 +731,9 @@ where
                     }));
                 }
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
-                    id, request, ..
+                    id,
+                    mut request,
+                    ..
                 })) => {
                     tracing::debug!(%id, ?request, "received request");
                     {
@@ -719,12 +742,17 @@ where
                         let request_ct = serve_loop_ct.child_token();
                         let context_ct = request_ct.child_token();
                         local_ct_pool.insert(id.clone(), request_ct);
+                        let mut extensions = Extensions::new();
+                        let mut meta = Meta::new();
+                        // avoid clone
+                        std::mem::swap(&mut extensions, request.extensions_mut());
+                        std::mem::swap(&mut meta, request.get_meta_mut());
                         let context = RequestContext {
                             ct: context_ct,
                             id: id.clone(),
                             peer: peer.clone(),
-                            meta: request.get_meta().clone(),
-                            extensions: request.extensions().clone(),
+                            meta,
+                            extensions,
                         };
                         tokio::spawn(async move {
                             let result = service.handle_request(request, context).await;
@@ -748,7 +776,7 @@ where
                 })) => {
                     tracing::info!(?notification, "received notification");
                     // catch cancelled notification
-                    let notification = match notification.try_into() {
+                    let mut notification = match notification.try_into() {
                         Ok::<CancelledNotification, _>(cancelled) => {
                             if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
                                 tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
@@ -760,8 +788,18 @@ where
                     };
                     {
                         let service = shared_service.clone();
+                        let mut extensions = Extensions::new();
+                        let mut meta = Meta::new();
+                        // avoid clone
+                        std::mem::swap(&mut extensions, notification.extensions_mut());
+                        std::mem::swap(&mut meta, notification.get_meta_mut());
+                        let context = NotificationContext {
+                            peer: peer.clone(),
+                            meta,
+                            extensions,
+                        };
                         tokio::spawn(async move {
-                            let result = service.handle_notification(notification).await;
+                            let result = service.handle_notification(notification, context).await;
                             if let Err(error) = result {
                                 tracing::warn!(%error, "Error sending notification");
                             }

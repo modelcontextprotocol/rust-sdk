@@ -52,7 +52,11 @@ pub struct Client {
 }
 
 impl ClientHandler for Client {
-    async fn on_resource_updated(&self, params: rmcp::model::ResourceUpdatedNotificationParam) {
+    async fn on_resource_updated(
+        &self,
+        params: rmcp::model::ResourceUpdatedNotificationParam,
+        _context: rmcp::service::NotificationContext<rmcp::RoleClient>,
+    ) {
         let uri = params.uri;
         tracing::info!("Resource updated: {}", uri);
         self.receive_signal.notify_one();

@@ -17,7 +17,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2"
-chrono = { version = "0.4.38", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 futures = "0.3"
 tracing = { version = "0.1" }
@@ -64,6 +63,12 @@ http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 # macro
 rmcp-macros = { version = "0.1", workspace = true, optional = true }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+chrono = { version = "0.4.38", features = ["serde"] }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+chrono = { version = "0.4.38", default-features = false, features = ["serde", "clock", "std", "oldtime"] }
 
 [features]
 default = ["base64", "macros", "server"]

@@ -95,7 +95,7 @@ impl StreamableHttpClient for reqwest::Client {
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());
         }
-        let response = request.json(&message).send().await?;
+        let response = request.json(&message).send().await?.error_for_status()?;
         if response.status() == reqwest::StatusCode::ACCEPTED {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
