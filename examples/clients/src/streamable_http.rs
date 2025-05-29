@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000");
+    let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
     let client_info = ClientInfo {
         protocol_version: Default::default(),
         capabilities: ClientCapabilities::default(),
