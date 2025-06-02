@@ -16,15 +16,16 @@ all-features = true
 
 [dependencies]
 rmcp = { path = "../../crates/rmcp", features = ["server", "client"] }
-tokio = { version = "1", features = [
-    "macros",
-    "rt",
-    "rt-multi-thread",
-    "io-std",
-    "net",
-    "fs",
-    "time",
-] }
+tokio = { version = "1", features = ["full"] } 
+# tokio = { version = "1", features = [
+#     "macros",
+#     "rt",
+#     "rt-multi-thread",
+#     "io-std",
+#     "net",
+#     "fs",
+#     "time",
+# ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
