@@ -1,15 +1,10 @@
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
-use axum::{
-    Json, Router,
-    extract::{Query, State},
-    http::{StatusCode, request::Parts},
-    response::{
-        Response,
-        sse::{Event, KeepAlive, Sse},
-    },
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::{Query, State}, http::{StatusCode, request::Parts}, response::{
+    Response,
+    sse::{Event, KeepAlive, Sse},
+}, routing::{get, post}, Extension};
+use axum::extract::NestedPath;
 use futures::{Sink, SinkExt, Stream};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
@@ -84,6 +79,7 @@ async fn post_event_handler(
 
 async fn sse_handler(
     State(app): State<App>,
+    nested_path: Option<Extension<NestedPath>>,
     parts: Parts,
 ) -> Result<Sse<impl Stream<Item = Result<Event, io::Error>>>, Response<String>> {
     let session = session_id();
@@ -115,12 +111,13 @@ async fn sse_handler(
         *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
         return Err(response);
     }
+    let nested_path = nested_path.as_deref().map(NestedPath::as_str).unwrap_or("");
     let post_path = app.post_path.as_ref();
     let ping_interval = app.sse_ping_interval;
     let stream = futures::stream::once(futures::future::ok(
         Event::default()
             .event("endpoint")
-            .data(format!("{post_path}?sessionId={session}")),
+            .data(format!("{nested_path}{post_path}?sessionId={session}")),
     ))
     .chain(ReceiverStream::new(to_client_rx).map(|message| {
         match serde_json::to_string(&message) {
@@ -257,8 +254,6 @@ impl SseServer {
         Ok(sse_server)
     }
 
-    /// Warning: This function creates a new SseServer instance with the provided configuration.
-    /// `App.post_path` may be incorrect if using `Router` as an embedded router.
     pub fn new(config: SseServerConfig) -> (SseServer, Router) {
         let (app, transport_rx) = App::new(
             config.post_path.clone(),

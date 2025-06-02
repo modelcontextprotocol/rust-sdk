@@ -1,10 +1,10 @@
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.sse import sse_client
-
-
+import sys
 
 async def run():
-    async with sse_client("http://localhost:8000/sse") as (read, write):
+    url = sys.argv[1]
+    async with sse_client(url) as (read, write):
         async with ClientSession(
             read, write
         ) as session:

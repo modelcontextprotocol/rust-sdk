@@ -151,6 +151,7 @@ path = "tests/test_tool_macros.rs"
 [[test]]
 name = "test_with_python"
 required-features = [
+    "reqwest",
     "server",
     "client",
     "transport-sse-server",
