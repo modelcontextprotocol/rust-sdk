@@ -1,10 +1,15 @@
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
-use axum::{Json, Router, extract::{Query, State}, http::{StatusCode, request::Parts}, response::{
-    Response,
-    sse::{Event, KeepAlive, Sse},
-}, routing::{get, post}, Extension};
-use axum::extract::NestedPath;
+use axum::{
+    Extension, Json, Router,
+    extract::{NestedPath, Query, State},
+    http::{StatusCode, request::Parts},
+    response::{
+        Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::{get, post},
+};
 use futures::{Sink, SinkExt, Stream};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};

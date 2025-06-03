@@ -1,13 +1,10 @@
 use axum::Router;
-use tokio::time::timeout;
-use tokio_util::sync::CancellationToken;
 use rmcp::{
     ServiceExt,
-    transport::{
-        ConfigureCommandExt, SseServer, TokioChildProcess,
-        sse_server::SseServerConfig
-    },
+    transport::{ConfigureCommandExt, SseServer, TokioChildProcess, sse_server::SseServerConfig},
 };
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
 use common::calculator::Calculator;
@@ -72,22 +69,18 @@ async fn test_nested_with_python_client() -> anyhow::Result<()> {
     let (sse_server, sse_router) = SseServer::new(sse_config);
     let ct = sse_server.with_service(Calculator::default);
 
-    let main_router = Router::new()
-        .nest("/nested", sse_router);
+    let main_router = Router::new().nest("/nested", sse_router);
 
     let server_ct = ct.clone();
-    let server = axum::serve(listener, main_router)
-        .with_graceful_shutdown(async move {
-            server_ct.cancelled().await;
-            tracing::info!("sse server cancelled");
-        });
+    let server = axum::serve(listener, main_router).with_graceful_shutdown(async move {
+        server_ct.cancelled().await;
+        tracing::info!("sse server cancelled");
+    });
 
-    tokio::spawn(
-        async move {
-            let _ = server.await;
-            tracing::info!("sse server shutting down");
-        }
-    );
+    tokio::spawn(async move {
+        let _ = server.await;
+        tracing::info!("sse server shutting down");
+    });
 
     // Spawn the process with timeout, as failure to access the '/message' URL
     // causes the client to never exit.
@@ -98,8 +91,9 @@ async fn test_nested_with_python_client() -> anyhow::Result<()> {
             .arg("tests/test_with_python/client.py")
             .arg(format!("http://{BIND_ADDRESS}/nested/sse"))
             .spawn()?
-            .wait()
-    ).await?;
+            .wait(),
+    )
+    .await?;
     assert!(status?.success());
     ct.cancel();
     Ok(())
