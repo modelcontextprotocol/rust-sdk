@@ -25,10 +25,10 @@ async fn main() -> anyhow::Result<()> {
 async fn http_server(req: Request<Incoming>) -> Result<hyper::Response<String>, hyper::Error> {
     tokio::spawn(async move {
         if let Err(e) = async {
-        let upgraded = hyper::upgrade::on(req).await?;
-        let service = Calculator.serve(TokioIo::new(upgraded)).await?;
-        service.waiting().await?;
-        Ok::<(), anyhow::Error>(())
+            let upgraded = hyper::upgrade::on(req).await?;
+            let service = Calculator.serve(TokioIo::new(upgraded)).await?;
+            service.waiting().await?;
+            Ok::<(), anyhow::Error>(())
         }.await {
             tracing::error!("Service error: {:?}", e);
         }
@@ -41,6 +41,7 @@ async fn http_server(req: Request<Incoming>) -> Result<hyper::Response<String>, 
     Ok(response)
 }
 
+
 async fn http_client(uri: &str) -> anyhow::Result<RunningService<RoleClient, ()>> {
     let tcp_stream = tokio::net::TcpStream::connect(uri).await?;
     let (mut s, c) =
@@ -51,7 +52,7 @@ async fn http_client(uri: &str) -> anyhow::Result<RunningService<RoleClient, ()>
         .insert(UPGRADE, HeaderValue::from_static("mcp"));
     let response = s.send_request(req).await?;
     let upgraded = hyper::upgrade::on(response).await?;
-    let client = RoleClient.serve(TokioIo::new(upgraded)).await?;
+    let client = ().serve(TokioIo::new(upgraded)).await?;
     Ok(client)
 }
 
