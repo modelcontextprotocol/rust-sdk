@@ -59,11 +59,14 @@ impl AsyncRead for TokioChildProcessOut {
 }
 
 impl TokioChildProcess {
-    pub fn new(mut command: tokio::process::Command) -> std::io::Result<Self> {
-        command
-            .stdin(std::process::Stdio::piped())
+    pub fn new(command: impl Into<TokioCommandWrap>) -> std::io::Result<Self> {
+        let mut command_wrap = command.into();
+        command_wrap
+            .command_mut()
+            .stdin(std::process::Stdio::piped());
+        command_wrap
+            .command_mut()
             .stdout(std::process::Stdio::piped());
-        let mut command_wrap = TokioCommandWrap::from(command);
         #[cfg(unix)]
         command_wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
         #[cfg(windows)]
