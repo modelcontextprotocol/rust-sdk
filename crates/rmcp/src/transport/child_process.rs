@@ -63,9 +63,7 @@ impl TokioChildProcess {
         let mut command_wrap = command.into();
         command_wrap
             .command_mut()
-            .stdin(std::process::Stdio::piped());
-        command_wrap
-            .command_mut()
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped());
         #[cfg(unix)]
         command_wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
