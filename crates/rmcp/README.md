@@ -210,7 +210,7 @@ RMCP uses feature flags to control which components are included:
 - `transport-child-process`: Client stdio transport
 - `transport-sse-client`: Client sse transport
 - `transport-streamable-http-server` streamable http server transport
-- `transport-streamable-client-server` streamable http server transport
+- `transport-streamable-http-client` streamable http client transport
 
 <details>
 <summary>Transport</summary>
