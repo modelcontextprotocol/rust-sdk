@@ -318,7 +318,9 @@ where
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
-                let service = self.get_service().map_err(internal_error_response("get service"))?;
+                let service = self
+                    .get_service()
+                    .map_err(internal_error_response("get service"))?;
                 // spawn a task to serve the session
                 tokio::spawn({
                     let session_manager = self.session_manager.clone();
@@ -372,7 +374,9 @@ where
                 Ok(response)
             }
         } else {
-            let service = self.get_service().map_err(internal_error_response("get service"))?;
+            let service = self
+                .get_service()
+                .map_err(internal_error_response("get service"))?;
             match message {
                 ClientJsonRpcMessage::Request(request) => {
                     let (transport, receiver) =

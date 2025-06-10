@@ -12,7 +12,7 @@ use rmcp::transport::streamable_http_server::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let service = TowerToHyperService::new(StreamableHttpService::new(
-        Counter::new,
+        || Ok(Counter::new()),
         LocalSessionManager::default().into(),
         Default::default(),
     ));
