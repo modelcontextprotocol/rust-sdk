@@ -48,6 +48,13 @@ pin_project_lite::pin_project! {
     }
 }
 
+impl TokioChildProcessOut {
+    /// Get the process ID of the child process.
+    pub fn id(&self) -> Option<u32> {
+        self.child.inner.id()
+    }
+}
+
 impl AsyncRead for TokioChildProcessOut {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
@@ -75,6 +82,11 @@ impl TokioChildProcess {
             child_stdin,
             child_stdout,
         })
+    }
+
+    /// Get the process ID of the child process.
+    pub fn id(&self) -> Option<u32> {
+        self.child.inner.id()
     }
 
     pub fn split(self) -> (TokioChildProcessOut, ChildStdin) {
