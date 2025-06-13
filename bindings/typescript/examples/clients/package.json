@@ -1,0 +1,17 @@
+{
+  "name": "rmcp-typescript-example",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "start": "ts-node-esm src/sse.ts"
+  },
+  "dependencies": {
+    "rmcp-typescript": "file:../.."
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.18",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
