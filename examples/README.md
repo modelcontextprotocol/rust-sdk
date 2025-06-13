@@ -3,7 +3,7 @@
 1. **Build the Server (Counter Example)**
 
    ```sh
-   cargo build --release --example servers_std_io
+   cargo build --release --example servers_counter_stdio
    ```
 
    This builds a standard input/output MCP server binary.
@@ -16,7 +16,7 @@
    {
      "mcpServers": {
        "counter": {
-         "command": "PATH-TO/rust-sdk/target/release/examples/servers_std_io.exe",
+         "command": "PATH-TO/rust-sdk/target/release/examples/servers_counter_stdio.exe",
          "args": []
        }
      }
@@ -29,7 +29,7 @@
    {
      "mcpServers": {
        "counter": {
-         "command": "PATH-TO/rust-sdk/target/release/examples/servers_std_io",
+         "command": "PATH-TO/rust-sdk/target/release/examples/servers_counter_stdio",
          "args": []
        }
      }
