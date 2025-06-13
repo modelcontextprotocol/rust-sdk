@@ -96,7 +96,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
 
     let service: StreamableHttpService<Calculator, LocalSessionManager> =
         StreamableHttpService::new(
-            Calculator::default,
+            || Ok(Calculator),
             Default::default(),
             StreamableHttpServerConfig {
                 stateful_mode: true,

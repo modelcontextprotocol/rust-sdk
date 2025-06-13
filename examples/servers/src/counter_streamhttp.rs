@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let service = StreamableHttpService::new(
-        Counter::new,
+        || Ok(Counter::new()),
         LocalSessionManager::default().into(),
         Default::default(),
     );

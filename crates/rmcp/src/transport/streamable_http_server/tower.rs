@@ -47,7 +47,7 @@ impl Default for StreamableHttpServerConfig {
 pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {
     pub config: StreamableHttpServerConfig,
     session_manager: Arc<M>,
-    service_factory: Arc<dyn Fn() -> S + Send + Sync>,
+    service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
 }
 
 impl<S, M> Clone for StreamableHttpService<S, M> {
@@ -92,7 +92,7 @@ where
     M: SessionManager,
 {
     pub fn new(
-        service_factory: impl Fn() -> S + Send + Sync + 'static,
+        service_factory: impl Fn() -> Result<S, std::io::Error> + Send + Sync + 'static,
         session_manager: Arc<M>,
         config: StreamableHttpServerConfig,
     ) -> Self {
@@ -102,7 +102,7 @@ where
             service_factory: Arc::new(service_factory),
         }
     }
-    fn get_service(&self) -> S {
+    fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
     }
     pub async fn handle<B>(&self, request: Request<B>) -> Response<UnsyncBoxBody<Bytes, Infallible>>
@@ -318,7 +318,9 @@ where
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
-                let service = self.get_service();
+                let service = self
+                    .get_service()
+                    .map_err(internal_error_response("get service"))?;
                 // spawn a task to serve the session
                 tokio::spawn({
                     let session_manager = self.session_manager.clone();
@@ -372,7 +374,9 @@ where
                 Ok(response)
             }
         } else {
-            let service = self.get_service();
+            let service = self
+                .get_service()
+                .map_err(internal_error_response("get service"))?;
             match message {
                 ClientJsonRpcMessage::Request(request) => {
                     let (transport, receiver) =
