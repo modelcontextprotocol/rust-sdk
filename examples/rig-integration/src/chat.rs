@@ -1,12 +1,16 @@
 use futures::StreamExt;
 use rig::{
     agent::Agent,
+    completion::{AssistantContent, CompletionModel},
     message::Message,
-    streaming::{StreamingChat, StreamingChoice, StreamingCompletionModel},
+    streaming::StreamingChat,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 
-pub async fn cli_chatbot<M: StreamingCompletionModel>(chatbot: Agent<M>) -> anyhow::Result<()> {
+pub async fn cli_chatbot<M>(chatbot: Agent<M>) -> anyhow::Result<()>
+where
+    M: CompletionModel,
+{
     let mut chat_log = vec![];
 
     let mut output = BufWriter::new(tokio::io::stdout());
@@ -32,15 +36,17 @@ pub async fn cli_chatbot<M: StreamingCompletionModel>(chatbot: Agent<M>) -> anyh
                 let mut message_buf = String::new();
                 while let Some(message) = response.next().await {
                     match message {
-                        Ok(StreamingChoice::Message(text)) => {
-                            message_buf.push_str(&text);
-                            output_agent(text, &mut output).await?;
+                        Ok(AssistantContent::Text(text)) => {
+                            message_buf.push_str(&text.text);
+                            output_agent(text.text, &mut output).await?;
                         }
-                        Ok(StreamingChoice::ToolCall(name, _, param)) => {
+                        Ok(AssistantContent::ToolCall(tool_call)) => {
+                            let name = tool_call.function.name;
+                            let arguments = tool_call.function.arguments;
                             chat_log.push(Message::assistant(format!(
-                                "Calling tool: {name} with args: {param}"
+                                "Calling tool: {name} with args: {arguments}"
                             )));
-                            let result = chatbot.tools.call(&name, param.to_string()).await;
+                            let result = chatbot.tools.call(&name, arguments.to_string()).await;
                             match result {
                                 Ok(tool_call_result) => {
                                     stream_output_agent_finished(&mut output).await?;

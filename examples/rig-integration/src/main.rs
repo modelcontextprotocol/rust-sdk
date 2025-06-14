@@ -1,4 +1,5 @@
 use rig::{
+    client::{CompletionClient, ProviderClient},
     embeddings::EmbeddingsBuilder,
     providers::{cohere, deepseek},
     vector_store::in_memory_store::InMemoryVectorStore,
