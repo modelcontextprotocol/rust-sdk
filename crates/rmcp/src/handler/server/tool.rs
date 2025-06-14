@@ -183,11 +183,11 @@ pub type DynCallToolHandler<S> = dyn for<'s> Fn(ToolCallContext<'s, S>) -> BoxFu
 pub struct Parameters<P>(pub P);
 
 impl<P: JsonSchema> JsonSchema for Parameters<P> {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         P::schema_name()
     }
 
-    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         P::json_schema(generator)
     }
 }

@@ -98,18 +98,19 @@ macro_rules! const_string {
 
         #[cfg(feature = "schemars")]
         impl schemars::JsonSchema for $name {
-            fn schema_name() -> String {
-                stringify!($name).to_string()
+            fn schema_name() -> Cow<'static, str> {
+                Cow::Borrowed(stringify!($name))
             }
 
-            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
-                // Create a schema for a constant value of type String
-                schemars::schema::Schema::Object(schemars::schema::SchemaObject {
-                    instance_type: Some(schemars::schema::InstanceType::String.into()),
-                    format: Some("const".to_string()),
-                    const_value: Some(serde_json::Value::String($value.into())),
-                    ..Default::default()
-                })
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                use serde_json::{Map, json};
+
+                let mut schema_map = Map::new();
+                schema_map.insert("type".to_string(), json!("string"));
+                schema_map.insert("format".to_string(), json!("const"));
+                schema_map.insert("const".to_string(), json!($value));
+
+                schemars::Schema::from(schema_map)
             }
         }
     };
@@ -233,27 +234,23 @@ impl<'de> Deserialize<'de> for NumberOrString {
 
 #[cfg(feature = "schemars")]
 impl schemars::JsonSchema for NumberOrString {
-    fn schema_name() -> String {
-        "NumberOrString".to_string()
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("NumberOrString")
     }
 
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::Schema::Object(schemars::schema::SchemaObject {
-            subschemas: Some(Box::new(schemars::schema::SubschemaValidation {
-                one_of: Some(vec![
-                    schemars::schema::Schema::Object(schemars::schema::SchemaObject {
-                        instance_type: Some(schemars::schema::InstanceType::Number.into()),
-                        ..Default::default()
-                    }),
-                    schemars::schema::Schema::Object(schemars::schema::SchemaObject {
-                        instance_type: Some(schemars::schema::InstanceType::String.into()),
-                        ..Default::default()
-                    }),
-                ]),
-                ..Default::default()
-            })),
-            ..Default::default()
-        })
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use serde_json::{Map, json};
+
+        let mut number_schema = Map::new();
+        number_schema.insert("type".to_string(), json!("number"));
+
+        let mut string_schema = Map::new();
+        string_schema.insert("type".to_string(), json!("string"));
+
+        let mut schema_map = Map::new();
+        schema_map.insert("oneOf".to_string(), json!([number_schema, string_schema]));
+
+        schemars::Schema::from(schema_map)
     }
 }
 
