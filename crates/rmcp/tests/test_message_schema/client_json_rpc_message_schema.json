@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "JsonRpcMessage_for_ClientRequest_and_ClientResult_and_ClientNotification",
-  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol: individual requests/responses, notifications, batch operations, and errors. It serves as the top-level message container for MCP communication.",
+  "title": "JsonRpcMessage",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, batch operations, and errors.\nIt serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
       "description": "A single request expecting a response",
       "allOf": [
         {
-          "$ref": "#/definitions/JsonRpcRequest_for_ClientRequest"
+          "$ref": "#/definitions/JsonRpcRequest"
         }
       ]
     },
@@ -15,7 +15,7 @@
       "description": "A response to a previous request",
       "allOf": [
         {
-          "$ref": "#/definitions/JsonRpcResponse_for_ClientResult"
+          "$ref": "#/definitions/JsonRpcResponse"
         }
       ]
     },
@@ -23,7 +23,7 @@
       "description": "A one-way notification (no response expected)",
       "allOf": [
         {
-          "$ref": "#/definitions/JsonRpcNotification_for_ClientNotification"
+          "$ref": "#/definitions/JsonRpcNotification"
         }
       ]
     },
@@ -31,14 +31,14 @@
       "description": "Multiple requests sent together",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/JsonRpcBatchRequestItem_for_ClientRequest_and_ClientNotification"
+        "$ref": "#/definitions/JsonRpcBatchRequestItem"
       }
     },
     {
       "description": "Multiple responses sent together",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/JsonRpcBatchResponseItem_for_ClientResult"
+        "$ref": "#/definitions/JsonRpcBatchResponseItem"
       }
     },
     {
@@ -51,101 +51,8 @@
     }
   ],
   "definitions": {
-    "Annotated_for_RawContent": {
+    "Annotated": {
       "type": "object",
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "text",
-            "type"
-          ],
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "text"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "data",
-            "mimeType",
-            "type"
-          ],
-          "properties": {
-            "data": {
-              "description": "The base64-encoded image",
-              "type": "string"
-            },
-            "mimeType": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "image"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "resource",
-            "type"
-          ],
-          "properties": {
-            "resource": {
-              "$ref": "#/definitions/ResourceContents"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "resource"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "data",
-            "mimeType",
-            "type"
-          ],
-          "properties": {
-            "annotations": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/Annotations"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "data": {
-              "type": "string"
-            },
-            "mimeType": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "audio"
-              ]
-            }
-          }
-        }
-      ],
       "properties": {
         "annotations": {
           "anyOf": [
@@ -157,7 +64,102 @@
             }
           ]
         }
-      }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawEmbeddedResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Annotated2"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Annotated2": {
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
     },
     "Annotations": {
       "type": "object",
@@ -189,10 +191,6 @@
     },
     "ArgumentInfo": {
       "type": "object",
-      "required": [
-        "name",
-        "value"
-      ],
       "properties": {
         "name": {
           "type": "string"
@@ -200,7 +198,11 @@
         "value": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name",
+        "value"
+      ]
     },
     "CallToolRequestMethod": {
       "type": "string",
@@ -208,11 +210,8 @@
       "const": "tools/call"
     },
     "CallToolRequestParam": {
-      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute the tool operation.",
+      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.",
       "type": "object",
-      "required": [
-        "name"
-      ],
       "properties": {
         "arguments": {
           "description": "Arguments to pass to the tool (must match the tool's input schema)",
@@ -226,7 +225,10 @@
           "description": "The name of the tool to call",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name"
+      ]
     },
     "CancelledNotificationMethod": {
       "type": "string",
@@ -235,9 +237,6 @@
     },
     "CancelledNotificationParam": {
       "type": "object",
-      "required": [
-        "requestId"
-      ],
       "properties": {
         "reason": {
           "type": [
@@ -248,11 +247,14 @@
         "requestId": {
           "$ref": "#/definitions/NumberOrString"
         }
-      }
+      },
+      "required": [
+        "requestId"
+      ]
     },
     "ClientCapabilities": {
       "title": "Builder",
-      "description": "```rust # use rmcp::model::ClientCapabilities; let cap = ClientCapabilities::builder() .enable_experimental() .enable_roots() .enable_roots_list_changed() .build(); ```",
+      "description": "```rust\n# use rmcp::model::ClientCapabilities;\nlet cap = ClientCapabilities::builder()\n    .enable_experimental()\n    .enable_roots()\n    .enable_roots_list_changed()\n    .build();\n```",
       "type": "object",
       "properties": {
         "experimental": {
@@ -304,10 +306,6 @@
     },
     "CompleteRequestParam": {
       "type": "object",
-      "required": [
-        "argument",
-        "ref"
-      ],
       "properties": {
         "argument": {
           "$ref": "#/definitions/ArgumentInfo"
@@ -315,22 +313,21 @@
         "ref": {
           "$ref": "#/definitions/Reference"
         }
-      }
+      },
+      "required": [
+        "ref",
+        "argument"
+      ]
     },
     "CreateMessageResult": {
-      "description": "The result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about how the generation was performed and why it stopped.",
+      "description": "The result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about\nhow the generation was performed and why it stopped.",
       "type": "object",
-      "required": [
-        "content",
-        "model",
-        "role"
-      ],
       "properties": {
         "content": {
           "description": "The actual content of the message (text, image, etc.)",
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated_for_RawContent"
+              "$ref": "#/definitions/Annotated"
             }
           ]
         },
@@ -353,33 +350,46 @@
             "null"
           ]
         }
-      }
+      },
+      "required": [
+        "model",
+        "role",
+        "content"
+      ]
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object"
     },
+    "ErrorCode": {
+      "description": "Standard JSON-RPC error codes used throughout the MCP protocol.\n\nThese codes follow the JSON-RPC 2.0 specification and provide\nstandardized error reporting across all MCP implementations.",
+      "type": "integer",
+      "format": "int32"
+    },
     "ErrorData": {
-      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting, providing a standardized way to communicate errors between clients and servers.",
+      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting,\nproviding a standardized way to communicate errors between clients and servers.",
       "type": "object",
-      "required": [
-        "code",
-        "message"
-      ],
       "properties": {
         "code": {
           "description": "The error type that occurred (using standard JSON-RPC error codes)",
-          "type": "integer",
-          "format": "int32"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorCode"
+            }
+          ]
         },
         "data": {
-          "description": "Additional information about the error. The value of this member is defined by the sender (e.g. detailed error information, nested errors etc.)."
+          "description": "Additional information about the error. The value of this member is defined by the\nsender (e.g. detailed error information, nested errors etc.)."
         },
         "message": {
           "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
     },
     "GetPromptRequestMethod": {
       "type": "string",
@@ -389,9 +399,6 @@
     "GetPromptRequestParam": {
       "description": "Parameters for retrieving a specific prompt",
       "type": "object",
-      "required": [
-        "name"
-      ],
       "properties": {
         "arguments": {
           "type": [
@@ -403,14 +410,13 @@
         "name": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name"
+      ]
     },
     "Implementation": {
       "type": "object",
-      "required": [
-        "name",
-        "version"
-      ],
       "properties": {
         "name": {
           "type": "string"
@@ -418,16 +424,15 @@
         "version": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
     },
     "InitializeRequestParam": {
-      "description": "Parameters sent by a client when initializing a connection to an MCP server.\n\nThis contains the client's protocol version, capabilities, and implementation information, allowing the server to understand what the client supports.",
+      "description": "Parameters sent by a client when initializing a connection to an MCP server.\n\nThis contains the client's protocol version, capabilities, and implementation\ninformation, allowing the server to understand what the client supports.",
       "type": "object",
-      "required": [
-        "capabilities",
-        "clientInfo",
-        "protocolVersion"
-      ],
       "properties": {
         "capabilities": {
           "description": "The capabilities this client supports (sampling, roots, etc.)",
@@ -453,7 +458,12 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "protocolVersion",
+        "capabilities",
+        "clientInfo"
+      ]
     },
     "InitializeResultMethod": {
       "type": "string",
@@ -465,20 +475,20 @@
       "format": "const",
       "const": "notifications/initialized"
     },
-    "JsonRpcBatchRequestItem_for_ClientRequest_and_ClientNotification": {
+    "JsonRpcBatchRequestItem": {
       "anyOf": [
         {
-          "$ref": "#/definitions/JsonRpcRequest_for_ClientRequest"
+          "$ref": "#/definitions/JsonRpcRequest"
         },
         {
-          "$ref": "#/definitions/JsonRpcNotification_for_ClientNotification"
+          "$ref": "#/definitions/JsonRpcNotification"
         }
       ]
     },
-    "JsonRpcBatchResponseItem_for_ClientResult": {
+    "JsonRpcBatchResponseItem": {
       "anyOf": [
         {
-          "$ref": "#/definitions/JsonRpcResponse_for_ClientResult"
+          "$ref": "#/definitions/JsonRpcResponse"
         },
         {
           "$ref": "#/definitions/JsonRpcError"
@@ -487,11 +497,6 @@
     },
     "JsonRpcError": {
       "type": "object",
-      "required": [
-        "error",
-        "id",
-        "jsonrpc"
-      ],
       "properties": {
         "error": {
           "$ref": "#/definitions/ErrorData"
@@ -502,80 +507,40 @@
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
         }
-      }
-    },
-    "JsonRpcNotification_for_ClientNotification": {
-      "type": "object",
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam"
-        },
-        {
-          "$ref": "#/definitions/Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam"
-        },
-        {
-          "$ref": "#/definitions/NotificationNoParam_for_InitializedNotificationMethod"
-        },
-        {
-          "$ref": "#/definitions/NotificationNoParam_for_RootsListChangedNotificationMethod"
-        }
-      ],
+      },
       "required": [
-        "jsonrpc"
-      ],
+        "jsonrpc",
+        "id",
+        "error"
+      ]
+    },
+    "JsonRpcNotification": {
+      "type": "object",
       "properties": {
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
         }
-      }
-    },
-    "JsonRpcRequest_for_ClientRequest": {
-      "type": "object",
+      },
       "anyOf": [
         {
-          "$ref": "#/definitions/RequestNoParam_for_PingRequestMethod"
+          "$ref": "#/definitions/Notification"
         },
         {
-          "$ref": "#/definitions/Request_for_InitializeResultMethod_and_InitializeRequestParam"
+          "$ref": "#/definitions/Notification2"
         },
         {
-          "$ref": "#/definitions/Request_for_CompleteRequestMethod_and_CompleteRequestParam"
+          "$ref": "#/definitions/NotificationNoParam"
         },
         {
-          "$ref": "#/definitions/Request_for_SetLevelRequestMethod_and_SetLevelRequestParam"
-        },
-        {
-          "$ref": "#/definitions/Request_for_GetPromptRequestMethod_and_GetPromptRequestParam"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam_for_ListPromptsRequestMethod_and_PaginatedRequestParam"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam_for_ListResourcesRequestMethod_and_PaginatedRequestParam"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam_for_ListResourceTemplatesRequestMethod_and_PaginatedRequestParam"
-        },
-        {
-          "$ref": "#/definitions/Request_for_ReadResourceRequestMethod_and_ReadResourceRequestParam"
-        },
-        {
-          "$ref": "#/definitions/Request_for_SubscribeRequestMethod_and_SubscribeRequestParam"
-        },
-        {
-          "$ref": "#/definitions/Request_for_UnsubscribeRequestMethod_and_UnsubscribeRequestParam"
-        },
-        {
-          "$ref": "#/definitions/Request_for_CallToolRequestMethod_and_CallToolRequestParam"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam_for_ListToolsRequestMethod_and_PaginatedRequestParam"
+          "$ref": "#/definitions/NotificationNoParam2"
         }
       ],
       "required": [
-        "id",
         "jsonrpc"
-      ],
+      ]
+    },
+    "JsonRpcRequest": {
+      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/definitions/NumberOrString"
@@ -583,15 +548,55 @@
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
         }
-      }
-    },
-    "JsonRpcResponse_for_ClientResult": {
-      "type": "object",
-      "required": [
-        "id",
-        "jsonrpc",
-        "result"
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestNoParam"
+        },
+        {
+          "$ref": "#/definitions/Request"
+        },
+        {
+          "$ref": "#/definitions/Request2"
+        },
+        {
+          "$ref": "#/definitions/Request3"
+        },
+        {
+          "$ref": "#/definitions/Request4"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam2"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam3"
+        },
+        {
+          "$ref": "#/definitions/Request5"
+        },
+        {
+          "$ref": "#/definitions/Request6"
+        },
+        {
+          "$ref": "#/definitions/Request7"
+        },
+        {
+          "$ref": "#/definitions/Request8"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam4"
+        }
       ],
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "JsonRpcResponse": {
+      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/definitions/NumberOrString"
@@ -602,7 +607,12 @@
         "result": {
           "$ref": "#/definitions/ClientResult"
         }
-      }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
     },
     "JsonRpcVersion2_0": {
       "type": "string",
@@ -626,9 +636,6 @@
     },
     "ListRootsResult": {
       "type": "object",
-      "required": [
-        "roots"
-      ],
       "properties": {
         "roots": {
           "type": "array",
@@ -636,7 +643,10 @@
             "$ref": "#/definitions/Root"
           }
         }
-      }
+      },
+      "required": [
+        "roots"
+      ]
     },
     "ListToolsRequestMethod": {
       "type": "string",
@@ -657,34 +667,8 @@
         "emergency"
       ]
     },
-    "NotificationNoParam_for_InitializedNotificationMethod": {
+    "Notification": {
       "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/InitializedNotificationMethod"
-        }
-      }
-    },
-    "NotificationNoParam_for_RootsListChangedNotificationMethod": {
-      "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/RootsListChangedNotificationMethod"
-        }
-      }
-    },
-    "Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam": {
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
       "properties": {
         "method": {
           "$ref": "#/definitions/CancelledNotificationMethod"
@@ -692,14 +676,14 @@
         "params": {
           "$ref": "#/definitions/CancelledNotificationParam"
         }
-      }
-    },
-    "Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam": {
-      "type": "object",
+      },
       "required": [
         "method",
         "params"
-      ],
+      ]
+    },
+    "Notification2": {
+      "type": "object",
       "properties": {
         "method": {
           "$ref": "#/definitions/ProgressNotificationMethod"
@@ -707,7 +691,33 @@
         "params": {
           "$ref": "#/definitions/ProgressNotificationParam"
         }
-      }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "NotificationNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/InitializedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NotificationNoParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/RootsListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
     },
     "NumberOrString": {
       "oneOf": [
@@ -742,10 +752,6 @@
     },
     "ProgressNotificationParam": {
       "type": "object",
-      "required": [
-        "progress",
-        "progressToken"
-      ],
       "properties": {
         "message": {
           "description": "An optional message describing the current progress.",
@@ -758,10 +764,10 @@
           "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         },
         "progressToken": {
-          "$ref": "#/definitions/NumberOrString"
+          "$ref": "#/definitions/ProgressToken"
         },
         "total": {
           "description": "Total number of items to process (or total progress required), if known",
@@ -770,13 +776,74 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "progressToken",
+        "progress"
+      ]
+    },
+    "ProgressToken": {
+      "description": "A token used to track the progress of long-running operations.\n\nProgress tokens allow clients and servers to associate progress notifications\nwith specific requests, enabling real-time updates on operation status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      ]
+    },
+    "PromptReference": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
     },
     "ProtocolVersion": {
-      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying which version of the Model Context Protocol is being used.",
+      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
+    },
+    "RawEmbeddedResource": {
+      "type": "object",
+      "properties": {
+        "resource": {
+          "$ref": "#/definitions/ResourceContents"
+        }
+      },
+      "required": [
+        "resource"
+      ]
+    },
+    "RawImageContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "The base64-encoded image",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
+    "RawTextContent": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
     },
     "ReadResourceRequestMethod": {
       "type": "string",
@@ -786,72 +853,195 @@
     "ReadResourceRequestParam": {
       "description": "Parameters for reading a specific resource",
       "type": "object",
-      "required": [
-        "uri"
-      ],
       "properties": {
         "uri": {
           "description": "The URI of the resource to read",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "uri"
+      ]
     },
     "Reference": {
       "oneOf": [
         {
           "type": "object",
-          "required": [
-            "type",
-            "uri"
-          ],
           "properties": {
             "type": {
               "type": "string",
-              "enum": [
-                "ref/resource"
-              ]
-            },
-            "uri": {
-              "type": "string"
+              "const": "ref/resource"
             }
-          }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceReference"
+            }
+          ],
+          "required": [
+            "type"
+          ]
         },
         {
           "type": "object",
-          "required": [
-            "name",
-            "type"
-          ],
           "properties": {
-            "name": {
-              "type": "string"
-            },
             "type": {
               "type": "string",
-              "enum": [
-                "ref/prompt"
-              ]
+              "const": "ref/prompt"
             }
-          }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/PromptReference"
+            }
+          ],
+          "required": [
+            "type"
+          ]
         }
       ]
     },
-    "RequestNoParam_for_PingRequestMethod": {
+    "Request": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/InitializeResultMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/InitializeRequestParam"
+        }
+      },
       "required": [
-        "method"
-      ],
+        "method",
+        "params"
+      ]
+    },
+    "Request2": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CompleteRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CompleteRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request3": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SetLevelRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SetLevelRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request4": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetPromptRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetPromptRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request5": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ReadResourceRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ReadResourceRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request6": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SubscribeRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request7": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/UnsubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/UnsubscribeRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request8": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CallToolRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CallToolRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "RequestNoParam": {
+      "type": "object",
       "properties": {
         "method": {
           "$ref": "#/definitions/PingRequestMethod"
         }
-      }
-    },
-    "RequestOptionalParam_for_ListPromptsRequestMethod_and_PaginatedRequestParam": {
-      "type": "object",
+      },
       "required": [
         "method"
-      ],
+      ]
+    },
+    "RequestOptionalParam": {
+      "type": "object",
       "properties": {
         "method": {
           "$ref": "#/definitions/ListPromptsRequestMethod"
@@ -866,34 +1056,13 @@
             }
           ]
         }
-      }
-    },
-    "RequestOptionalParam_for_ListResourceTemplatesRequestMethod_and_PaginatedRequestParam": {
-      "type": "object",
+      },
       "required": [
         "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ListResourceTemplatesRequestMethod"
-        },
-        "params": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PaginatedRequestParam"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
+      ]
     },
-    "RequestOptionalParam_for_ListResourcesRequestMethod_and_PaginatedRequestParam": {
+    "RequestOptionalParam2": {
       "type": "object",
-      "required": [
-        "method"
-      ],
       "properties": {
         "method": {
           "$ref": "#/definitions/ListResourcesRequestMethod"
@@ -908,13 +1077,34 @@
             }
           ]
         }
-      }
-    },
-    "RequestOptionalParam_for_ListToolsRequestMethod_and_PaginatedRequestParam": {
-      "type": "object",
+      },
       "required": [
         "method"
-      ],
+      ]
+    },
+    "RequestOptionalParam3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListResourceTemplatesRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam4": {
+      "type": "object",
       "properties": {
         "method": {
           "$ref": "#/definitions/ListToolsRequestMethod"
@@ -929,144 +1119,15 @@
             }
           ]
         }
-      }
-    },
-    "Request_for_CallToolRequestMethod_and_CallToolRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
+      },
       "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/CallToolRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/CallToolRequestParam"
-        }
-      }
-    },
-    "Request_for_CompleteRequestMethod_and_CompleteRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/CompleteRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/CompleteRequestParam"
-        }
-      }
-    },
-    "Request_for_GetPromptRequestMethod_and_GetPromptRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/GetPromptRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/GetPromptRequestParam"
-        }
-      }
-    },
-    "Request_for_InitializeResultMethod_and_InitializeRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/InitializeResultMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/InitializeRequestParam"
-        }
-      }
-    },
-    "Request_for_ReadResourceRequestMethod_and_ReadResourceRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ReadResourceRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/ReadResourceRequestParam"
-        }
-      }
-    },
-    "Request_for_SetLevelRequestMethod_and_SetLevelRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/SetLevelRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/SetLevelRequestParam"
-        }
-      }
-    },
-    "Request_for_SubscribeRequestMethod_and_SubscribeRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/SubscribeRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/SubscribeRequestParam"
-        }
-      }
-    },
-    "Request_for_UnsubscribeRequestMethod_and_UnsubscribeRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/UnsubscribeRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/UnsubscribeRequestParam"
-        }
-      }
+        "method"
+      ]
     },
     "ResourceContents": {
       "anyOf": [
         {
           "type": "object",
-          "required": [
-            "text",
-            "uri"
-          ],
           "properties": {
             "mime_type": {
               "type": [
@@ -1080,14 +1141,14 @@
             "uri": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "uri",
+            "text"
+          ]
         },
         {
           "type": "object",
-          "required": [
-            "blob",
-            "uri"
-          ],
           "properties": {
             "blob": {
               "type": "string"
@@ -1101,34 +1162,42 @@
             "uri": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "uri",
+            "blob"
+          ]
         }
       ]
     },
+    "ResourceReference": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
     "Role": {
-      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different types of message senders in the conversation flow.",
+      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different\ntypes of message senders in the conversation flow.",
       "oneOf": [
         {
           "description": "A human user or client making a request",
           "type": "string",
-          "enum": [
-            "user"
-          ]
+          "const": "user"
         },
         {
           "description": "An AI assistant or server providing a response",
           "type": "string",
-          "enum": [
-            "assistant"
-          ]
+          "const": "assistant"
         }
       ]
     },
     "Root": {
       "type": "object",
-      "required": [
-        "uri"
-      ],
       "properties": {
         "name": {
           "type": [
@@ -1139,7 +1208,10 @@
         "uri": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "uri"
+      ]
     },
     "RootsCapabilities": {
       "type": "object",
@@ -1165,9 +1237,6 @@
     "SetLevelRequestParam": {
       "description": "Parameters for setting the logging level",
       "type": "object",
-      "required": [
-        "level"
-      ],
       "properties": {
         "level": {
           "description": "The desired logging level",
@@ -1177,7 +1246,10 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "level"
+      ]
     },
     "SubscribeRequestMethod": {
       "type": "string",
@@ -1187,15 +1259,15 @@
     "SubscribeRequestParam": {
       "description": "Parameters for subscribing to resource updates",
       "type": "object",
-      "required": [
-        "uri"
-      ],
       "properties": {
         "uri": {
           "description": "The URI of the resource to subscribe to",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "uri"
+      ]
     },
     "UnsubscribeRequestMethod": {
       "type": "string",
@@ -1205,15 +1277,15 @@
     "UnsubscribeRequestParam": {
       "description": "Parameters for unsubscribing from resource updates",
       "type": "object",
-      "required": [
-        "uri"
-      ],
       "properties": {
         "uri": {
           "description": "The URI of the resource to unsubscribe from",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "uri"
+      ]
     }
   }
 }

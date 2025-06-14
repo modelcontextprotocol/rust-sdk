@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "JsonRpcMessage_for_ServerRequest_and_ServerResult_and_ServerNotification",
-  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol: individual requests/responses, notifications, batch operations, and errors. It serves as the top-level message container for MCP communication.",
+  "title": "JsonRpcMessage",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, batch operations, and errors.\nIt serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
       "description": "A single request expecting a response",
       "allOf": [
         {
-          "$ref": "#/definitions/JsonRpcRequest_for_ServerRequest"
+          "$ref": "#/definitions/JsonRpcRequest"
         }
       ]
     },
@@ -15,7 +15,7 @@
       "description": "A response to a previous request",
       "allOf": [
         {
-          "$ref": "#/definitions/JsonRpcResponse_for_ServerResult"
+          "$ref": "#/definitions/JsonRpcResponse"
         }
       ]
     },
@@ -23,7 +23,7 @@
       "description": "A one-way notification (no response expected)",
       "allOf": [
         {
-          "$ref": "#/definitions/JsonRpcNotification_for_ServerNotification"
+          "$ref": "#/definitions/JsonRpcNotification"
         }
       ]
     },
@@ -31,14 +31,14 @@
       "description": "Multiple requests sent together",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/JsonRpcBatchRequestItem_for_ServerRequest_and_ServerNotification"
+        "$ref": "#/definitions/JsonRpcBatchRequestItem"
       }
     },
     {
       "description": "Multiple responses sent together",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/JsonRpcBatchResponseItem_for_ServerResult"
+        "$ref": "#/definitions/JsonRpcBatchResponseItem"
       }
     },
     {
@@ -51,101 +51,8 @@
     }
   ],
   "definitions": {
-    "Annotated_for_RawContent": {
+    "Annotated": {
       "type": "object",
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "text",
-            "type"
-          ],
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "text"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "data",
-            "mimeType",
-            "type"
-          ],
-          "properties": {
-            "data": {
-              "description": "The base64-encoded image",
-              "type": "string"
-            },
-            "mimeType": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "image"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "resource",
-            "type"
-          ],
-          "properties": {
-            "resource": {
-              "$ref": "#/definitions/ResourceContents"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "resource"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "data",
-            "mimeType",
-            "type"
-          ],
-          "properties": {
-            "annotations": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/Annotations"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "data": {
-              "type": "string"
-            },
-            "mimeType": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "audio"
-              ]
-            }
-          }
-        }
-      ],
       "properties": {
         "annotations": {
           "anyOf": [
@@ -157,13 +64,105 @@
             }
           ]
         }
-      }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawEmbeddedResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Annotated2"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
     },
-    "Annotated_for_RawEmbeddedResource": {
+    "Annotated2": {
       "type": "object",
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
       "required": [
-        "resource"
-      ],
+        "data",
+        "mimeType"
+      ]
+    },
+    "Annotated3": {
+      "type": "object",
       "properties": {
         "annotations": {
           "anyOf": [
@@ -178,15 +177,14 @@
         "resource": {
           "$ref": "#/definitions/ResourceContents"
         }
-      }
+      },
+      "required": [
+        "resource"
+      ]
     },
-    "Annotated_for_RawResource": {
+    "Annotated4": {
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
-      "required": [
-        "name",
-        "uri"
-      ],
       "properties": {
         "annotations": {
           "anyOf": [
@@ -223,20 +221,20 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         },
         "uri": {
           "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
           "type": "string"
         }
-      }
-    },
-    "Annotated_for_RawResourceTemplate": {
-      "type": "object",
+      },
       "required": [
-        "name",
-        "uriTemplate"
-      ],
+        "uri",
+        "name"
+      ]
+    },
+    "Annotated5": {
+      "type": "object",
       "properties": {
         "annotations": {
           "anyOf": [
@@ -266,7 +264,11 @@
         "uriTemplate": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "uriTemplate",
+        "name"
+      ]
     },
     "Annotations": {
       "type": "object",
@@ -297,17 +299,14 @@
       }
     },
     "CallToolResult": {
-      "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional flag indicating whether the operation resulted in an error.",
+      "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
-      "required": [
-        "content"
-      ],
       "properties": {
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated_for_RawContent"
+            "$ref": "#/definitions/Annotated"
           }
         },
         "isError": {
@@ -317,7 +316,10 @@
             "null"
           ]
         }
-      }
+      },
+      "required": [
+        "content"
+      ]
     },
     "CancelledNotificationMethod": {
       "type": "string",
@@ -326,9 +328,6 @@
     },
     "CancelledNotificationParam": {
       "type": "object",
-      "required": [
-        "requestId"
-      ],
       "properties": {
         "reason": {
           "type": [
@@ -339,24 +338,24 @@
         "requestId": {
           "$ref": "#/definitions/NumberOrString"
         }
-      }
+      },
+      "required": [
+        "requestId"
+      ]
     },
     "CompleteResult": {
       "type": "object",
-      "required": [
-        "completion"
-      ],
       "properties": {
         "completion": {
           "$ref": "#/definitions/CompletionInfo"
         }
-      }
+      },
+      "required": [
+        "completion"
+      ]
     },
     "CompletionInfo": {
       "type": "object",
-      "required": [
-        "values"
-      ],
       "properties": {
         "hasMore": {
           "type": [
@@ -370,7 +369,7 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         },
         "values": {
           "type": "array",
@@ -378,31 +377,28 @@
             "type": "string"
           }
         }
-      }
+      },
+      "required": [
+        "values"
+      ]
     },
     "ContextInclusion": {
-      "description": "Specifies how much context should be included in sampling requests.\n\nThis allows clients to control what additional context information should be provided to the LLM when processing sampling requests.",
+      "description": "Specifies how much context should be included in sampling requests.\n\nThis allows clients to control what additional context information\nshould be provided to the LLM when processing sampling requests.",
       "oneOf": [
         {
           "description": "Include context from all connected MCP servers",
           "type": "string",
-          "enum": [
-            "allServers"
-          ]
+          "const": "allServers"
         },
         {
           "description": "Include no additional context",
           "type": "string",
-          "enum": [
-            "none"
-          ]
+          "const": "none"
         },
         {
           "description": "Include context only from the requesting server",
           "type": "string",
-          "enum": [
-            "thisServer"
-          ]
+          "const": "thisServer"
         }
       ]
     },
@@ -412,12 +408,8 @@
       "const": "sampling/createMessage"
     },
     "CreateMessageRequestParam": {
-      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to generate an LLM response, including conversation history, model preferences, and generation parameters.",
+      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.",
       "type": "object",
-      "required": [
-        "maxTokens",
-        "messages"
-      ],
       "properties": {
         "includeContext": {
           "description": "How much context to include from MCP servers",
@@ -434,7 +426,7 @@
           "description": "Maximum number of tokens to generate",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         },
         "messages": {
           "description": "The conversation history and current messages",
@@ -482,39 +474,48 @@
           ],
           "format": "float"
         }
-      }
+      },
+      "required": [
+        "messages",
+        "maxTokens"
+      ]
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object"
     },
+    "ErrorCode": {
+      "description": "Standard JSON-RPC error codes used throughout the MCP protocol.\n\nThese codes follow the JSON-RPC 2.0 specification and provide\nstandardized error reporting across all MCP implementations.",
+      "type": "integer",
+      "format": "int32"
+    },
     "ErrorData": {
-      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting, providing a standardized way to communicate errors between clients and servers.",
+      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting,\nproviding a standardized way to communicate errors between clients and servers.",
       "type": "object",
-      "required": [
-        "code",
-        "message"
-      ],
       "properties": {
         "code": {
           "description": "The error type that occurred (using standard JSON-RPC error codes)",
-          "type": "integer",
-          "format": "int32"
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorCode"
+            }
+          ]
         },
         "data": {
-          "description": "Additional information about the error. The value of this member is defined by the sender (e.g. detailed error information, nested errors etc.)."
+          "description": "Additional information about the error. The value of this member is defined by the\nsender (e.g. detailed error information, nested errors etc.)."
         },
         "message": {
           "description": "A short description of the error. The message SHOULD be limited to a concise single sentence.",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
     },
     "GetPromptResult": {
       "type": "object",
-      "required": [
-        "messages"
-      ],
       "properties": {
         "description": {
           "type": [
@@ -528,14 +529,13 @@
             "$ref": "#/definitions/PromptMessage"
           }
         }
-      }
+      },
+      "required": [
+        "messages"
+      ]
     },
     "Implementation": {
       "type": "object",
-      "required": [
-        "name",
-        "version"
-      ],
       "properties": {
         "name": {
           "type": "string"
@@ -543,16 +543,15 @@
         "version": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
     },
     "InitializeResult": {
-      "description": "The server's response to an initialization request.\n\nContains the server's protocol version, capabilities, and implementation information, along with optional instructions for the client.",
+      "description": "The server's response to an initialization request.\n\nContains the server's protocol version, capabilities, and implementation\ninformation, along with optional instructions for the client.",
       "type": "object",
-      "required": [
-        "capabilities",
-        "protocolVersion",
-        "serverInfo"
-      ],
       "properties": {
         "capabilities": {
           "description": "The capabilities this server provides (tools, resources, prompts, etc.)",
@@ -585,22 +584,27 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "protocolVersion",
+        "capabilities",
+        "serverInfo"
+      ]
     },
-    "JsonRpcBatchRequestItem_for_ServerRequest_and_ServerNotification": {
+    "JsonRpcBatchRequestItem": {
       "anyOf": [
         {
-          "$ref": "#/definitions/JsonRpcRequest_for_ServerRequest"
+          "$ref": "#/definitions/JsonRpcRequest"
         },
         {
-          "$ref": "#/definitions/JsonRpcNotification_for_ServerNotification"
+          "$ref": "#/definitions/JsonRpcNotification"
         }
       ]
     },
-    "JsonRpcBatchResponseItem_for_ServerResult": {
+    "JsonRpcBatchResponseItem": {
       "anyOf": [
         {
-          "$ref": "#/definitions/JsonRpcResponse_for_ServerResult"
+          "$ref": "#/definitions/JsonRpcResponse"
         },
         {
           "$ref": "#/definitions/JsonRpcError"
@@ -609,11 +613,6 @@
     },
     "JsonRpcError": {
       "type": "object",
-      "required": [
-        "error",
-        "id",
-        "jsonrpc"
-      ],
       "properties": {
         "error": {
           "$ref": "#/definitions/ErrorData"
@@ -624,59 +623,49 @@
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
         }
-      }
-    },
-    "JsonRpcNotification_for_ServerNotification": {
-      "type": "object",
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam"
-        },
-        {
-          "$ref": "#/definitions/Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam"
-        },
-        {
-          "$ref": "#/definitions/Notification_for_LoggingMessageNotificationMethod_and_LoggingMessageNotificationParam"
-        },
-        {
-          "$ref": "#/definitions/Notification_for_ResourceUpdatedNotificationMethod_and_ResourceUpdatedNotificationParam"
-        },
-        {
-          "$ref": "#/definitions/NotificationNoParam_for_ResourceListChangedNotificationMethod"
-        },
-        {
-          "$ref": "#/definitions/NotificationNoParam_for_ToolListChangedNotificationMethod"
-        },
-        {
-          "$ref": "#/definitions/NotificationNoParam_for_PromptListChangedNotificationMethod"
-        }
-      ],
+      },
       "required": [
-        "jsonrpc"
-      ],
+        "jsonrpc",
+        "id",
+        "error"
+      ]
+    },
+    "JsonRpcNotification": {
+      "type": "object",
       "properties": {
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
         }
-      }
-    },
-    "JsonRpcRequest_for_ServerRequest": {
-      "type": "object",
+      },
       "anyOf": [
         {
-          "$ref": "#/definitions/RequestNoParam_for_PingRequestMethod"
+          "$ref": "#/definitions/Notification"
         },
         {
-          "$ref": "#/definitions/Request_for_CreateMessageRequestMethod_and_CreateMessageRequestParam"
+          "$ref": "#/definitions/Notification2"
         },
         {
-          "$ref": "#/definitions/RequestNoParam_for_ListRootsRequestMethod"
+          "$ref": "#/definitions/Notification3"
+        },
+        {
+          "$ref": "#/definitions/Notification4"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam2"
+        },
+        {
+          "$ref": "#/definitions/NotificationNoParam3"
         }
       ],
       "required": [
-        "id",
         "jsonrpc"
-      ],
+      ]
+    },
+    "JsonRpcRequest": {
+      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/definitions/NumberOrString"
@@ -684,15 +673,25 @@
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
         }
-      }
-    },
-    "JsonRpcResponse_for_ServerResult": {
-      "type": "object",
-      "required": [
-        "id",
-        "jsonrpc",
-        "result"
+      },
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RequestNoParam"
+        },
+        {
+          "$ref": "#/definitions/Request"
+        },
+        {
+          "$ref": "#/definitions/RequestNoParam2"
+        }
       ],
+      "required": [
+        "jsonrpc",
+        "id"
+      ]
+    },
+    "JsonRpcResponse": {
+      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/definitions/NumberOrString"
@@ -703,7 +702,12 @@
         "result": {
           "$ref": "#/definitions/ServerResult"
         }
-      }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
     },
     "JsonRpcVersion2_0": {
       "type": "string",
@@ -712,9 +716,6 @@
     },
     "ListPromptsResult": {
       "type": "object",
-      "required": [
-        "prompts"
-      ],
       "properties": {
         "nextCursor": {
           "type": [
@@ -728,13 +729,13 @@
             "$ref": "#/definitions/Prompt"
           }
         }
-      }
+      },
+      "required": [
+        "prompts"
+      ]
     },
     "ListResourceTemplatesResult": {
       "type": "object",
-      "required": [
-        "resourceTemplates"
-      ],
       "properties": {
         "nextCursor": {
           "type": [
@@ -745,16 +746,16 @@
         "resourceTemplates": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated_for_RawResourceTemplate"
+            "$ref": "#/definitions/Annotated5"
           }
         }
-      }
+      },
+      "required": [
+        "resourceTemplates"
+      ]
     },
     "ListResourcesResult": {
       "type": "object",
-      "required": [
-        "resources"
-      ],
       "properties": {
         "nextCursor": {
           "type": [
@@ -765,10 +766,13 @@
         "resources": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated_for_RawResource"
+            "$ref": "#/definitions/Annotated4"
           }
         }
-      }
+      },
+      "required": [
+        "resources"
+      ]
     },
     "ListRootsRequestMethod": {
       "type": "string",
@@ -777,9 +781,6 @@
     },
     "ListToolsResult": {
       "type": "object",
-      "required": [
-        "tools"
-      ],
       "properties": {
         "nextCursor": {
           "type": [
@@ -793,7 +794,10 @@
             "$ref": "#/definitions/Tool"
           }
         }
-      }
+      },
+      "required": [
+        "tools"
+      ]
     },
     "LoggingLevel": {
       "description": "Logging levels supported by the MCP protocol",
@@ -817,10 +821,6 @@
     "LoggingMessageNotificationParam": {
       "description": "Parameters for a logging message notification",
       "type": "object",
-      "required": [
-        "data",
-        "level"
-      ],
       "properties": {
         "data": {
           "description": "The actual log data"
@@ -840,10 +840,14 @@
             "null"
           ]
         }
-      }
+      },
+      "required": [
+        "level",
+        "data"
+      ]
     },
     "ModelHint": {
-      "description": "A hint suggesting a preferred model name or family.\n\nModel hints are advisory suggestions that help clients choose appropriate models. They can be specific model names or general families like \"claude\" or \"gpt\".",
+      "description": "A hint suggesting a preferred model name or family.\n\nModel hints are advisory suggestions that help clients choose appropriate\nmodels. They can be specific model names or general families like \"claude\" or \"gpt\".",
       "type": "object",
       "properties": {
         "name": {
@@ -856,7 +860,7 @@
       }
     },
     "ModelPreferences": {
-      "description": "Preferences for model selection and behavior in sampling requests.\n\nThis allows servers to express their preferences for which model to use and how to balance different priorities when the client has multiple model options available.",
+      "description": "Preferences for model selection and behavior in sampling requests.\n\nThis allows servers to express their preferences for which model to use\nand how to balance different priorities when the client has multiple\nmodel options available.",
       "type": "object",
       "properties": {
         "costPriority": {
@@ -895,45 +899,8 @@
         }
       }
     },
-    "NotificationNoParam_for_PromptListChangedNotificationMethod": {
+    "Notification": {
       "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/PromptListChangedNotificationMethod"
-        }
-      }
-    },
-    "NotificationNoParam_for_ResourceListChangedNotificationMethod": {
-      "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ResourceListChangedNotificationMethod"
-        }
-      }
-    },
-    "NotificationNoParam_for_ToolListChangedNotificationMethod": {
-      "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ToolListChangedNotificationMethod"
-        }
-      }
-    },
-    "Notification_for_CancelledNotificationMethod_and_CancelledNotificationParam": {
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
       "properties": {
         "method": {
           "$ref": "#/definitions/CancelledNotificationMethod"
@@ -941,29 +908,14 @@
         "params": {
           "$ref": "#/definitions/CancelledNotificationParam"
         }
-      }
-    },
-    "Notification_for_LoggingMessageNotificationMethod_and_LoggingMessageNotificationParam": {
-      "type": "object",
+      },
       "required": [
         "method",
         "params"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/LoggingMessageNotificationMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/LoggingMessageNotificationParam"
-        }
-      }
+      ]
     },
-    "Notification_for_ProgressNotificationMethod_and_ProgressNotificationParam": {
+    "Notification2": {
       "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
       "properties": {
         "method": {
           "$ref": "#/definitions/ProgressNotificationMethod"
@@ -971,14 +923,29 @@
         "params": {
           "$ref": "#/definitions/ProgressNotificationParam"
         }
-      }
-    },
-    "Notification_for_ResourceUpdatedNotificationMethod_and_ResourceUpdatedNotificationParam": {
-      "type": "object",
+      },
       "required": [
         "method",
         "params"
-      ],
+      ]
+    },
+    "Notification3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/LoggingMessageNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/LoggingMessageNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification4": {
+      "type": "object",
       "properties": {
         "method": {
           "$ref": "#/definitions/ResourceUpdatedNotificationMethod"
@@ -986,7 +953,44 @@
         "params": {
           "$ref": "#/definitions/ResourceUpdatedNotificationParam"
         }
-      }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "NotificationNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ResourceListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NotificationNoParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ToolListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "NotificationNoParam3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PromptListChangedNotificationMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
     },
     "NumberOrString": {
       "oneOf": [
@@ -1010,10 +1014,6 @@
     },
     "ProgressNotificationParam": {
       "type": "object",
-      "required": [
-        "progress",
-        "progressToken"
-      ],
       "properties": {
         "message": {
           "description": "An optional message describing the current progress.",
@@ -1026,10 +1026,10 @@
           "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         },
         "progressToken": {
-          "$ref": "#/definitions/NumberOrString"
+          "$ref": "#/definitions/ProgressToken"
         },
         "total": {
           "description": "Total number of items to process (or total progress required), if known",
@@ -1038,16 +1038,25 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "progressToken",
+        "progress"
+      ]
+    },
+    "ProgressToken": {
+      "description": "A token used to track the progress of long-running operations.\n\nProgress tokens allow clients and servers to associate progress notifications\nwith specific requests, enabling real-time updates on operation status.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      ]
     },
     "Prompt": {
       "description": "A prompt that can be used to generate text from a model",
       "type": "object",
-      "required": [
-        "name"
-      ],
       "properties": {
         "arguments": {
           "description": "Optional arguments that can be passed to customize the prompt",
@@ -1070,14 +1079,14 @@
           "description": "The name of the prompt",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name"
+      ]
     },
     "PromptArgument": {
       "description": "Represents a prompt argument that can be passed to customize the prompt",
       "type": "object",
-      "required": [
-        "name"
-      ],
       "properties": {
         "description": {
           "description": "A description of what the argument is used for",
@@ -1097,7 +1106,10 @@
             "null"
           ]
         }
-      }
+      },
+      "required": [
+        "name"
+      ]
     },
     "PromptListChangedNotificationMethod": {
       "type": "string",
@@ -1107,10 +1119,6 @@
     "PromptMessage": {
       "description": "A message in a prompt conversation",
       "type": "object",
-      "required": [
-        "content",
-        "role"
-      ],
       "properties": {
         "content": {
           "description": "The content of the message",
@@ -1128,7 +1136,11 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
     },
     "PromptMessageContent": {
       "description": "Content types that can be included in prompt messages",
@@ -1136,30 +1148,23 @@
         {
           "description": "Plain text content",
           "type": "object",
-          "required": [
-            "text",
-            "type"
-          ],
           "properties": {
             "text": {
               "type": "string"
             },
             "type": {
               "type": "string",
-              "enum": [
-                "text"
-              ]
+              "const": "text"
             }
-          }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
         },
         {
           "description": "Image content with base64-encoded data",
           "type": "object",
-          "required": [
-            "data",
-            "mimeType",
-            "type"
-          ],
           "properties": {
             "annotations": {
               "anyOf": [
@@ -1180,30 +1185,31 @@
             },
             "type": {
               "type": "string",
-              "enum": [
-                "image"
-              ]
+              "const": "image"
             }
-          }
+          },
+          "required": [
+            "type",
+            "data",
+            "mimeType"
+          ]
         },
         {
           "description": "Embedded server-side resource",
           "type": "object",
-          "required": [
-            "resource",
-            "type"
-          ],
           "properties": {
             "resource": {
-              "$ref": "#/definitions/Annotated_for_RawEmbeddedResource"
+              "$ref": "#/definitions/Annotated3"
             },
             "type": {
               "type": "string",
-              "enum": [
-                "resource"
-              ]
+              "const": "resource"
             }
-          }
+          },
+          "required": [
+            "type",
+            "resource"
+          ]
         }
       ]
     },
@@ -1227,15 +1233,50 @@
       }
     },
     "ProtocolVersion": {
-      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying which version of the Model Context Protocol is being used.",
+      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
+    },
+    "RawEmbeddedResource": {
+      "type": "object",
+      "properties": {
+        "resource": {
+          "$ref": "#/definitions/ResourceContents"
+        }
+      },
+      "required": [
+        "resource"
+      ]
+    },
+    "RawImageContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "The base64-encoded image",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
+    "RawTextContent": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
     },
     "ReadResourceResult": {
       "description": "Result containing the contents of a read resource",
       "type": "object",
-      "required": [
-        "contents"
-      ],
       "properties": {
         "contents": {
           "description": "The actual content of the resource",
@@ -1244,37 +1285,14 @@
             "$ref": "#/definitions/ResourceContents"
           }
         }
-      }
-    },
-    "RequestNoParam_for_ListRootsRequestMethod": {
-      "type": "object",
+      },
       "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ListRootsRequestMethod"
-        }
-      }
+        "contents"
+      ]
     },
-    "RequestNoParam_for_PingRequestMethod": {
+    "Request": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
-      "required": [
-        "method"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/PingRequestMethod"
-        }
-      }
-    },
-    "Request_for_CreateMessageRequestMethod_and_CreateMessageRequestParam": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
       "properties": {
         "method": {
           "$ref": "#/definitions/CreateMessageRequestMethod"
@@ -1282,16 +1300,38 @@
         "params": {
           "$ref": "#/definitions/CreateMessageRequestParam"
         }
-      }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "RequestNoParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/PingRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestNoParam2": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListRootsRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
     },
     "ResourceContents": {
       "anyOf": [
         {
           "type": "object",
-          "required": [
-            "text",
-            "uri"
-          ],
           "properties": {
             "mime_type": {
               "type": [
@@ -1305,14 +1345,14 @@
             "uri": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "uri",
+            "text"
+          ]
         },
         {
           "type": "object",
-          "required": [
-            "blob",
-            "uri"
-          ],
           "properties": {
             "blob": {
               "type": "string"
@@ -1326,7 +1366,11 @@
             "uri": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "uri",
+            "blob"
+          ]
         }
       ]
     },
@@ -1343,15 +1387,15 @@
     "ResourceUpdatedNotificationParam": {
       "description": "Parameters for a resource update notification",
       "type": "object",
-      "required": [
-        "uri"
-      ],
       "properties": {
         "uri": {
           "description": "The URI of the resource that was updated",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "uri"
+      ]
     },
     "ResourcesCapability": {
       "type": "object",
@@ -1371,37 +1415,29 @@
       }
     },
     "Role": {
-      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different types of message senders in the conversation flow.",
+      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different\ntypes of message senders in the conversation flow.",
       "oneOf": [
         {
           "description": "A human user or client making a request",
           "type": "string",
-          "enum": [
-            "user"
-          ]
+          "const": "user"
         },
         {
           "description": "An AI assistant or server providing a response",
           "type": "string",
-          "enum": [
-            "assistant"
-          ]
+          "const": "assistant"
         }
       ]
     },
     "SamplingMessage": {
-      "description": "A message in a sampling conversation, containing a role and content.\n\nThis represents a single message in a conversation flow, used primarily in LLM sampling requests where the conversation history is important for generating appropriate responses.",
+      "description": "A message in a sampling conversation, containing a role and content.\n\nThis represents a single message in a conversation flow, used primarily\nin LLM sampling requests where the conversation history is important\nfor generating appropriate responses.",
       "type": "object",
-      "required": [
-        "content",
-        "role"
-      ],
       "properties": {
         "content": {
           "description": "The actual content of the message (text, image, etc.)",
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated_for_RawContent"
+              "$ref": "#/definitions/Annotated"
             }
           ]
         },
@@ -1413,11 +1449,15 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
     },
     "ServerCapabilities": {
       "title": "Builder",
-      "description": "```rust # use rmcp::model::ServerCapabilities; let cap = ServerCapabilities::builder() .enable_logging() .enable_experimental() .enable_prompts() .enable_resources() .enable_tools() .enable_tool_list_changed() .build(); ```",
+      "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_logging()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
       "type": "object",
       "properties": {
         "completions": {
@@ -1513,10 +1553,6 @@
     "Tool": {
       "description": "A tool that can be used by a model.",
       "type": "object",
-      "required": [
-        "inputSchema",
-        "name"
-      ],
       "properties": {
         "annotations": {
           "description": "Optional additional tool information.",
@@ -1545,28 +1581,32 @@
           "description": "The name of the tool",
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "name",
+        "inputSchema"
+      ]
     },
     "ToolAnnotations": {
-      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
+      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**.\nThey are not guaranteed to provide a faithful description of\ntool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations\nreceived from untrusted servers.",
       "type": "object",
       "properties": {
         "destructiveHint": {
-          "description": "If true, the tool may perform destructive updates to its environment. If false, the tool performs only additive updates.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: true A human-readable description of the tool's purpose.",
+          "description": "If true, the tool may perform destructive updates to its environment.\nIf false, the tool performs only additive updates.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: true\nA human-readable description of the tool's purpose.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "idempotentHint": {
-          "description": "If true, calling the tool repeatedly with the same arguments will have no additional effect on the its environment.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: false.",
+          "description": "If true, calling the tool repeatedly with the same arguments\nwill have no additional effect on the its environment.\n\n(This property is meaningful only when `readOnlyHint == false`)\n\nDefault: false.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "openWorldHint": {
-          "description": "If true, this tool may interact with an \"open world\" of external entities. If false, the tool's domain of interaction is closed. For example, the world of a web search tool is open, whereas that of a memory tool is not.\n\nDefault: true",
+          "description": "If true, this tool may interact with an \"open world\" of external\nentities. If false, the tool's domain of interaction is closed.\nFor example, the world of a web search tool is open, whereas that\nof a memory tool is not.\n\nDefault: true",
           "type": [
             "boolean",
             "null"
