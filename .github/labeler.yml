@@ -1,0 +1,67 @@
+# Configuration for GitHub Labeler Action
+# https://github.com/actions/labeler
+
+# Documentation changes
+T-documentation:
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.md', 'docs/**/*', '**/*.rst']
+
+# Core library changes
+T-core:
+  - changed-files:
+    - any-glob-to-any-file: ['crates/rmcp/src/**/*']
+
+# Macro changes
+T-macros:
+  - changed-files:
+    - any-glob-to-any-file: ['crates/rmcp-macros/**/*']
+
+# Example changes
+T-examples:
+  - changed-files:
+    - any-glob-to-any-file: ['examples/**/*']
+
+# CI/CD changes
+T-CI:
+  - changed-files:
+    - any-glob-to-any-file: ['.github/**/*', '**/*.yml', '**/*.yaml', '**/Dockerfile*']
+
+# Dependencies
+T-dependencies:
+  - changed-files:
+    - any-glob-to-any-file: ['**/Cargo.toml', '**/Cargo.lock', '**/package.json', '**/package-lock.json', '**/requirements.txt', '**/pyproject.toml']
+
+# Tests
+T-test:
+  - changed-files:
+    - any-glob-to-any-file: ['**/tests/**/*', '**/*test*.rs', '**/benches/**/*']
+
+# Transport layer changes
+T-transport:
+  - changed-files:
+    - any-glob-to-any-file: ['crates/rmcp/src/transport/**/*']
+
+# Service layer changes  
+T-service:
+  - changed-files:
+    - any-glob-to-any-file: ['crates/rmcp/src/service/**/*']
+
+# Handler changes
+T-handler:
+  - changed-files:
+    - any-glob-to-any-file: ['crates/rmcp/src/handler/**/*']
+
+# Model changes
+T-model:
+  - changed-files:
+    - any-glob-to-any-file: ['crates/rmcp/src/model/**/*']
+
+# Configuration files
+T-config:
+  - changed-files:
+    - any-glob-to-any-file: ['**/*.toml', '**/*.json', '**/*.yaml', '**/*.yml', '**/*.env*']
+
+# Security related files
+T-security:
+  - changed-files:
+    - any-glob-to-any-file: ['**/security.md', '**/SECURITY.md', '**/audit.toml'] 

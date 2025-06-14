@@ -1,0 +1,27 @@
+name: Auto Label PR
+on:
+  # Runs workflow when activity on a PR in the workflow's repository occurs.
+  pull_request_target:
+
+jobs:
+  auto-label:
+    permissions:
+      contents: read
+      pull-requests: write
+
+    name: Assign labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Required by gh
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+
+    steps:
+    - uses: actions/labeler@v5
+      with:
+        # Auto-include paths starting with dot (e.g. .github)
+        dot: true
+        # Remove labels when matching files are reverted or no longer changed by the PR
+        sync-labels: true
