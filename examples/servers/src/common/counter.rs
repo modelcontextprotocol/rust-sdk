@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use rmcp::{
     Error as McpError, RoleServer, ServerHandler, const_string, model::*, schemars,
