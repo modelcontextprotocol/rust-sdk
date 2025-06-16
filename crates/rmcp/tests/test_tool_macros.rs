@@ -321,7 +321,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     // Test null case
     let result = client
         .call_tool(CallToolRequestParam {
-            name: "test_optional_i64_aggr".into(),
+            name: "test_optional_i64".into(),
             arguments: Some(
                 serde_json::json!({
                     "count": null,
@@ -349,7 +349,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     // Test Some case
     let some_result = client
         .call_tool(CallToolRequestParam {
-            name: "test_optional_i64_aggr".into(),
+            name: "test_optional_i64".into(),
             arguments: Some(
                 serde_json::json!({
                     "count": 42,
