@@ -2,8 +2,12 @@
 use std::sync::Arc;
 
 use rmcp::{
-    Error as McpError, RoleServer, ServerHandler, const_string, handler::server::tool::Parameters,
-    model::*, schemars, service::RequestContext, tool, tool_router,
+    Error as McpError, RoleServer, ServerHandler, const_string,
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    model::*,
+    schemars,
+    service::RequestContext,
+    tool, tool_router,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -17,6 +21,7 @@ pub struct StructRequest {
 #[derive(Clone)]
 pub struct Counter {
     counter: Arc<Mutex<i32>>,
+    tool_router: ToolRouter<Counter>,
 }
 
 #[tool_router]
@@ -25,6 +30,7 @@ impl Counter {
     pub fn new() -> Self {
         Self {
             counter: Arc::new(Mutex::new(0)),
+            tool_router: Self::tool_router(),
         }
     }
 
@@ -193,6 +199,22 @@ impl ServerHandler for Counter {
         })
     }
 
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
+    }
     async fn initialize(
         &self,
         _request: InitializeRequestParam,

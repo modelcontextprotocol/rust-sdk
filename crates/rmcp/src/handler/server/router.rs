@@ -2,13 +2,12 @@ use std::sync::Arc;
 
 use tool::{IntoToolRoute, ToolRoute};
 
+use super::ServerHandler;
 use crate::{
     RoleServer, Service,
     model::{ClientRequest, ListToolsResult, ServerResult},
     service::NotificationContext,
 };
-
-use super::ServerHandler;
 
 pub mod tool;
 

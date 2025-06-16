@@ -29,6 +29,12 @@ pub struct Calculator {
 
 #[tool_router]
 impl Calculator {
+    pub fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+
     #[tool(description = "Calculate the sum of two numbers")]
     fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
         (a + b).to_string()

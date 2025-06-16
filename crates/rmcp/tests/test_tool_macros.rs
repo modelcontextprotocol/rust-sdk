@@ -9,7 +9,7 @@ use rmcp::{
         tool::{Parameters, ToolCallContext},
     },
     model::{CallToolRequestParam, ClientInfo, ListToolsResult},
-    tool_router, tool,
+    tool, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

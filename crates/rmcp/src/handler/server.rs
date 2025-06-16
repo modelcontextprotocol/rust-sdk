@@ -5,9 +5,9 @@ use crate::{
 };
 
 mod resource;
+pub mod router;
 pub mod tool;
 pub mod wrapper;
-pub mod router;
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,

@@ -1,5 +1,4 @@
-use darling::FromMeta;
-use darling::ast::NestedMeta;
+use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Expr, Ident, ImplItemFn, ReturnType};

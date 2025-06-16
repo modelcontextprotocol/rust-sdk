@@ -13,7 +13,7 @@ async fn server() -> anyhow::Result<()> {
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:8001").await?;
     while let Ok((stream, _)) = tcp_listener.accept().await {
         tokio::spawn(async move {
-            let server = serve_server(Calculator, stream).await?;
+            let server = serve_server(Calculator::new(), stream).await?;
             server.waiting().await?;
             anyhow::Ok(())
         });
