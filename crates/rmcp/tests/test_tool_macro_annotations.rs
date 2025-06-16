@@ -1,9 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use rmcp::{ServerHandler, tool};
+    use rmcp::{ServerHandler, handler::server::router::tool::ToolRouter, tool};
 
     #[derive(Debug, Clone, Default)]
-    pub struct AnnotatedServer {}
+    pub struct AnnotatedServer {
+        tool_router: ToolRouter<AnnotatedServer>,
+    }
 
     impl AnnotatedServer {
         // Tool with inline comments for documentation
@@ -11,12 +13,9 @@ mod tests {
         /// This is used to test tool annotations
         #[tool(
             name = "direct-annotated-tool",
-            annotations = {
-                title: "Annotated Tool", 
-                readOnlyHint: true
-            }
+            annotations(title = "Annotated Tool", read_only_hint = true)
         )]
-        pub async fn direct_annotated_tool(&self, #[tool(param)] input: String) -> String {
+        pub async fn direct_annotated_tool(&self, input: String) -> String {
             format!("Direct: {}", input)
         }
     }
@@ -28,10 +27,7 @@ mod tests {
             context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
             let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-            match tcc.name() {
-                "direct-annotated-tool" => Self::direct_annotated_tool_tool_call(tcc).await,
-                _ => Err(rmcp::Error::invalid_params("method not found", None)),
-            }
+            self.tool_router.call(tcc).await
         }
     }
 

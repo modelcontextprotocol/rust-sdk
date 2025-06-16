@@ -97,7 +97,7 @@ pub struct SumRequest {
 pub struct Calculator;
 
 // create a static toolbox to store the tool attributes
-#[tool(tool_box)]
+#[tool_router]
 impl Calculator {
     // async function
     #[tool(description = "Calculate the sum of two numbers")]
@@ -122,7 +122,7 @@ impl Calculator {
 }
 
 // impl call_tool and list_tool by querying static toolbox
-#[tool(tool_box)]
+#[tool_router]
 impl ServerHandler for Calculator {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {

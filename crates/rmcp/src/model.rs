@@ -679,6 +679,17 @@ macro_rules! paginated_result {
             pub next_cursor: Option<Cursor>,
             pub $i_item: $t_item,
         }
+
+        impl $t {
+            pub fn with_all_items(
+                items: $t_item,
+            ) -> Self {
+                Self {
+                    next_cursor: None,
+                    $i_item: items,
+                }
+            }
+        }
     };
 }
 

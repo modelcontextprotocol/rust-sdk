@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use rmcp::{
     ServerHandler,
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    schemars, tool,
+    schemars, tool, tool_router,
 };
 
 #[allow(dead_code)]
@@ -40,14 +41,21 @@ impl DataService for MemoryDataService {
 pub struct GenericService<DS: DataService> {
     #[allow(dead_code)]
     data_service: Arc<DS>,
+    tool_router: ToolRouter<Self>,
 }
 
-#[tool(tool_box)]
+#[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+pub struct SetDataRequest {
+    pub data: String,
+}
+
+#[tool_router]
 impl<DS: DataService> GenericService<DS> {
     #[allow(dead_code)]
     pub fn new(data_service: DS) -> Self {
         Self {
             data_service: Arc::new(data_service),
+            tool_router: Self::tool_router(),
         }
     }
 
@@ -57,13 +65,15 @@ impl<DS: DataService> GenericService<DS> {
     }
 
     #[tool(description = "set memory to service")]
-    pub async fn set_data(&self, #[tool(param)] data: String) -> String {
+    pub async fn set_data(
+        &self,
+        Parameters(SetDataRequest { data }): Parameters<SetDataRequest>,
+    ) -> String {
         let new_data = data.clone();
         format!("Current memory: {}", new_data)
     }
 }
 
-#[tool(tool_box)]
 impl<DS: DataService> ServerHandler for GenericService<DS> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -71,5 +81,24 @@ impl<DS: DataService> ServerHandler for GenericService<DS> {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParam,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
+        Ok(rmcp::model::ListToolsResult::with_all_items(
+            self.tool_router.list_all(),
+        ))
     }
 }
