@@ -34,7 +34,7 @@ impl MyHandler {
     }
     
     #[tool]
-    fn tool(&self) -> Result<CallToolResult, Error> {
+    fn tool2(&self) -> Result<CallToolResult, Error> {
         // Tool 2 implementation
     }
 }
