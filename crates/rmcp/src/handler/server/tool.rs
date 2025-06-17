@@ -7,13 +7,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio_util::sync::CancellationToken;
 
+pub use super::router::tool::{ToolRoute, ToolRouter};
 use crate::{
     RoleServer,
     model::{CallToolRequestParam, CallToolResult, IntoContents, JsonObject},
     service::RequestContext,
 };
-
-pub use super::router::tool::{ToolRoute, ToolRouter};
 
 /// A shortcut for generating a JSON schema for a type.
 pub fn schema_for_type<T: JsonSchema>() -> JsonObject {

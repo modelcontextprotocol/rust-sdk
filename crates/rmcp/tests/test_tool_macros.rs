@@ -3,10 +3,13 @@
 use std::sync::Arc;
 
 use rmcp::{
+    ClientHandler, ServerHandler, ServiceExt,
     handler::server::{
         router::tool::ToolRouter,
         tool::{Parameters, ToolCallContext},
-    }, model::{CallToolRequestParam, ClientInfo, ListToolsResult}, tool, tool_handler, tool_router, ClientHandler, ServerHandler, ServiceExt
+    },
+    model::{CallToolRequestParam, ClientInfo, ListToolsResult},
+    tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -96,9 +99,7 @@ impl<DS: DataService> GenericServer<DS> {
 }
 
 #[tool_handler]
-impl<DS: DataService> ServerHandler for GenericServer<DS> {
-
-}
+impl<DS: DataService> ServerHandler for GenericServer<DS> {}
 
 #[tokio::test]
 async fn test_tool_macros() {

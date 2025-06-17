@@ -27,6 +27,12 @@ pub struct Calculator {
     tool_router: ToolRouter<Self>,
 }
 
+impl Default for Calculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tool_router]
 impl Calculator {
     pub fn new() -> Self {

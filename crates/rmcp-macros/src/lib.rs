@@ -19,7 +19,7 @@ mod tool_router;
 /// | `input_schema`    | `Expr`                     | A JSON Schema object defining the expected parameters for the tool. If not provide, if will use the json schema of its argument with type `Parameters<T>` |
 /// | `annotations`     | `ToolAnnotationsAttribute` | Additional tool information. Defaults to `None`. |
 ///
-/// ## Exmaple
+/// ## Example
 ///
 /// ```rust,ignore
 /// #[tool(name = "my_tool", description = "This is my tool", annotations(title = "我的工具", read_only_hint = true))]
@@ -48,7 +48,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
 ///
 /// ## Example
-/// 
+///
 /// ```rust,ignore
 /// #[tool_router]
 /// impl MyToolHandler {
@@ -56,7 +56,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     pub fn my_tool() {
 ///         
 ///     }
-/// 
+///
 ///     pub fn new() -> Self {
 ///         Self {
 ///             // the default name of tool router will be `tool_router`
@@ -65,9 +65,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     }
 /// }
 /// ```
-/// 
+///
 /// Or specify the visibility and router name:
-/// 
+///
 /// ```rust,ignore
 /// #[tool_router(router = my_tool_router, vis = pub)]
 /// impl MyToolHandler {
@@ -84,13 +84,12 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
         .into()
 }
 
-
 /// # tool_handler
-/// 
-/// This macro will generate the handler for `tool_call` and `list_tools` methods in the implementation block, by using an exsisting `ToolRouter` instance.
-/// 
+///
+/// This macro will generate the handler for `tool_call` and `list_tools` methods in the implementation block, by using an existing `ToolRouter` instance.
+///
 /// ## Usage
-/// 
+///
 /// | field     | type          | usage |
 /// | :-        | :-            | :-    |
 /// | `router`  | `Expr`        | The expression to access the `ToolRouter` instance. Defaults to `self.tool_router`. |
@@ -101,7 +100,7 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     // ...implement other handler
 /// }
 /// ```
-/// 
+///
 /// or using a custom router expression:
 /// ```rust,ignore
 /// #[tool_handler(router = self.get_router().await)]
@@ -111,7 +110,7 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn tool_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
-    tool_handler::tool_hanlder(attr.into(), input.into())
+    tool_handler::tool_handler(attr.into(), input.into())
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
