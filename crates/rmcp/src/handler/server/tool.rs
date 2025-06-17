@@ -14,13 +14,13 @@ use crate::{
 };
 /// A shortcut for generating a JSON schema for a type.
 pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
-    let mut settings = schemars::r#gen::SchemaSettings::default();
+    // explicitly to align json schema version to official specifications.
+    // https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-03-26/schema.json
+    let mut settings = schemars::r#gen::SchemaSettings::draft07();
     settings.option_nullable = true;
     settings.option_add_null_type = false;
-    settings.definitions_path = "#/components/schemas/".to_owned();
-    settings.meta_schema = None;
     settings.visitors = Vec::default();
-    settings.inline_subschemas = false;
+    // settings.inline_subschemas = false;
     let generator = settings.into_generator();
     let schema = generator.into_root_schema_for::<T>();
     let object = serde_json::to_value(schema).expect("failed to serialize schema");
