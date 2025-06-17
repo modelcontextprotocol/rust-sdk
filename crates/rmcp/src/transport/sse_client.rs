@@ -132,7 +132,20 @@ impl<C: SseClient> SseClientTransport<C> {
                 let Some("endpoint") = sse.event.as_deref() else {
                     continue;
                 };
-                let sse_endpoint = sse.data.unwrap_or_default();
+                let ep = sse.data.unwrap_or_default();
+                // Join the result and
+                let sse_endpoint = if ep.starts_with("/") {
+                    // Absolute path, take as-is
+                    ep
+                } else {
+                    // Relative path, merge with base
+                    sse_endpoint
+                        .path_and_query()
+                        .map(|p| p.path())
+                        .unwrap_or_default()
+                        .to_string()
+                        + ep.as_str()
+                };
                 break sse_endpoint.parse::<http::Uri>()?;
             }
         };
