@@ -13,6 +13,8 @@ use crate::{
     service::RequestContext,
 };
 
+pub use super::router::tool::{ToolRoute, ToolRouter};
+
 /// A shortcut for generating a JSON schema for a type.
 pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
     let mut settings = schemars::r#gen::SchemaSettings::default();

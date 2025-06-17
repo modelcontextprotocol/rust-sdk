@@ -19,12 +19,13 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use rmcp::{Error as McpError, model::*, tool};
+//! use rmcp::{Error as McpError, model::*, tool, tool_router, handler::server::tool::ToolRouter};
 //! use tokio::sync::Mutex;
 //!
 //! #[derive(Clone)]
 //! pub struct Counter {
 //!     counter: Arc<Mutex<i32>>,
+//!     tool_router: ToolRouter<Self>,
 //! }
 //!
 //! #[tool_router]
@@ -32,6 +33,7 @@
 //!     fn new() -> Self {
 //!         Self {
 //!             counter: Arc::new(Mutex::new(0)),
+//!             tool_router: Self::tool_router(),
 //!         }
 //!     }
 //!

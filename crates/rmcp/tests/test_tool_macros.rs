@@ -3,13 +3,10 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ClientHandler, ServerHandler, ServiceExt,
     handler::server::{
         router::tool::ToolRouter,
         tool::{Parameters, ToolCallContext},
-    },
-    model::{CallToolRequestParam, ClientInfo, ListToolsResult},
-    tool, tool_router,
+    }, model::{CallToolRequestParam, ClientInfo, ListToolsResult}, tool, tool_handler, tool_router, ClientHandler, ServerHandler, ServiceExt
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -43,7 +40,7 @@ impl Default for Server {
     }
 }
 
-#[tool_router]
+#[tool_router(router = tool_router)]
 impl Server {
     pub fn new() -> Self {
         Self {
@@ -98,22 +95,9 @@ impl<DS: DataService> GenericServer<DS> {
     }
 }
 
+#[tool_handler]
 impl<DS: DataService> ServerHandler for GenericServer<DS> {
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParam,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-        let tcc = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
-    }
-    async fn list_tools(
-        &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
-        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
-    }
+
 }
 
 #[tokio::test]

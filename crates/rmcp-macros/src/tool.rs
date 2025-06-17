@@ -246,8 +246,47 @@ mod test {
                 drop(fields)
             }
         };
-        let input = tool(attr, input)?;
+        let _input = tool(attr, input)?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_doc_comment_description() -> syn::Result<()> {
+        let attr = quote! {}; // No explicit description
+        let input = quote! {
+            /// This is a test description from doc comments
+            /// with multiple lines
+            fn test_function(&self) -> Result<(), Error> {
+                Ok(())
+            }
+        };
+        let result = tool(attr, input)?;
+
+        // The output should contain the description from doc comments
+        let result_str = result.to_string();
+        assert!(result_str.contains("This is a test description from doc comments"));
+        assert!(result_str.contains("with multiple lines"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_explicit_description_priority() -> syn::Result<()> {
+        let attr = quote! {
+            description = "Explicit description has priority"
+        };
+        let input = quote! {
+            /// Doc comment description that should be ignored
+            fn test_function(&self) -> Result<(), Error> {
+                Ok(())
+            }
+        };
+        let result = tool(attr, input)?;
+
+        // The output should contain the explicit description
+        let result_str = result.to_string();
+        assert!(result_str.contains("Explicit description has priority"));
         Ok(())
     }
 }
