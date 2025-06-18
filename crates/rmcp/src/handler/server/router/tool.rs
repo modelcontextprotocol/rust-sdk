@@ -210,11 +210,11 @@ where
             transparent_when_not_found: false,
         }
     }
-    pub fn with_route<C, A>(mut self, attr: crate::model::Tool, call: C) -> Self
+    pub fn with_route<R, A>(mut self, route: R) -> Self
     where
-        C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+        R: IntoToolRoute<S, A>,
     {
-        self.add_route(ToolRoute::new(attr, call));
+        self.add_route(route.into_tool_route());
         self
     }
 

@@ -58,8 +58,8 @@ fn async_function2<T>(_callee: &TestHandler<T>) -> BoxFuture<'_, ()> {
 #[test]
 fn test_tool_router() {
     let test_tool_router: ToolRouter<TestHandler<()>> = ToolRouter::<TestHandler<()>>::new()
-        .with_route(async_function_tool_attr(), async_function)
-        .with_route(async_function2_tool_attr(), async_function2)
+        .with_route((async_function_tool_attr(), async_function))
+        .with_route((async_function2_tool_attr(), async_function2))
         + TestHandler::<()>::test_router_1()
         + TestHandler::<()>::test_router_2();
     let tools = test_tool_router.list_all();

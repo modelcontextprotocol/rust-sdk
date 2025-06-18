@@ -56,7 +56,7 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> syn::Result<TokenSt
     for handler in tool_attr_fns {
         let tool_attr_fn_ident = format_ident!("{handler}_tool_attr");
         routers.push(quote! {
-            .with_route(Self::#tool_attr_fn_ident(), Self::#handler)
+            .with_route((Self::#tool_attr_fn_ident(), Self::#handler))
         })
     }
     let router_fn = syn::parse2::<ImplItem>(quote! {
