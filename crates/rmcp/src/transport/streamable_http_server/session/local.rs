@@ -328,7 +328,7 @@ impl LocalSessionWorker {
         if let Some(http_request_id) = self.resource_router.remove(resource) {
             tracing::trace!(?resource, http_request_id, "unregister resource");
             if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
-                // It's okey to do so, since we don't handle batch json rcp request anymore
+                // It's okey to do so, since we don't handle batch json rpc request anymore
                 // and this can be refactored after the batch request is removed in the coming version.
                 if channel.resources.is_empty() || matches!(resource, ResourceKey::McpRequestId(_))
                 {
