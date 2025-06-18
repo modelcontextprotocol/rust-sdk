@@ -93,6 +93,14 @@ A server demonstrating the prompt framework capabilities.
 - Uses standard I/O transport
 - Good example of prompt implementation patterns
 
+### Progress Demo Server (`progress_demo.rs`)
+
+A server that demonstrates progress notifications during long-running operations.
+
+- Provides a stream_processor tool that generates progress notifications
+- Demonstrates progress notifications during long-running operations
+- Can be run with `cargo run --example servers_progress_demo -- {stdio|sse|http|all}`
+
 ## How to Run
 
 Each example can be run using Cargo:

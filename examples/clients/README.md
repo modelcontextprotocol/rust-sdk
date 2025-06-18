@@ -4,6 +4,7 @@ This directory contains Model Context Protocol (MCP) client examples implemented
 
 ## Example List
 
+
 ### SSE Client (`sse.rs`)
 
 A client that communicates with an MCP server using Server-Sent Events (SSE) transport.
@@ -66,6 +67,16 @@ A client demonstrating how to use the sampling tool.
 - Connects to the server
 - Retrieves server information and list of available tools
 - Calls the `ask_llm` tool
+
+### Progress Test Client (`progress_test_client.rs`)
+
+A client that communicates with an MCP server using progress notifications.
+
+- Launches the `cargo run --example clients_progress_client -- --transport {stdio|sse|http|all}` to test the progress notifications
+- Connects to the server using different transport methods
+- Tests the progress notifications
+- The sse and http should run the server first
+
 
 ## How to Run
 

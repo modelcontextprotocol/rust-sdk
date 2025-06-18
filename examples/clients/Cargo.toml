@@ -28,6 +28,7 @@ url = "2.4"
 tower = "0.5"
 axum = "0.8"
 reqwest = "0.12"
+clap = { version = "4.0", features = ["derive"] }
 
 [[example]]
 name = "clients_sse"
@@ -56,3 +57,8 @@ path = "src/auth/oauth_client.rs"
 [[example]]
 name = "clients_sampling_stdio"
 path = "src/sampling_stdio.rs"
+
+
+[[example]]
+name = "clients_progress_client"
+path = "src/progress_client.rs"
