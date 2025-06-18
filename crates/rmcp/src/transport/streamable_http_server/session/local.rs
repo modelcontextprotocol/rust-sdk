@@ -328,11 +328,19 @@ impl LocalSessionWorker {
         if let Some(http_request_id) = self.resource_router.remove(resource) {
             tracing::trace!(?resource, http_request_id, "unregister resource");
             if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
-                channel.resources.remove(resource);
-                if channel.resources.is_empty() {
+                // It's okey to do so, since we don't handle batch json rcp request anymore
+                // and this can be refactored after the batch request is removed in the coming version.
+                if channel.resources.is_empty() || matches!(resource, ResourceKey::McpRequestId(_))
+                {
                     tracing::debug!(http_request_id, "close http request wise channel");
-                    self.tx_router.remove(&http_request_id);
+                    if let Some(channel) = self.tx_router.remove(&http_request_id) {
+                        for resource in channel.resources {
+                            self.resource_router.remove(&resource);
+                        }
+                    }
                 }
+            } else {
+                tracing::warn!(http_request_id, "http request wise channel not found");
             }
         }
     }
