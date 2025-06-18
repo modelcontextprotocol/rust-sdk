@@ -39,7 +39,7 @@ rand = { version = "0.9" }
 schemars = { version = "0.8", optional = true }
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-tokio-tungstenite = "0.26.2"
+tokio-tungstenite = "0.27.0"
 reqwest = { version = "0.12" }
 pin-project-lite = "0.2"
 
