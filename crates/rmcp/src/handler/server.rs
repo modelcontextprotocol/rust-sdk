@@ -185,19 +185,6 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         request: CallToolRequestParam,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        // async move {
-        //     let router = router::tool::GlobalStaticRouters::get::<Self>().await;
-        //     router.call(tool::ToolCallContext {
-        //         request_context: context,
-        //         service: todo!(),
-        //         name: todo!(),
-        //         arguments: todo!(),
-        //     }).await.map_err(|e| {
-        //         tracing::error!("call tool error: {}", e);
-        //         e
-        //     })
-
-        // };
         std::future::ready(Err(McpError::method_not_found::<CallToolRequestMethod>()))
     }
     fn list_tools(

@@ -90,7 +90,7 @@ fn none_expr() -> Expr {
 }
 
 // extract doc line from attribute
-fn extract_doc_line(attr: &syn::Attribute) -> Option<String> {
+fn extract_doc_line(existing_docs: Option<String>, attr: &syn::Attribute) -> Option<String> {
     if !attr.path().is_ident("doc") {
         return None;
     }
@@ -108,8 +108,16 @@ fn extract_doc_line(attr: &syn::Attribute) -> Option<String> {
     };
 
     let content = lit_str.value().trim().to_string();
-
-    (!content.is_empty()).then_some(content)
+    match (existing_docs, content) {
+        (Some(mut existing_docs), content) if !content.is_empty() => {
+            existing_docs.push('\n');
+            existing_docs.push_str(&content);
+            Some(existing_docs)
+        }
+        (Some(existing_docs), _) => Some(existing_docs),
+        (None, content) if !content.is_empty() => Some(content),
+        _ => None,
+    }
 }
 
 pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
@@ -186,19 +194,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     };
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
-        description: attribute.description.or_else(|| {
-            let doc_content = fn_item
-                .attrs
-                .iter()
-                .filter_map(extract_doc_line)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if doc_content.is_empty() {
-                None
-            } else {
-                Some(doc_content)
-            }
-        }),
+        description: attribute
+            .description
+            .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line)),
         input_schema: input_schema_expr,
         annotations: annotations_expr,
     };
