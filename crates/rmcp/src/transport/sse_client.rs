@@ -121,7 +121,10 @@ impl<C: SseClient> SseClientTransport<C> {
 
         let mut sse_stream = client.get_stream(sse_endpoint.clone(), None, None).await?;
         let message_endpoint = if let Some(endpoint) = config.use_message_endpoint.clone() {
-            endpoint.parse::<http::Uri>()?
+            let ep = endpoint.parse::<http::Uri>()?;
+            let mut sse_endpoint_parts = sse_endpoint.clone().into_parts();
+            sse_endpoint_parts.path_and_query = ep.into_parts().path_and_query;
+            Uri::from_parts(sse_endpoint_parts)?
         } else {
             // wait the endpoint event
             loop {
@@ -133,29 +136,11 @@ impl<C: SseClient> SseClientTransport<C> {
                     continue;
                 };
                 let ep = sse.data.unwrap_or_default();
-                // Join the result and
-                let sse_endpoint = if ep.starts_with("/") {
-                    // Absolute path, take as-is
-                    ep
-                } else {
-                    // Relative path, merge with base
-                    sse_endpoint
-                        .path_and_query()
-                        .map(|p| p.path())
-                        .unwrap_or_default()
-                        .to_string()
-                        + ep.as_str()
-                };
-                break sse_endpoint.parse::<http::Uri>()?;
+
+                break message_endpoint(sse_endpoint.clone(), ep)?;
             }
         };
 
-        // sse: <authority><sse_pq> -> <authority><message_pq>
-        let message_endpoint = {
-            let mut sse_endpoint_parts = sse_endpoint.clone().into_parts();
-            sse_endpoint_parts.path_and_query = message_endpoint.into_parts().path_and_query;
-            Uri::from_parts(sse_endpoint_parts)?
-        };
         let stream = Box::pin(SseAutoReconnectStream::new(
             sse_stream,
             SseClientReconnect {
@@ -171,6 +156,36 @@ impl<C: SseClient> SseClientTransport<C> {
             stream: Some(stream),
         })
     }
+}
+
+fn message_endpoint(base: http::Uri, endpoint: String) -> Result<http::Uri, http::uri::InvalidUri> {
+    // If endpoint is a full URL, parse and return it directly
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        return endpoint.parse::<http::Uri>();
+    }
+
+    let mut base_parts = base.into_parts();
+    let endpoint_clone = endpoint.clone();
+
+    if endpoint.starts_with("?") {
+        // Query only - keep base path and append query
+        if let Some(base_path_and_query) = &base_parts.path_and_query {
+            let base_path = base_path_and_query.path();
+            base_parts.path_and_query = Some(format!("{}{}", base_path, endpoint).parse()?);
+        } else {
+            base_parts.path_and_query = Some(format!("/{}", endpoint).parse()?);
+        }
+    } else {
+        // Path (with optional query) - replace entire path_and_query
+        let path_to_use = if endpoint.starts_with("/") {
+            endpoint // Use absolute path as-is
+        } else {
+            format!("/{}", endpoint) // Make relative path absolute
+        };
+        base_parts.path_and_query = Some(path_to_use.parse()?);
+    }
+
+    http::Uri::from_parts(base_parts).map_err(|_| endpoint_clone.parse::<http::Uri>().unwrap_err())
 }
 
 #[derive(Debug, Clone)]
@@ -199,5 +214,35 @@ impl Default for SseClientConfig {
             retry_policy: Arc::new(super::common::client_side_sse::FixedInterval::default()),
             use_message_endpoint: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_message_endpoint() {
+        let base_url = "https://localhost/sse".parse::<http::Uri>().unwrap();
+
+        // Query only
+        let result = message_endpoint(base_url.clone(), "?sessionId=x".to_string()).unwrap();
+        assert_eq!(result.to_string(), "https://localhost/sse?sessionId=x");
+
+        // Relative path with query
+        let result = message_endpoint(base_url.clone(), "mypath?sessionId=x".to_string()).unwrap();
+        assert_eq!(result.to_string(), "https://localhost/mypath?sessionId=x");
+
+        // Absolute path with query
+        let result = message_endpoint(base_url.clone(), "/xxx?sessionId=x".to_string()).unwrap();
+        assert_eq!(result.to_string(), "https://localhost/xxx?sessionId=x");
+
+        // Full URL
+        let result = message_endpoint(
+            base_url.clone(),
+            "http://example.com/xxx?sessionId=x".to_string(),
+        )
+        .unwrap();
+        assert_eq!(result.to_string(), "http://example.com/xxx?sessionId=x");
     }
 }
