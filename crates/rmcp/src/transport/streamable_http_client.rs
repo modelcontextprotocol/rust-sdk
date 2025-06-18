@@ -211,6 +211,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         + Send
         + 'static,
         sse_worker_tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
+        close_on_response: bool,
         ct: CancellationToken,
     ) -> Result<(), StreamableHttpError<C::Error>> {
         let mut sse_stream = std::pin::pin!(sse_stream);
@@ -227,10 +228,14 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             let Some(message) = message.transpose()? else {
                 break;
             };
-
+            let is_response = matches!(message, ServerJsonRpcMessage::Response(_));
             let yield_result = sse_worker_tx.send(message).await;
             if yield_result.is_err() {
                 tracing::trace!("streamable http transport worker dropped, exiting");
+                break;
+            }
+            if close_on_response && is_response {
+                tracing::debug!("got response, closing sse stream");
                 break;
             }
         }
@@ -363,6 +368,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     streams.spawn(Self::execute_sse_stream(
                         sse_stream,
                         sse_worker_tx.clone(),
+                        false,
                         transport_task_ct.child_token(),
                     ));
                     tracing::debug!("got common stream");
@@ -439,6 +445,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 streams.spawn(Self::execute_sse_stream(
                                     sse_stream,
                                     sse_worker_tx.clone(),
+                                    true,
                                     transport_task_ct.child_token(),
                                 ));
                             } else {
@@ -449,6 +456,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 streams.spawn(Self::execute_sse_stream(
                                     sse_stream,
                                     sse_worker_tx.clone(),
+                                    true,
                                     transport_task_ct.child_token(),
                                 ));
                             }
