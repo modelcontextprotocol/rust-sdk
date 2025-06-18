@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 

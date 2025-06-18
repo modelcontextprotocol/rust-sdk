@@ -1,5 +1,10 @@
 use std::{
-    any::TypeId, borrow::Cow, collections::HashMap, future::Ready, marker::PhantomData, sync::Arc,
+    any::TypeId,
+    borrow::Cow,
+    collections::HashMap,
+    future::{Future, Ready},
+    marker::PhantomData,
+    sync::Arc,
 };
 
 use futures::future::BoxFuture;

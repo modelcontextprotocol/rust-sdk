@@ -1,4 +1,7 @@
-use std::{future::poll_fn, marker::PhantomData};
+use std::{
+    future::{Future, poll_fn},
+    marker::PhantomData,
+};
 
 use tower_service::Service as TowerService;
 

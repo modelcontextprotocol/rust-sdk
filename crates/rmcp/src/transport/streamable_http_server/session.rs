@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use futures::Stream;
 
 pub use crate::transport::common::server_side_http::SessionId;

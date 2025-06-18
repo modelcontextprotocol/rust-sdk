@@ -38,7 +38,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
 ], optional = true }
-
+# Dependent on Unmerged PR
 sse-stream = { version = "0.2", optional = true }
 
 http = { version = "1", optional = true }

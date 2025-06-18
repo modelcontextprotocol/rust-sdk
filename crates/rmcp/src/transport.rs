@@ -64,7 +64,7 @@
 //! }
 //! ```
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
@@ -161,7 +161,7 @@ where
 pub trait IntoTransport<R, E, A>: Send + 'static
 where
     R: ServiceRole,
-    E: std::error::Error + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn into_transport(self) -> impl Transport<R, Error = E> + 'static;
 }

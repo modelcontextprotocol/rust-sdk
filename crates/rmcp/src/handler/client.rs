@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use crate::{
     error::Error as McpError,
     model::*,

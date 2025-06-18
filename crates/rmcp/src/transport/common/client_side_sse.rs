@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{Stream, stream::BoxStream};
+use futures::{Future, Stream, stream::BoxStream};
 use sse_stream::{Error as SseError, Sse};
 
 use crate::model::ServerJsonRpcMessage;
