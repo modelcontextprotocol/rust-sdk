@@ -11,6 +11,7 @@ use axum::{
     routing::{get, post},
 };
 use futures::{Sink, SinkExt, Stream};
+use tokio::signal;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
 use tracing::Instrument;
@@ -247,6 +248,27 @@ impl SseServer {
         let server = axum::serve(listener, service).with_graceful_shutdown(async move {
             ct.cancelled().await;
             tracing::info!("sse server cancelled");
+            let ctrl_c = async {
+                signal::ctrl_c()
+                    .await
+                    .expect("failed to install Ctrl+C handler");
+            };
+
+            #[cfg(unix)]
+            let terminate = async {
+                signal::unix::signal(signal::unix::SignalKind::terminate())
+                    .expect("failed to install signal handler")
+                    .recv()
+                    .await;
+            };
+
+            #[cfg(not(unix))]
+            let terminate = std::future::pending::<()>();
+
+            tokio::select! {
+                _ = ctrl_c => {},
+                _ = terminate => {},
+            }
         });
         tokio::spawn(
             async move {
