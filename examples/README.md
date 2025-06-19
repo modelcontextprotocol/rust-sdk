@@ -70,8 +70,8 @@ see [servers/README.md](servers/README.md)
 
 # Integration
 
-- [Rig](examples/rig-integration) A stream chatbot with rig
-- [Simple Chat Client](examples/simple-chat-client) A simple chat client implementation using the Model Context Protocol (MCP) SDK.
+- [Rig](rig-integration) A stream chatbot with rig
+- [Simple Chat Client](simple-chat-client) A simple chat client implementation using the Model Context Protocol (MCP) SDK.
 
 # WASI
 
