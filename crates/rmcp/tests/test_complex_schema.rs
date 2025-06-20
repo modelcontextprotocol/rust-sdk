@@ -1,4 +1,6 @@
-use rmcp::{Error as McpError, model::*, schemars, tool};
+use rmcp::{
+    Error as McpError, handler::server::tool::Parameters, model::*, schemars, tool, tool_router,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -24,7 +26,7 @@ pub struct ChatRequest {
 #[derive(Clone, Default)]
 pub struct Demo;
 
-#[tool(tool_box)]
+#[tool_router]
 impl Demo {
     pub fn new() -> Self {
         Self
@@ -33,9 +35,9 @@ impl Demo {
     #[tool(description = "LLM")]
     async fn chat(
         &self,
-        #[tool(aggr)] chat_request: ChatRequest,
+        chat_request: Parameters<ChatRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let content = Content::json(chat_request)?;
+        let content = Content::json(chat_request.0)?;
         Ok(CallToolResult::success(vec![content]))
     }
 }

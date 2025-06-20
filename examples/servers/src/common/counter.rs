@@ -1,8 +1,13 @@
+#![allow(dead_code)]
 use std::sync::Arc;
 
 use rmcp::{
-    Error as McpError, RoleServer, ServerHandler, const_string, model::*, schemars,
-    service::RequestContext, tool,
+    Error as McpError, RoleServer, ServerHandler, const_string,
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    model::*,
+    schemars,
+    service::RequestContext,
+    tool, tool_router,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -16,14 +21,16 @@ pub struct StructRequest {
 #[derive(Clone)]
 pub struct Counter {
     counter: Arc<Mutex<i32>>,
+    tool_router: ToolRouter<Counter>,
 }
 
-#[tool(tool_box)]
+#[tool_router]
 impl Counter {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             counter: Arc::new(Mutex::new(0)),
+            tool_router: Self::tool_router(),
         }
     }
 
@@ -63,19 +70,16 @@ impl Counter {
     }
 
     #[tool(description = "Repeat what you say")]
-    fn echo(
-        &self,
-        #[tool(param)]
-        #[schemars(description = "Repeat what you say")]
-        saying: String,
-    ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(saying)]))
+    fn echo(&self, Parameters(object): Parameters<JsonObject>) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::Value::Object(object).to_string(),
+        )]))
     }
 
     #[tool(description = "Calculate the sum of two numbers")]
     fn sum(
         &self,
-        #[tool(aggr)] StructRequest { a, b }: StructRequest,
+        Parameters(StructRequest { a, b }): Parameters<StructRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             (a + b).to_string(),
@@ -83,7 +87,6 @@ impl Counter {
     }
 }
 const_string!(Echo = "echo");
-#[tool(tool_box)]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -196,6 +199,22 @@ impl ServerHandler for Counter {
         })
     }
 
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
+    }
     async fn initialize(
         &self,
         _request: InitializeRequestParam,

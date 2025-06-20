@@ -26,7 +26,7 @@ fn calculator(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> Result<Cal
 Use on an impl block to automatically register multiple tools:
 
 ```rust ignore
-#[tool(tool_box)]
+#[tool_router]
 impl MyHandler {
     #[tool]
     fn tool1(&self) -> Result<CallToolResult, Error> {

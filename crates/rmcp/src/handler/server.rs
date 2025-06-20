@@ -5,6 +5,7 @@ use crate::{
 };
 
 mod resource;
+pub mod router;
 pub mod tool;
 pub mod wrapper;
 impl<H: ServerHandler> Service<RoleServer> for H {

@@ -15,23 +15,25 @@
 //! as Claude Desktop or the Cursor IDE.
 //!
 //! For example, to implement a server that has a tool that can count, you would
-//! make an object for that tool and add an implementation with the `#[tool(tool_box)]` macro:
+//! make an object for that tool and add an implementation with the `#[tool_router]` macro:
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use rmcp::{Error as McpError, model::*, tool};
+//! use rmcp::{Error as McpError, model::*, tool, tool_router, handler::server::tool::ToolRouter};
 //! use tokio::sync::Mutex;
 //!
 //! #[derive(Clone)]
 //! pub struct Counter {
 //!     counter: Arc<Mutex<i32>>,
+//!     tool_router: ToolRouter<Self>,
 //! }
 //!
-//! #[tool(tool_box)]
+//! #[tool_router]
 //! impl Counter {
 //!     fn new() -> Self {
 //!         Self {
 //!             counter: Arc::new(Mutex::new(0)),
+//!             tool_router: Self::tool_router(),
 //!         }
 //!     }
 //!
@@ -120,7 +122,7 @@ pub mod transport;
 pub use paste::paste;
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
-pub use rmcp_macros::tool;
+pub use rmcp_macros::*;
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
 pub use schemars;

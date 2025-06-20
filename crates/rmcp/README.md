@@ -15,20 +15,22 @@ wait for the first release.
 Creating a server with tools is simple using the `#[tool]` macro:
 
 ```rust, ignore
-use rmcp::{Error as McpError, ServiceExt, model::*, tool, transport::stdio};
+use rmcp::{Error as McpError, ServiceExt, model::*, tool, tool_router, transport::stdio, handler::server::tool::ToolCallContext, handler::server::router::tool::ToolRouter};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct Counter {
     counter: Arc<Mutex<i32>>,
+    tool_router: ToolRouter<Self>,
 }
 
-#[tool(tool_box)]
+#[tool_router]
 impl Counter {
     fn new() -> Self {
         Self {
             counter: Arc::new(Mutex::new(0)),
+            tool_router: Self::tool_router(),
         }
     }
 
@@ -51,7 +53,7 @@ impl Counter {
 }
 
 // Implement the server handler
-#[tool(tool_box)]
+#[tool_router]
 impl rmcp::ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -59,6 +61,22 @@ impl rmcp::ServerHandler for Counter {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let tcc = ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::Error> {
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
     }
 }
 

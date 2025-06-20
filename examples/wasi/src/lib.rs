@@ -112,7 +112,10 @@ impl wasi::exports::cli::run::Guest for TokioCliRunner {
                 .with_writer(std::io::stderr)
                 .with_ansi(false)
                 .init();
-            let server = calculator::Calculator.serve(wasi_io()).await.unwrap();
+            let server = calculator::Calculator::new()
+                .serve(wasi_io())
+                .await
+                .unwrap();
             server.waiting().await.unwrap();
         });
         Ok(())

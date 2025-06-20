@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
 async fn http_server(req: Request<Incoming>) -> Result<hyper::Response<String>, hyper::Error> {
     tokio::spawn(async move {
         let upgraded = hyper::upgrade::on(req).await?;
-        let service = Calculator.serve(TokioIo::new(upgraded)).await?;
+        let service = Calculator::new().serve(TokioIo::new(upgraded)).await?;
         service.waiting().await?;
         anyhow::Result::<()>::Ok(())
     });

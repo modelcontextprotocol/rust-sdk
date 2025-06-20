@@ -40,7 +40,7 @@ async fn start_server() -> anyhow::Result<()> {
             tokio::spawn(async move {
                 let ws_stream = tokio_tungstenite::accept_async(stream).await?;
                 let transport = WebsocketTransport::new_server(ws_stream);
-                let server = Calculator.serve(transport).await?;
+                let server = Calculator::new().serve(transport).await?;
                 server.waiting().await?;
                 Ok::<(), anyhow::Error>(())
             });
