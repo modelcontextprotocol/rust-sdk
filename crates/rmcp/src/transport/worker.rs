@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, future::Future};
 
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level};

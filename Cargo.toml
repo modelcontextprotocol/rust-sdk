@@ -1,5 +1,3 @@
-
-
 [workspace]
 members = ["crates/rmcp", "crates/rmcp-macros", "examples/*"]
 resolver = "2"
@@ -9,7 +7,7 @@ rmcp = { version = "0.1.5", path = "./crates/rmcp" }
 rmcp-macros = { version = "0.1.5", path = "./crates/rmcp-macros" }
 
 [workspace.package]
-edition = "2024"
+edition = "2021"
 version = "0.1.5"
 authors = ["4t145 <u4t145@163.com>"]
 license = "MIT/Apache-2.0"

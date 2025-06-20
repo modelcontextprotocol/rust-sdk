@@ -3,7 +3,7 @@
 [package]
 name = "mcp-client-examples"
 version = "0.1.5"
-edition = "2024"
+edition = "2021"
 publish = false
 
 [dependencies]

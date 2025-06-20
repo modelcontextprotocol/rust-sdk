@@ -1,5 +1,5 @@
 //！ reference: https://html.spec.whatwg.org/multipage/server-sent-events.html
-use std::{pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use futures::{StreamExt, future::BoxFuture};
 use http::Uri;

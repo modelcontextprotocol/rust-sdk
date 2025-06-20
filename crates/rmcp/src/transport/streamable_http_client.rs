@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{borrow::Cow, future::Future, sync::Arc, time::Duration};
 
 use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
 pub use sse_stream::Error as SseError;

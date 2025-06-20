@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{future::Future, marker::PhantomData, sync::Arc};
 
 // use crate::schema::*;
 use futures::{SinkExt, StreamExt};

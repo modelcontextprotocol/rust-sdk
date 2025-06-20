@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    future::Future,
     sync::Arc,
     time::{Duration, Instant},
 };

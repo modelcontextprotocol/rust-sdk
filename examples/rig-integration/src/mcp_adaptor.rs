@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future};
 
 use rig::tool::{ToolDyn as RigTool, ToolEmbeddingDyn, ToolSet};
 use rmcp::{

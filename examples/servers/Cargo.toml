@@ -1,9 +1,7 @@
-
-
 [package]
 name = "mcp-server-examples"
 version = "0.1.5"
-edition = "2024"
+edition = "2021"
 publish = false
 
 [dependencies]
@@ -38,7 +36,7 @@ reqwest = { version = "0.12", features = ["json"] }
 chrono = "0.4"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 serde_urlencoded = "0.7"
-askama = { version = "0.14" }
+askama = { version = "0.14", optional = true }
 tower-http = { version = "0.6", features = ["cors"] }
 hyper = { version = "1" }
 hyper-util = { version = "0", features = ["server"] }
@@ -70,6 +68,7 @@ path = "src/counter_streamhttp.rs"
 [[example]]
 name = "servers_complex_auth_sse"
 path = "src/complex_auth_sse.rs"
+required-features = ["askama"]
 
 [[example]]
 name = "servers_simple_auth_sse"

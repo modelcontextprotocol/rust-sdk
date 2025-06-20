@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use futures::{Sink, Stream};
 use tokio::sync::Mutex;

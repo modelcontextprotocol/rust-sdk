@@ -1,4 +1,4 @@
-use std::{convert::Infallible, fmt::Display, sync::Arc, time::Duration};
+use std::{convert::Infallible, fmt::Display, future::Future, sync::Arc, time::Duration};
 
 use bytes::{Buf, Bytes};
 use http::Response;
@@ -8,7 +8,6 @@ use sse_stream::{KeepAlive, Sse, SseBody};
 
 use super::http_header::EVENT_STREAM_MIME_TYPE;
 use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
-
 pub type SessionId = Arc<str>;
 
 pub fn session_id() -> SessionId {
@@ -88,7 +87,7 @@ pub(crate) fn sse_stream_response(
 
 pub(crate) const fn internal_error_response<E: Display>(
     context: &str,
-) -> impl FnOnce(E) -> Response<UnsyncBoxBody<Bytes, Infallible>> {
+) -> impl FnOnce(E) -> Response<UnsyncBoxBody<Bytes, Infallible>> + use<'_, E> {
     move |error| {
         tracing::error!("Internal server error when {context}: {error}");
         Response::builder()
