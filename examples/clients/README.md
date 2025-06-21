@@ -4,6 +4,7 @@ This directory contains Model Context Protocol (MCP) client examples implemented
 
 ## Example List
 
+
 ### SSE Client (`sse.rs`)
 
 A client that communicates with an MCP server using Server-Sent Events (SSE) transport.
@@ -56,6 +57,15 @@ A client demonstrating how to authenticate with an MCP server using OAuth.
 - Displays the authorization URL and waits for user authorization
 - Establishes an authorized connection to the MCP server using the acquired access token
 - Demonstrates how to use the authorized connection to retrieve available tools and prompts
+
+### Progress Test Client (`progress_test_client.rs`)
+
+A client that communicates with an MCP server using progress notifications.
+
+- Launches the `cargo run --example clients_progress_test_client -- --transport {stdio|sse|http|all}` to test the progress notifications
+- Connects to the server using different transport methods
+- Tests the progress notifications
+
 
 ## How to Run
 

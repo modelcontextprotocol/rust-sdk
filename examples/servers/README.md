@@ -72,6 +72,14 @@ A simplified OAuth example showing basic token-based authentication.
 - Simplified authentication flow
 - Good starting point for adding authentication to MCP servers
 
+### Progress Demo Server (`progress_demo.rs`)
+
+A server that demonstrates progress notifications during long-running operations.
+
+- Provides a stream_processor tool that generates progress notifications
+- Demonstrates progress notifications during long-running operations
+- Can be run with `cargo run --example servers_progress_demo -- {stdio|sse|http|all}`
+
 ## How to Run
 
 Each example can be run using Cargo:
@@ -97,6 +105,7 @@ cargo run --example servers_complex_auth_sse
 
 # Run the simple OAuth SSE server
 cargo run --example servers_simple_auth_sse
+
 ```
 
 ## Testing with MCP Inspector
