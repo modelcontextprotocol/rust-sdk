@@ -103,6 +103,15 @@ pub(crate) const fn internal_error_response<E: Display>(
     }
 }
 
+pub(crate) fn unexpected_message_response(
+    expect: &str,
+) -> Response<UnsyncBoxBody<Bytes, Infallible>> {
+    Response::builder()
+        .status(http::StatusCode::UNPROCESSABLE_ENTITY)
+        .body(Full::new(Bytes::from(format!("Unexpected message, expect {expect}"))).boxed_unsync())
+        .expect("valid response")
+}
+
 pub(crate) async fn expect_json<B>(
     body: B,
 ) -> Result<ClientJsonRpcMessage, Response<UnsyncBoxBody<Bytes, Infallible>>>

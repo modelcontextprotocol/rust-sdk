@@ -10,7 +10,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use super::session::SessionManager;
 use crate::{
     RoleServer,
-    model::{ClientJsonRpcMessage, GetExtensions},
+    model::{ClientJsonRpcMessage, ClientRequest, GetExtensions},
     serve_server,
     service::serve_directly,
     transport::{
@@ -21,7 +21,7 @@ use crate::{
             },
             server_side_http::{
                 BoxResponse, ServerSseMessage, accepted_response, expect_json,
-                internal_error_response, sse_stream_response,
+                internal_error_response, sse_stream_response, unexpected_message_response,
             },
         },
     },
@@ -318,6 +318,15 @@ where
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
+                if let ClientJsonRpcMessage::Request(req) = &mut message {
+                    if !matches!(req.request, ClientRequest::InitializeRequest(_)) {
+                        return Err(unexpected_message_response("initialize request"));
+                    }
+                    // inject request part to extensions
+                    req.request.extensions_mut().insert(part);
+                } else {
+                    return Err(unexpected_message_response("initialize request"));
+                }
                 let service = self
                     .get_service()
                     .map_err(internal_error_response("get service"))?;
@@ -378,7 +387,8 @@ where
                 .get_service()
                 .map_err(internal_error_response("get service"))?;
             match message {
-                ClientJsonRpcMessage::Request(request) => {
+                ClientJsonRpcMessage::Request(mut request) => {
+                    request.request.extensions_mut().insert(part);
                     let (transport, receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
                     let service = serve_directly(service, transport, None);
