@@ -126,7 +126,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Development
 
-### Tips for Contributers
+### Tips for Contributors
 See [docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD) to get some tips for contributing.
 
 ### Using Dev Container
