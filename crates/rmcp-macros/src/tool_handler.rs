@@ -30,7 +30,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             request: rmcp::model::CallToolRequestParam,
             context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-            let tcc = ToolCallContext::new(self, request, context);
+            let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
             #router.call(tcc).await
         }
     };
@@ -40,7 +40,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             _request: Option<rmcp::model::PaginatedRequestParam>,
             _context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
-            Ok(ListToolsResult::with_all_items(#router.list_all()))
+            Ok(rmcp::model::ListToolsResult::with_all_items(#router.list_all()))
         }
     };
     let tool_call_fn = syn::parse2::<ImplItem>(tool_call_fn)?;

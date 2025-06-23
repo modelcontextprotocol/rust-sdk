@@ -4,11 +4,8 @@ use std::sync::Arc;
 
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
-    handler::server::{
-        router::tool::ToolRouter,
-        tool::{Parameters, ToolCallContext},
-    },
-    model::{CallToolRequestParam, ClientInfo, ListToolsResult},
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    model::{CallToolRequestParam, ClientInfo},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -20,16 +17,8 @@ pub struct GetWeatherRequest {
     pub date: String,
 }
 
-impl ServerHandler for Server {
-    async fn call_tool(
-        &self,
-        request: rmcp::model::CallToolRequestParam,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-        let tcc = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
-    }
-}
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for Server {}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -169,7 +158,7 @@ pub struct OptionalI64TestSchema {
 // Dummy struct to host the test tool method
 #[derive(Debug, Clone)]
 pub struct OptionalSchemaTester {
-    router: ToolRouter<Self>,
+    tool_router: ToolRouter<Self>,
 }
 
 impl Default for OptionalSchemaTester {
@@ -181,7 +170,7 @@ impl Default for OptionalSchemaTester {
 impl OptionalSchemaTester {
     pub fn new() -> Self {
         Self {
-            router: Self::tool_router(),
+            tool_router: Self::tool_router(),
         }
     }
 }
@@ -207,18 +196,9 @@ impl OptionalSchemaTester {
         }
     }
 }
-
+#[tool_handler]
 // Implement ServerHandler to route tool calls for OptionalSchemaTester
-impl ServerHandler for OptionalSchemaTester {
-    async fn call_tool(
-        &self,
-        request: rmcp::model::CallToolRequestParam,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-        let tcc = ToolCallContext::new(self, request, context);
-        self.router.call(tcc).await
-    }
-}
+impl ServerHandler for OptionalSchemaTester {}
 
 #[test]
 fn test_optional_field_schema_generation_via_macro() {

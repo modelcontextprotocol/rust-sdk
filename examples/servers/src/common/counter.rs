@@ -2,12 +2,12 @@
 use std::sync::Arc;
 
 use rmcp::{
-    Error as McpError, RoleServer, ServerHandler, const_string,
+    Error as McpError, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::*,
     schemars,
     service::RequestContext,
-    tool, tool_router,
+    tool, tool_handler, tool_router,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -86,7 +86,7 @@ impl Counter {
         )]))
     }
 }
-const_string!(Echo = "echo");
+#[tool_handler]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -199,22 +199,6 @@ impl ServerHandler for Counter {
         })
     }
 
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParam>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
-    }
     async fn initialize(
         &self,
         _request: InitializeRequestParam,

@@ -4,7 +4,7 @@ use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_router,
+    schemars, tool, tool_handler, tool_router,
 };
 
 #[allow(dead_code)]
@@ -74,6 +74,7 @@ impl<DS: DataService> GenericService<DS> {
     }
 }
 
+#[tool_handler]
 impl<DS: DataService> ServerHandler for GenericService<DS> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -81,24 +82,5 @@ impl<DS: DataService> ServerHandler for GenericService<DS> {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
-    }
-
-    async fn call_tool(
-        &self,
-        request: rmcp::model::CallToolRequestParam,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::ListToolsResult, rmcp::Error> {
-        Ok(rmcp::model::ListToolsResult::with_all_items(
-            self.tool_router.list_all(),
-        ))
     }
 }

@@ -40,6 +40,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// It creates a function that returns a `ToolRouter` instance.
 ///
+/// In most case, you need to add a field for handler to store the router information and initialize it when creating handler, or store it with a static variable.
 /// ## Usage
 ///
 /// | feied     | type          | usage |
@@ -66,14 +67,34 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// Or specify the visibility and router name:
+/// Or specify the visibility and router name, which would be helpful when you want to combine multiple routers into one:
 ///
 /// ```rust,ignore
-/// #[tool_router(router = my_tool_router, vis = pub)]
+/// mod a {
+///     #[tool_router(router = tool_router_a, vis = pub)]
+///     impl MyToolHandler {
+///         #[tool]
+///         fn my_tool_a() {
+///             
+///         }
+///     }
+/// }
+///
+/// mod b {
+///     #[tool_router(router = tool_router_b, vis = pub)]
+///     impl MyToolHandler {
+///         #[tool]
+///         fn my_tool_b() {
+///             
+///         }
+///     }
+/// }
+///
 /// impl MyToolHandler {
-///     #[tool]
-///     pub fn my_tool() {
-///         
+///     fn new() -> Self {
+///         Self {
+///             tool_router: self::tool_router_a() + self::tool_router_b(),
+///         }
 ///     }
 /// }
 /// ```
@@ -106,6 +127,31 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// #[tool_handler(router = self.get_router().await)]
 /// impl ServerHandler for MyToolHandler {
 ///    // ...implement other handler
+/// }
+/// ```
+///
+/// ## Explain
+///
+/// This macro will be expended to something like this:
+/// ```rust,ignore
+/// impl ServerHandler for MyToolHandler {
+///        async fn call_tool(
+///         &self,
+///         request: CallToolRequestParam,
+///         context: RequestContext<RoleServer>,
+///     ) -> Result<CallToolResult, rmcp::Error> {
+///         let tcc = ToolCallContext::new(self, request, context);
+///         self.tool_router.call(tcc).await
+///     }
+///
+///     async fn list_tools(
+///         &self,
+///         _request: Option<PaginatedRequestParam>,
+///         _context: RequestContext<RoleServer>,
+///     ) -> Result<ListToolsResult, rmcp::Error> {
+///         let items = self.tool_router.list_all();
+///         Ok(ListToolsResult::with_all_items(items))
+///     }
 /// }
 /// ```
 #[proc_macro_attribute]

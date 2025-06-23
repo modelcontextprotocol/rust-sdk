@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use rmcp::{ServerHandler, handler::server::router::tool::ToolRouter, tool};
+    use rmcp::{ServerHandler, handler::server::router::tool::ToolRouter, tool, tool_handler};
 
     #[derive(Debug, Clone, Default)]
     pub struct AnnotatedServer {
@@ -19,17 +19,8 @@ mod tests {
             format!("Direct: {}", input)
         }
     }
-
-    impl ServerHandler for AnnotatedServer {
-        async fn call_tool(
-            &self,
-            request: rmcp::model::CallToolRequestParam,
-            context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-            let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-            self.tool_router.call(tcc).await
-        }
-    }
+    #[tool_handler]
+    impl ServerHandler for AnnotatedServer {}
 
     #[test]
     fn test_direct_tool_attributes() {

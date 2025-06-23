@@ -3,8 +3,8 @@
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters, wrapper::Json},
-    model::{ListToolsResult, ServerCapabilities, ServerInfo},
-    schemars, tool, tool_router,
+    model::{ServerCapabilities, ServerInfo},
+    schemars, tool, tool_handler, tool_router,
 };
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -51,7 +51,7 @@ impl Calculator {
         Json(a - b)
     }
 }
-
+#[tool_handler]
 impl ServerHandler for Calculator {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -59,23 +59,5 @@ impl ServerHandler for Calculator {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
-    }
-
-    async fn call_tool(
-        &self,
-        request: rmcp::model::CallToolRequestParam,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<rmcp::model::CallToolResult, rmcp::Error> {
-        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<ListToolsResult, rmcp::Error> {
-        let items = self.tool_router.list_all();
-        Ok(ListToolsResult::with_all_items(items))
     }
 }

@@ -122,7 +122,7 @@ impl Calculator {
 }
 
 // impl call_tool and list_tool by querying static toolbox
-#[tool_router]
+#[tool_handler]
 impl ServerHandler for Calculator {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
