@@ -53,7 +53,7 @@ impl Counter {
 }
 
 // Implement the server handler
-#[tool_router]
+#[tool_handler]
 impl rmcp::ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -61,22 +61,6 @@ impl rmcp::ServerHandler for Counter {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
-    }
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParam,
-        context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let tcc = ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParam>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<ListToolsResult, rmcp::Error> {
-        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
     }
 }
 

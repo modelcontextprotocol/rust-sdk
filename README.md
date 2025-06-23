@@ -124,5 +124,10 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 ## Related Projects
 - [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
 
-## Development with Dev Container
-See [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.
+## Development
+
+### Tips for Contributers
+See [docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD) to get some tips for contributing.
+
+### Using Dev Container
+If you want to use dev container, see [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.
