@@ -242,7 +242,7 @@ pub type RequestId = NumberOrString;
 #[serde(transparent)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProgressToken(pub NumberOrString);
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Request<M = String, P = JsonObject> {
     pub method: M,
@@ -255,6 +255,16 @@ pub struct Request<M = String, P = JsonObject> {
     pub extensions: Extensions,
 }
 
+impl<M: Default, P> Request<M, P> {
+    pub fn new(params: P) -> Self {
+        Self {
+            method: Default::default(),
+            params,
+            extensions: Extensions::default(),
+        }
+    }
+}
+
 impl<M, P> GetExtensions for Request<M, P> {
     fn extensions(&self) -> &Extensions {
         &self.extensions
@@ -264,7 +274,7 @@ impl<M, P> GetExtensions for Request<M, P> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RequestOptionalParam<M = String, P = JsonObject> {
     pub method: M,
@@ -277,7 +287,17 @@ pub struct RequestOptionalParam<M = String, P = JsonObject> {
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Clone)]
+impl<M: Default, P> RequestOptionalParam<M, P> {
+    pub fn with_param(params: P) -> Self {
+        Self {
+            method: Default::default(),
+            params: Some(params),
+            extensions: Extensions::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RequestNoParam<M = String> {
     pub method: M,
@@ -296,7 +316,7 @@ impl<M> GetExtensions for RequestNoParam<M> {
         &mut self.extensions
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Notification<M = String, P = JsonObject> {
     pub method: M,
@@ -308,7 +328,17 @@ pub struct Notification<M = String, P = JsonObject> {
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Clone)]
+impl<M: Default, P> Notification<M, P> {
+    pub fn new(params: P) -> Self {
+        Self {
+            method: Default::default(),
+            params,
+            extensions: Extensions::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct NotificationNoParam<M = String> {
     pub method: M,

@@ -43,10 +43,7 @@ impl<T> TestHandler<T> {
 }
 
 #[rmcp::tool]
-async fn async_function<T>(
-    _callee: &TestHandler<T>,
-    Parameters(Request { fields }): Parameters<Request>,
-) {
+async fn async_function(Parameters(Request { fields }): Parameters<Request>) {
     drop(fields)
 }
 

@@ -745,8 +745,9 @@ where
                         let mut extensions = Extensions::new();
                         let mut meta = Meta::new();
                         // avoid clone
-                        std::mem::swap(&mut extensions, request.extensions_mut());
+                        // swap meta firstly, otherwise progress token will be lost
                         std::mem::swap(&mut meta, request.get_meta_mut());
+                        std::mem::swap(&mut extensions, request.extensions_mut());
                         let context = RequestContext {
                             ct: context_ct,
                             id: id.clone(),

@@ -1,3 +1,4 @@
+pub mod progress;
 use crate::{
     error::Error as McpError,
     model::*,

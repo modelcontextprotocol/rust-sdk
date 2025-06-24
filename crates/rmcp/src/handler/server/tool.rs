@@ -99,11 +99,6 @@ pub trait FromToolCallContextPart<S>: Sized {
 pub trait IntoCallToolResult {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error>;
 }
-impl IntoCallToolResult for () {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
-        Ok(CallToolResult::success(vec![]))
-    }
-}
 
 impl<T: IntoContents> IntoCallToolResult for T {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
@@ -116,6 +111,15 @@ impl<T: IntoContents, E: IntoContents> IntoCallToolResult for Result<T, E> {
         match self {
             Ok(value) => Ok(CallToolResult::success(value.into_contents())),
             Err(error) => Ok(CallToolResult::error(error.into_contents())),
+        }
+    }
+}
+
+impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::Error> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+        match self {
+            Ok(value) => value.into_call_tool_result(),
+            Err(error) => Err(error),
         }
     }
 }

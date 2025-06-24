@@ -165,3 +165,9 @@ impl IntoContents for String {
         vec![Content::text(self)]
     }
 }
+
+impl IntoContents for () {
+    fn into_contents(self) -> Vec<Content> {
+        vec![]
+    }
+}

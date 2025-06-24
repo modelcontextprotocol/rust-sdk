@@ -71,7 +71,7 @@ chrono = { version = "0.4.38", default-features = false, features = ["serde", "c
 
 [features]
 default = ["base64", "macros", "server"]
-client = []
+client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
 
@@ -191,3 +191,8 @@ path = "tests/test_message_protocol.rs"
 name = "test_message_schema"
 required-features = ["server", "client", "schemars"]
 path = "tests/test_message_schema.rs"
+
+[[test]]
+name = "test_progress_subscriber"
+required-features = ["server", "client", "macros"]
+path = "tests/test_progress_subscriber.rs"

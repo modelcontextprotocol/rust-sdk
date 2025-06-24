@@ -207,12 +207,22 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         // 2. make return type: `std::pin::Pin<Box<dyn Future<Output = #ReturnType> + Send + '_>>`
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
+            let mut lt = quote! { 'static };
+            if let Some(receiver) = fn_item.sig.receiver() {
+                if let Some((_, receiver_lt)) = receiver.reference.as_ref() {
+                    if let Some(receiver_lt) = receiver_lt {
+                        lt = quote! { #receiver_lt };
+                    } else {
+                        lt = quote! { '_ };
+                    }
+                }
+            }
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + '_>> }
+                    quote! { -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + #lt>> }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> std::pin::Pin<Box<dyn Future<Output = #ty> + Send + '_>> }
+                    quote! { -> std::pin::Pin<Box<dyn Future<Output = #ty> + Send + #lt>> }
                 }
             }
         })?;
