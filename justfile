@@ -10,3 +10,6 @@ fix: fmt
     
 test:
     cargo test --all-features
+
+cov:
+    cargo llvm-cov --lcov --output-path {{justfile_directory()}}/target/llvm-cov-target/coverage.lcov

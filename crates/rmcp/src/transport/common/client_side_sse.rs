@@ -134,7 +134,8 @@ impl<R: SseStreamReconnect> SseAutoReconnectStream<R> {
 }
 
 impl<E: std::error::Error + Send> SseAutoReconnectStream<NeverReconnect<E>> {
-    pub fn never_reconnect(stream: BoxedSseResponse, error_when_reconnect: E) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn never_reconnect(stream: BoxedSseResponse, error_when_reconnect: E) -> Self {
         Self {
             retry_policy: Arc::new(NeverRetry),
             last_event_id: None,

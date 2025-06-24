@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{convert::Infallible, fmt::Display, sync::Arc, time::Duration};
 
 use bytes::{Buf, Bytes};

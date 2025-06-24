@@ -18,7 +18,7 @@ async fn init() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .try_init();
     tokio::process::Command::new("uv")
-        .args(["pip", "install", "-r", "pyproject.toml"])
+        .args(["sync"])
         .current_dir("tests/test_with_python")
         .spawn()?
         .wait()
@@ -38,8 +38,9 @@ async fn test_with_python_client() -> anyhow::Result<()> {
 
     let status = tokio::process::Command::new("uv")
         .arg("run")
-        .arg("tests/test_with_python/client.py")
+        .arg("client.py")
         .arg(format!("http://{BIND_ADDRESS}/sse"))
+        .current_dir("tests/test_with_python")
         .spawn()?
         .wait()
         .await?;
@@ -88,8 +89,9 @@ async fn test_nested_with_python_client() -> anyhow::Result<()> {
         tokio::time::Duration::from_secs(5),
         tokio::process::Command::new("uv")
             .arg("run")
-            .arg("tests/test_with_python/client.py")
+            .arg("client.py")
             .arg(format!("http://{BIND_ADDRESS}/nested/sse"))
+            .current_dir("tests/test_with_python")
             .spawn()?
             .wait(),
     )
@@ -104,7 +106,9 @@ async fn test_with_python_server() -> anyhow::Result<()> {
     init().await?;
 
     let transport = TokioChildProcess::new(tokio::process::Command::new("uv").configure(|cmd| {
-        cmd.arg("run").arg("tests/test_with_python/server.py");
+        cmd.arg("run")
+            .arg("server.py")
+            .current_dir("tests/test_with_python");
     }))?;
 
     let client = ().serve(transport).await?;

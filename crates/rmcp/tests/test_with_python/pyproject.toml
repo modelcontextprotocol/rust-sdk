@@ -7,7 +7,7 @@ name = "test_with_python"
 version = "0.1.0"
 description = "Test Python client for RMCP"
 dependencies = [
-  "mcp",
+  "fastmcp",
 ]
 
 [tool.setuptools]
