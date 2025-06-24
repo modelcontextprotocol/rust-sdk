@@ -66,16 +66,25 @@ impl AsyncRead for TokioChildProcessOut {
 }
 
 impl TokioChildProcess {
+    /// Create a new Tokio child process with the given command.
+    ///
+    /// # Manage the child process
+    /// You can also check these issue and pr for more information on how to manage the child process:
+    /// - [#156](https://github.com/modelcontextprotocol/rust-sdk/pull/156)
+    /// - [#253](https://github.com/modelcontextprotocol/rust-sdk/issues/253)
+    /// ```rust,ignore
+    /// #[cfg(unix)]
+    /// command_wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
+    /// #[cfg(windows)]
+    /// command_wrap.wrap(process_wrap::tokio::JobObject);
+    /// ```
+    ///
     pub fn new(command: impl Into<TokioCommandWrap>) -> std::io::Result<Self> {
         let mut command_wrap = command.into();
         command_wrap
             .command_mut()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped());
-        #[cfg(unix)]
-        command_wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
-        #[cfg(windows)]
-        command_wrap.wrap(process_wrap::tokio::JobObject);
         let (child, (child_stdout, child_stdin)) = child_process(command_wrap.spawn()?)?;
         Ok(Self {
             child: ChildWithCleanup { inner: child },
