@@ -39,6 +39,9 @@ pub enum ClientInitializeError<E> {
         error: E,
         context: Cow<'static, str>,
     },
+
+    #[error("Cancelled")]
+    Cancelled,
 }
 
 /// Helper function to get the next message from the stream
@@ -117,6 +120,24 @@ where
 }
 
 pub async fn serve_client_with_ct<S, T, E, A>(
+    service: S,
+    transport: T,
+    ct: CancellationToken,
+) -> Result<RunningService<RoleClient, S>, ClientInitializeError<E>>
+where
+    S: Service<RoleClient>,
+    T: IntoTransport<RoleClient, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    tokio::select! {
+        result = serve_client_with_ct_inner(service, transport, ct.clone()) => { result }
+        _ = ct.cancelled() => {
+            Err(ClientInitializeError::Cancelled)
+        }
+    }
+}
+
+async fn serve_client_with_ct_inner<S, T, E, A>(
     service: S,
     transport: T,
     ct: CancellationToken,

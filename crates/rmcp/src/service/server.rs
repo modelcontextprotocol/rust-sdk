@@ -58,6 +58,9 @@ pub enum ServerInitializeError<E> {
         error: E,
         context: Cow<'static, str>,
     },
+
+    #[error("Cancelled")]
+    Cancelled,
 }
 
 pub type ClientSink = Peer<RoleServer>;
@@ -136,6 +139,24 @@ where
 }
 
 pub async fn serve_server_with_ct<S, T, E, A>(
+    service: S,
+    transport: T,
+    ct: CancellationToken,
+) -> Result<RunningService<RoleServer, S>, ServerInitializeError<E>>
+where
+    S: Service<RoleServer>,
+    T: IntoTransport<RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    tokio::select! {
+        result = serve_server_with_ct_inner(service, transport, ct.clone()) => { result }
+        _ = ct.cancelled() => {
+            Err(ServerInitializeError::Cancelled)
+        }
+    }
+}
+
+async fn serve_server_with_ct_inner<S, T, E, A>(
     service: S,
     transport: T,
     ct: CancellationToken,
