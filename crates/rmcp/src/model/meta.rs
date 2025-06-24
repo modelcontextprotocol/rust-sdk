@@ -95,6 +95,7 @@ variant_extension! {
         ResourceListChangedNotification
         ToolListChangedNotification
         PromptListChangedNotification
+        StderrNotification
     }
 }
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

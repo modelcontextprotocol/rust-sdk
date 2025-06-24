@@ -29,6 +29,9 @@ impl<H: ClientHandler> Service<RoleClient> for H {
         context: NotificationContext<RoleClient>,
     ) -> Result<(), McpError> {
         match notification {
+            ServerNotification::StderrNotification(notification) => {
+                self.on_stderr(notification.params).await
+            }
             ServerNotification::CancelledNotification(notification) => {
                 self.on_cancelled(notification.params, context).await
             }
@@ -89,6 +92,12 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         &self,
         params: CancelledNotificationParam,
         context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        std::future::ready(())
+    }
+    fn on_stderr(
+        &self,
+        params: StderrNotificationParam,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())
     }
