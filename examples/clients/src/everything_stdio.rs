@@ -19,8 +19,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Start server
-    let service = ()
+    let client = ()
         .serve(TokioChildProcess::new(Command::new("npx").configure(
             |cmd| {
                 cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
@@ -29,15 +28,15 @@ async fn main() -> Result<()> {
         .await?;
 
     // Initialize
-    let server_info = service.peer_info();
+    let server_info = client.peer_info();
     tracing::info!("Connected to server: {server_info:#?}");
 
     // List tools
-    let tools = service.list_all_tools().await?;
+    let tools = client.list_all_tools().await?;
     tracing::info!("Available tools: {tools:#?}");
 
     // Call tool echo
-    let tool_result = service
+    let tool_result = client
         .call_tool(CallToolRequestParam {
             name: "echo".into(),
             arguments: Some(object!({ "message": "hi from rmcp" })),
@@ -46,7 +45,7 @@ async fn main() -> Result<()> {
     tracing::info!("Tool result for echo: {tool_result:#?}");
 
     // Call tool longRunningOperation
-    let tool_result = service
+    let tool_result = client
         .call_tool(CallToolRequestParam {
             name: "longRunningOperation".into(),
             arguments: Some(object!({ "duration": 3, "steps": 1 })),
@@ -55,11 +54,11 @@ async fn main() -> Result<()> {
     tracing::info!("Tool result for longRunningOperation: {tool_result:#?}");
 
     // List resources
-    let resources = service.list_all_resources().await?;
+    let resources = client.list_all_resources().await?;
     tracing::info!("Available resources: {resources:#?}");
 
     // Read resource
-    let resource = service
+    let resource = client
         .read_resource(ReadResourceRequestParam {
             uri: "test://static/resource/3".into(),
         })
@@ -67,11 +66,11 @@ async fn main() -> Result<()> {
     tracing::info!("Resource: {resource:#?}");
 
     // List prompts
-    let prompts = service.list_all_prompts().await?;
+    let prompts = client.list_all_prompts().await?;
     tracing::info!("Available prompts: {prompts:#?}");
 
     // Get simple prompt
-    let prompt = service
+    let prompt = client
         .get_prompt(GetPromptRequestParam {
             name: "simple_prompt".into(),
             arguments: None,
@@ -80,7 +79,7 @@ async fn main() -> Result<()> {
     tracing::info!("Prompt - simple: {prompt:#?}");
 
     // Get complex prompt (returns text & image)
-    let prompt = service
+    let prompt = client
         .get_prompt(GetPromptRequestParam {
             name: "complex_prompt".into(),
             arguments: Some(object!({ "temperature": "0.5", "style": "formal" })),
@@ -89,10 +88,10 @@ async fn main() -> Result<()> {
     tracing::info!("Prompt - complex: {prompt:#?}");
 
     // List resource templates
-    let resource_templates = service.list_all_resource_templates().await?;
+    let resource_templates = client.list_all_resource_templates().await?;
     tracing::info!("Available resource templates: {resource_templates:#?}");
 
-    service.cancel().await?;
+    client.cancel().await?;
 
     Ok(())
 }

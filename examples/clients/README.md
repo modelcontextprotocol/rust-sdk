@@ -57,6 +57,16 @@ A client demonstrating how to authenticate with an MCP server using OAuth.
 - Establishes an authorized connection to the MCP server using the acquired access token
 - Demonstrates how to use the authorized connection to retrieve available tools and prompts
 
+
+### Sampling Standard I/O Client (`sampling_stdio.rs`)
+
+A client demonstrating how to use the sampling tool.
+
+- Launches the server example `servers_sampling_stdio`
+- Connects to the server
+- Retrieves server information and list of available tools
+- Calls the `ask_llm` tool
+
 ## How to Run
 
 Each example can be run using Cargo:
@@ -79,6 +89,9 @@ cargo run --example clients_collection
 
 # Run the OAuth client example
 cargo run --example clients_oauth_client
+
+# Run the sampling standard I/O client example
+cargo run --example clients_sampling_stdio
 ```
 
 ## Dependencies
