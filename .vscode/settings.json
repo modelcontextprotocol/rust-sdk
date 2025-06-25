@@ -1,9 +1,0 @@
-{
-    "coverage-gutters.coverageFileNames": [
-        "coverage.lcov",
-    ],
-    "coverage-gutters.coverageBaseDir": "target/llvm-cov-target",
-    "coverage-gutters.showLineCoverage": true,
-    "coverage-gutters.showRulerCoverage": true,
-    "coverage-gutters.showGutterCoverage": true
-}
