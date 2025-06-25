@@ -1,30 +1,53 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonRpcMessage_for_ServerRequest_and_ServerResult_and_ServerNotification",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol: individual requests/responses, notifications, batch operations, and errors. It serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
-      "$ref": "#/definitions/JsonRpcRequest_for_ServerRequest"
+      "description": "A single request expecting a response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcRequest_for_ServerRequest"
+        }
+      ]
     },
     {
-      "$ref": "#/definitions/JsonRpcResponse_for_ServerResult"
+      "description": "A response to a previous request",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse_for_ServerResult"
+        }
+      ]
     },
     {
-      "$ref": "#/definitions/JsonRpcNotification_for_ServerNotification"
+      "description": "A one-way notification (no response expected)",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcNotification_for_ServerNotification"
+        }
+      ]
     },
     {
+      "description": "Multiple requests sent together",
       "type": "array",
       "items": {
         "$ref": "#/definitions/JsonRpcBatchRequestItem_for_ServerRequest_and_ServerNotification"
       }
     },
     {
+      "description": "Multiple responses sent together",
       "type": "array",
       "items": {
         "$ref": "#/definitions/JsonRpcBatchResponseItem_for_ServerResult"
       }
     },
     {
-      "$ref": "#/definitions/JsonRpcError"
+      "description": "An error response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ]
     }
   ],
   "definitions": {
@@ -274,18 +297,21 @@
       }
     },
     "CallToolResult": {
+      "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional flag indicating whether the operation resulted in an error.",
       "type": "object",
       "required": [
         "content"
       ],
       "properties": {
         "content": {
+          "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
           "items": {
             "$ref": "#/definitions/Annotated_for_RawContent"
           }
         },
         "isError": {
+          "description": "Whether this result represents an error condition",
           "type": [
             "boolean",
             "null"
@@ -355,11 +381,29 @@
       }
     },
     "ContextInclusion": {
-      "type": "string",
-      "enum": [
-        "allServers",
-        "none",
-        "thisServer"
+      "description": "Specifies how much context should be included in sampling requests.\n\nThis allows clients to control what additional context information should be provided to the LLM when processing sampling requests.",
+      "oneOf": [
+        {
+          "description": "Include context from all connected MCP servers",
+          "type": "string",
+          "enum": [
+            "allServers"
+          ]
+        },
+        {
+          "description": "Include no additional context",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        },
+        {
+          "description": "Include context only from the requesting server",
+          "type": "string",
+          "enum": [
+            "thisServer"
+          ]
+        }
       ]
     },
     "CreateMessageRequestMethod": {
@@ -368,6 +412,7 @@
       "const": "sampling/createMessage"
     },
     "CreateMessageRequestParam": {
+      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to generate an LLM response, including conversation history, model preferences, and generation parameters.",
       "type": "object",
       "required": [
         "maxTokens",
@@ -375,6 +420,7 @@
       ],
       "properties": {
         "includeContext": {
+          "description": "How much context to include from MCP servers",
           "anyOf": [
             {
               "$ref": "#/definitions/ContextInclusion"
@@ -385,18 +431,23 @@
           ]
         },
         "maxTokens": {
+          "description": "Maximum number of tokens to generate",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
         },
         "messages": {
+          "description": "The conversation history and current messages",
           "type": "array",
           "items": {
             "$ref": "#/definitions/SamplingMessage"
           }
         },
-        "metadata": true,
+        "metadata": {
+          "description": "Additional metadata for the request"
+        },
         "modelPreferences": {
+          "description": "Preferences for model selection and behavior",
           "anyOf": [
             {
               "$ref": "#/definitions/ModelPreferences"
@@ -407,6 +458,7 @@
           ]
         },
         "stopSequences": {
+          "description": "Sequences that should stop generation",
           "type": [
             "array",
             "null"
@@ -416,12 +468,14 @@
           }
         },
         "systemPrompt": {
+          "description": "System prompt to guide the model's behavior",
           "type": [
             "string",
             "null"
           ]
         },
         "temperature": {
+          "description": "Temperature for controlling randomness (0.0 to 1.0)",
           "type": [
             "number",
             "null"
@@ -431,10 +485,11 @@
       }
     },
     "EmptyObject": {
+      "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object"
     },
     "ErrorData": {
-      "description": "Error information for JSON-RPC error responses.",
+      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting, providing a standardized way to communicate errors between clients and servers.",
       "type": "object",
       "required": [
         "code",
@@ -442,7 +497,7 @@
       ],
       "properties": {
         "code": {
-          "description": "The error type that occurred.",
+          "description": "The error type that occurred (using standard JSON-RPC error codes)",
           "type": "integer",
           "format": "int32"
         },
@@ -491,6 +546,7 @@
       }
     },
     "InitializeResult": {
+      "description": "The server's response to an initialization request.\n\nContains the server's protocol version, capabilities, and implementation information, along with optional instructions for the client.",
       "type": "object",
       "required": [
         "capabilities",
@@ -499,19 +555,35 @@
       ],
       "properties": {
         "capabilities": {
-          "$ref": "#/definitions/ServerCapabilities"
+          "description": "The capabilities this server provides (tools, resources, prompts, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServerCapabilities"
+            }
+          ]
         },
         "instructions": {
+          "description": "Optional human-readable instructions about using this server",
           "type": [
             "string",
             "null"
           ]
         },
         "protocolVersion": {
-          "$ref": "#/definitions/ProtocolVersion"
+          "description": "The MCP protocol version this server supports",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolVersion"
+            }
+          ]
         },
         "serverInfo": {
-          "$ref": "#/definitions/Implementation"
+          "description": "Information about the server implementation",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Implementation"
+            }
+          ]
         }
       }
     },
@@ -724,6 +796,7 @@
       }
     },
     "LoggingLevel": {
+      "description": "Logging levels supported by the MCP protocol",
       "type": "string",
       "enum": [
         "debug",
@@ -742,17 +815,26 @@
       "const": "notifications/message"
     },
     "LoggingMessageNotificationParam": {
+      "description": "Parameters for a logging message notification",
       "type": "object",
       "required": [
         "data",
         "level"
       ],
       "properties": {
-        "data": true,
+        "data": {
+          "description": "The actual log data"
+        },
         "level": {
-          "$ref": "#/definitions/LoggingLevel"
+          "description": "The severity level of this log message",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LoggingLevel"
+            }
+          ]
         },
         "logger": {
+          "description": "Optional logger name that generated this message",
           "type": [
             "string",
             "null"
@@ -761,9 +843,11 @@
       }
     },
     "ModelHint": {
+      "description": "A hint suggesting a preferred model name or family.\n\nModel hints are advisory suggestions that help clients choose appropriate models. They can be specific model names or general families like \"claude\" or \"gpt\".",
       "type": "object",
       "properties": {
         "name": {
+          "description": "The suggested model name or family identifier",
           "type": [
             "string",
             "null"
@@ -772,9 +856,11 @@
       }
     },
     "ModelPreferences": {
+      "description": "Preferences for model selection and behavior in sampling requests.\n\nThis allows servers to express their preferences for which model to use and how to balance different priorities when the client has multiple model options available.",
       "type": "object",
       "properties": {
         "costPriority": {
+          "description": "Priority for cost optimization (0.0 to 1.0, higher = prefer cheaper models)",
           "type": [
             "number",
             "null"
@@ -782,6 +868,7 @@
           "format": "float"
         },
         "hints": {
+          "description": "Specific model names or families to prefer (e.g., \"claude\", \"gpt\")",
           "type": [
             "array",
             "null"
@@ -791,6 +878,7 @@
           }
         },
         "intelligencePriority": {
+          "description": "Priority for intelligence/capability (0.0 to 1.0, higher = prefer more capable models)",
           "type": [
             "number",
             "null"
@@ -798,6 +886,7 @@
           "format": "float"
         },
         "speedPriority": {
+          "description": "Priority for speed/latency (0.0 to 1.0, higher = prefer faster models)",
           "type": [
             "number",
             "null"
@@ -1138,15 +1227,18 @@
       }
     },
     "ProtocolVersion": {
+      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying which version of the Model Context Protocol is being used.",
       "type": "string"
     },
     "ReadResourceResult": {
+      "description": "Result containing the contents of a read resource",
       "type": "object",
       "required": [
         "contents"
       ],
       "properties": {
         "contents": {
+          "description": "The actual content of the resource",
           "type": "array",
           "items": {
             "$ref": "#/definitions/ResourceContents"
@@ -1177,6 +1269,7 @@
       }
     },
     "Request_for_CreateMessageRequestMethod_and_CreateMessageRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -1248,12 +1341,14 @@
       "const": "notifications/resources/updated"
     },
     "ResourceUpdatedNotificationParam": {
+      "description": "Parameters for a resource update notification",
       "type": "object",
       "required": [
         "uri"
       ],
       "properties": {
         "uri": {
+          "description": "The URI of the resource that was updated",
           "type": "string"
         }
       }
@@ -1276,13 +1371,26 @@
       }
     },
     "Role": {
-      "type": "string",
-      "enum": [
-        "user",
-        "assistant"
+      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different types of message senders in the conversation flow.",
+      "oneOf": [
+        {
+          "description": "A human user or client making a request",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        },
+        {
+          "description": "An AI assistant or server providing a response",
+          "type": "string",
+          "enum": [
+            "assistant"
+          ]
+        }
       ]
     },
     "SamplingMessage": {
+      "description": "A message in a sampling conversation, containing a role and content.\n\nThis represents a single message in a conversation flow, used primarily in LLM sampling requests where the conversation history is important for generating appropriate responses.",
       "type": "object",
       "required": [
         "content",
@@ -1290,10 +1398,20 @@
       ],
       "properties": {
         "content": {
-          "$ref": "#/definitions/Annotated_for_RawContent"
+          "description": "The actual content of the message (text, image, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Annotated_for_RawContent"
+            }
+          ]
         },
         "role": {
-          "$ref": "#/definitions/Role"
+          "description": "The role of the message sender (User or Assistant)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Role"
+            }
+          ]
         }
       }
     },

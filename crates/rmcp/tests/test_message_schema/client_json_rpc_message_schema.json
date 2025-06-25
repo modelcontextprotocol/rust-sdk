@@ -1,30 +1,53 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonRpcMessage_for_ClientRequest_and_ClientResult_and_ClientNotification",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol: individual requests/responses, notifications, batch operations, and errors. It serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
-      "$ref": "#/definitions/JsonRpcRequest_for_ClientRequest"
+      "description": "A single request expecting a response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcRequest_for_ClientRequest"
+        }
+      ]
     },
     {
-      "$ref": "#/definitions/JsonRpcResponse_for_ClientResult"
+      "description": "A response to a previous request",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse_for_ClientResult"
+        }
+      ]
     },
     {
-      "$ref": "#/definitions/JsonRpcNotification_for_ClientNotification"
+      "description": "A one-way notification (no response expected)",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcNotification_for_ClientNotification"
+        }
+      ]
     },
     {
+      "description": "Multiple requests sent together",
       "type": "array",
       "items": {
         "$ref": "#/definitions/JsonRpcBatchRequestItem_for_ClientRequest_and_ClientNotification"
       }
     },
     {
+      "description": "Multiple responses sent together",
       "type": "array",
       "items": {
         "$ref": "#/definitions/JsonRpcBatchResponseItem_for_ClientResult"
       }
     },
     {
-      "$ref": "#/definitions/JsonRpcError"
+      "description": "An error response",
+      "allOf": [
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ]
     }
   ],
   "definitions": {
@@ -185,12 +208,14 @@
       "const": "tools/call"
     },
     "CallToolRequestParam": {
+      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute the tool operation.",
       "type": "object",
       "required": [
         "name"
       ],
       "properties": {
         "arguments": {
+          "description": "Arguments to pass to the tool (must match the tool's input schema)",
           "type": [
             "object",
             "null"
@@ -198,6 +223,7 @@
           "additionalProperties": true
         },
         "name": {
+          "description": "The name of the tool to call",
           "type": "string"
         }
       }
@@ -292,6 +318,7 @@
       }
     },
     "CreateMessageResult": {
+      "description": "The result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about how the generation was performed and why it stopped.",
       "type": "object",
       "required": [
         "content",
@@ -300,15 +327,27 @@
       ],
       "properties": {
         "content": {
-          "$ref": "#/definitions/Annotated_for_RawContent"
+          "description": "The actual content of the message (text, image, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Annotated_for_RawContent"
+            }
+          ]
         },
         "model": {
+          "description": "The identifier of the model that generated the response",
           "type": "string"
         },
         "role": {
-          "$ref": "#/definitions/Role"
+          "description": "The role of the message sender (User or Assistant)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Role"
+            }
+          ]
         },
         "stopReason": {
+          "description": "The reason why generation stopped (e.g., \"endTurn\", \"maxTokens\")",
           "type": [
             "string",
             "null"
@@ -317,10 +356,11 @@
       }
     },
     "EmptyObject": {
+      "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object"
     },
     "ErrorData": {
-      "description": "Error information for JSON-RPC error responses.",
+      "description": "Error information for JSON-RPC error responses.\n\nThis structure follows the JSON-RPC 2.0 specification for error reporting, providing a standardized way to communicate errors between clients and servers.",
       "type": "object",
       "required": [
         "code",
@@ -328,7 +368,7 @@
       ],
       "properties": {
         "code": {
-          "description": "The error type that occurred.",
+          "description": "The error type that occurred (using standard JSON-RPC error codes)",
           "type": "integer",
           "format": "int32"
         },
@@ -347,6 +387,7 @@
       "const": "prompts/get"
     },
     "GetPromptRequestParam": {
+      "description": "Parameters for retrieving a specific prompt",
       "type": "object",
       "required": [
         "name"
@@ -380,6 +421,7 @@
       }
     },
     "InitializeRequestParam": {
+      "description": "Parameters sent by a client when initializing a connection to an MCP server.\n\nThis contains the client's protocol version, capabilities, and implementation information, allowing the server to understand what the client supports.",
       "type": "object",
       "required": [
         "capabilities",
@@ -388,13 +430,28 @@
       ],
       "properties": {
         "capabilities": {
-          "$ref": "#/definitions/ClientCapabilities"
+          "description": "The capabilities this client supports (sampling, roots, etc.)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ClientCapabilities"
+            }
+          ]
         },
         "clientInfo": {
-          "$ref": "#/definitions/Implementation"
+          "description": "Information about the client implementation",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Implementation"
+            }
+          ]
         },
         "protocolVersion": {
-          "$ref": "#/definitions/ProtocolVersion"
+          "description": "The MCP protocol version this client supports",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProtocolVersion"
+            }
+          ]
         }
       }
     },
@@ -587,6 +644,7 @@
       "const": "tools/list"
     },
     "LoggingLevel": {
+      "description": "Logging levels supported by the MCP protocol",
       "type": "string",
       "enum": [
         "debug",
@@ -717,6 +775,7 @@
       }
     },
     "ProtocolVersion": {
+      "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying which version of the Model Context Protocol is being used.",
       "type": "string"
     },
     "ReadResourceRequestMethod": {
@@ -725,12 +784,14 @@
       "const": "resources/read"
     },
     "ReadResourceRequestParam": {
+      "description": "Parameters for reading a specific resource",
       "type": "object",
       "required": [
         "uri"
       ],
       "properties": {
         "uri": {
+          "description": "The URI of the resource to read",
           "type": "string"
         }
       }
@@ -871,6 +932,7 @@
       }
     },
     "Request_for_CallToolRequestMethod_and_CallToolRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -886,6 +948,7 @@
       }
     },
     "Request_for_CompleteRequestMethod_and_CompleteRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -901,6 +964,7 @@
       }
     },
     "Request_for_GetPromptRequestMethod_and_GetPromptRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -916,6 +980,7 @@
       }
     },
     "Request_for_InitializeResultMethod_and_InitializeRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -931,6 +996,7 @@
       }
     },
     "Request_for_ReadResourceRequestMethod_and_ReadResourceRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -946,6 +1012,7 @@
       }
     },
     "Request_for_SetLevelRequestMethod_and_SetLevelRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -961,6 +1028,7 @@
       }
     },
     "Request_for_SubscribeRequestMethod_and_SubscribeRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -976,6 +1044,7 @@
       }
     },
     "Request_for_UnsubscribeRequestMethod_and_UnsubscribeRequestParam": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing: - `method`: The name of the method being called - `params`: The parameters for the method - `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "required": [
         "method",
@@ -1037,10 +1106,22 @@
       ]
     },
     "Role": {
-      "type": "string",
-      "enum": [
-        "user",
-        "assistant"
+      "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different types of message senders in the conversation flow.",
+      "oneOf": [
+        {
+          "description": "A human user or client making a request",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        },
+        {
+          "description": "An AI assistant or server providing a response",
+          "type": "string",
+          "enum": [
+            "assistant"
+          ]
+        }
       ]
     },
     "Root": {
@@ -1082,13 +1163,19 @@
       "const": "logging/setLevel"
     },
     "SetLevelRequestParam": {
+      "description": "Parameters for setting the logging level",
       "type": "object",
       "required": [
         "level"
       ],
       "properties": {
         "level": {
-          "$ref": "#/definitions/LoggingLevel"
+          "description": "The desired logging level",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LoggingLevel"
+            }
+          ]
         }
       }
     },
@@ -1098,12 +1185,14 @@
       "const": "resources/subscribe"
     },
     "SubscribeRequestParam": {
+      "description": "Parameters for subscribing to resource updates",
       "type": "object",
       "required": [
         "uri"
       ],
       "properties": {
         "uri": {
+          "description": "The URI of the resource to subscribe to",
           "type": "string"
         }
       }
@@ -1114,12 +1203,14 @@
       "const": "resources/unsubscribe"
     },
     "UnsubscribeRequestParam": {
+      "description": "Parameters for unsubscribing from resource updates",
       "type": "object",
       "required": [
         "uri"
       ],
       "properties": {
         "uri": {
+          "description": "The URI of the resource to unsubscribe from",
           "type": "string"
         }
       }
