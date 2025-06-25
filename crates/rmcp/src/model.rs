@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use tool::*;
 
+/// A JSON object type alias for convenient handling of JSON data.
+///
 /// You can use [`crate::object!`] or [`crate::model::object`] to create a json object quickly.
+/// This is commonly used for storing arbitrary JSON data in MCP messages.
 pub type JsonObject<F = Value> = serde_json::Map<String, F>;
 
 /// unwrap the JsonObject under [`serde_json::Value`]
@@ -45,6 +48,10 @@ macro_rules! object {
         })
     };
 }
+
+/// This is commonly used for representing empty objects in MCP messages.
+///
+/// without returning any specific data.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy, Eq)]
 #[cfg_attr(feature = "server", derive(schemars::JsonSchema))]
 pub struct EmptyObject {}
@@ -110,6 +117,14 @@ macro_rules! const_string {
 
 const_string!(JsonRpcVersion2_0 = "2.0");
 
+// =============================================================================
+// CORE PROTOCOL TYPES
+// =============================================================================
+
+/// Represents the MCP protocol version used for communication.
+///
+/// This ensures compatibility between clients and servers by specifying
+/// which version of the Model Context Protocol is being used.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProtocolVersion(Cow<'static, str>);
@@ -157,9 +172,15 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
     }
 }
 
+/// A flexible identifier type that can be either a number or a string.
+///
+/// This is commonly used for request IDs and other identifiers in JSON-RPC
+/// where the specification allows both numeric and string values.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NumberOrString {
+    /// A numeric identifier
     Number(u32),
+    /// A string identifier  
     String(Arc<str>),
 }
 
@@ -236,17 +257,32 @@ impl schemars::JsonSchema for NumberOrString {
     }
 }
 
+/// Type alias for request identifiers used in JSON-RPC communication.
 pub type RequestId = NumberOrString;
 
+/// A token used to track the progress of long-running operations.
+///
+/// Progress tokens allow clients and servers to associate progress notifications
+/// with specific requests, enabling real-time updates on operation status.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Hash, Eq)]
 #[serde(transparent)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProgressToken(pub NumberOrString);
+
+// =============================================================================
+// JSON-RPC MESSAGE STRUCTURES
+// =============================================================================
+
+/// Represents a JSON-RPC request with method, parameters, and extensions.
+///
+/// This is the core structure for all MCP requests, containing:
+/// - `method`: The name of the method being called
+/// - `params`: The parameters for the method
+/// - `extensions`: Additional context data (similar to HTTP headers)
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Request<M = String, P = JsonObject> {
     pub method: M,
-    // #[serde(skip_serializing_if = "Option::is_none")]
     pub params: P,
     /// extensions will carry anything possible in the context, including [`Meta`]
     ///
@@ -383,7 +419,10 @@ pub struct JsonRpcNotification<N = Notification> {
     pub notification: N,
 }
 
-// Standard JSON-RPC error codes
+/// Standard JSON-RPC error codes used throughout the MCP protocol.
+///
+/// These codes follow the JSON-RPC 2.0 specification and provide
+/// standardized error reporting across all MCP implementations.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -399,10 +438,13 @@ impl ErrorCode {
 }
 
 /// Error information for JSON-RPC error responses.
+///
+/// This structure follows the JSON-RPC 2.0 specification for error reporting,
+/// providing a standardized way to communicate errors between clients and servers.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ErrorData {
-    /// The error type that occurred.
+    /// The error type that occurred (using standard JSON-RPC error codes)
     pub code: ErrorCode,
 
     /// A short description of the error. The message SHOULD be limited to a concise single sentence.
@@ -480,15 +522,26 @@ impl<Resp> JsonRpcBatchResponseItem<Resp> {
     }
 }
 
+/// Represents any JSON-RPC message that can be sent or received.
+///
+/// This enum covers all possible message types in the JSON-RPC protocol:
+/// individual requests/responses, notifications, batch operations, and errors.
+/// It serves as the top-level message container for MCP communication.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum JsonRpcMessage<Req = Request, Resp = DefaultResponse, Noti = Notification> {
+    /// A single request expecting a response
     Request(JsonRpcRequest<Req>),
+    /// A response to a previous request
     Response(JsonRpcResponse<Resp>),
+    /// A one-way notification (no response expected)
     Notification(JsonRpcNotification<Noti>),
+    /// Multiple requests sent together
     BatchRequest(Vec<JsonRpcBatchRequestItem<Req, Noti>>),
+    /// Multiple responses sent together
     BatchResponse(Vec<JsonRpcBatchResponseItem<Resp>>),
+    /// An error response
     Error(JsonRpcError),
 }
 
@@ -558,6 +611,10 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
     }
 }
 
+// =============================================================================
+// INITIALIZATION AND CONNECTION SETUP
+// =============================================================================
+
 /// # Empty result
 /// A response that indicates success but carries no data.
 pub type EmptyResult = EmptyObject;
@@ -601,22 +658,38 @@ pub type InitializeRequest = Request<InitializeResultMethod, InitializeRequestPa
 const_string!(InitializedNotificationMethod = "notifications/initialized");
 /// This notification is sent from the client to the server after initialization has finished.
 pub type InitializedNotification = NotificationNoParam<InitializedNotificationMethod>;
+
+/// Parameters sent by a client when initializing a connection to an MCP server.
+///
+/// This contains the client's protocol version, capabilities, and implementation
+/// information, allowing the server to understand what the client supports.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InitializeRequestParam {
+    /// The MCP protocol version this client supports
     pub protocol_version: ProtocolVersion,
+    /// The capabilities this client supports (sampling, roots, etc.)
     pub capabilities: ClientCapabilities,
+    /// Information about the client implementation
     pub client_info: Implementation,
 }
 
+/// The server's response to an initialization request.
+///
+/// Contains the server's protocol version, capabilities, and implementation
+/// information, along with optional instructions for the client.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct InitializeResult {
+    /// The MCP protocol version this server supports
     pub protocol_version: ProtocolVersion,
+    /// The capabilities this server provides (tools, resources, prompts, etc.)
     pub capabilities: ServerCapabilities,
+    /// Information about the server implementation
     pub server_info: Implementation,
+    /// Optional human-readable instructions about using this server
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
 }
@@ -674,6 +747,10 @@ pub struct PaginatedRequestParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
+// =============================================================================
+// PROGRESS AND PAGINATION
+// =============================================================================
+
 const_string!(PingRequestMethod = "ping");
 pub type PingRequest = RequestNoParam<PingRequestMethod>;
 
@@ -723,75 +800,105 @@ macro_rules! paginated_result {
     };
 }
 
+// =============================================================================
+// RESOURCE MANAGEMENT
+// =============================================================================
+
 const_string!(ListResourcesRequestMethod = "resources/list");
+/// Request to list all available resources from a server
 pub type ListResourcesRequest =
     RequestOptionalParam<ListResourcesRequestMethod, PaginatedRequestParam>;
+
 paginated_result!(ListResourcesResult {
     resources: Vec<Resource>
 });
 
 const_string!(ListResourceTemplatesRequestMethod = "resources/templates/list");
+/// Request to list all available resource templates from a server
 pub type ListResourceTemplatesRequest =
     RequestOptionalParam<ListResourceTemplatesRequestMethod, PaginatedRequestParam>;
+
 paginated_result!(ListResourceTemplatesResult {
     resource_templates: Vec<ResourceTemplate>
 });
 
 const_string!(ReadResourceRequestMethod = "resources/read");
+/// Parameters for reading a specific resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReadResourceRequestParam {
+    /// The URI of the resource to read
     pub uri: String,
 }
 
+/// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ReadResourceResult {
+    /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
 }
 
+/// Request to read a specific resource
 pub type ReadResourceRequest = Request<ReadResourceRequestMethod, ReadResourceRequestParam>;
 
 const_string!(ResourceListChangedNotificationMethod = "notifications/resources/list_changed");
+/// Notification sent when the list of available resources changes
 pub type ResourceListChangedNotification =
     NotificationNoParam<ResourceListChangedNotificationMethod>;
 
 const_string!(SubscribeRequestMethod = "resources/subscribe");
+/// Parameters for subscribing to resource updates
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SubscribeRequestParam {
+    /// The URI of the resource to subscribe to
     pub uri: String,
 }
+/// Request to subscribe to resource updates
 pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestParam>;
 
 const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
+/// Parameters for unsubscribing from resource updates
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct UnsubscribeRequestParam {
+    /// The URI of the resource to unsubscribe from
     pub uri: String,
 }
+/// Request to unsubscribe from resource updates
 pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeRequestParam>;
 
 const_string!(ResourceUpdatedNotificationMethod = "notifications/resources/updated");
+/// Parameters for a resource update notification
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResourceUpdatedNotificationParam {
+    /// The URI of the resource that was updated
     pub uri: String,
 }
+/// Notification sent when a subscribed resource is updated
 pub type ResourceUpdatedNotification =
     Notification<ResourceUpdatedNotificationMethod, ResourceUpdatedNotificationParam>;
 
+// =============================================================================
+// PROMPT MANAGEMENT
+// =============================================================================
+
 const_string!(ListPromptsRequestMethod = "prompts/list");
+/// Request to list all available prompts from a server
 pub type ListPromptsRequest = RequestOptionalParam<ListPromptsRequestMethod, PaginatedRequestParam>;
+
 paginated_result!(ListPromptsResult {
     prompts: Vec<Prompt>
 });
 
 const_string!(GetPromptRequestMethod = "prompts/get");
+/// Parameters for retrieving a specific prompt
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -800,14 +907,22 @@ pub struct GetPromptRequestParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
 }
+/// Request to get a specific prompt
 pub type GetPromptRequest = Request<GetPromptRequestMethod, GetPromptRequestParam>;
 
 const_string!(PromptListChangedNotificationMethod = "notifications/prompts/list_changed");
+/// Notification sent when the list of available prompts changes
 pub type PromptListChangedNotification = NotificationNoParam<PromptListChangedNotificationMethod>;
 
 const_string!(ToolListChangedNotificationMethod = "notifications/tools/list_changed");
+/// Notification sent when the list of available tools changes
 pub type ToolListChangedNotification = NotificationNoParam<ToolListChangedNotificationMethod>;
-// 日志相关
+
+// =============================================================================
+// LOGGING
+// =============================================================================
+
+/// Logging levels supported by the MCP protocol
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy)]
 #[serde(rename_all = "lowercase")] //match spec
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -823,96 +938,159 @@ pub enum LoggingLevel {
 }
 
 const_string!(SetLevelRequestMethod = "logging/setLevel");
+/// Parameters for setting the logging level
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SetLevelRequestParam {
+    /// The desired logging level
     pub level: LoggingLevel,
 }
+/// Request to set the logging level
 pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParam>;
 
 const_string!(LoggingMessageNotificationMethod = "notifications/message");
+/// Parameters for a logging message notification
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LoggingMessageNotificationParam {
+    /// The severity level of this log message
     pub level: LoggingLevel,
+    /// Optional logger name that generated this message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logger: Option<String>,
+    /// The actual log data
     pub data: Value,
 }
+/// Notification containing a log message
 pub type LoggingMessageNotification =
     Notification<LoggingMessageNotificationMethod, LoggingMessageNotificationParam>;
+
+// =============================================================================
+// SAMPLING (LLM INTERACTION)
+// =============================================================================
 
 const_string!(CreateMessageRequestMethod = "sampling/createMessage");
 pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParam>;
 
+/// Represents the role of a participant in a conversation or message exchange.
+///
+/// Used in sampling and chat contexts to distinguish between different
+/// types of message senders in the conversation flow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum Role {
+    /// A human user or client making a request
     User,
+    /// An AI assistant or server providing a response
     Assistant,
 }
 
+/// A message in a sampling conversation, containing a role and content.
+///
+/// This represents a single message in a conversation flow, used primarily
+/// in LLM sampling requests where the conversation history is important
+/// for generating appropriate responses.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SamplingMessage {
+    /// The role of the message sender (User or Assistant)
     pub role: Role,
+    /// The actual content of the message (text, image, etc.)
     pub content: Content,
 }
 
+/// Specifies how much context should be included in sampling requests.
+///
+/// This allows clients to control what additional context information
+/// should be provided to the LLM when processing sampling requests.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum ContextInclusion {
+    /// Include context from all connected MCP servers
     #[serde(rename = "allServers")]
     AllServers,
+    /// Include no additional context
     #[serde(rename = "none")]
     None,
+    /// Include context only from the requesting server
     #[serde(rename = "thisServer")]
     ThisServer,
 }
 
+/// Parameters for creating a message through LLM sampling.
+///
+/// This structure contains all the necessary information for a client to
+/// generate an LLM response, including conversation history, model preferences,
+/// and generation parameters.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateMessageRequestParam {
+    /// The conversation history and current messages
     pub messages: Vec<SamplingMessage>,
+    /// Preferences for model selection and behavior
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_preferences: Option<ModelPreferences>,
+    /// System prompt to guide the model's behavior
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// How much context to include from MCP servers
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_context: Option<ContextInclusion>,
+    /// Temperature for controlling randomness (0.0 to 1.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Maximum number of tokens to generate
     pub max_tokens: u32,
+    /// Sequences that should stop generation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    /// Additional metadata for the request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
 }
 
+/// Preferences for model selection and behavior in sampling requests.
+///
+/// This allows servers to express their preferences for which model to use
+/// and how to balance different priorities when the client has multiple
+/// model options available.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ModelPreferences {
+    /// Specific model names or families to prefer (e.g., "claude", "gpt")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hints: Option<Vec<ModelHint>>,
+    /// Priority for cost optimization (0.0 to 1.0, higher = prefer cheaper models)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_priority: Option<f32>,
+    /// Priority for speed/latency (0.0 to 1.0, higher = prefer faster models)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed_priority: Option<f32>,
+    /// Priority for intelligence/capability (0.0 to 1.0, higher = prefer more capable models)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intelligence_priority: Option<f32>,
 }
 
+/// A hint suggesting a preferred model name or family.
+///
+/// Model hints are advisory suggestions that help clients choose appropriate
+/// models. They can be specific model names or general families like "claude" or "gpt".
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ModelHint {
+    /// The suggested model name or family identifier
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
+
+// =============================================================================
+// COMPLETION AND AUTOCOMPLETE
+// =============================================================================
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -973,7 +1151,10 @@ pub struct ArgumentInfo {
     pub value: String,
 }
 
-// 根目录相关
+// =============================================================================
+// ROOTS AND WORKSPACE MANAGEMENT
+// =============================================================================
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Root {
@@ -995,22 +1176,34 @@ pub struct ListRootsResult {
 const_string!(RootsListChangedNotificationMethod = "notifications/roots/list_changed");
 pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNotificationMethod>;
 
+// =============================================================================
+// TOOL EXECUTION RESULTS
+// =============================================================================
+
+/// The result of a tool call operation.
+///
+/// Contains the content returned by the tool execution and an optional
+/// flag indicating whether the operation resulted in an error.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
+    /// The content returned by the tool (text, images, etc.)
     pub content: Vec<Content>,
+    /// Whether this result represents an error condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 impl CallToolResult {
+    /// Create a successful tool result
     pub fn success(content: Vec<Content>) -> Self {
         CallToolResult {
             content,
             is_error: Some(false),
         }
     }
+    /// Create an error tool result
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
             content,
@@ -1020,7 +1213,9 @@ impl CallToolResult {
 }
 
 const_string!(ListToolsRequestMethod = "tools/list");
+/// Request to list all available tools from a server
 pub type ListToolsRequest = RequestOptionalParam<ListToolsRequestMethod, PaginatedRequestParam>;
+
 paginated_result!(
     ListToolsResult {
         tools: Vec<Tool>
@@ -1028,24 +1223,38 @@ paginated_result!(
 );
 
 const_string!(CallToolRequestMethod = "tools/call");
+/// Parameters for calling a tool provided by an MCP server.
+///
+/// Contains the tool name and optional arguments needed to execute
+/// the tool operation.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolRequestParam {
+    /// The name of the tool to call
     pub name: Cow<'static, str>,
+    /// Arguments to pass to the tool (must match the tool's input schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
 }
 
+/// Request to call a specific tool
 pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParam>;
 
+/// The result of a sampling/createMessage request containing the generated response.
+///
+/// This structure contains the generated message along with metadata about
+/// how the generation was performed and why it stopped.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateMessageResult {
+    /// The identifier of the model that generated the response
     pub model: String,
+    /// The reason why generation stopped (e.g., "endTurn", "maxTokens")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    /// The generated message with role and content
     #[serde(flatten)]
     pub message: SamplingMessage,
 }
@@ -1064,6 +1273,10 @@ pub struct GetPromptResult {
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
 }
+
+// =============================================================================
+// MESSAGE TYPE UNIONS
+// =============================================================================
 
 macro_rules! ts_union {
     (
@@ -1189,6 +1402,10 @@ impl From<CancelledNotification> for ClientNotification {
         ClientNotification::CancelledNotification(value)
     }
 }
+
+// =============================================================================
+// TESTS
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
