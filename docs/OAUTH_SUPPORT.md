@@ -70,7 +70,7 @@ rmcp = { version = "0.1", features = ["auth", "transport-sse-client"] }
     let client = client_service.serve(transport).await?;
 ```
 
-### 5. May you can use Authorized HTTP Client after authorized
+### 5. Use Authorized HTTP Client after authorized
 
 ```rust ignore
     let client = oauth_state.to_authorized_http_client().await?;
