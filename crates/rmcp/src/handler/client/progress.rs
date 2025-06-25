@@ -32,7 +32,7 @@ impl ProgressDispatcher {
     }
 
     /// Subscribe to progress notifications for a specific token.
-    /// 
+    ///
     /// If you drop the returned `ProgressSubscriber`, it will automatically unsubscribe from notifications for that token.
     pub async fn subscribe(&self, progress_token: ProgressToken) -> ProgressSubscriber {
         let (sender, receiver) = tokio::sync::mpsc::channel(Self::CHANNEL_SIZE);

@@ -2,9 +2,7 @@ use futures::StreamExt;
 use rmcp::{
     ClientHandler, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::{client::progress::ProgressDispatcher, server::tool::ToolRouter},
-    model::{
-        CallToolRequestParam, ClientRequest, Meta, ProgressNotificationParam, Request,
-    },
+    model::{CallToolRequestParam, ClientRequest, Meta, ProgressNotificationParam, Request},
     service::PeerRequestOptions,
     tool, tool_handler, tool_router,
 };
