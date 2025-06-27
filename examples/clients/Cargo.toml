@@ -52,3 +52,7 @@ path = "src/collection.rs"
 [[example]]
 name = "clients_oauth_client"
 path = "src/auth/oauth_client.rs"
+
+[[example]]
+name = "clients_sampling_stdio"
+path = "src/sampling_stdio.rs"

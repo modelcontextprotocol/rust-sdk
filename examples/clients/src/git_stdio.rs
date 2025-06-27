@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let service = ()
+    let client = ()
         .serve(TokioChildProcess::new(Command::new("uvx").configure(
             |cmd| {
                 cmd.arg("mcp-server-git");
@@ -28,21 +28,21 @@ async fn main() -> Result<()> {
     // or serve_client((), TokioChildProcess::new(cmd)?).await?;
 
     // Initialize
-    let server_info = service.peer_info();
+    let server_info = client.peer_info();
     tracing::info!("Connected to server: {server_info:#?}");
 
     // List tools
-    let tools = service.list_tools(Default::default()).await?;
+    let tools = client.list_tools(Default::default()).await?;
     tracing::info!("Available tools: {tools:#?}");
 
     // Call tool 'git_status' with arguments = {"repo_path": "."}
-    let tool_result = service
+    let tool_result = client
         .call_tool(CallToolRequestParam {
             name: "git_status".into(),
             arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
         })
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
-    service.cancel().await?;
+    client.cancel().await?;
     Ok(())
 }

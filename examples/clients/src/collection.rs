@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
 
     let mut clients_map = HashMap::new();
     for idx in 0..10 {
-        let service = ()
+        let client = ()
             .into_dyn()
             .serve(TokioChildProcess::new(Command::new("uvx").configure(
                 |cmd| {
@@ -34,18 +34,18 @@ async fn main() -> Result<()> {
                 },
             ))?)
             .await?;
-        clients_map.insert(idx, service);
+        clients_map.insert(idx, client);
     }
 
-    for (_, service) in clients_map.iter() {
+    for (_, client) in clients_map.iter() {
         // Initialize
-        let _server_info = service.peer_info();
+        let _server_info = client.peer_info();
 
         // List tools
-        let _tools = service.list_tools(Default::default()).await?;
+        let _tools = client.list_tools(Default::default()).await?;
 
         // Call tool 'git_status' with arguments = {"repo_path": "."}
-        let _tool_result = service
+        let _tool_result = client
             .call_tool(CallToolRequestParam {
                 name: "git_status".into(),
                 arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
