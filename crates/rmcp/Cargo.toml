@@ -28,7 +28,7 @@ paste = { version = "1", optional = true }
 oauth2 = { version = "5.0", optional = true }
 
 # for auto generate schema
-schemars = { version = "0.8", optional = true, features = ["chrono"] }
+schemars = { version = "1.0", optional = true, features = ["chrono"] }
 
 # for image encoding
 base64 = { version = "0.22", optional = true }
@@ -133,7 +133,7 @@ schemars = ["dep:schemars"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-schemars = { version = "0.8" }
+schemars = { version = "1.0" }
 
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
