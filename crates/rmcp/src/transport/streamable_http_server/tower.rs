@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
 use http::{Method, Request, Response, header::ALLOW};
 use http_body::Body;
-use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::session::SessionManager;
@@ -105,7 +105,7 @@ where
     fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
     }
-    pub async fn handle<B>(&self, request: Request<B>) -> Response<UnsyncBoxBody<Bytes, Infallible>>
+    pub async fn handle<B>(&self, request: Request<B>) -> Response<BoxBody<Bytes, Infallible>>
     where
         B: Body + Send + 'static,
         B::Error: Display,
@@ -120,7 +120,7 @@ where
                 let response = Response::builder()
                     .status(http::StatusCode::METHOD_NOT_ALLOWED)
                     .header(ALLOW, "GET, POST, DELETE")
-                    .body(Full::new(Bytes::from("Method Not Allowed")).boxed_unsync())
+                    .body(Full::new(Bytes::from("Method Not Allowed")).boxed())
                     .expect("valid response");
                 return response;
             }
@@ -148,7 +148,7 @@ where
                     Full::new(Bytes::from(
                         "Not Acceptable: Client must accept text/event-stream",
                     ))
-                    .boxed_unsync(),
+                    .boxed(),
                 )
                 .expect("valid response"));
         }
@@ -162,7 +162,7 @@ where
             // unauthorized
             return Ok(Response::builder()
                 .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed_unsync())
+                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // check if session exists
@@ -175,7 +175,7 @@ where
             // unauthorized
             return Ok(Response::builder()
                 .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed_unsync())
+                .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
                 .expect("valid response"));
         }
         // check if last event id is provided
@@ -219,7 +219,7 @@ where
         {
             return Ok(Response::builder()
                 .status(http::StatusCode::NOT_ACCEPTABLE)
-                .body(Full::new(Bytes::from("Not Acceptable: Client must accept both application/json and text/event-stream")).boxed_unsync())
+                .body(Full::new(Bytes::from("Not Acceptable: Client must accept both application/json and text/event-stream")).boxed())
                 .expect("valid response"));
         }
 
@@ -236,7 +236,7 @@ where
                     Full::new(Bytes::from(
                         "Unsupported Media Type: Content-Type must be application/json",
                     ))
-                    .boxed_unsync(),
+                    .boxed(),
                 )
                 .expect("valid response"));
         }
@@ -265,10 +265,7 @@ where
                     // unauthorized
                     return Ok(Response::builder()
                         .status(http::StatusCode::UNAUTHORIZED)
-                        .body(
-                            Full::new(Bytes::from("Unauthorized: Session not found"))
-                                .boxed_unsync(),
-                        )
+                        .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
                         .expect("valid response"));
                 }
 
@@ -307,8 +304,7 @@ where
                     _ => Ok(Response::builder()
                         .status(http::StatusCode::NOT_IMPLEMENTED)
                         .body(
-                            Full::new(Bytes::from("Batch requests are not supported yet"))
-                                .boxed_unsync(),
+                            Full::new(Bytes::from("Batch requests are not supported yet")).boxed(),
                         )
                         .expect("valid response")),
                 }
@@ -415,10 +411,7 @@ where
                 ClientJsonRpcMessage::Error(_json_rpc_error) => Ok(accepted_response()),
                 _ => Ok(Response::builder()
                     .status(http::StatusCode::NOT_IMPLEMENTED)
-                    .body(
-                        Full::new(Bytes::from("Batch requests are not supported yet"))
-                            .boxed_unsync(),
-                    )
+                    .body(Full::new(Bytes::from("Batch requests are not supported yet")).boxed())
                     .expect("valid response")),
             }
         }
@@ -439,7 +432,7 @@ where
             // unauthorized
             return Ok(Response::builder()
                 .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed_unsync())
+                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // close session

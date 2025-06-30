@@ -31,7 +31,7 @@ pub trait SessionManager: Send + Sync + 'static {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> impl Future<
-        Output = Result<impl Stream<Item = ServerSseMessage> + Send + 'static, Self::Error>,
+        Output = Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error>,
     > + Send;
     fn accept_message(
         &self,
@@ -42,13 +42,13 @@ pub trait SessionManager: Send + Sync + 'static {
         &self,
         id: &SessionId,
     ) -> impl Future<
-        Output = Result<impl Stream<Item = ServerSseMessage> + Send + 'static, Self::Error>,
+        Output = Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error>,
     > + Send;
     fn resume(
         &self,
         id: &SessionId,
         last_event_id: String,
     ) -> impl Future<
-        Output = Result<impl Stream<Item = ServerSseMessage> + Send + 'static, Self::Error>,
+        Output = Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error>,
     > + Send;
 }
