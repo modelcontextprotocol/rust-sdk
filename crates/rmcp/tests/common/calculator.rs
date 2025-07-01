@@ -3,7 +3,7 @@ use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_router,
+    schemars, tool, tool_router, tool_handler,
 };
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SumRequest {
@@ -51,6 +51,7 @@ impl Calculator {
     }
 }
 
+#[tool_handler]
 impl ServerHandler for Calculator {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {

@@ -55,12 +55,15 @@ process-wrap = { version = "8.2", features = ["tokio1"], optional = true }
 
 # for http-server transport
 axum = { version = "0.8", features = [], optional = true }
+actix-web = { version = "4", optional = true }
+actix-rt = { version = "2", optional = true }
 rand = { version = "0.9", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
+async-stream = { version = "0.3", optional = true }
 # macro
 rmcp-macros = { version = "0.1", workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -70,10 +73,13 @@ chrono = { version = "0.4.38", features = ["serde"] }
 chrono = { version = "0.4.38", default-features = false, features = ["serde", "clock", "std", "oldtime"] }
 
 [features]
-default = ["base64", "macros", "server"]
+default = ["base64", "macros", "server", "axum"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
+# Web framework features
+axum = ["dep:axum"]
+actix-web = ["dep:actix-web", "dep:actix-rt", "dep:async-stream"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -116,7 +122,6 @@ transport-sse-server = [
     "transport-async-rw",
     "transport-worker",
     "server-side-http",
-    "dep:axum",
 ]
 transport-streamable-http-server = [
     "transport-streamable-http-server-session",

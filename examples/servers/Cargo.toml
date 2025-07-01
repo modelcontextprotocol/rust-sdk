@@ -33,6 +33,8 @@ tracing-subscriber = { version = "0.3", features = [
 futures = "0.3"
 rand = { version = "0.9", features = ["std"] }
 axum = { version = "0.8", features = ["macros"] }
+actix-web = { version = "4", optional = true }
+actix-rt = { version = "2", optional = true }
 schemars = { version = "0.8", optional = true }
 reqwest = { version = "0.12", features = ["json"] }
 chrono = "0.4"
@@ -82,3 +84,11 @@ path = "src/counter_hyper_streamable_http.rs"
 [[example]]
 name = "servers_sampling_stdio"
 path = "src/sampling_stdio.rs"
+
+[[example]]
+name = "servers_counter_sse_actix"
+path = "src/counter_sse_actix.rs"
+required-features = ["actix-web"]
+
+[features]
+actix-web = ["dep:actix-web", "dep:actix-rt", "rmcp/actix-web"]

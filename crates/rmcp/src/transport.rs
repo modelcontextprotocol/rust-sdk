@@ -105,8 +105,8 @@ pub use sse_client::SseClientTransport;
 #[cfg(feature = "transport-sse-server")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
 pub mod sse_server;
-#[cfg(feature = "transport-sse-server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
+#[cfg(all(feature = "transport-sse-server", any(feature = "axum", feature = "actix-web")))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-sse-server", any(feature = "axum", feature = "actix-web")))))]
 pub use sse_server::SseServer;
 
 #[cfg(feature = "auth")]
