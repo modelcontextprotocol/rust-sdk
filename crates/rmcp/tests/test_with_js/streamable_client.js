@@ -1,7 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:8001/mcp/`));
+const url = process.argv[2] || "http://127.0.0.1:8001/mcp/";
+const transport = new StreamableHTTPClientTransport(new URL(url));
 
 const client = new Client(
   {

@@ -1,4 +1,4 @@
-use std::{convert::Infallible, fmt::Display, sync::Arc, time::Duration};
+use std::{convert::Infallible, fmt::Display, sync::Arc};
 
 use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
@@ -7,7 +7,7 @@ use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::session::SessionManager;
+use super::{StreamableHttpServerConfig, session::SessionManager};
 use crate::{
     RoleServer,
     model::{ClientJsonRpcMessage, ClientRequest, GetExtensions},
@@ -26,23 +26,6 @@ use crate::{
         },
     },
 };
-
-#[derive(Debug, Clone)]
-pub struct StreamableHttpServerConfig {
-    /// The ping message duration for SSE connections.
-    pub sse_keep_alive: Option<Duration>,
-    /// If true, the server will create a session for each request and keep it alive.
-    pub stateful_mode: bool,
-}
-
-impl Default for StreamableHttpServerConfig {
-    fn default() -> Self {
-        Self {
-            sse_keep_alive: Some(Duration::from_secs(15)),
-            stateful_mode: true,
-        }
-    }
-}
 
 pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {
     pub config: StreamableHttpServerConfig,

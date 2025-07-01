@@ -88,6 +88,10 @@ path = "src/sampling_stdio.rs"
 [[example]]
 name = "servers_counter_sse_actix"
 path = "src/counter_sse_actix.rs"
+
+[[example]]
+name = "servers_counter_streamable_http_actix"
+path = "src/counter_streamable_http_actix.rs"
 required-features = ["actix-web"]
 
 [features]
