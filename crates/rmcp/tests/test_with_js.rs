@@ -22,9 +22,9 @@ use common::calculator::Calculator;
 
 const SSE_BIND_ADDRESS: &str = "127.0.0.1:8000";
 const STREAMABLE_HTTP_BIND_ADDRESS: &str = "127.0.0.1:8001";
+const STREAMABLE_HTTP_JS_BIND_ADDRESS: &str = "127.0.0.1:8002";
 #[cfg(feature = "actix-web")]
 const STREAMABLE_HTTP_ACTIX_BIND_ADDRESS: &str = "127.0.0.1:8004";
-const STREAMABLE_HTTP_JS_BIND_ADDRESS: &str = "127.0.0.1:8003";
 
 #[tokio::test]
 async fn test_with_js_client() -> anyhow::Result<()> {
