@@ -18,10 +18,10 @@ use crate::{
 };
 
 use super::common::{SseServerConfig, SessionId, session_id, DEFAULT_AUTO_PING_INTERVAL};
+use crate::transport::common::http_header::HEADER_X_ACCEL_BUFFERING;
 
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
-pub type TransportReceiver = ReceiverStream<RxJsonRpcMessage<RoleServer>>;
 
 #[derive(Clone, Debug)]
 struct AppData {
@@ -169,7 +169,7 @@ async fn sse_handler(
     Ok(HttpResponse::Ok()
         .content_type("text/event-stream")
         .insert_header(("Cache-Control", "no-cache"))
-        .insert_header(("X-Accel-Buffering", "no"))
+        .insert_header((HEADER_X_ACCEL_BUFFERING, "no"))
         .streaming(sse_stream))
 }
 

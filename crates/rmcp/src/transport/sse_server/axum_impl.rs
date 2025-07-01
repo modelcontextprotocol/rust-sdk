@@ -25,7 +25,6 @@ use super::common::{SseServerConfig, SessionId, session_id, DEFAULT_AUTO_PING_IN
 
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
-pub type TransportReceiver = ReceiverStream<RxJsonRpcMessage<RoleServer>>;
 
 #[derive(Clone)]
 struct App {

@@ -1,8 +1,14 @@
-use axum::Router;
 use rmcp::{
     ServiceExt,
-    transport::{ConfigureCommandExt, SseServer, TokioChildProcess, sse_server::SseServerConfig},
+    transport::{ConfigureCommandExt, TokioChildProcess, sse_server::SseServerConfig},
 };
+
+// Import framework-specific types
+#[cfg(feature = "axum")]
+use rmcp::transport::AxumSseServer;
+#[cfg(feature = "actix-web")]
+use rmcp::transport::ActixSseServer;
+
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -26,20 +32,12 @@ async fn init() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_with_python_client() -> anyhow::Result<()> {
-    init().await?;
-
-    const BIND_ADDRESS: &str = "127.0.0.1:8000";
-
-    let ct = SseServer::serve(BIND_ADDRESS.parse()?)
-        .await?
-        .with_service(Calculator::default);
-
+// Common test logic for Python client
+async fn test_with_python_client_common(bind_address: &str, ct: CancellationToken) -> anyhow::Result<()> {
     let status = tokio::process::Command::new("uv")
         .arg("run")
         .arg("client.py")
-        .arg(format!("http://{BIND_ADDRESS}/sse"))
+        .arg(format!("http://{bind_address}/sse"))
         .current_dir("tests/test_with_python")
         .spawn()?
         .wait()
@@ -49,9 +47,40 @@ async fn test_with_python_client() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "axum")]
+#[tokio::test]
+async fn test_with_python_client_axum() -> anyhow::Result<()> {
+    init().await?;
+
+    const BIND_ADDRESS: &str = "127.0.0.1:8000";
+
+    let ct = AxumSseServer::serve(BIND_ADDRESS.parse()?)
+        .await?
+        .with_service(Calculator::default);
+
+    test_with_python_client_common(BIND_ADDRESS, ct).await
+}
+
+#[cfg(feature = "actix-web")]
+#[tokio::test]
+async fn test_with_python_client_actix() -> anyhow::Result<()> {
+    init().await?;
+
+    const BIND_ADDRESS: &str = "127.0.0.1:8000";
+
+    let ct = ActixSseServer::serve(BIND_ADDRESS.parse()?)
+        .await?
+        .with_service(Calculator::default);
+
+    test_with_python_client_common(BIND_ADDRESS, ct).await
+}
+
 /// Test the SSE server in a nested Axum router.
+#[cfg(feature = "axum")]
 #[tokio::test]
 async fn test_nested_with_python_client() -> anyhow::Result<()> {
+    use axum::Router;
+    
     init().await?;
 
     const BIND_ADDRESS: &str = "127.0.0.1:8001";
@@ -67,7 +96,7 @@ async fn test_nested_with_python_client() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&sse_config.bind).await?;
 
-    let (sse_server, sse_router) = SseServer::new(sse_config);
+    let (sse_server, sse_router) = AxumSseServer::new(sse_config);
     let ct = sse_server.with_service(Calculator::default);
 
     let main_router = Router::new().nest("/nested", sse_router);
