@@ -1,3 +1,5 @@
+// Example of using SSE server transport with actix-web framework
+// This requires the "actix-web" feature to be enabled in Cargo.toml
 use rmcp::transport::sse_server::{SseServer, SseServerConfig};
 use tracing_subscriber::{
     layer::SubscriberExt,
@@ -9,6 +11,8 @@ use common::counter::Counter;
 
 const BIND_ADDRESS: &str = "127.0.0.1:8000";
 
+// Note: Using #[actix_web::main] instead of #[tokio::main]
+// This sets up the actix-web runtime which is required for actix-web transports
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -29,6 +33,8 @@ async fn main() -> anyhow::Result<()> {
 
     let ct_signal = config.ct.clone();
     
+    // When actix-web feature is enabled, SseServer uses actix-web implementation
+    // The same API works with both axum and actix-web
     let sse_server = SseServer::serve_with_config(config).await?;
     let bind_addr = sse_server.config.bind;
     let ct = sse_server.with_service(Counter::new);

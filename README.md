@@ -26,6 +26,17 @@ rmcp = { version = "0.1", features = ["server"] }
 ## or dev channel
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
+
+#### Web Framework Choice
+By default, rmcp uses [axum](https://github.com/tokio-rs/axum) for web server transports (SSE and streamable HTTP). You can also use [actix-web](https://github.com/actix/actix-web) as an alternative:
+
+```toml
+# For actix-web support
+rmcp = { version = "0.1", features = ["server", "actix-web"] }
+```
+
+**Note**: When both `axum` and `actix-web` features are enabled, actix-web takes precedence for convenience type aliases.
+
 ### Third Dependencies
 Basic dependencies:
 - [tokio required](https://github.com/tokio-rs/tokio)

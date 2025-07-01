@@ -51,6 +51,23 @@
 //! Next also implement [ServerHandler] for `Counter` and start the server inside
 //! `main` by calling `Counter::new().serve(...)`. See the examples directory in the repository for more information.
 //!
+//! ### Web Framework Support
+//!
+//! Server transports (SSE and streamable HTTP) support both axum (default) and actix-web:
+//!
+//! ```rust,ignore
+//! // Using actix-web (requires actix-web feature)
+//! use rmcp::{ServiceExt, transport::SseServer};
+//!
+//! #[actix_web::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
+//!     let ct = server.with_service(Counter::new);
+//!     ct.cancelled().await;
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Client
 //!
 //! A client can be used to interact with a server. Clients can be used to get a

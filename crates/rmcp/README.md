@@ -195,6 +195,9 @@ RMCP uses feature flags to control which components are included:
 - `client`: Enable client functionality
 - `server`: Enable server functionality and the tool system
 - `macros`: Enable the `#[tool]` macro (enabled by default)
+- Web framework features:
+  - `axum`: Axum web framework support (enabled by default)
+  - `actix-web`: actix-web framework support as an alternative to axum
 - Transport-specific features:
   - `transport-async-rw`: Async read/write support
   - `transport-io`: I/O stream support
@@ -204,15 +207,65 @@ RMCP uses feature flags to control which components are included:
 - `auth`: OAuth2 authentication support
 - `schemars`: JSON Schema generation (for tool definitions)
 
+**Note**: When both `axum` and `actix-web` features are enabled, actix-web implementations take precedence for convenience type aliases.
+
+
+## Web Framework Support
+
+SSE and streamable HTTP server transports support multiple web frameworks:
+
+### Using axum (default)
+```rust
+use rmcp::transport::SseServer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
+    let ct = server.with_service(|| Ok(MyService::new()));
+    ct.cancelled().await;
+    Ok(())
+}
+```
+
+### Using actix-web
+Enable the `actix-web` feature in your `Cargo.toml`:
+```toml
+rmcp = { version = "0.1", features = ["server", "actix-web"] }
+```
+
+Then use with actix-web runtime:
+```rust
+use rmcp::transport::SseServer;
+
+#[actix_web::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
+    let ct = server.with_service(|| Ok(MyService::new()));
+    ct.cancelled().await;
+    Ok(())
+}
+```
+
+### Framework-specific imports
+When you need to use a specific framework implementation:
+```rust
+// For axum
+#[cfg(feature = "axum")]
+use rmcp::transport::sse_server::axum::SseServer;
+
+// For actix-web
+#[cfg(feature = "actix-web")]
+use rmcp::transport::sse_server::actix_web::SseServer;
+```
 
 ## Transports
 
 - `transport-io`: Server stdio transport
-- `transport-sse-server`: Server SSE transport
+- `transport-sse-server`: Server SSE transport (supports both axum and actix-web)
 - `transport-child-process`: Client stdio transport
 - `transport-sse-client`: Client sse transport
-- `transport-streamable-http-server` streamable http server transport
-- `transport-streamable-http-client` streamable http client transport
+- `transport-streamable-http-server`: Streamable HTTP server transport (supports both axum and actix-web)
+- `transport-streamable-http-client`: Streamable HTTP client transport
 
 <details>
 <summary>Transport</summary>
