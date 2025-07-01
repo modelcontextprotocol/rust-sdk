@@ -130,6 +130,7 @@ transport-streamable-http-server = [
 transport-streamable-http-server-session = [
     "transport-async-rw",
     "dep:tokio-stream",
+    "transport-worker",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
