@@ -1,14 +1,12 @@
+// Import framework-specific types
+#[cfg(feature = "actix-web")]
+use rmcp::transport::sse_server::actix_web::SseServer as ActixSseServer;
+#[cfg(feature = "axum")]
+use rmcp::transport::sse_server::axum::SseServer as AxumSseServer;
 use rmcp::{
     ServiceExt,
     transport::{ConfigureCommandExt, TokioChildProcess, sse_server::SseServerConfig},
 };
-
-// Import framework-specific types
-#[cfg(feature = "axum")]
-use rmcp::transport::sse_server::axum::SseServer as AxumSseServer;
-#[cfg(feature = "actix-web")]
-use rmcp::transport::sse_server::actix_web::SseServer as ActixSseServer;
-
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -33,7 +31,10 @@ async fn init() -> anyhow::Result<()> {
 }
 
 // Common test logic for Python client
-async fn test_with_python_client_common(bind_address: &str, ct: CancellationToken) -> anyhow::Result<()> {
+async fn test_with_python_client_common(
+    bind_address: &str,
+    ct: CancellationToken,
+) -> anyhow::Result<()> {
     let status = tokio::process::Command::new("uv")
         .arg("run")
         .arg("client.py")
@@ -80,7 +81,7 @@ async fn test_with_python_client_actix() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_nested_with_python_client() -> anyhow::Result<()> {
     use axum::Router;
-    
+
     init().await?;
 
     const BIND_ADDRESS: &str = "127.0.0.1:8001";

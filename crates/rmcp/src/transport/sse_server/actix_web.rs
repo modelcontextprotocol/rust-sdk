@@ -12,14 +12,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
 use tracing::Instrument;
 
+use super::common::{DEFAULT_AUTO_PING_INTERVAL, SessionId, SseServerConfig, session_id};
 use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage, serve_directly_with_ct},
+    transport::common::http_header::HEADER_X_ACCEL_BUFFERING,
 };
-
-use super::common::{SseServerConfig, SessionId, session_id, DEFAULT_AUTO_PING_INTERVAL};
-use crate::transport::common::http_header::HEADER_X_ACCEL_BUFFERING;
 
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
@@ -67,41 +66,39 @@ async fn post_event_handler(
 ) -> Result<HttpResponse> {
     let session_id = &query.session_id;
     tracing::debug!(session_id, ?message, "new client message");
-    
+
     let tx = {
         let rg = app_data.txs.read().await;
         rg.get(session_id.as_str())
             .ok_or_else(|| actix_web::error::ErrorNotFound("Session not found"))?
             .clone()
     };
-    
+
     // Note: In actix-web, we don't have direct access to modify extensions
     // This would need a different approach for passing HTTP request context
-    
+
     if tx.send(message.0).await.is_err() {
         tracing::error!("send message error");
         return Err(actix_web::error::ErrorGone("Session closed"));
     }
-    
+
     Ok(HttpResponse::Accepted().finish())
 }
 
-async fn sse_handler(
-    app_data: Data<AppData>,
-    _req: HttpRequest,
-) -> Result<HttpResponse> {
+async fn sse_handler(app_data: Data<AppData>, _req: HttpRequest) -> Result<HttpResponse> {
     let session = session_id();
     tracing::info!(%session, "sse connection");
-    
+
     let (from_client_tx, from_client_rx) = tokio::sync::mpsc::channel(64);
     let (to_client_tx, to_client_rx) = tokio::sync::mpsc::channel(64);
     let to_client_tx_clone = to_client_tx.clone();
 
-    app_data.txs
+    app_data
+        .txs
         .write()
         .await
         .insert(session.clone(), from_client_tx);
-    
+
     let _session_id = session.clone();
     let stream = ReceiverStream::new(from_client_rx);
     let sink = PollSender::new(to_client_tx);
@@ -111,17 +108,19 @@ async fn sse_handler(
         session_id: session.clone(),
         tx_store: app_data.txs.clone(),
     };
-    
+
     let transport_send_result = app_data.transport_tx.send(transport);
     if transport_send_result.is_err() {
         tracing::warn!("send transport out error");
-        return Err(ErrorInternalServerError("Failed to send transport, server is closed"));
+        return Err(ErrorInternalServerError(
+            "Failed to send transport, server is closed",
+        ));
     }
-    
+
     let post_path = app_data.post_path.clone();
     let ping_interval = app_data.sse_ping_interval;
     let session_for_stream = session.clone();
-    
+
     // Create SSE response stream
     let sse_stream = async_stream::stream! {
         // Send initial endpoint message
@@ -129,13 +128,13 @@ async fn sse_handler(
             "event: endpoint\ndata: {}?sessionId={}\n\n",
             post_path, session_for_stream
         )));
-        
+
         // Set up ping interval
         let mut ping_interval = tokio::time::interval(ping_interval);
         ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        
+
         let mut rx = ReceiverStream::new(to_client_rx);
-        
+
         loop {
             tokio::select! {
                 Some(message) = rx.next() => {
@@ -155,18 +154,18 @@ async fn sse_handler(
             }
         }
     };
-    
+
     // Clean up on disconnect
     let app_data_clone = app_data.clone();
     let session_for_cleanup = session.clone();
     actix_rt::spawn(async move {
         to_client_tx_clone.closed().await;
-        
+
         let mut txs = app_data_clone.txs.write().await;
         txs.remove(&session_for_cleanup);
         tracing::debug!(%session_for_cleanup, "Closed session and cleaned up resources");
     });
-    
+
     Ok(HttpResponse::Ok()
         .content_type("text/event-stream")
         .insert_header(("Cache-Control", "no-cache"))
@@ -259,23 +258,23 @@ impl SseServer {
         })
         .await
     }
-    
+
     pub async fn serve_with_config(mut config: SseServerConfig) -> io::Result<Self> {
         let bind_addr = config.bind;
         let ct = config.ct.clone();
-        
+
         // First bind to get the actual address
         let listener = std::net::TcpListener::bind(bind_addr)?;
         let actual_addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
-        
+
         // Update config with actual address
         config.bind = actual_addr;
         let (sse_server, _) = Self::new(config);
         let app_data = sse_server.app_data.clone();
         let sse_path = sse_server.config.sse_path.clone();
         let post_path = sse_server.config.post_path.clone();
-        
+
         let server = actix_web::HttpServer::new(move || {
             actix_web::App::new()
                 .app_data(app_data.clone())
@@ -285,16 +284,16 @@ impl SseServer {
         })
         .listen(listener)?
         .run();
-        
+
         let ct_child = ct.child_token();
         let server_handle = server.handle();
-        
+
         actix_rt::spawn(async move {
             ct_child.cancelled().await;
             tracing::info!("sse server cancelled");
             server_handle.stop(true).await;
         });
-        
+
         actix_rt::spawn(
             async move {
                 if let Err(e) = server.await {
@@ -303,7 +302,7 @@ impl SseServer {
             }
             .instrument(tracing::info_span!("sse-server", bind_address = %actual_addr)),
         );
-        
+
         Ok(sse_server)
     }
 
@@ -312,17 +311,17 @@ impl SseServer {
             config.post_path.clone(),
             config.sse_keep_alive.unwrap_or(DEFAULT_AUTO_PING_INTERVAL),
         );
-        
+
         let sse_path = config.sse_path.clone();
         let post_path = config.post_path.clone();
-        
+
         let app_data = Data::new(app_data);
-        
+
         let scope = web::scope("")
             .app_data(app_data.clone())
             .route(&sse_path, web::get().to(sse_handler))
             .route(&post_path, web::post().to(post_event_handler));
-        
+
         let server = SseServer {
             transport_rx: Arc::new(Mutex::new(transport_rx)),
             config,
@@ -340,7 +339,7 @@ impl SseServer {
         use crate::service::ServiceExt;
         let ct = self.config.ct.clone();
         let transport_rx = self.transport_rx.clone();
-        
+
         actix_rt::spawn(async move {
             while let Some(transport) = transport_rx.lock().await.recv().await {
                 let service = service_provider();
@@ -366,7 +365,7 @@ impl SseServer {
     {
         let ct = self.config.ct.clone();
         let transport_rx = self.transport_rx.clone();
-        
+
         actix_rt::spawn(async move {
             while let Some(transport) = transport_rx.lock().await.recv().await {
                 let service = service_provider();
@@ -410,30 +409,32 @@ impl Stream for SseServer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures::{SinkExt, StreamExt};
     use tokio::time::timeout;
 
+    use super::*;
+
     #[tokio::test]
     async fn test_session_management() {
-        let (app_data, transport_rx) = AppData::new("/message".to_string(), Duration::from_secs(15));
-        
+        let (app_data, transport_rx) =
+            AppData::new("/message".to_string(), Duration::from_secs(15));
+
         // Create a session
         let session_id = session_id();
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
-        
+
         // Insert session
         app_data.txs.write().await.insert(session_id.clone(), tx);
-        
+
         // Verify session exists
         assert!(app_data.txs.read().await.contains_key(&session_id));
-        
+
         // Remove session
         app_data.txs.write().await.remove(&session_id);
-        
+
         // Verify session removed
         assert!(!app_data.txs.read().await.contains_key(&session_id));
-        
+
         drop(transport_rx);
     }
 
@@ -446,12 +447,12 @@ mod tests {
             ct: CancellationToken::new(),
             sse_keep_alive: Some(Duration::from_secs(15)),
         };
-        
+
         let (sse_server, scope) = SseServer::new(config);
-        
+
         assert_eq!(sse_server.config.sse_path, "/sse");
         assert_eq!(sse_server.config.post_path, "/message");
-        
+
         // Scope should be properly configured
         drop(scope); // Just ensure it's created without panic
     }
@@ -462,59 +463,61 @@ mod tests {
         let stream = ReceiverStream::new(rx);
         let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(1);
         let sink = PollSender::new(sink_tx);
-        
+
         let mut transport = SseServerTransport {
             stream,
             sink,
             session_id: session_id(),
             tx_store: Default::default(),
         };
-        
+
         // Test sending through transport
-        use crate::model::{ServerResult, EmptyResult, JsonRpcMessage};
-        let msg: TxJsonRpcMessage<RoleServer> = JsonRpcMessage::Response(crate::model::JsonRpcResponse {
-            jsonrpc: crate::model::JsonRpcVersion2_0,
-            id: crate::model::NumberOrString::Number(1),
-            result: ServerResult::EmptyResult(EmptyResult {}),
-        });
+        use crate::model::{EmptyResult, JsonRpcMessage, ServerResult};
+        let msg: TxJsonRpcMessage<RoleServer> =
+            JsonRpcMessage::Response(crate::model::JsonRpcResponse {
+                jsonrpc: crate::model::JsonRpcVersion2_0,
+                id: crate::model::NumberOrString::Number(1),
+                result: ServerResult::EmptyResult(EmptyResult {}),
+            });
         // For PollSender, we need to send through async context
         transport.send(msg).await.unwrap();
-        
+
         // Should receive the message
         let received = timeout(Duration::from_millis(100), sink_rx.recv())
             .await
             .unwrap()
             .unwrap();
-        
+
         match received {
-            TxJsonRpcMessage::<RoleServer>::Response(_) => {},
+            TxJsonRpcMessage::<RoleServer>::Response(_) => {}
             _ => panic!("Unexpected message type"),
         }
-        
+
         // Test receiving through transport
-        let client_msg: RxJsonRpcMessage<RoleServer> = crate::model::JsonRpcMessage::Notification(crate::model::JsonRpcNotification {
-            jsonrpc: crate::model::JsonRpcVersion2_0,
-            notification: crate::model::ClientNotification::CancelledNotification(
-                crate::model::Notification {
-                    method: crate::model::CancelledNotificationMethod,
-                    params: crate::model::CancelledNotificationParam {
-                        request_id: crate::model::NumberOrString::Number(1),
-                        reason: None,
+        let client_msg: RxJsonRpcMessage<RoleServer> =
+            crate::model::JsonRpcMessage::Notification(crate::model::JsonRpcNotification {
+                jsonrpc: crate::model::JsonRpcVersion2_0,
+                notification: crate::model::ClientNotification::CancelledNotification(
+                    crate::model::Notification {
+                        method: crate::model::CancelledNotificationMethod,
+                        params: crate::model::CancelledNotificationParam {
+                            request_id: crate::model::NumberOrString::Number(1),
+                            reason: None,
+                        },
+                        extensions: Default::default(),
                     },
-                    extensions: Default::default(),
-                }
-            ),
-        });
+                ),
+            });
         tx.send(client_msg).await.unwrap();
         drop(tx);
-        
+
         let received = timeout(Duration::from_millis(100), transport.next())
             .await
             .unwrap()
             .unwrap();
-        
+
         match received {
-            RxJsonRpcMessage::<RoleServer>::Notification(_) => {},
+            RxJsonRpcMessage::<RoleServer>::Notification(_) => {}
             _ => panic!("Unexpected message type"),
         }
     }
@@ -522,14 +525,14 @@ mod tests {
     #[actix_web::test]
     async fn test_post_event_handler_session_not_found() {
         use actix_web::test;
-        
+
         let (app_data, _) = AppData::new("/message".to_string(), Duration::from_secs(15));
         let app_data = Data::new(app_data);
-        
+
         let query = PostEventQuery {
             session_id: "non-existent".to_string(),
         };
-        
+
         // Create a simple cancelled notification
         let client_msg = ClientJsonRpcMessage::Notification(crate::model::JsonRpcNotification {
             jsonrpc: crate::model::JsonRpcVersion2_0,
@@ -541,17 +544,18 @@ mod tests {
                         reason: None,
                     },
                     extensions: Default::default(),
-                }
+                },
             ),
         });
-        
+
         let result = post_event_handler(
             app_data,
             Query(query),
             test::TestRequest::default().to_http_request(),
             Json(client_msg),
-        ).await;
-        
+        )
+        .await;
+
         assert!(result.is_err());
     }
 
@@ -564,40 +568,42 @@ mod tests {
             ct: CancellationToken::new(),
             sse_keep_alive: None,
         };
-        
+
         let ct = config.ct.clone();
         let (sse_server, _) = SseServer::new(config);
-        
+
         // Test that the cancellation token is properly connected
         assert!(!ct.is_cancelled());
         ct.cancel();
         assert!(ct.is_cancelled());
-        
+
         // Verify server config
         assert!(sse_server.config.ct.is_cancelled());
     }
 
     #[actix_web::test]
     async fn test_sse_stream_generation() {
-        let (app_data, mut transport_rx) = AppData::new("/message".to_string(), Duration::from_secs(15));
+        let (app_data, mut transport_rx) =
+            AppData::new("/message".to_string(), Duration::from_secs(15));
         let app_data = Data::new(app_data);
-        
+
         // Call SSE handler
         let result = sse_handler(
             app_data.clone(),
             actix_web::test::TestRequest::default().to_http_request(),
-        ).await;
-        
+        )
+        .await;
+
         assert!(result.is_ok());
         let response = result.unwrap();
-        
+
         // Check response headers
         assert_eq!(response.status(), actix_web::http::StatusCode::OK);
         assert_eq!(
             response.headers().get("content-type").unwrap(),
             "text/event-stream"
         );
-        
+
         // Verify a transport was created
         let transport = transport_rx.try_recv();
         assert!(transport.is_ok());

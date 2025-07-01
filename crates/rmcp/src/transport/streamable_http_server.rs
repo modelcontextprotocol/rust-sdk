@@ -54,19 +54,27 @@ impl Default for StreamableHttpServerConfig {
 
 // Axum implementation
 #[cfg(all(feature = "transport-streamable-http-server", feature = "axum"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", feature = "axum"))))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "transport-streamable-http-server", feature = "axum")))
+)]
 pub mod axum;
 
 // Actix-web implementation
 #[cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "transport-streamable-http-server", feature = "actix-web")))
+)]
 pub mod actix_web;
 
 // Export the preferred implementation as StreamableHttpService (without generic parameters)
 #[cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))]
 pub use actix_web::StreamableHttpService;
-
-#[cfg(all(feature = "transport-streamable-http-server", feature = "axum", not(feature = "actix-web")))]
+#[cfg(all(
+    feature = "transport-streamable-http-server",
+    feature = "axum",
+    not(feature = "actix-web")
+))]
 pub use axum::StreamableHttpService;
-
 pub use session::{SessionId, SessionManager};

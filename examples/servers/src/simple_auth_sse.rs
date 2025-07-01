@@ -16,7 +16,7 @@ use axum::{
     response::{Html, Response},
     routing::get,
 };
-use rmcp::transport::{SseServer, sse_server::SseServerConfig};
+use rmcp::transport::sse_server::{SseServerConfig, axum::SseServer};
 use tokio_util::sync::CancellationToken;
 mod common;
 use common::counter::Counter;

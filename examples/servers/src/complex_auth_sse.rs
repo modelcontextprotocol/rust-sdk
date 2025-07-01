@@ -13,12 +13,11 @@ use axum::{
 };
 use rand::{Rng, distr::Alphanumeric};
 use rmcp::transport::{
-    SseServer,
     auth::{
         AuthorizationMetadata, ClientRegistrationRequest, ClientRegistrationResponse,
         OAuthClientConfig,
     },
-    sse_server::SseServerConfig,
+    sse_server::{SseServerConfig, axum::SseServer},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

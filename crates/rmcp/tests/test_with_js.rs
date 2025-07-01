@@ -1,20 +1,16 @@
+// Import framework-specific types
+#[cfg(feature = "actix-web")]
+use rmcp::transport::streamable_http_server::actix_web::StreamableHttpService as ActixStreamableHttpService;
+#[cfg(feature = "axum")]
+use rmcp::transport::streamable_http_server::axum::StreamableHttpService as AxumStreamableHttpService;
 use rmcp::{
     ServiceExt,
     service::QuitReason,
     transport::{
         ConfigureCommandExt, SseServer, StreamableHttpClientTransport, StreamableHttpServerConfig,
-        TokioChildProcess,
-        streamable_http_server::{
-            session::local::LocalSessionManager,
-        },
+        TokioChildProcess, streamable_http_server::session::local::LocalSessionManager,
     },
 };
-
-// Import framework-specific types
-#[cfg(feature = "axum")]
-use rmcp::transport::streamable_http_server::axum::StreamableHttpService as AxumStreamableHttpService;
-#[cfg(feature = "actix-web")]
-use rmcp::transport::streamable_http_server::actix_web::StreamableHttpService as ActixStreamableHttpService;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
@@ -151,40 +147,45 @@ async fn test_with_js_streamable_http_client_actix() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let service = std::sync::Arc::new(ActixStreamableHttpService::<Calculator, LocalSessionManager>::new(
-        || Ok(Calculator::new()),
-        Default::default(),
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: None,
-        },
-    ));
-    
+    let service = std::sync::Arc::new(
+        ActixStreamableHttpService::<Calculator, LocalSessionManager>::new(
+            || Ok(Calculator::new()),
+            Default::default(),
+            StreamableHttpServerConfig {
+                stateful_mode: true,
+                sse_keep_alive: None,
+            },
+        ),
+    );
+
     let server = actix_web::HttpServer::new(move || {
         actix_web::App::new()
             .wrap(actix_web::middleware::Logger::default())
             .service(
                 actix_web::web::scope("/mcp")
-                    .configure(ActixStreamableHttpService::configure(service.clone()))
+                    .configure(ActixStreamableHttpService::configure(service.clone())),
             )
     })
     .bind(STREAMABLE_HTTP_ACTIX_BIND_ADDRESS)?
     .run();
-    
+
     let server_handle = server.handle();
     let server_task = tokio::spawn(server);
-    
+
     // Give the server a moment to start
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
+
     let exit_status = tokio::process::Command::new("node")
         .arg("tests/test_with_js/streamable_client.js")
-        .arg(format!("http://{}/mcp/", STREAMABLE_HTTP_ACTIX_BIND_ADDRESS))
+        .arg(format!(
+            "http://{}/mcp/",
+            STREAMABLE_HTTP_ACTIX_BIND_ADDRESS
+        ))
         .spawn()?
         .wait()
         .await?;
     assert!(exit_status.success());
-    
+
     server_handle.stop(true).await;
     let _ = server_task.await;
     Ok(())

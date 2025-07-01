@@ -15,13 +15,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::{CancellationToken, PollSender};
 use tracing::Instrument;
 
+use super::common::{DEFAULT_AUTO_PING_INTERVAL, SessionId, SseServerConfig, session_id};
 use crate::{
     RoleServer, Service,
     model::ClientJsonRpcMessage,
     service::{RxJsonRpcMessage, TxJsonRpcMessage, serve_directly_with_ct},
 };
-
-use super::common::{SseServerConfig, SessionId, session_id, DEFAULT_AUTO_PING_INTERVAL};
 
 type TxStore =
     Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::mpsc::Sender<ClientJsonRpcMessage>>>>;
@@ -214,7 +213,6 @@ impl Stream for SseServerTransport {
     }
 }
 
-
 #[derive(Debug)]
 pub struct SseServer {
     transport_rx: tokio::sync::mpsc::UnboundedReceiver<SseServerTransport>,
@@ -338,30 +336,31 @@ impl Stream for SseServer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures::{SinkExt, StreamExt};
     use tokio::time::timeout;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_session_management() {
         let (app, transport_rx) = App::new("/message".to_string(), Duration::from_secs(15));
-        
+
         // Create a session
         let session_id = session_id();
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
-        
+
         // Insert session
         app.txs.write().await.insert(session_id.clone(), tx);
-        
+
         // Verify session exists
         assert!(app.txs.read().await.contains_key(&session_id));
-        
+
         // Remove session
         app.txs.write().await.remove(&session_id);
-        
+
         // Verify session removed
         assert!(!app.txs.read().await.contains_key(&session_id));
-        
+
         drop(transport_rx);
     }
 
@@ -374,12 +373,12 @@ mod tests {
             ct: CancellationToken::new(),
             sse_keep_alive: Some(Duration::from_secs(15)),
         };
-        
+
         let (sse_server, router) = SseServer::new(config);
-        
+
         assert_eq!(sse_server.config.sse_path, "/sse");
         assert_eq!(sse_server.config.post_path, "/message");
-        
+
         // Router should be properly configured
         drop(router); // Just ensure it's created without panic
     }
@@ -390,75 +389,79 @@ mod tests {
         let stream = ReceiverStream::new(rx);
         let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(1);
         let sink = PollSender::new(sink_tx);
-        
+
         let mut transport = SseServerTransport {
             stream,
             sink,
             session_id: session_id(),
             tx_store: Default::default(),
         };
-        
+
         // Test sending through transport
-        use crate::model::{ServerResult, EmptyResult, JsonRpcMessage};
-        let msg: TxJsonRpcMessage<RoleServer> = JsonRpcMessage::Response(crate::model::JsonRpcResponse {
-            jsonrpc: crate::model::JsonRpcVersion2_0,
-            id: crate::model::NumberOrString::Number(1),
-            result: ServerResult::EmptyResult(EmptyResult {}),
-        });
+        use crate::model::{EmptyResult, JsonRpcMessage, ServerResult};
+        let msg: TxJsonRpcMessage<RoleServer> =
+            JsonRpcMessage::Response(crate::model::JsonRpcResponse {
+                jsonrpc: crate::model::JsonRpcVersion2_0,
+                id: crate::model::NumberOrString::Number(1),
+                result: ServerResult::EmptyResult(EmptyResult {}),
+            });
         // For PollSender, we need to send through async context
         transport.send(msg).await.unwrap();
-        
+
         // Should receive the message
         let received = timeout(Duration::from_millis(100), sink_rx.recv())
             .await
             .unwrap()
             .unwrap();
-        
+
         match received {
-            TxJsonRpcMessage::<RoleServer>::Response(_) => {},
+            TxJsonRpcMessage::<RoleServer>::Response(_) => {}
             _ => panic!("Unexpected message type"),
         }
-        
-        // Test receiving through transport  
-        let client_msg: RxJsonRpcMessage<RoleServer> = crate::model::JsonRpcMessage::Notification(crate::model::JsonRpcNotification {
-            jsonrpc: crate::model::JsonRpcVersion2_0,
-            notification: crate::model::ClientNotification::CancelledNotification(
-                crate::model::Notification {
-                    method: crate::model::CancelledNotificationMethod,
-                    params: crate::model::CancelledNotificationParam {
-                        request_id: crate::model::NumberOrString::Number(1),
-                        reason: None,
+
+        // Test receiving through transport
+        let client_msg: RxJsonRpcMessage<RoleServer> =
+            crate::model::JsonRpcMessage::Notification(crate::model::JsonRpcNotification {
+                jsonrpc: crate::model::JsonRpcVersion2_0,
+                notification: crate::model::ClientNotification::CancelledNotification(
+                    crate::model::Notification {
+                        method: crate::model::CancelledNotificationMethod,
+                        params: crate::model::CancelledNotificationParam {
+                            request_id: crate::model::NumberOrString::Number(1),
+                            reason: None,
+                        },
+                        extensions: Default::default(),
                     },
-                    extensions: Default::default(),
-                }
-            ),
-        });
+                ),
+            });
         tx.send(client_msg).await.unwrap();
         drop(tx);
-        
+
         let received = timeout(Duration::from_millis(100), transport.next())
             .await
             .unwrap()
             .unwrap();
-        
+
         match received {
-            RxJsonRpcMessage::<RoleServer>::Notification(_) => {},
+            RxJsonRpcMessage::<RoleServer>::Notification(_) => {}
             _ => panic!("Unexpected message type"),
         }
     }
 
     #[tokio::test]
     async fn test_post_event_handler_session_not_found() {
-        use axum::extract::{Query, State};
-        use axum::Json;
-        use axum::http::Request;
-        
+        use axum::{
+            Json,
+            extract::{Query, State},
+            http::Request,
+        };
+
         let (app, _) = App::new("/message".to_string(), Duration::from_secs(15));
-        
+
         let query = PostEventQuery {
             session_id: "non-existent".to_string(),
         };
-        
+
         // Create a minimal request parts
         let request = Request::builder()
             .method("POST")
@@ -466,7 +469,7 @@ mod tests {
             .body(())
             .unwrap();
         let (parts, _) = request.into_parts();
-        
+
         // Create a simple cancelled notification
         let client_msg = ClientJsonRpcMessage::Notification(crate::model::JsonRpcNotification {
             jsonrpc: crate::model::JsonRpcVersion2_0,
@@ -478,21 +481,16 @@ mod tests {
                         reason: None,
                     },
                     extensions: Default::default(),
-                }
+                },
             ),
         });
-        
-        let result = post_event_handler(
-            State(app),
-            Query(query),
-            parts,
-            Json(client_msg),
-        ).await;
-        
+
+        let result = post_event_handler(State(app), Query(query), parts, Json(client_msg)).await;
+
         assert_eq!(result, Err(StatusCode::NOT_FOUND));
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_server_with_cancellation() {
         let config = SseServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
@@ -501,13 +499,13 @@ mod tests {
             ct: CancellationToken::new(),
             sse_keep_alive: None,
         };
-        
+
         let ct_clone = config.ct.clone();
         let (mut sse_server, _) = SseServer::new(config);
-        
+
         // Cancel immediately
         ct_clone.cancel();
-        
+
         // next_transport should return None after cancellation
         let transport = timeout(Duration::from_millis(100), sse_server.next_transport()).await;
         assert!(transport.is_ok());

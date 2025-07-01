@@ -44,10 +44,12 @@ pub mod actix_web;
 // Convenience type alias
 #[cfg(all(feature = "transport-sse-server", feature = "actix-web"))]
 pub use actix_web::SseServer;
-
-#[cfg(all(feature = "transport-sse-server", feature = "axum", not(feature = "actix-web")))]
+#[cfg(all(
+    feature = "transport-sse-server",
+    feature = "axum",
+    not(feature = "actix-web")
+))]
 pub use axum::SseServer;
-
 // Re-export common types when transport-sse-server is enabled
 #[cfg(feature = "transport-sse-server")]
-pub use common::{SseServerConfig, SessionId, session_id, DEFAULT_AUTO_PING_INTERVAL};
+pub use common::{DEFAULT_AUTO_PING_INTERVAL, SessionId, SseServerConfig, session_id};

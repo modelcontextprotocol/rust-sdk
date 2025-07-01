@@ -3,7 +3,7 @@ use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_router, tool_handler,
+    schemars, tool, tool_handler, tool_router,
 };
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SumRequest {

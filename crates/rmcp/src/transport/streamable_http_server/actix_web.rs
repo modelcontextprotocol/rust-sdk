@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use actix_web::{
-    HttpRequest, HttpResponse, Result, error::InternalError, http::{StatusCode, header}, middleware, web::{self, Bytes, Data},
+    HttpRequest, HttpResponse, Result,
+    error::InternalError,
+    http::{StatusCode, header},
+    middleware,
+    web::{self, Bytes, Data},
 };
 use futures::{Stream, StreamExt};
 use tokio_stream::wrappers::ReceiverStream;
@@ -14,10 +18,9 @@ use crate::{
     service::serve_directly,
     transport::{
         OneshotTransport, TransportAdapterIdentity,
-        common::{
-            http_header::{
-                EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, HEADER_X_ACCEL_BUFFERING, JSON_MIME_TYPE,
-            },
+        common::http_header::{
+            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID,
+            HEADER_X_ACCEL_BUFFERING, JSON_MIME_TYPE,
         },
     },
 };
@@ -59,7 +62,7 @@ where
                     .wrap(middleware::NormalizePath::trim())
                     .route("", web::get().to(Self::handle_get))
                     .route("", web::post().to(Self::handle_post))
-                    .route("", web::delete().to(Self::handle_delete))
+                    .route("", web::delete().to(Self::handle_delete)),
             );
         }
     }
@@ -73,7 +76,7 @@ where
             .headers()
             .get(header::ACCEPT)
             .and_then(|h| h.to_str().ok());
-        
+
         if !accept.is_some_and(|header| header.contains(EVENT_STREAM_MIME_TYPE)) {
             return Ok(HttpResponse::NotAcceptable()
                 .body("Not Acceptable: Client must accept text/event-stream"));
@@ -85,12 +88,11 @@ where
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
-        
+
         let Some(session_id) = session_id else {
-            return Ok(HttpResponse::Unauthorized()
-                .body("Unauthorized: Session ID is required"));
+            return Ok(HttpResponse::Unauthorized().body("Unauthorized: Session ID is required"));
         };
-        
+
         tracing::debug!(%session_id, "GET request for SSE stream");
 
         // Check if session exists
@@ -99,10 +101,9 @@ where
             .has_session(&session_id)
             .await
             .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-        
+
         if !has_session {
-            return Ok(HttpResponse::Unauthorized()
-                .body("Unauthorized: Session not found"));
+            return Ok(HttpResponse::Unauthorized().body("Unauthorized: Session not found"));
         }
 
         // Check if last event id is provided
@@ -113,28 +114,33 @@ where
             .map(|s| s.to_owned());
 
         // Get the appropriate stream
-        let sse_stream: std::pin::Pin<Box<dyn Stream<Item = _> + Send>> = if let Some(last_event_id) = last_event_id {
-            tracing::debug!(%session_id, %last_event_id, "Resuming stream from last event");
-            Box::pin(service
-                .session_manager
-                .resume(&session_id, last_event_id)
-                .await
-                .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?)
-        } else {
-            tracing::debug!(%session_id, "Creating standalone stream");
-            Box::pin(service
-                .session_manager
-                .create_standalone_stream(&session_id)
-                .await
-                .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?)
-        };
+        let sse_stream: std::pin::Pin<Box<dyn Stream<Item = _> + Send>> =
+            if let Some(last_event_id) = last_event_id {
+                tracing::debug!(%session_id, %last_event_id, "Resuming stream from last event");
+                Box::pin(
+                    service
+                        .session_manager
+                        .resume(&session_id, last_event_id)
+                        .await
+                        .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?,
+                )
+            } else {
+                tracing::debug!(%session_id, "Creating standalone stream");
+                Box::pin(
+                    service
+                        .session_manager
+                        .create_standalone_stream(&session_id)
+                        .await
+                        .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?,
+                )
+            };
 
         // Convert to SSE format
         let keep_alive = service.config.sse_keep_alive;
         let sse_stream = async_stream::stream! {
             let mut stream = sse_stream;
             let mut keep_alive_timer = keep_alive.map(|duration| tokio::time::interval(duration));
-            
+
             loop {
                 tokio::select! {
                     Some(msg) = stream.next() => {
@@ -181,12 +187,13 @@ where
             .headers()
             .get(header::ACCEPT)
             .and_then(|h| h.to_str().ok());
-        
+
         if !accept.is_some_and(|header| {
             header.contains(JSON_MIME_TYPE) && header.contains(EVENT_STREAM_MIME_TYPE)
         }) {
-            return Ok(HttpResponse::NotAcceptable()
-                .body("Not Acceptable: Client must accept both application/json and text/event-stream"));
+            return Ok(HttpResponse::NotAcceptable().body(
+                "Not Acceptable: Client must accept both application/json and text/event-stream",
+            ));
         }
 
         // Check content type
@@ -194,7 +201,7 @@ where
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|h| h.to_str().ok());
-        
+
         if !content_type.is_some_and(|header| header.starts_with(JSON_MIME_TYPE)) {
             return Ok(HttpResponse::UnsupportedMediaType()
                 .body("Unsupported Media Type: Content-Type must be application/json"));
@@ -203,7 +210,7 @@ where
         // Deserialize the message
         let mut message: ClientJsonRpcMessage = serde_json::from_slice(&body)
             .map_err(|e| InternalError::new(e, StatusCode::BAD_REQUEST))?;
-        
+
         tracing::debug!(?message, "POST request with message");
 
         if service.config.stateful_mode {
@@ -212,21 +219,20 @@ where
                 .headers()
                 .get(HEADER_SESSION_ID)
                 .and_then(|v| v.to_str().ok());
-            
+
             if let Some(session_id) = session_id {
                 let session_id = session_id.to_owned().into();
                 tracing::debug!(%session_id, "POST request with existing session");
-                
+
                 let has_session = service
                     .session_manager
                     .has_session(&session_id)
                     .await
                     .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                
+
                 if !has_session {
                     tracing::warn!(%session_id, "Session not found");
-                    return Ok(HttpResponse::Unauthorized()
-                        .body("Unauthorized: Session not found"));
+                    return Ok(HttpResponse::Unauthorized().body("Unauthorized: Session not found"));
                 }
 
                 // Note: In actix-web we can't inject request parts like in tower,
@@ -238,14 +244,16 @@ where
                             .session_manager
                             .create_stream(&session_id, message)
                             .await
-                            .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                        
+                            .map_err(|e| {
+                                InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR)
+                            })?;
+
                         // Convert to SSE format
                         let keep_alive = service.config.sse_keep_alive;
                         let sse_stream = async_stream::stream! {
                             let mut stream = Box::pin(stream);
                             let mut keep_alive_timer = keep_alive.map(|duration| tokio::time::interval(duration));
-                            
+
                             loop {
                                 tokio::select! {
                                     Some(msg) = stream.next() => {
@@ -289,11 +297,14 @@ where
                             .session_manager
                             .accept_message(&session_id, message)
                             .await
-                            .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                        
+                            .map_err(|e| {
+                                InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR)
+                            })?;
+
                         Ok(HttpResponse::Accepted().finish())
                     }
-                    ClientJsonRpcMessage::BatchRequest(_) | ClientJsonRpcMessage::BatchResponse(_) => {
+                    ClientJsonRpcMessage::BatchRequest(_)
+                    | ClientJsonRpcMessage::BatchResponse(_) => {
                         Ok(HttpResponse::NotImplemented()
                             .body("Batch requests are not supported yet"))
                     }
@@ -301,36 +312,39 @@ where
             } else {
                 // No session id in stateful mode - create new session
                 tracing::debug!("POST request without session, creating new session");
-                
+
                 let (session_id, transport) = service
                     .session_manager
                     .create_session()
                     .await
                     .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                
+
                 tracing::info!(%session_id, "Created new session");
-                
+
                 if let ClientJsonRpcMessage::Request(req) = &mut message {
                     if !matches!(req.request, ClientRequest::InitializeRequest(_)) {
-                        return Ok(HttpResponse::UnprocessableEntity()
-                            .body("Expected initialize request"));
+                        return Ok(
+                            HttpResponse::UnprocessableEntity().body("Expected initialize request")
+                        );
                     }
                 } else {
-                    return Ok(HttpResponse::UnprocessableEntity()
-                        .body("Expected initialize request"));
+                    return Ok(
+                        HttpResponse::UnprocessableEntity().body("Expected initialize request")
+                    );
                 }
-                
+
                 let service_instance = service
                     .get_service()
                     .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                
+
                 // Spawn a task to serve the session
                 tokio::spawn({
                     let session_manager = service.session_manager.clone();
                     let session_id = session_id.clone();
                     async move {
                         let service = serve_server::<S, M::Transport, _, TransportAdapterIdentity>(
-                            service_instance, transport,
+                            service_instance,
+                            transport,
                         )
                         .await;
                         match service {
@@ -349,14 +363,14 @@ where
                             });
                     }
                 });
-                
+
                 // Get initialize response
                 let response = service
                     .session_manager
                     .initialize_session(&session_id, message)
                     .await
                     .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                
+
                 // Return SSE stream with single response
                 let sse_stream = async_stream::stream! {
                     yield Ok::<_, actix_web::Error>(Bytes::from(format!(
@@ -364,7 +378,7 @@ where
                         serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
                     )));
                 };
-                
+
                 Ok(HttpResponse::Ok()
                     .content_type(EVENT_STREAM_MIME_TYPE)
                     .append_header((header::CACHE_CONTROL, "no-cache"))
@@ -375,39 +389,39 @@ where
         } else {
             // Stateless mode
             tracing::debug!("POST request in stateless mode");
-            
+
             match message {
                 ClientJsonRpcMessage::Request(request) => {
                     tracing::debug!(?request, "Processing request in stateless mode");
-                    
+
                     // In stateless mode, handle the request directly
                     let service_instance = service
                         .get_service()
                         .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-                    
+
                     let (transport, receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
                     let service_handle = serve_directly(service_instance, transport, None);
-                    
+
                     tokio::spawn(async move {
                         // Let the service process the request
                         let _ = service_handle.waiting().await;
                     });
-                    
+
                     // Convert receiver stream to SSE format
                     let sse_stream = ReceiverStream::new(receiver).map(|message| {
                         tracing::info!(?message);
-                        let data = serde_json::to_string(&message)
-                            .unwrap_or_else(|_| "{}".to_string());
+                        let data =
+                            serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_string());
                         Ok::<_, actix_web::Error>(Bytes::from(format!("data: {}\n\n", data)))
                     });
-                    
+
                     // Add keep-alive if configured
                     let keep_alive = service.config.sse_keep_alive;
                     let sse_stream = async_stream::stream! {
                         let mut stream = Box::pin(sse_stream);
                         let mut keep_alive_timer = keep_alive.map(|duration| tokio::time::interval(duration));
-                        
+
                         loop {
                             tokio::select! {
                                 Some(result) = stream.next() => {
@@ -432,17 +446,14 @@ where
                             }
                         }
                     };
-                    
+
                     Ok(HttpResponse::Ok()
                         .content_type(EVENT_STREAM_MIME_TYPE)
                         .append_header((header::CACHE_CONTROL, "no-cache"))
                         .append_header((HEADER_X_ACCEL_BUFFERING, "no"))
                         .streaming(sse_stream))
                 }
-                _ => {
-                    Ok(HttpResponse::UnprocessableEntity()
-                        .body("Unexpected message type"))
-                }
+                _ => Ok(HttpResponse::UnprocessableEntity().body("Unexpected message type")),
             }
         }
     }
@@ -457,12 +468,11 @@ where
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
-        
+
         let Some(session_id) = session_id else {
-            return Ok(HttpResponse::Unauthorized()
-                .body("Unauthorized: Session ID is required"));
+            return Ok(HttpResponse::Unauthorized().body("Unauthorized: Session ID is required"));
         };
-        
+
         tracing::debug!(%session_id, "DELETE request to close session");
 
         // Close session
@@ -471,7 +481,7 @@ where
             .close_session(&session_id)
             .await
             .map_err(|e| InternalError::new(e, StatusCode::INTERNAL_SERVER_ERROR))?;
-        
+
         tracing::info!(%session_id, "Session closed");
 
         Ok(HttpResponse::NoContent().finish())

@@ -32,14 +32,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let ct_signal = config.ct.clone();
-    
+
     // When actix-web feature is enabled, SseServer uses actix-web implementation
     // The same API works with both axum and actix-web
     let sse_server = SseServer::serve_with_config(config).await?;
     let bind_addr = sse_server.config.bind;
     let ct = sse_server.with_service(Counter::new);
 
-    println!("\n🚀 SSE Server (actix-web) running at http://{}", bind_addr);
+    println!(
+        "\n🚀 SSE Server (actix-web) running at http://{}",
+        bind_addr
+    );
     println!("📡 SSE endpoint: http://{}/sse", bind_addr);
     println!("📮 Message endpoint: http://{}/message", bind_addr);
     println!("\nPress Ctrl+C to stop the server\n");

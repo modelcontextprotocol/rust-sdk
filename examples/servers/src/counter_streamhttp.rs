@@ -1,5 +1,6 @@
+// Example of using streamable HTTP server transport with axum framework
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpService, session::local::LocalSessionManager,
+    axum::StreamableHttpService, session::local::LocalSessionManager,
 };
 use tracing_subscriber::{
     layer::SubscriberExt,

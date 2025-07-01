@@ -1,4 +1,6 @@
-use rmcp::transport::sse_server::{SseServer, SseServerConfig};
+// Example of using SSE server transport with axum framework
+// This requires the "axum" feature to be enabled in Cargo.toml
+use rmcp::transport::sse_server::{SseServerConfig, axum::SseServer};
 use tracing_subscriber::{
     layer::SubscriberExt,
     util::SubscriberInitExt,
@@ -27,28 +29,27 @@ async fn main() -> anyhow::Result<()> {
         sse_keep_alive: None,
     };
 
-    let (sse_server, router) = SseServer::new(config);
+    let ct_signal = config.ct.clone();
 
-    // Do something with the router, e.g., add routes or middleware
-
-    let listener = tokio::net::TcpListener::bind(sse_server.config.bind).await?;
-
-    let ct = sse_server.config.ct.child_token();
-
-    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
-        ct.cancelled().await;
-        tracing::info!("sse server cancelled");
-    });
-
-    tokio::spawn(async move {
-        if let Err(e) = server.await {
-            tracing::error!(error = %e, "sse server shutdown with error");
-        }
-    });
-
+    // When axum feature is enabled, use axum-specific SseServer
+    let sse_server = SseServer::serve_with_config(config).await?;
+    let bind_addr = sse_server.config.bind;
     let ct = sse_server.with_service(Counter::new);
 
-    tokio::signal::ctrl_c().await?;
-    ct.cancel();
+    println!("\n🚀 SSE Server (axum) running at http://{}", bind_addr);
+    println!("📡 SSE endpoint: http://{}/sse", bind_addr);
+    println!("📮 Message endpoint: http://{}/message", bind_addr);
+    println!("\nPress Ctrl+C to stop the server\n");
+
+    // Set up Ctrl-C handler
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        println!("\n⏹️  Shutting down...");
+        ct_signal.cancel();
+    });
+
+    // Wait for cancellation
+    ct.cancelled().await;
+    println!("✅ Server stopped");
     Ok(())
 }

@@ -1,3 +1,4 @@
+// Example of using streamable HTTP server transport with hyper/tower
 mod common;
 use common::counter::Counter;
 use hyper_util::{
@@ -6,7 +7,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpService, session::local::LocalSessionManager,
+    axum::StreamableHttpService, session::local::LocalSessionManager,
 };
 
 #[tokio::main]

@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let bind_addr = "127.0.0.1:8080";
-    
+
     // Create the streamable HTTP service
     // When actix-web feature is enabled, StreamableHttpService uses actix-web implementation
     let service = Arc::new(StreamableHttpService::new(
