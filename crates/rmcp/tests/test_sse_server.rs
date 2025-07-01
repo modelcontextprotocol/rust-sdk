@@ -7,9 +7,9 @@ use rmcp::{
 
 // Import framework-specific types
 #[cfg(feature = "axum")]
-use rmcp::transport::AxumSseServer;
+use rmcp::transport::sse_server::axum::SseServer as AxumSseServer;
 #[cfg(feature = "actix-web")]
-use rmcp::transport::ActixSseServer;
+use rmcp::transport::sse_server::actix_web::SseServer as ActixSseServer;
 
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

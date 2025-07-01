@@ -2,15 +2,17 @@
 //!
 //! This module provides streamable HTTP transport implementations for MCP.
 //!
-//! # Type Export Strategy
+//! # Module Organization
 //!
-//! This module exports framework-specific implementations with explicit names:
-//! - `AxumStreamableHttpService` - The Axum-based streamable HTTP service implementation
-//! - `ActixStreamableHttpService` - The actix-web-based streamable HTTP service implementation
+//! Framework-specific implementations are organized in submodules:
+//! - `axum` - Contains the Axum-based streamable HTTP service implementation
+//! - `actix_web` - Contains the actix-web-based streamable HTTP service implementation
 //!
-//! For convenience, a type alias `StreamableHttpService` is provided that resolves to:
-//! - `ActixStreamableHttpService` when the `actix-web` feature is enabled
-//! - `AxumStreamableHttpService` when only the `axum` feature is enabled
+//! Each submodule exports a `StreamableHttpService` type with the same interface.
+//!
+//! For convenience, a type alias `StreamableHttpService` is provided at the module root that resolves to:
+//! - `actix_web::StreamableHttpService` when the `actix-web` feature is enabled
+//! - `axum::StreamableHttpService` when only the `axum` feature is enabled
 //!
 //! # Examples
 //!
@@ -20,12 +22,12 @@
 //! let service = StreamableHttpService::new(|| Ok(handler), session_manager, config);
 //! ```
 //!
-//! Using explicit types (when you need a specific implementation):
+//! Using framework-specific modules (when you need a specific implementation):
 //! ```ignore
 //! #[cfg(feature = "axum")]
-//! use rmcp::transport::AxumStreamableHttpService;
+//! use rmcp::transport::streamable_http_server::axum::StreamableHttpService;
 //! #[cfg(feature = "axum")]
-//! let service = AxumStreamableHttpService::new(|| Ok(handler), session_manager, config);
+//! let service = StreamableHttpService::new(|| Ok(handler), session_manager, config);
 //! ```
 
 pub mod session;
@@ -53,24 +55,18 @@ impl Default for StreamableHttpServerConfig {
 // Axum implementation
 #[cfg(all(feature = "transport-streamable-http-server", feature = "axum"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", feature = "axum"))))]
-pub mod tower;
-
-#[cfg(all(feature = "transport-streamable-http-server", feature = "axum"))]
-pub use tower::StreamableHttpService as AxumStreamableHttpService;
+pub mod axum;
 
 // Actix-web implementation
 #[cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))))]
-pub mod actix_impl;
-
-#[cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))]
-pub use actix_impl::StreamableHttpService as ActixStreamableHttpService;
+pub mod actix_web;
 
 // Export the preferred implementation as StreamableHttpService (without generic parameters)
 #[cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))]
-pub use actix_impl::StreamableHttpService;
+pub use actix_web::StreamableHttpService;
 
 #[cfg(all(feature = "transport-streamable-http-server", feature = "axum", not(feature = "actix-web")))]
-pub use tower::StreamableHttpService;
+pub use axum::StreamableHttpService;
 
 pub use session::{SessionId, SessionManager};

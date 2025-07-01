@@ -2,15 +2,17 @@
 //!
 //! This module provides Server-Sent Events (SSE) transport implementations for MCP.
 //!
-//! # Type Export Strategy
+//! # Module Organization
 //!
-//! This module exports framework-specific implementations with explicit names:
-//! - `AxumSseServer` - The Axum-based SSE server implementation
-//! - `ActixSseServer` - The actix-web-based SSE server implementation
+//! Framework-specific implementations are organized in submodules:
+//! - `axum` - Contains the Axum-based SSE server implementation
+//! - `actix_web` - Contains the actix-web-based SSE server implementation
 //!
-//! For convenience, a type alias `SseServer` is provided that resolves to:
-//! - `ActixSseServer` when the `actix-web` feature is enabled
-//! - `AxumSseServer` when only the `axum` feature is enabled
+//! Each submodule exports a `SseServer` type with the same interface.
+//!
+//! For convenience, a type alias `SseServer` is provided at the module root that resolves to:
+//! - `actix_web::SseServer` when the `actix-web` feature is enabled
+//! - `axum::SseServer` when only the `axum` feature is enabled
 //!
 //! # Examples
 //!
@@ -20,12 +22,12 @@
 //! let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
 //! ```
 //!
-//! Using explicit types (when you need a specific implementation):
+//! Using framework-specific modules (when you need a specific implementation):
 //! ```ignore
 //! #[cfg(feature = "axum")]
-//! use rmcp::transport::AxumSseServer;
+//! use rmcp::transport::sse_server::axum::SseServer;
 //! #[cfg(feature = "axum")]
-//! let server = AxumSseServer::serve("127.0.0.1:8080".parse()?).await?;
+//! let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
 //! ```
 
 #[cfg(feature = "transport-sse-server")]
@@ -33,24 +35,18 @@ pub mod common;
 
 // Axum implementation
 #[cfg(all(feature = "transport-sse-server", feature = "axum"))]
-mod axum_impl;
-
-#[cfg(all(feature = "transport-sse-server", feature = "axum"))]
-pub use axum_impl::SseServer as AxumSseServer;
+pub mod axum;
 
 // Actix-web implementation
 #[cfg(all(feature = "transport-sse-server", feature = "actix-web"))]
-mod actix_impl;
-
-#[cfg(all(feature = "transport-sse-server", feature = "actix-web"))]
-pub use actix_impl::SseServer as ActixSseServer;
+pub mod actix_web;
 
 // Convenience type alias
 #[cfg(all(feature = "transport-sse-server", feature = "actix-web"))]
-pub type SseServer = ActixSseServer;
+pub use actix_web::SseServer;
 
 #[cfg(all(feature = "transport-sse-server", feature = "axum", not(feature = "actix-web")))]
-pub type SseServer = AxumSseServer;
+pub use axum::SseServer;
 
 // Re-export common types when transport-sse-server is enabled
 #[cfg(feature = "transport-sse-server")]

@@ -96,4 +96,4 @@ path = "src/counter_streamable_http_actix.rs"
 required-features = ["actix-web"]
 
 [features]
-actix-web = ["dep:actix-web", "dep:actix-rt", "dep:rmcp/actix-web"]
+actix-web = ["dep:actix-web", "dep:actix-rt", "rmcp/actix-web"]

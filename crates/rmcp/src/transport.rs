@@ -16,11 +16,11 @@
 //!
 //! ### SSE Server Transport
 //! - **Convenience alias**: [`SseServer`] - resolves to the appropriate implementation based on enabled features
-//! - **Explicit types**: [`AxumSseServer`], [`ActixSseServer`] - use specific framework implementations
+//! - **Framework-specific**: Available via `sse_server::axum::SseServer` and `sse_server::actix_web::SseServer`
 //!
 //! ### Streamable HTTP Server Transport
 //! - **Convenience alias**: [`StreamableHttpService`] - resolves to the appropriate implementation based on enabled features
-//! - **Explicit types**: [`AxumStreamableHttpService`], [`ActixStreamableHttpService`] - use specific framework implementations
+//! - **Framework-specific**: Available via `streamable_http_server::axum::StreamableHttpService` and `streamable_http_server::actix_web::StreamableHttpService`
 //!
 //! #### Type Resolution Strategy
 //! The convenience aliases resolve as follows:
@@ -33,11 +33,11 @@
 //! use rmcp::transport::{SseServer, StreamableHttpService};
 //! let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
 //!
-//! // Using explicit types (when you need a specific implementation)
+//! // Using framework-specific modules (when you need a specific implementation)
 //! #[cfg(feature = "axum")]
-//! use rmcp::transport::AxumSseServer;
+//! use rmcp::transport::sse_server::axum::SseServer;
 //! #[cfg(feature = "axum")]
-//! let server = AxumSseServer::serve("127.0.0.1:8080".parse()?).await?;
+//! let server = SseServer::serve("127.0.0.1:8080".parse()?).await?;
 //! ```
 //!
 //! ## Helper Transport Types
@@ -141,14 +141,9 @@ pub mod sse_server;
 #[cfg_attr(docsrs, doc(cfg(all(feature = "transport-sse-server", any(feature = "axum", feature = "actix-web")))))]
 pub use sse_server::SseServer;
 
-// Re-export explicit types
-#[cfg(all(feature = "transport-sse-server", feature = "axum"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-sse-server", feature = "axum"))))]
-pub use sse_server::AxumSseServer;
-
-#[cfg(all(feature = "transport-sse-server", feature = "actix-web"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-sse-server", feature = "actix-web"))))]
-pub use sse_server::ActixSseServer;
+// Framework-specific implementations are available via submodules:
+// - sse_server::axum::SseServer
+// - sse_server::actix_web::SseServer
 
 #[cfg(feature = "auth")]
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
@@ -174,14 +169,9 @@ pub use streamable_http_server::StreamableHttpServerConfig;
 #[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", any(feature = "axum", feature = "actix-web")))))]
 pub use streamable_http_server::StreamableHttpService;
 
-// Re-export explicit types
-#[cfg(all(feature = "transport-streamable-http-server", feature = "axum"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", feature = "axum"))))]
-pub use streamable_http_server::AxumStreamableHttpService;
-
-#[cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "transport-streamable-http-server", feature = "actix-web"))))]
-pub use streamable_http_server::ActixStreamableHttpService;
+// Framework-specific implementations are available via submodules:
+// - streamable_http_server::axum::StreamableHttpService
+// - streamable_http_server::actix_web::StreamableHttpService
 
 #[cfg(feature = "transport-streamable-http-client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]

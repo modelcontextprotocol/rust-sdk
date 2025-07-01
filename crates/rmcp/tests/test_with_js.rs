@@ -12,9 +12,9 @@ use rmcp::{
 
 // Import framework-specific types
 #[cfg(feature = "axum")]
-use rmcp::transport::AxumStreamableHttpService;
+use rmcp::transport::streamable_http_server::axum::StreamableHttpService as AxumStreamableHttpService;
 #[cfg(feature = "actix-web")]
-use rmcp::transport::ActixStreamableHttpService;
+use rmcp::transport::streamable_http_server::actix_web::StreamableHttpService as ActixStreamableHttpService;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
