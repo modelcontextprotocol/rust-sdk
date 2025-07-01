@@ -62,7 +62,7 @@ async fn test_with_python_client_axum() -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "actix-web")]
-#[tokio::test]
+#[actix_web::test]
 async fn test_with_python_client_actix() -> anyhow::Result<()> {
     init().await?;
 

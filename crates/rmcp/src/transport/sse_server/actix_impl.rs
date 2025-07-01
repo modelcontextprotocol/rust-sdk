@@ -3,6 +3,7 @@ use std::{collections::HashMap, io, sync::Arc, time::Duration};
 use actix_web::{
     HttpRequest, HttpResponse, Result, Scope,
     error::ErrorInternalServerError,
+    middleware,
     web::{self, Bytes, Data, Json, Query},
 };
 use futures::{Sink, SinkExt, Stream, StreamExt};
@@ -278,6 +279,7 @@ impl SseServer {
         let server = actix_web::HttpServer::new(move || {
             actix_web::App::new()
                 .app_data(app_data.clone())
+                .wrap(middleware::NormalizePath::trim())
                 .route(&sse_path, web::get().to(sse_handler))
                 .route(&post_path, web::post().to(post_event_handler))
         })
