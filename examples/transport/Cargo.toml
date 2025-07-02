@@ -10,12 +10,13 @@ keywords = { workspace = true }
 homepage = { workspace = true }
 categories = { workspace = true }
 readme = { workspace = true }
+publish = false
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
-rmcp = { path = "../../crates/rmcp", features = ["server", "client"] }
+rmcp = { workspace = true, features = ["server", "client"] }
 tokio = { version = "1", features = [
     "macros",
     "rt",

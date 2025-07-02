@@ -10,11 +10,12 @@ keywords = { workspace = true }
 homepage = { workspace = true }
 categories = { workspace = true }
 readme = { workspace = true }
+publish = false
 
 [dependencies]
 rig-core = "0.13.0"
 tokio = { version = "1", features = ["full"] }
-rmcp = { path = "../../crates/rmcp", features = [
+rmcp = { workspace = true, features = [
     "client",
     "reqwest",
     "transport-child-process",

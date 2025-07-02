@@ -7,7 +7,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rmcp = { path = "../../crates/rmcp", features = [
+rmcp = { workspace = true, features = [
     "server",
     "transport-sse-server",
     "transport-io",
