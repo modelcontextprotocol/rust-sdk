@@ -3,14 +3,11 @@
 </div>
 
 # RMCP
-Wait for the first release.
-<!-- [![Crates.io Version](todo)](todo) -->
 <!-- ![Release status](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg) -->
 <!-- [![docs.rs](todo)](todo) -->
 ![Coverage](docs/coverage.svg)
 
-An official rust Model Context Protocol SDK implementation with tokio async runtime.
-
+An official Rust Model Context Protocol SDK implementation with tokio async runtime.
 
 This repository contains the following crates:
 
@@ -22,7 +19,7 @@ This repository contains the following crates:
 ### Import the crate
 
 ```toml
-rmcp = { version = "0.1", features = ["server"] }
+rmcp = { version = "0.2.0", features = ["server"] }
 ## or dev channel
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
@@ -115,7 +112,6 @@ See [examples](examples/README.md)
 
 See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
-
 ## Related Resources
 
 - [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
@@ -127,7 +123,9 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 ## Development
 
 ### Tips for Contributors
+
 See [docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD) to get some tips for contributing.
 
 ### Using Dev Container
+
 If you want to use dev container, see [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.
