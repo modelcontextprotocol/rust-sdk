@@ -48,5 +48,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fmt the project ([#54](https://github.com/modelcontextprotocol/rust-sdk/pull/54))
 - fix broken link ([#53](https://github.com/modelcontextprotocol/rust-sdk/pull/53))
 - fix the branch name for git dependency ([#46](https://github.com/modelcontextprotocol/rust-sdk/pull/46))
-- Move whole rmcp crate to offcial rust sdk ([#44](https://github.com/modelcontextprotocol/rust-sdk/pull/44))
+- Move whole rmcp crate to official rust sdk ([#44](https://github.com/modelcontextprotocol/rust-sdk/pull/44))
 - Initial commit

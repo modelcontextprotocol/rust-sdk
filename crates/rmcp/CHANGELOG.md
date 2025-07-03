@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add simpling example and test ([#289](https://github.com/modelcontextprotocol/rust-sdk/pull/289))
 - add update for test_message_schema ([#286](https://github.com/modelcontextprotocol/rust-sdk/pull/286))
 - add notion clear in model.rs ([#284](https://github.com/modelcontextprotocol/rust-sdk/pull/284))
-- cov settings, and fix serveral building warnings ([#281](https://github.com/modelcontextprotocol/rust-sdk/pull/281))
+- cov settings, and fix several building warnings ([#281](https://github.com/modelcontextprotocol/rust-sdk/pull/281))
 - refactor tool macros and router implementation ([#261](https://github.com/modelcontextprotocol/rust-sdk/pull/261))
 - fix regression in URL joining ([#265](https://github.com/modelcontextprotocol/rust-sdk/pull/265))
 - remove erroneous definitions_path  ([#264](https://github.com/modelcontextprotocol/rust-sdk/pull/264))
@@ -104,5 +104,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(sse_server)* separate router and server startup ([#52](https://github.com/modelcontextprotocol/rust-sdk/pull/52))
 - fix broken link ([#53](https://github.com/modelcontextprotocol/rust-sdk/pull/53))
 - fix the branch name for git dependency ([#46](https://github.com/modelcontextprotocol/rust-sdk/pull/46))
-- Move whole rmcp crate to offcial rust sdk ([#44](https://github.com/modelcontextprotocol/rust-sdk/pull/44))
+- Move whole rmcp crate to official rust sdk ([#44](https://github.com/modelcontextprotocol/rust-sdk/pull/44))
 - Initial commit
