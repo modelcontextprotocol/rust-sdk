@@ -1,6 +1,11 @@
 from fastmcp import FastMCP
 
+import sys
+
 mcp = FastMCP("Demo")
+
+print("server starting up...", file=sys.stderr)
+
 
 @mcp.tool()
 def add(a: int, b: int) -> int:

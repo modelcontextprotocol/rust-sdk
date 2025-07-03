@@ -1,9 +1,11 @@
+use std::process::Stdio;
+
 use axum::Router;
 use rmcp::{
     ServiceExt,
     transport::{ConfigureCommandExt, SseServer, TokioChildProcess, sse_server::SseServerConfig},
 };
-use tokio::time::timeout;
+use tokio::{io::AsyncReadExt, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
@@ -117,5 +119,37 @@ async fn test_with_python_server() -> anyhow::Result<()> {
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
     client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_python_server_stderr() -> anyhow::Result<()> {
+    init().await?;
+
+    let (transport, stderr) =
+        TokioChildProcess::builder(tokio::process::Command::new("uv").configure(|cmd| {
+            cmd.arg("run")
+                .arg("server.py")
+                .current_dir("tests/test_with_python");
+        }))
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stderr = stderr.expect("stderr must be piped");
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buffer = String::new();
+        stderr.read_to_string(&mut buffer).await?;
+        Ok::<_, std::io::Error>(buffer)
+    });
+
+    let client = ().serve(transport).await?;
+    let _ = client.list_all_resources().await?;
+    let _ = client.list_all_tools().await?;
+    client.cancel().await?;
+
+    let stderr_output = stderr_task.await??;
+    assert!(stderr_output.contains("server starting up..."));
+
     Ok(())
 }
