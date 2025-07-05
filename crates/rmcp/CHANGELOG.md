@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.2.1...rmcp-v0.2.2) - 2025-07-05
+
+### Added
+
+- *(transport)* add builder & expose child stderr ([#305](https://github.com/modelcontextprotocol/rust-sdk/pull/305))
+
 ## [0.2.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.2.0...rmcp-v0.2.1) - 2025-07-03
 
 ### Other
