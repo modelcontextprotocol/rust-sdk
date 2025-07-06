@@ -35,8 +35,8 @@ base64 = { version = "0.22", optional = true }
 
 # for SSE client
 reqwest = { version = "0.12", default-features = false, features = [
-    "json",
-    "stream",
+  "json",
+  "stream",
 ], optional = true }
 
 sse-stream = { version = "0.2", optional = true }
@@ -62,12 +62,17 @@ http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 # macro
-rmcp-macros = { version = "0.1", workspace = true, optional = true }
+rmcp-macros = { version = "0.2.1", workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 chrono = { version = "0.4.38", features = ["serde"] }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-chrono = { version = "0.4.38", default-features = false, features = ["serde", "clock", "std", "oldtime"] }
+chrono = { version = "0.4.38", default-features = false, features = [
+  "serde",
+  "clock",
+  "std",
+  "oldtime",
+] }
 
 [features]
 default = ["base64", "macros", "server"]
@@ -83,15 +88,15 @@ reqwest = ["__reqwest", "reqwest?/rustls-tls"]
 reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
 
 server-side-http = [
-    "uuid",
-    "dep:rand",
-    "dep:tokio-stream",
-    "dep:http",
-    "dep:http-body",
-    "dep:http-body-util",
-    "dep:bytes",
-    "dep:sse-stream",
-    "tower",
+  "uuid",
+  "dep:rand",
+  "dep:tokio-stream",
+  "dep:http",
+  "dep:http-body",
+  "dep:http-body-util",
+  "dep:bytes",
+  "dep:sse-stream",
+  "tower",
 ]
 # SSE client
 client-side-sse = ["dep:sse-stream", "dep:http"]
@@ -108,23 +113,23 @@ transport-streamable-http-client = ["client-side-sse", "transport-worker"]
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
 transport-child-process = [
-    "transport-async-rw",
-    "tokio/process",
-    "dep:process-wrap",
+  "transport-async-rw",
+  "tokio/process",
+  "dep:process-wrap",
 ]
 transport-sse-server = [
-    "transport-async-rw",
-    "transport-worker",
-    "server-side-http",
-    "dep:axum",
+  "transport-async-rw",
+  "transport-worker",
+  "server-side-http",
+  "dep:axum",
 ]
 transport-streamable-http-server = [
-    "transport-streamable-http-server-session",
-    "server-side-http",
+  "transport-streamable-http-server-session",
+  "server-side-http",
 ]
 transport-streamable-http-server-session = [
-    "transport-async-rw",
-    "dep:tokio-stream",
+  "transport-async-rw",
+  "dep:tokio-stream",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
@@ -137,9 +142,9 @@ schemars = { version = "0.8" }
 
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
-    "env-filter",
-    "std",
-    "fmt",
+  "env-filter",
+  "std",
+  "fmt",
 ] }
 async-trait = "0.1"
 [[test]]
@@ -150,25 +155,25 @@ path = "tests/test_tool_macros.rs"
 [[test]]
 name = "test_with_python"
 required-features = [
-    "reqwest",
-    "server",
-    "client",
-    "transport-sse-server",
-    "transport-sse-client",
-    "transport-child-process",
+  "reqwest",
+  "server",
+  "client",
+  "transport-sse-server",
+  "transport-sse-client",
+  "transport-child-process",
 ]
 path = "tests/test_with_python.rs"
 
 [[test]]
 name = "test_with_js"
 required-features = [
-    "server",
-    "client",
-    "transport-sse-server",
-    "transport-child-process",
-    "transport-streamable-http-server",
-    "transport-streamable-http-client",
-    "__reqwest",
+  "server",
+  "client",
+  "transport-sse-server",
+  "transport-child-process",
+  "transport-streamable-http-server",
+  "transport-streamable-http-client",
+  "__reqwest",
 ]
 path = "tests/test_with_js.rs"
 
