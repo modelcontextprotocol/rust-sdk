@@ -19,7 +19,7 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use rmcp::{Error as McpError, model::*, tool, tool_router, handler::server::tool::ToolRouter};
+//! use rmcp::{ErrorData as McpError, model::*, tool, tool_router, handler::server::tool::ToolRouter};
 //! use tokio::sync::Mutex;
 //!
 //! #[derive(Clone)]
@@ -90,7 +90,8 @@
 //! }
 //! ```
 mod error;
-pub use error::Error;
+#[allow(deprecated)]
+pub use error::{Error, ErrorData, RmcpError};
 
 /// Basic data types in MCP specification
 pub mod model;

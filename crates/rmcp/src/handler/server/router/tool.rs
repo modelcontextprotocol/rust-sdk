@@ -52,7 +52,7 @@ impl<S: Send + Sync + 'static> ToolRoute<S> {
     where
         C: for<'a> Fn(
                 ToolCallContext<'a, S>,
-            ) -> BoxFuture<'a, Result<CallToolResult, crate::Error>>
+            ) -> BoxFuture<'a, Result<CallToolResult, crate::ErrorData>>
             + Send
             + Sync
             + 'static,
@@ -237,11 +237,11 @@ where
     pub async fn call(
         &self,
         context: ToolCallContext<'_, S>,
-    ) -> Result<CallToolResult, crate::Error> {
+    ) -> Result<CallToolResult, crate::ErrorData> {
         let item = self
             .map
             .get(context.name())
-            .ok_or_else(|| crate::Error::invalid_params("tool not found", None))?;
+            .ok_or_else(|| crate::ErrorData::invalid_params("tool not found", None))?;
         (item.call)(context).await
     }
 

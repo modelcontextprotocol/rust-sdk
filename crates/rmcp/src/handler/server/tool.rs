@@ -56,9 +56,9 @@ pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject
 }
 
 /// Deserialize a JSON object into a type
-pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, crate::Error> {
+pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, crate::ErrorData> {
     serde_json::from_value(serde_json::Value::Object(input)).map_err(|e| {
-        crate::Error::invalid_params(
+        crate::ErrorData::invalid_params(
             format!("failed to deserialize parameters: {error}", error = e),
             None,
         )
@@ -93,21 +93,23 @@ impl<'s, S> ToolCallContext<'s, S> {
 }
 
 pub trait FromToolCallContextPart<S>: Sized {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error>;
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData>;
 }
 
 pub trait IntoCallToolResult {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error>;
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData>;
 }
 
 impl<T: IntoContents> IntoCallToolResult for T {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         Ok(CallToolResult::success(self.into_contents()))
     }
 }
 
 impl<T: IntoContents, E: IntoContents> IntoCallToolResult for Result<T, E> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         match self {
             Ok(value) => Ok(CallToolResult::success(value.into_contents())),
             Err(error) => Ok(CallToolResult::error(error.into_contents())),
@@ -115,8 +117,8 @@ impl<T: IntoContents, E: IntoContents> IntoCallToolResult for Result<T, E> {
     }
 }
 
-impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::Error> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         match self {
             Ok(value) => value.into_call_tool_result(),
             Err(error) => Err(error),
@@ -134,7 +136,7 @@ pin_project_lite::pin_project! {
         },
         Ready {
             #[pin]
-            result: Ready<Result<CallToolResult, crate::Error>>,
+            result: Ready<Result<CallToolResult, crate::ErrorData>>,
         }
     }
 }
@@ -144,7 +146,7 @@ where
     F: Future<Output = R>,
     R: IntoCallToolResult,
 {
-    type Output = Result<CallToolResult, crate::Error>;
+    type Output = Result<CallToolResult, crate::ErrorData>;
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
@@ -159,8 +161,8 @@ where
     }
 }
 
-impl IntoCallToolResult for Result<CallToolResult, crate::Error> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::Error> {
+impl IntoCallToolResult for Result<CallToolResult, crate::ErrorData> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         self
     }
 }
@@ -169,10 +171,10 @@ pub trait CallToolHandler<S, A> {
     fn call(
         self,
         context: ToolCallContext<'_, S>,
-    ) -> BoxFuture<'_, Result<CallToolResult, crate::Error>>;
+    ) -> BoxFuture<'_, Result<CallToolResult, crate::ErrorData>>;
 }
 
-pub type DynCallToolHandler<S> = dyn for<'s> Fn(ToolCallContext<'s, S>) -> BoxFuture<'s, Result<CallToolResult, crate::Error>>
+pub type DynCallToolHandler<S> = dyn for<'s> Fn(ToolCallContext<'s, S>) -> BoxFuture<'s, Result<CallToolResult, crate::ErrorData>>
     + Send
     + Sync;
 
@@ -193,7 +195,9 @@ impl<P: JsonSchema> JsonSchema for Parameters<P> {
 }
 
 impl<S> FromToolCallContextPart<S> for CancellationToken {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         Ok(context.request_context.ct.clone())
     }
 }
@@ -201,7 +205,9 @@ impl<S> FromToolCallContextPart<S> for CancellationToken {
 pub struct ToolName(pub Cow<'static, str>);
 
 impl<S> FromToolCallContextPart<S> for ToolName {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         Ok(Self(context.name.clone()))
     }
 }
@@ -210,11 +216,13 @@ impl<S, P> FromToolCallContextPart<S> for Parameters<P>
 where
     P: DeserializeOwned,
 {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         let arguments = context.arguments.take().unwrap_or_default();
         let value: P =
             serde_json::from_value(serde_json::Value::Object(arguments)).map_err(|e| {
-                crate::Error::invalid_params(
+                crate::ErrorData::invalid_params(
                     format!("failed to deserialize parameters: {error}", error = e),
                     None,
                 )
@@ -224,14 +232,18 @@ where
 }
 
 impl<S> FromToolCallContextPart<S> for JsonObject {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         let object = context.arguments.take().unwrap_or_default();
         Ok(object)
     }
 }
 
 impl<S> FromToolCallContextPart<S> for crate::model::Extensions {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         let extensions = context.request_context.extensions.clone();
         Ok(extensions)
     }
@@ -243,14 +255,16 @@ impl<S, T> FromToolCallContextPart<S> for Extension<T>
 where
     T: Send + Sync + 'static + Clone,
 {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         let extension = context
             .request_context
             .extensions
             .get::<T>()
             .cloned()
             .ok_or_else(|| {
-                crate::Error::invalid_params(
+                crate::ErrorData::invalid_params(
                     format!("missing extension {}", std::any::type_name::<T>()),
                     None,
                 )
@@ -260,14 +274,18 @@ where
 }
 
 impl<S> FromToolCallContextPart<S> for crate::Peer<RoleServer> {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         let peer = context.request_context.peer.clone();
         Ok(peer)
     }
 }
 
 impl<S> FromToolCallContextPart<S> for crate::model::Meta {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         let mut meta = crate::model::Meta::default();
         std::mem::swap(&mut meta, &mut context.request_context.meta);
         Ok(meta)
@@ -276,19 +294,23 @@ impl<S> FromToolCallContextPart<S> for crate::model::Meta {
 
 pub struct RequestId(pub crate::model::RequestId);
 impl<S> FromToolCallContextPart<S> for RequestId {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         Ok(RequestId(context.request_context.id.clone()))
     }
 }
 
 impl<S> FromToolCallContextPart<S> for RequestContext<RoleServer> {
-    fn from_tool_call_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::Error> {
+    fn from_tool_call_context_part(
+        context: &mut ToolCallContext<S>,
+    ) -> Result<Self, crate::ErrorData> {
         Ok(context.request_context.clone())
     }
 }
 
 impl<'s, S> ToolCallContext<'s, S> {
-    pub fn invoke<H, A>(self, h: H) -> BoxFuture<'s, Result<CallToolResult, crate::Error>>
+    pub fn invoke<H, A>(self, h: H) -> BoxFuture<'s, Result<CallToolResult, crate::ErrorData>>
     where
         H: CallToolHandler<S, A>,
     {
@@ -331,7 +353,7 @@ macro_rules! impl_for {
             fn call(
                 self,
                 mut context: ToolCallContext<'_, S>,
-            ) -> BoxFuture<'_, Result<CallToolResult, crate::Error>>{
+            ) -> BoxFuture<'_, Result<CallToolResult, crate::ErrorData>>{
                 $(
                     let result = $Tn::from_tool_call_context_part(&mut context);
                     let $Tn = match result {
@@ -362,7 +384,7 @@ macro_rules! impl_for {
             fn call(
                 self,
                 mut context: ToolCallContext<S>,
-            ) -> BoxFuture<'static, Result<CallToolResult, crate::Error>>{
+            ) -> BoxFuture<'static, Result<CallToolResult, crate::ErrorData>>{
                 $(
                     let result = $Tn::from_tool_call_context_part(&mut context);
                     let $Tn = match result {
@@ -391,7 +413,7 @@ macro_rules! impl_for {
             fn call(
                 self,
                 mut context: ToolCallContext<S>,
-            ) -> BoxFuture<'static, Result<CallToolResult, crate::Error>> {
+            ) -> BoxFuture<'static, Result<CallToolResult, crate::ErrorData>> {
                 $(
                     let result = $Tn::from_tool_call_context_part(&mut context);
                     let $Tn = match result {
@@ -416,7 +438,7 @@ macro_rules! impl_for {
             fn call(
                 self,
                 mut context: ToolCallContext<S>,
-            ) -> BoxFuture<'static, Result<CallToolResult, crate::Error>>  {
+            ) -> BoxFuture<'static, Result<CallToolResult, crate::ErrorData>>  {
                 $(
                     let result = $Tn::from_tool_call_context_part(&mut context);
                     let $Tn = match result {

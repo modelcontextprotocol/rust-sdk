@@ -139,7 +139,7 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///         &self,
 ///         request: CallToolRequestParam,
 ///         context: RequestContext<RoleServer>,
-///     ) -> Result<CallToolResult, rmcp::Error> {
+///     ) -> Result<CallToolResult, rmcp::ErrorData> {
 ///         let tcc = ToolCallContext::new(self, request, context);
 ///         self.tool_router.call(tcc).await
 ///     }
@@ -148,7 +148,7 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///         &self,
 ///         _request: Option<PaginatedRequestParam>,
 ///         _context: RequestContext<RoleServer>,
-///     ) -> Result<ListToolsResult, rmcp::Error> {
+///     ) -> Result<ListToolsResult, rmcp::ErrorData> {
 ///         let items = self.tool_router.list_all();
 ///         Ok(ListToolsResult::with_all_items(items))
 ///     }

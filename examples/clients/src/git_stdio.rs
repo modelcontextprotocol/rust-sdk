@@ -1,5 +1,5 @@
-use anyhow::Result;
 use rmcp::{
+    RmcpError,
     model::CallToolRequestParam,
     service::ServiceExt,
     transport::{ConfigureCommandExt, TokioChildProcess},
@@ -8,7 +8,7 @@ use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), RmcpError> {
     // Initialize logging
     tracing_subscriber::registry()
         .with(
@@ -18,11 +18,12 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
     let client = ()
-        .serve(TokioChildProcess::new(Command::new("uvx").configure(
-            |cmd| {
+        .serve(
+            TokioChildProcess::new(Command::new("uvx").configure(|cmd| {
                 cmd.arg("mcp-server-git");
-            },
-        ))?)
+            }))
+            .map_err(RmcpError::transport_creation::<TokioChildProcess>)?,
+        )
         .await?;
 
     // or serve_client((), TokioChildProcess::new(cmd)?).await?;

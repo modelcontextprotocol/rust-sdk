@@ -51,7 +51,7 @@ where
         &self,
         notification: <RoleServer as crate::service::ServiceRole>::PeerNot,
         context: NotificationContext<RoleServer>,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), crate::ErrorData> {
         self.service
             .handle_notification(notification, context)
             .await
@@ -60,7 +60,7 @@ where
         &self,
         request: <RoleServer as crate::service::ServiceRole>::PeerReq,
         context: crate::service::RequestContext<RoleServer>,
-    ) -> Result<<RoleServer as crate::service::ServiceRole>::Resp, crate::Error> {
+    ) -> Result<<RoleServer as crate::service::ServiceRole>::Resp, crate::ErrorData> {
         match request {
             ClientRequest::CallToolRequest(request) => {
                 if self.tool_router.has_route(request.params.name.as_ref())

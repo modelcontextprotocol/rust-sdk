@@ -2,14 +2,14 @@ use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 
 use crate::{
-    error::Error as McpError,
+    error::ErrorData as McpError,
     model::{
         CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
         JsonRpcBatchRequestItem, JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage,
         JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta, NumberOrString, ProgressToken,
         RequestId, ServerJsonRpcMessage,
     },
-    transport::{IntoTransport, Transport},
+    transport::{DynamicTransportError, IntoTransport, Transport},
 };
 #[cfg(feature = "client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
@@ -37,7 +37,7 @@ pub enum ServiceError {
     #[error("Mcp error: {0}")]
     McpError(McpError),
     #[error("Transport send error: {0}")]
-    TransportSend(Box<dyn std::error::Error + Send + Sync>),
+    TransportSend(DynamicTransportError),
     #[error("Transport closed")]
     TransportClosed,
     #[error("Unexpected response type")]
@@ -48,7 +48,6 @@ pub enum ServiceError {
     Timeout { timeout: Duration },
 }
 
-impl ServiceError {}
 trait TransferObject:
     std::fmt::Debug + Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static
 {
@@ -79,7 +78,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
         + TransferObject
         + GetMeta
         + GetExtensions;
-    type InitializeError<E>;
+    type InitializeError;
     const IS_CLIENT: bool;
     type Info: TransferObject;
     type PeerInfo: TransferObject;
@@ -117,10 +116,10 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn serve<T, E, A>(
         self,
         transport: T,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError<E>>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
     where
         T: IntoTransport<R, E, A>,
-        E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static,
         Self: Sized,
     {
         Self::serve_with_ct(self, transport, Default::default())
@@ -129,10 +128,10 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError<E>>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
     where
         T: IntoTransport<R, E, A>,
-        E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static,
         Self: Sized;
 }
 
@@ -537,11 +536,11 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let (peer, peer_rx) = Peer::new(Arc::new(AtomicU32RequestIdProvider::default()), peer_info);
-    serve_inner(service, transport, peer, peer_rx, ct)
+    serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
 }
 
 #[instrument(skip_all)]
-fn serve_inner<R, S, T, E, A>(
+fn serve_inner<R, S, T>(
     service: S,
     transport: T,
     peer: Peer<R>,
@@ -551,8 +550,7 @@ fn serve_inner<R, S, T, E, A>(
 where
     R: ServiceRole,
     S: Service<R>,
-    T: IntoTransport<R, E, A>,
-    E: std::error::Error + Send + Sync + 'static,
+    T: Transport<R> + 'static,
 {
     const SINK_PROXY_BUFFER_SIZE: usize = 64;
     let (sink_proxy_tx, mut sink_proxy_rx) =
@@ -578,25 +576,25 @@ where
     let handle = tokio::spawn(async move {
         let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
-        let mut send_task_set = tokio::task::JoinSet::<SendTaskResult<E>>::new();
+        let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
         #[derive(Debug)]
-        enum SendTaskResult<E> {
+        enum SendTaskResult {
             Request {
                 id: RequestId,
-                result: Result<(), E>,
+                result: Result<(), DynamicTransportError>,
             },
             Notification {
                 responder: Responder<Result<(), ServiceError>>,
                 cancellation_param: Option<CancelledNotificationParam>,
-                result: Result<(), E>,
+                result: Result<(), DynamicTransportError>,
             },
         }
         #[derive(Debug)]
-        enum Event<R: ServiceRole, E> {
+        enum Event<R: ServiceRole> {
             ProxyMessage(PeerSinkMessage<R>),
             PeerMessage(RxJsonRpcMessage<R>),
             ToSink(TxJsonRpcMessage<R>),
-            SendTaskResult(SendTaskResult<E>),
+            SendTaskResult(SendTaskResult),
         }
 
         let quit_reason = loop {
@@ -654,7 +652,7 @@ where
                 Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
                     if let Err(e) = result {
                         if let Some(responder) = local_responder_pool.remove(&id) {
-                            let _ = responder.send(Err(ServiceError::TransportSend(Box::new(e))));
+                            let _ = responder.send(Err(ServiceError::TransportSend(e)));
                         }
                     }
                 }
@@ -664,7 +662,7 @@ where
                     cancellation_param,
                 }) => {
                     let response = if let Err(e) = result {
-                        Err(ServiceError::TransportSend(Box::new(e)))
+                        Err(ServiceError::TransportSend(e))
                     } else {
                         Ok(())
                     };
@@ -706,8 +704,10 @@ where
                     let send = transport.send(JsonRpcMessage::request(request, id.clone()));
                     {
                         let id = id.clone();
-                        send_task_set
-                            .spawn(send.map(move |r| SendTaskResult::Request { id, result: r }));
+                        send_task_set.spawn(send.map(move |r| SendTaskResult::Request {
+                            id,
+                            result: r.map_err(DynamicTransportError::new::<T, R>),
+                        }));
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Notification {
@@ -727,7 +727,7 @@ where
                     send_task_set.spawn(send.map(move |result| SendTaskResult::Notification {
                         responder,
                         cancellation_param,
-                        result,
+                        result: result.map_err(DynamicTransportError::new::<T, R>),
                     }));
                 }
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {

@@ -63,9 +63,9 @@ pub enum RawContent {
 pub type Content = Annotated<RawContent>;
 
 impl RawContent {
-    pub fn json<S: Serialize>(json: S) -> Result<Self, crate::Error> {
+    pub fn json<S: Serialize>(json: S) -> Result<Self, crate::ErrorData> {
         let json = serde_json::to_string(&json).map_err(|e| {
-            crate::Error::internal_error(
+            crate::ErrorData::internal_error(
                 "fail to serialize response to json",
                 Some(json!(
                     {"reason": e.to_string()}
@@ -142,7 +142,7 @@ impl Content {
         RawContent::embedded_text(uri, content).no_annotation()
     }
 
-    pub fn json<S: Serialize>(json: S) -> Result<Self, crate::Error> {
+    pub fn json<S: Serialize>(json: S) -> Result<Self, crate::ErrorData> {
         RawContent::json(json).map(|c| c.no_annotation())
     }
 }

@@ -55,10 +55,13 @@ impl MyServer {
         }
     }
     #[tool]
-    pub async fn some_progress(meta: Meta, client: Peer<RoleServer>) -> Result<(), rmcp::Error> {
+    pub async fn some_progress(
+        meta: Meta,
+        client: Peer<RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
         let progress_token = meta
             .get_progress_token()
-            .ok_or(rmcp::Error::invalid_params(
+            .ok_or(rmcp::ErrorData::invalid_params(
                 "Progress token is required for this tool",
                 None,
             ))?;

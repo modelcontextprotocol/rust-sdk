@@ -64,7 +64,7 @@
 //! }
 //! ```
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
@@ -141,6 +141,9 @@ where
     R: ServiceRole,
 {
     type Error: std::error::Error + Send + Sync + 'static;
+    fn name() -> Cow<'static, str> {
+        std::any::type_name::<Self>().into()
+    }
     /// Send a message to the transport
     ///
     /// Notice that the future returned by this function should be `Send` and `'static`.
@@ -239,5 +242,36 @@ where
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
         self.message.take();
         std::future::ready(Ok(()))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Transport [{transport}] error: {error}")]
+pub struct DynamicTransportError {
+    pub transport: Cow<'static, str>,
+    #[source]
+    pub error: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl DynamicTransportError {
+    pub fn new<T: Transport<R>, R: ServiceRole>(e: T::Error) -> Self {
+        Self {
+            transport: T::name(),
+            error: Box::new(e),
+        }
+    }
+    pub fn downcast<T: Transport<R>, R: ServiceRole>(self) -> Result<T::Error, Self> {
+        if !self.is::<T, R>() {
+            Err(self)
+        } else {
+            Ok(self
+                .error
+                .downcast::<T::Error>()
+                .map(|e| *e)
+                .expect("type is checked"))
+        }
+    }
+    pub fn is<T: Transport<R>, R: ServiceRole>(&self) -> bool {
+        self.error.is::<T::Error>() && self.transport == T::name()
     }
 }
