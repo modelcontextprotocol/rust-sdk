@@ -49,7 +49,7 @@ pub enum ClientInitializeError {
 }
 
 impl ClientInitializeError {
-    pub fn transport<T: Transport<RoleClient>>(
+    pub fn transport<T: Transport<RoleClient> + 'static>(
         error: T::Error,
         context: impl Into<Cow<'static, str>>,
     ) -> Self {

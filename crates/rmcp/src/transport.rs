@@ -246,21 +246,23 @@ where
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("Transport [{transport}] error: {error}")]
+#[error("Transport [{transport_name}] error: {error}")]
 pub struct DynamicTransportError {
-    pub transport: Cow<'static, str>,
+    pub transport_name: Cow<'static, str>,
+    pub transport_type_id: std::any::TypeId,
     #[source]
     pub error: Box<dyn std::error::Error + Send + Sync>,
 }
 
 impl DynamicTransportError {
-    pub fn new<T: Transport<R>, R: ServiceRole>(e: T::Error) -> Self {
+    pub fn new<T: Transport<R> + 'static, R: ServiceRole>(e: T::Error) -> Self {
         Self {
-            transport: T::name(),
+            transport_name: T::name(),
+            transport_type_id: std::any::TypeId::of::<T>(),
             error: Box::new(e),
         }
     }
-    pub fn downcast<T: Transport<R>, R: ServiceRole>(self) -> Result<T::Error, Self> {
+    pub fn downcast<T: Transport<R> + 'static, R: ServiceRole>(self) -> Result<T::Error, Self> {
         if !self.is::<T, R>() {
             Err(self)
         } else {
@@ -271,7 +273,7 @@ impl DynamicTransportError {
                 .expect("type is checked"))
         }
     }
-    pub fn is<T: Transport<R>, R: ServiceRole>(&self) -> bool {
-        self.error.is::<T::Error>() && self.transport == T::name()
+    pub fn is<T: Transport<R> + 'static, R: ServiceRole>(&self) -> bool {
+        self.error.is::<T::Error>() && self.transport_type_id == std::any::TypeId::of::<T>()
     }
 }

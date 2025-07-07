@@ -35,7 +35,8 @@ pub enum RmcpError {
     // TODO: Maybe we can introduce something like `TryIntoTransport` to auto wrap transport type,
     // but it could be an breaking change, so we could do it in the future.
     TransportCreation {
-        into_transport_type: Cow<'static, str>,
+        into_transport_type_name: Cow<'static, str>,
+        into_transport_type_id: std::any::TypeId,
         #[source]
         error: Box<dyn std::error::Error + Send + Sync>,
     },
@@ -43,11 +44,12 @@ pub enum RmcpError {
 }
 
 impl RmcpError {
-    pub fn transport_creation<T>(
+    pub fn transport_creation<T: 'static>(
         error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
     ) -> Self {
         RmcpError::TransportCreation {
-            into_transport_type: std::any::type_name::<T>().into(),
+            into_transport_type_id: std::any::TypeId::of::<T>(),
+            into_transport_type_name: std::any::type_name::<T>().into(),
             error: error.into(),
         }
     }

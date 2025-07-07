@@ -68,7 +68,7 @@ pub enum ServerInitializeError {
 }
 
 impl ServerInitializeError {
-    pub fn transport<T: Transport<RoleServer>>(
+    pub fn transport<T: Transport<RoleServer> + 'static>(
         error: T::Error,
         context: impl Into<Cow<'static, str>>,
     ) -> Self {
