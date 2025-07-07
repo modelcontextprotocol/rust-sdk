@@ -15,7 +15,7 @@ wait for the first release.
 Creating a server with tools is simple using the `#[tool]` macro:
 
 ```rust, ignore
-use rmcp::{Error as McpError, ServiceExt, model::*, tool, tool_router, transport::stdio, handler::server::tool::ToolCallContext, handler::server::router::tool::ToolRouter};
+use rmcp::{Error as McpError, ServiceExt, model::*, tool, tool_handler, tool_router, transport::stdio, handler::server::router::tool::ToolRouter};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
