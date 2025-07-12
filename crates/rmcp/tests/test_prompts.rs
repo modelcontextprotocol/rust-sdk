@@ -207,4 +207,3 @@ async fn test_prompt_route_creation() {
 
 // Additional integration tests would require a full server setup
 // These tests demonstrate the basic functionality of the prompt system
-

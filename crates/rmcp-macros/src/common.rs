@@ -38,4 +38,3 @@ pub fn extract_doc_line(existing_docs: Option<String>, attr: &Attribute) -> Opti
         _ => None,
     }
 }
-
