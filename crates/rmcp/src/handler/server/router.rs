@@ -1,18 +1,21 @@
 use std::sync::Arc;
 
+use prompt::{IntoPromptRoute, PromptRoute};
 use tool::{IntoToolRoute, ToolRoute};
 
 use super::ServerHandler;
 use crate::{
     RoleServer, Service,
-    model::{ClientRequest, ListToolsResult, ServerResult},
+    model::{ClientRequest, ListPromptsResult, ListToolsResult, ServerResult},
     service::NotificationContext,
 };
 
+pub mod prompt;
 pub mod tool;
 
 pub struct Router<S> {
     pub tool_router: tool::ToolRouter<S>,
+    pub prompt_router: prompt::PromptRouter<S>,
     pub service: Arc<S>,
 }
 
@@ -23,6 +26,7 @@ where
     pub fn new(service: S) -> Self {
         Self {
             tool_router: tool::ToolRouter::new(),
+            prompt_router: prompt::PromptRouter::new(),
             service: Arc::new(service),
         }
     }
@@ -38,6 +42,21 @@ where
     pub fn with_tools(mut self, routes: impl IntoIterator<Item = ToolRoute<S>>) -> Self {
         for route in routes {
             self.tool_router.add_route(route);
+        }
+        self
+    }
+
+    pub fn with_prompt<R, A: 'static>(mut self, route: R) -> Self
+    where
+        R: IntoPromptRoute<S, A>,
+    {
+        self.prompt_router.add_route(route.into_prompt_route());
+        self
+    }
+
+    pub fn with_prompts(mut self, routes: impl IntoIterator<Item = PromptRoute<S>>) -> Self {
+        for route in routes {
+            self.prompt_router.add_route(route);
         }
         self
     }
@@ -83,6 +102,29 @@ where
                 let tools = self.tool_router.list_all();
                 Ok(ServerResult::ListToolsResult(ListToolsResult {
                     tools,
+                    next_cursor: None,
+                }))
+            }
+            ClientRequest::GetPromptRequest(request) => {
+                if self.prompt_router.has_route(request.params.name.as_ref()) {
+                    let prompt_context = crate::handler::server::prompt::PromptContext::new(
+                        self.service.as_ref(),
+                        request.params.name,
+                        request.params.arguments,
+                        context,
+                    );
+                    let result = self.prompt_router.get_prompt(prompt_context).await?;
+                    Ok(ServerResult::GetPromptResult(result))
+                } else {
+                    self.service
+                        .handle_request(ClientRequest::GetPromptRequest(request), context)
+                        .await
+                }
+            }
+            ClientRequest::ListPromptsRequest(_) => {
+                let prompts = self.prompt_router.list_all();
+                Ok(ServerResult::ListPromptsResult(ListPromptsResult {
+                    prompts,
                     next_cursor: None,
                 }))
             }

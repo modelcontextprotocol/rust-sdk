@@ -162,12 +162,12 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> BoxFuture<Result<R::Resp, McpError>>;
+    ) -> BoxFuture<'_, Result<R::Resp, McpError>>;
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> BoxFuture<Result<(), McpError>>;
+    ) -> BoxFuture<'_, Result<(), McpError>>;
     fn get_info(&self) -> R::Info;
 }
 
@@ -176,14 +176,14 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> BoxFuture<Result<R::Resp, McpError>> {
+    ) -> BoxFuture<'_, Result<R::Resp, McpError>> {
         Box::pin(self.handle_request(request, context))
     }
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> BoxFuture<Result<(), McpError>> {
+    ) -> BoxFuture<'_, Result<(), McpError>> {
         Box::pin(self.handle_notification(notification, context))
     }
     fn get_info(&self) -> R::Info {

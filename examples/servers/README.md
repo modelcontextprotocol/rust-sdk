@@ -83,6 +83,16 @@ A working MCP server demonstrating elicitation for user name collection.
 - JSON Schema validation with schemars
 - Tools: `greet_user` (collects name), `reset_name` (clears stored name)
 
+### Prompt Standard I/O Server (`prompt_stdio.rs`)
+
+A server demonstrating the prompt framework capabilities.
+
+- Shows how to implement prompts in MCP servers
+- Provides code review and debugging prompts
+- Demonstrates prompt argument handling with JSON schema
+- Uses standard I/O transport
+- Good example of prompt implementation patterns
+
 ## How to Run
 
 Each example can be run using Cargo:
@@ -111,6 +121,9 @@ cargo run --example servers_simple_auth_sse
 
 # Run the elicitation standard I/O server
 cargo run --example servers_elicitation_stdio
+
+# Run the prompt standard I/O server
+cargo run --example servers_prompt_stdio
 ```
 
 ## Testing with MCP Inspector
