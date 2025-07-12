@@ -2,6 +2,8 @@ use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{Expr, Ident, ImplItemFn, ReturnType};
+
+use crate::common::{extract_doc_line, none_expr};
 #[derive(FromMeta, Default, Debug)]
 #[darling(default)]
 pub struct ToolAttribute {
@@ -85,41 +87,6 @@ pub struct ToolAnnotationsAttribute {
     pub open_world_hint: Option<bool>,
 }
 
-fn none_expr() -> Expr {
-    syn::parse2::<Expr>(quote! { None }).unwrap()
-}
-
-// extract doc line from attribute
-fn extract_doc_line(existing_docs: Option<String>, attr: &syn::Attribute) -> Option<String> {
-    if !attr.path().is_ident("doc") {
-        return None;
-    }
-
-    let syn::Meta::NameValue(name_value) = &attr.meta else {
-        return None;
-    };
-
-    let syn::Expr::Lit(expr_lit) = &name_value.value else {
-        return None;
-    };
-
-    let syn::Lit::Str(lit_str) = &expr_lit.lit else {
-        return None;
-    };
-
-    let content = lit_str.value().trim().to_string();
-    match (existing_docs, content) {
-        (Some(mut existing_docs), content) if !content.is_empty() => {
-            existing_docs.push('\n');
-            existing_docs.push_str(&content);
-            Some(existing_docs)
-        }
-        (Some(existing_docs), _) => Some(existing_docs),
-        (None, content) if !content.is_empty() => Some(content),
-        _ => None,
-    }
-}
-
 pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let attribute = if attr.is_empty() {
         Default::default()
@@ -190,7 +157,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         };
         syn::parse2::<Expr>(token_stream)?
     } else {
-        none_expr()
+        none_expr()?
     };
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
