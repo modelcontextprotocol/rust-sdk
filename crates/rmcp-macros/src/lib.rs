@@ -177,13 +177,13 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// | :-                | :-       | :-    |
 /// | `name`            | `String` | The name of the prompt. If not provided, it defaults to the function name. |
 /// | `description`     | `String` | A description of the prompt. The document of this function will be used if not provided. |
-/// | `arguments`       | `Expr`   | Arguments that can be passed to the prompt. If not provided, it will use arguments from `Arguments<T>` or `PromptArguments<T>` parameter type. |
+/// | `arguments`       | `Expr`   | An expression that evaluates to `Option<Vec<PromptArgument>>` defining the prompt's arguments. If not provided, it will automatically generate arguments from the `Parameters<T>` type found in the function signature. |
 ///
 /// ## Example
 ///
 /// ```rust,ignore
 /// #[prompt(name = "code_review", description = "Reviews code for best practices")]
-/// pub async fn code_review_prompt(&self, Arguments(args): Arguments<CodeReviewArgs>) -> Result<Vec<PromptMessage>> {
+/// pub async fn code_review_prompt(&self, Parameters(args): Parameters<CodeReviewArgs>) -> Result<Vec<PromptMessage>> {
 ///     // Generate prompt messages based on arguments
 /// }
 /// ```
@@ -213,8 +213,8 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// #[prompt_router]
 /// impl MyPromptHandler {
 ///     #[prompt]
-///     pub async fn greeting_prompt(&self) -> Result<Vec<PromptMessage>, Error> {
-///         // Generate greeting prompt
+///     pub async fn greeting_prompt(&self, Parameters(args): Parameters<GreetingArgs>) -> Result<Vec<PromptMessage>, Error> {
+///         // Generate greeting prompt using args
 ///     }
 ///
 ///     pub fn new() -> Self {

@@ -29,7 +29,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
             &self,
             request: GetPromptRequestParam,
             context: RequestContext<RoleServer>,
-        ) -> Result<GetPromptResult, rmcp::Error> {
+        ) -> Result<GetPromptResult, rmcp::ErrorData> {
             let prompt_context = rmcp::handler::server::prompt::PromptContext::new(
                 self,
                 request.name,
@@ -46,7 +46,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
             &self,
             _request: Option<PaginatedRequestParam>,
             _context: RequestContext<RoleServer>,
-        ) -> Result<ListPromptsResult, rmcp::Error> {
+        ) -> Result<ListPromptsResult, rmcp::ErrorData> {
             let prompts = #router_expr.list_all();
             Ok(ListPromptsResult {
                 prompts,
