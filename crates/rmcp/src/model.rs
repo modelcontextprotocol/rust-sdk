@@ -1181,7 +1181,9 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+///
+/// Note: `content` and `structured_content` are mutually exclusive - exactly one must be provided.
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
@@ -1228,6 +1230,46 @@ impl CallToolResult {
             structured_content: Some(value),
             is_error: Some(true),
         }
+    }
+
+    /// Validate that content and structured_content are mutually exclusive
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match (&self.content, &self.structured_content) {
+            (Some(_), Some(_)) => Err("content and structured_content are mutually exclusive"),
+            (None, None) => Err("either content or structured_content must be provided"),
+            _ => Ok(()),
+        }
+    }
+}
+
+// Custom deserialize implementation to validate mutual exclusivity
+impl<'de> Deserialize<'de> for CallToolResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CallToolResultHelper {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            content: Option<Vec<Content>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            structured_content: Option<Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            is_error: Option<bool>,
+        }
+
+        let helper = CallToolResultHelper::deserialize(deserializer)?;
+        let result = CallToolResult {
+            content: helper.content,
+            structured_content: helper.structured_content,
+            is_error: helper.is_error,
+        };
+
+        // Validate mutual exclusivity
+        result.validate().map_err(serde::de::Error::custom)?;
+
+        Ok(result)
     }
 }
 
