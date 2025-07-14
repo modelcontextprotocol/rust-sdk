@@ -13,7 +13,7 @@ readme = { workspace = true }
 publish = false
 
 [dependencies]
-rig-core = "0.13.0"
+rig-core = "0.14.0"
 tokio = { version = "1", features = ["full"] }
 rmcp = { workspace = true, features = [
     "client",
