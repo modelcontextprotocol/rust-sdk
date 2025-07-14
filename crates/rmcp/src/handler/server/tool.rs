@@ -1,95 +1,22 @@
-//! Tool handler traits and types for MCP servers.
-//!
-//! This module provides the infrastructure for implementing tools that can be called
-//! by MCP clients. Tools can return either unstructured content (text, images) or
-//! structured JSON data with schemas.
-//!
-//! # Structured Output
-//!
-//! Tools can return structured JSON data using the [`Json`] wrapper type.
-//! When using `Json<T>`, the framework will:
-//! - Automatically generate a JSON schema for the output type
-//! - Validate the output against the schema
-//! - Return the data in the `structured_content` field of [`CallToolResult`]
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use rmcp::{tool, Json};
-//! use schemars::JsonSchema;
-//! use serde::{Serialize, Deserialize};
-//!
-//! #[derive(Serialize, Deserialize, JsonSchema)]
-//! struct AnalysisResult {
-//!     score: f64,
-//!     summary: String,
-//! }
-//!
-//! #[tool(name = "analyze")]
-//! async fn analyze(&self, text: String) -> Result<Json<AnalysisResult>, String> {
-//!     Ok(Json(AnalysisResult {
-//!         score: 0.95,
-//!         summary: "Positive sentiment".to_string(),
-//!     }))
-//! }
-//! ```
-
 use std::{
-    any::TypeId, borrow::Cow, collections::HashMap, future::Ready, marker::PhantomData, sync::Arc,
+    borrow::Cow,
+    future::{Future, Ready},
+    marker::PhantomData,
 };
 
 use futures::future::{BoxFuture, FutureExt};
-use schemars::{JsonSchema, transform::AddNullable};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio_util::sync::CancellationToken;
+use serde::de::DeserializeOwned;
 
+use super::common::{AsRequestContext, FromContextPart};
+pub use super::common::{
+    Extension, Parameters, RequestId, cached_schema_for_type, schema_for_type,
+};
 pub use super::router::tool::{ToolRoute, ToolRouter};
 use crate::{
     RoleServer,
-    handler::server::wrapper::Json,
     model::{CallToolRequestParam, CallToolResult, IntoContents, JsonObject},
-    schemars::generate::SchemaSettings,
     service::RequestContext,
 };
-/// A shortcut for generating a JSON schema for a type.
-pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
-    // explicitly to align json schema version to official specifications.
-    // https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-03-26/schema.json
-    // TODO: update to 2020-12 waiting for the mcp spec update
-    let mut settings = SchemaSettings::draft07();
-    settings.transforms = vec![Box::new(AddNullable::default())];
-    let generator = settings.into_generator();
-    let schema = generator.into_root_schema_for::<T>();
-    let object = serde_json::to_value(schema).expect("failed to serialize schema");
-    match object {
-        serde_json::Value::Object(object) => object,
-        _ => panic!("unexpected schema value"),
-    }
-}
-
-/// Call [`schema_for_type`] with a cache
-pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
-    thread_local! {
-        static CACHE_FOR_TYPE: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
-    };
-    CACHE_FOR_TYPE.with(|cache| {
-        if let Some(x) = cache
-            .read()
-            .expect("schema cache lock poisoned")
-            .get(&TypeId::of::<T>())
-        {
-            x.clone()
-        } else {
-            let schema = schema_for_type::<T>();
-            let schema = Arc::new(schema);
-            cache
-                .write()
-                .expect("schema cache lock poisoned")
-                .insert(TypeId::of::<T>(), schema.clone());
-            schema
-        }
-    })
-}
 
 /// Deserialize a JSON object into a type
 pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, crate::ErrorData> {
@@ -128,32 +55,25 @@ impl<'s, S> ToolCallContext<'s, S> {
     }
 }
 
+impl<S> AsRequestContext for ToolCallContext<'_, S> {
+    fn as_request_context(&self) -> &RequestContext<RoleServer> {
+        &self.request_context
+    }
+
+    fn as_request_context_mut(&mut self) -> &mut RequestContext<RoleServer> {
+        &mut self.request_context
+    }
+}
+
+// Keep the original trait for backward compatibility
 pub trait FromToolCallContextPart<S>: Sized {
     fn from_tool_call_context_part(
         context: &mut ToolCallContext<S>,
     ) -> Result<Self, crate::ErrorData>;
 }
 
-/// Trait for converting tool return values into [`CallToolResult`].
-///
-/// This trait is automatically implemented for:
-/// - Types implementing [`IntoContents`] (returns unstructured content)
-/// - `Result<T, E>` where both `T` and `E` implement [`IntoContents`]
-/// - [`Json<T>`](crate::handler::server::wrapper::Json) where `T` implements [`Serialize`] (returns structured content)
-/// - `Result<Json<T>, E>` for structured results with errors
-///
-/// The `#[tool]` macro uses this trait to convert tool function return values
-/// into the appropriate [`CallToolResult`] format.
 pub trait IntoCallToolResult {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData>;
-
-    /// Returns the output schema for this type, if any.
-    ///
-    /// This is used by the macro to automatically generate output schemas
-    /// for tool functions that return structured data.
-    fn output_schema() -> Option<Arc<JsonObject>> {
-        None
-    }
 }
 
 impl<T: IntoContents> IntoCallToolResult for T {
@@ -177,40 +97,6 @@ impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
             Ok(value) => value.into_call_tool_result(),
             Err(error) => Err(error),
         }
-    }
-}
-
-// Implementation for Json<T> to create structured content
-impl<T: Serialize + JsonSchema + 'static> IntoCallToolResult for Json<T> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
-        let value = serde_json::to_value(self.0).map_err(|e| {
-            crate::ErrorData::internal_error(
-                format!("Failed to serialize structured content: {}", e),
-                None,
-            )
-        })?;
-
-        Ok(CallToolResult::structured(value))
-    }
-
-    fn output_schema() -> Option<Arc<JsonObject>> {
-        Some(cached_schema_for_type::<T>())
-    }
-}
-
-// Implementation for Result<Json<T>, E>
-impl<T: Serialize + JsonSchema + 'static, E: IntoContents> IntoCallToolResult
-    for Result<Json<T>, E>
-{
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
-        match self {
-            Ok(value) => value.into_call_tool_result(),
-            Err(error) => Ok(CallToolResult::error(error.into_contents())),
-        }
-    }
-
-    fn output_schema() -> Option<Arc<JsonObject>> {
-        Json::<T>::output_schema()
     }
 }
 
@@ -266,40 +152,34 @@ pub type DynCallToolHandler<S> = dyn for<'s> Fn(ToolCallContext<'s, S>) -> BoxFu
     + Send
     + Sync;
 
-/// Parameter Extractor
-///
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Parameters<P>(pub P);
-
-impl<P: JsonSchema> JsonSchema for Parameters<P> {
-    fn schema_name() -> Cow<'static, str> {
-        P::schema_name()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        P::json_schema(generator)
-    }
-}
-
-impl<S> FromToolCallContextPart<S> for CancellationToken {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        Ok(context.request_context.ct.clone())
-    }
-}
-
+// Tool-specific extractor for tool name
 pub struct ToolName(pub Cow<'static, str>);
 
-impl<S> FromToolCallContextPart<S> for ToolName {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
+impl<S> FromContextPart<ToolCallContext<'_, S>> for ToolName {
+    fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
         Ok(Self(context.name.clone()))
     }
 }
 
+// Special implementation for Parameters that handles tool arguments
+impl<S, P> FromContextPart<ToolCallContext<'_, S>> for Parameters<P>
+where
+    P: DeserializeOwned,
+{
+    fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
+        let arguments = context.arguments.take().unwrap_or_default();
+        let value: P =
+            serde_json::from_value(serde_json::Value::Object(arguments)).map_err(|e| {
+                crate::ErrorData::invalid_params(
+                    format!("failed to deserialize parameters: {error}", error = e),
+                    None,
+                )
+            })?;
+        Ok(Parameters(value))
+    }
+}
+
+// Also implement the old trait directly for Parameters to support macro-generated code
 impl<S, P> FromToolCallContextPart<S> for Parameters<P>
 where
     P: DeserializeOwned,
@@ -319,81 +199,11 @@ where
     }
 }
 
-impl<S> FromToolCallContextPart<S> for JsonObject {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
+// Special implementation for JsonObject that takes tool arguments
+impl<S> FromContextPart<ToolCallContext<'_, S>> for JsonObject {
+    fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
         let object = context.arguments.take().unwrap_or_default();
         Ok(object)
-    }
-}
-
-impl<S> FromToolCallContextPart<S> for crate::model::Extensions {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        let extensions = context.request_context.extensions.clone();
-        Ok(extensions)
-    }
-}
-
-pub struct Extension<T>(pub T);
-
-impl<S, T> FromToolCallContextPart<S> for Extension<T>
-where
-    T: Send + Sync + 'static + Clone,
-{
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        let extension = context
-            .request_context
-            .extensions
-            .get::<T>()
-            .cloned()
-            .ok_or_else(|| {
-                crate::ErrorData::invalid_params(
-                    format!("missing extension {}", std::any::type_name::<T>()),
-                    None,
-                )
-            })?;
-        Ok(Extension(extension))
-    }
-}
-
-impl<S> FromToolCallContextPart<S> for crate::Peer<RoleServer> {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        let peer = context.request_context.peer.clone();
-        Ok(peer)
-    }
-}
-
-impl<S> FromToolCallContextPart<S> for crate::model::Meta {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        let mut meta = crate::model::Meta::default();
-        std::mem::swap(&mut meta, &mut context.request_context.meta);
-        Ok(meta)
-    }
-}
-
-pub struct RequestId(pub crate::model::RequestId);
-impl<S> FromToolCallContextPart<S> for RequestId {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        Ok(RequestId(context.request_context.id.clone()))
-    }
-}
-
-impl<S> FromToolCallContextPart<S> for RequestContext<RoleServer> {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        Ok(context.request_context.clone())
     }
 }
 

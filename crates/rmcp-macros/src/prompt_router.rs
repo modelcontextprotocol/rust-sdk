@@ -42,8 +42,23 @@ pub fn prompt_router(attr: TokenStream, input: TokenStream) -> syn::Result<Token
             if has_prompt_attr {
                 let fn_ident = &fn_item.sig.ident;
                 let attr_fn_ident = format_ident!("{}_prompt_attr", fn_ident);
-                prompt_route_fn_calls
-                    .push(quote! { .with_route((Self::#attr_fn_ident(), Self::#fn_ident)) });
+
+                // Check what parameters the function takes
+                let mut param_names = Vec::new();
+                let mut param_types = Vec::new();
+
+                for input in &fn_item.sig.inputs {
+                    if let syn::FnArg::Typed(pat_type) = input {
+                        // Extract parameter pattern and type
+                        param_types.push(&*pat_type.ty);
+                        param_names.push(&*pat_type.pat);
+                    }
+                }
+
+                // Use the exact same pattern as tool_router
+                prompt_route_fn_calls.push(quote! {
+                    .with_route((Self::#attr_fn_ident(), Self::#fn_ident))
+                });
             }
         }
     }
@@ -76,7 +91,7 @@ mod test {
                 }
 
                 #[prompt]
-                async fn code_review_prompt(&self, args: Arguments<CodeReviewArgs>) -> Result<Vec<PromptMessage>, Error> {
+                async fn code_review_prompt(&self, Parameters(args): Parameters<CodeReviewArgs>) -> Result<Vec<PromptMessage>, Error> {
                     Ok(vec![])
                 }
             }

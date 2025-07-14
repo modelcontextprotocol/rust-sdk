@@ -45,6 +45,7 @@ askama = { version = "0.14" }
 tower-http = { version = "0.6", features = ["cors"] }
 hyper = { version = "1" }
 hyper-util = { version = "0", features = ["server"] }
+tokio-util = { version = "0.7" }
 
 [dev-dependencies]
 tokio-stream = { version = "0.1" }
@@ -97,3 +98,7 @@ path = "src/structured_output.rs"
 [[example]]
 name = "servers_elicitation_stdio"
 path = "src/elicitation_stdio.rs"
+
+[[example]]
+name = "servers_prompt_with_extractors"
+path = "src/prompt_with_extractors.rs"

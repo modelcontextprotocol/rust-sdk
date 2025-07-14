@@ -1,6 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
-use futures::{FutureExt, future::BoxFuture};
+use futures::future::BoxFuture;
 
 use crate::{
     handler::server::prompt::{DynGetPromptHandler, GetPromptHandler, PromptContext},
@@ -40,7 +40,7 @@ impl<S: Send + Sync + 'static> PromptRoute<S> {
         Self {
             get: Arc::new(move |context: PromptContext<S>| {
                 let handler = handler.clone();
-                context.invoke(handler).boxed()
+                handler.handle(context)
             }),
             attr: attr.into(),
         }
@@ -48,7 +48,9 @@ impl<S: Send + Sync + 'static> PromptRoute<S> {
 
     pub fn new_dyn<H>(attr: impl Into<Prompt>, handler: H) -> Self
     where
-        H: for<'a> Fn(PromptContext<'a, S>) -> BoxFuture<'a, Result<GetPromptResult, crate::Error>>
+        H: for<'a> Fn(
+                PromptContext<'a, S>,
+            ) -> BoxFuture<'a, Result<GetPromptResult, crate::ErrorData>>
             + Send
             + Sync
             + 'static,
@@ -172,9 +174,9 @@ where
     pub async fn get_prompt(
         &self,
         context: PromptContext<'_, S>,
-    ) -> Result<GetPromptResult, crate::Error> {
+    ) -> Result<GetPromptResult, crate::ErrorData> {
         let item = self.map.get(context.name.as_str()).ok_or_else(|| {
-            crate::Error::invalid_params(
+            crate::ErrorData::invalid_params(
                 format!("prompt '{}' not found", context.name),
                 Some(serde_json::json!({
                     "available_prompts": self.list_all().iter().map(|p| &p.name).collect::<Vec<_>>()

@@ -169,30 +169,16 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         input_schema
     } else {
         // try to find some parameters wrapper in the function
-        let params_ty = fn_item.sig.inputs.iter().find_map(|input| {
-            if let syn::FnArg::Typed(pat_type) = input {
-                if let syn::Type::Path(type_path) = &*pat_type.ty {
-                    if type_path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|type_name| type_name.ident == "Parameters")
-                    {
-                        return Some(pat_type.ty.clone());
-                    }
-                }
-            }
-            None
-        });
+        let params_ty = crate::common::find_parameters_type_impl(&fn_item);
         if let Some(params_ty) = params_ty {
             // if found, use the Parameters schema
             syn::parse2::<Expr>(quote! {
-                rmcp::handler::server::tool::cached_schema_for_type::<#params_ty>()
+                rmcp::handler::server::common::cached_schema_for_type::<#params_ty>()
             })?
         } else {
             // if not found, use the default EmptyObject schema
             syn::parse2::<Expr>(quote! {
-                rmcp::handler::server::tool::cached_schema_for_type::<rmcp::model::EmptyObject>()
+                rmcp::handler::server::common::cached_schema_for_type::<rmcp::model::EmptyObject>()
             })?
         }
     };
@@ -263,10 +249,10 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
             }
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + #lt>> }
+                    quote! { -> futures::future::BoxFuture<#lt, ()> }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> std::pin::Pin<Box<dyn Future<Output = #ty> + Send + #lt>> }
+                    quote! { -> futures::future::BoxFuture<#lt, #ty> }
                 }
             }
         })?;

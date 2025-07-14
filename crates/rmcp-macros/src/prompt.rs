@@ -12,7 +12,7 @@ pub struct PromptAttribute {
     pub name: Option<String>,
     /// Optional description of what the prompt does
     pub description: Option<String>,
-    /// Arguments that can be passed to customize the prompt
+    /// Arguments that can be passed to the prompt
     pub arguments: Option<Expr>,
 }
 
@@ -59,39 +59,17 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
 
     let prompt_attr_fn_ident = format_ident!("{}_prompt_attr", fn_ident);
 
-    // Try to find prompt arguments from function parameters
+    // Try to find prompt parameters from function parameters
     let arguments_expr = if let Some(arguments) = attribute.arguments {
         arguments
     } else {
-        // Look for a type named Arguments or PromptArguments in the function signature
-        let args_ty = fn_item.sig.inputs.iter().find_map(|input| {
-            if let syn::FnArg::Typed(pat_type) = input {
-                if let syn::Type::Path(type_path) = &*pat_type.ty {
-                    if let Some(last_segment) = type_path.path.segments.last() {
-                        if last_segment.ident == "Arguments"
-                            || last_segment.ident == "PromptArguments"
-                        {
-                            // Extract the inner type from Arguments<T>
-                            if let syn::PathArguments::AngleBracketed(args) =
-                                &last_segment.arguments
-                            {
-                                if let Some(syn::GenericArgument::Type(inner_ty)) =
-                                    args.args.first()
-                                {
-                                    return Some(inner_ty.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            None
-        });
+        // Look for a type named Parameters in the function signature
+        let params_ty = crate::common::find_parameters_type_impl(&fn_item);
 
-        if let Some(args_ty) = args_ty {
+        if let Some(params_ty) = params_ty {
             // Generate arguments from the type's schema with caching
             syn::parse2::<Expr>(quote! {
-                rmcp::handler::server::prompt::cached_arguments_from_schema::<#args_ty>()
+                rmcp::handler::server::prompt::cached_arguments_from_schema::<#params_ty>()
             })?
         } else {
             // No arguments
@@ -112,10 +90,10 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     };
     let prompt_attr_fn = resolved_prompt_attr.into_fn(prompt_attr_fn_ident.clone())?;
 
-    // Modify the input function for async support
+    // Modify the input function for async support (same as tool macro)
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
-        // 2. make return type: `std::pin::Pin<Box<dyn Future<Output = #ReturnType> + Send + '_>>`
+        // 2. make return type: `futures::future::BoxFuture<'_, #ReturnType>`
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
@@ -130,10 +108,10 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
             }
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + #lt>> }
+                    quote! { -> futures::future::BoxFuture<#lt, ()> }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> std::pin::Pin<Box<dyn Future<Output = #ty> + Send + #lt>> }
+                    quote! { -> futures::future::BoxFuture<#lt, #ty> }
                 }
             }
         })?;
@@ -163,7 +141,7 @@ mod test {
             description = "An example prompt"
         };
         let input = quote! {
-            async fn example_prompt(&self, Arguments(args): Arguments<ExampleArgs>) -> Result<String> {
+            async fn example_prompt(&self, Parameters(args): Parameters<ExampleArgs>) -> Result<String> {
                 Ok("Example prompt response".to_string())
             }
         };
