@@ -10,6 +10,8 @@ pub struct ToolAttribute {
     pub description: Option<String>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Option<Expr>,
+    /// An optional JSON Schema object defining the structure of the tool's output
+    pub output_schema: Option<Expr>,
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotationsAttribute>,
 }
@@ -18,6 +20,7 @@ pub struct ResolvedToolAttribute {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Expr,
+    pub output_schema: Option<Expr>,
     pub annotations: Expr,
 }
 
@@ -27,10 +30,16 @@ impl ResolvedToolAttribute {
             name,
             description,
             input_schema,
+            output_schema,
             annotations,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
+        } else {
+            quote! { None }
+        };
+        let output_schema = if let Some(output_schema) = output_schema {
+            quote! { Some(#output_schema) }
         } else {
             quote! { None }
         };
@@ -40,6 +49,7 @@ impl ResolvedToolAttribute {
                     name: #name.into(),
                     description: #description,
                     input_schema: #input_schema,
+                    output_schema: #output_schema,
                     annotations: #annotations,
                 }
             }
@@ -192,12 +202,70 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     } else {
         none_expr()
     };
+    // Handle output_schema - either explicit or generated from return type
+    let output_schema_expr = if let Some(output_schema) = attribute.output_schema {
+        Some(output_schema)
+    } else {
+        // Try to generate schema from return type
+        // Look for Result<T, E> where T is not CallToolResult
+        match &fn_item.sig.output {
+            syn::ReturnType::Type(_, ret_type) => {
+                if let syn::Type::Path(type_path) = &**ret_type {
+                    if let Some(last_segment) = type_path.path.segments.last() {
+                        if last_segment.ident == "Result" {
+                            if let syn::PathArguments::AngleBracketed(args) =
+                                &last_segment.arguments
+                            {
+                                if let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
+                                {
+                                    // Check if the type is NOT CallToolResult
+                                    let is_call_tool_result =
+                                        if let syn::Type::Path(ok_path) = ok_type {
+                                            ok_path
+                                                .path
+                                                .segments
+                                                .last()
+                                                .map(|seg| seg.ident == "CallToolResult")
+                                                .unwrap_or(false)
+                                        } else {
+                                            false
+                                        };
+
+                                    if !is_call_tool_result {
+                                        // Generate schema for the Ok type
+                                        syn::parse2::<Expr>(quote! {
+                                            rmcp::handler::server::tool::cached_schema_for_type::<#ok_type>()
+                                        }).ok()
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    };
+
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
         description: attribute
             .description
             .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line)),
         input_schema: input_schema_expr,
+        output_schema: output_schema_expr,
         annotations: annotations_expr,
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
