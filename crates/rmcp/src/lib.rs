@@ -53,10 +53,17 @@
 //! Tools can also return structured JSON data with schemas. Use the [`handler::server::tool::Structured`] wrapper:
 //!
 //! ```rust
-//! # use rmcp::{tool, tool_router, ErrorData as McpError, handler::server::tool::{ToolRouter, Structured}};
+//! # use rmcp::{tool, tool_router, handler::server::tool::{ToolRouter, Structured, Parameters}};
 //! # use schemars::JsonSchema;
 //! # use serde::{Serialize, Deserialize};
 //! #
+//! #[derive(Serialize, Deserialize, JsonSchema)]
+//! struct CalculationRequest {
+//!     a: i32,
+//!     b: i32,
+//!     operation: String,
+//! }
+//!
 //! #[derive(Serialize, Deserialize, JsonSchema)]
 //! struct CalculationResult {
 //!     result: i32,
@@ -70,15 +77,15 @@
 //! #
 //! # #[tool_router]
 //! # impl Calculator {
-//! #[tool(name = "calculate")]
-//! async fn calculate(&self, a: i32, b: i32, op: String) -> Result<Structured<CalculationResult>, McpError> {
-//!     let result = match op.as_str() {
-//!         "add" => a + b,
-//!         "multiply" => a * b,
-//!         _ => return Err(McpError::invalid_params("Unknown operation", None)),
+//! #[tool(name = "calculate", description = "Perform a calculation")]
+//! async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Structured<CalculationResult>, String> {
+//!     let result = match params.0.operation.as_str() {
+//!         "add" => params.0.a + params.0.b,
+//!         "multiply" => params.0.a * params.0.b,
+//!         _ => return Err("Unknown operation".to_string()),
 //!     };
 //!     
-//!     Ok(Structured(CalculationResult { result, operation: op }))
+//!     Ok(Structured(CalculationResult { result, operation: params.0.operation }))
 //! }
 //! # }
 //! ```
