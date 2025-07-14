@@ -97,6 +97,15 @@ pub trait FromToolCallContextPart<S>: Sized {
     ) -> Result<Self, crate::ErrorData>;
 }
 
+/// Marker wrapper to indicate that a type should be serialized as structured content
+pub struct Structured<T>(pub T);
+
+impl<T> Structured<T> {
+    pub fn new(value: T) -> Self {
+        Structured(value)
+    }
+}
+
 pub trait IntoCallToolResult {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData>;
 }
@@ -121,6 +130,29 @@ impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
         match self {
             Ok(value) => value.into_call_tool_result(),
             Err(error) => Err(error),
+        }
+    }
+}
+
+// Implementation for Structured<T> to create structured content
+impl<T: Serialize> IntoCallToolResult for Structured<T> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
+        let value = serde_json::to_value(self.0).map_err(|e| {
+            crate::ErrorData::internal_error(
+                format!("Failed to serialize structured content: {}", e),
+                None,
+            )
+        })?;
+        Ok(CallToolResult::structured(value))
+    }
+}
+
+// Implementation for Result<Structured<T>, E>
+impl<T: Serialize, E: IntoContents> IntoCallToolResult for Result<Structured<T>, E> {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
+        match self {
+            Ok(value) => value.into_call_tool_result(),
+            Err(error) => Ok(CallToolResult::error(error.into_contents())),
         }
     }
 }
