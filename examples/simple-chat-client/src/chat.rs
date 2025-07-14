@@ -86,21 +86,24 @@ impl ChatSession {
                             self.messages
                                 .push(Message::user("tool call failed, mcp call error"));
                         } else {
-                            result.content.iter().for_each(|content| {
-                                if let Some(content_text) = content.as_text() {
-                                    let json_result = serde_json::from_str::<serde_json::Value>(
-                                        &content_text.text,
-                                    )
-                                    .unwrap_or_default();
-                                    let pretty_result =
-                                        serde_json::to_string_pretty(&json_result).unwrap();
-                                    println!("call tool result: {}", pretty_result);
-                                    self.messages.push(Message::user(format!(
-                                        "call tool result: {}",
-                                        pretty_result
-                                    )));
-                                }
-                            });
+                            if let Some(contents) = &result.content {
+                                contents.iter().for_each(|content| {
+                                    if let Some(content_text) = content.as_text() {
+                                        let json_result =
+                                            serde_json::from_str::<serde_json::Value>(
+                                                &content_text.text,
+                                            )
+                                            .unwrap_or_default();
+                                        let pretty_result =
+                                            serde_json::to_string_pretty(&json_result).unwrap();
+                                        println!("call tool result: {}", pretty_result);
+                                        self.messages.push(Message::user(format!(
+                                            "call tool result: {}",
+                                            pretty_result
+                                        )));
+                                    }
+                                });
+                            }
                         }
                     }
                     Err(e) => {
