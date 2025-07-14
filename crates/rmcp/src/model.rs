@@ -1186,24 +1186,46 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
-    pub content: Vec<Content>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<Content>>,
+    /// An optional JSON object that represents the structured result of the tool call
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     /// Whether this result represents an error condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 impl CallToolResult {
-    /// Create a successful tool result
+    /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<Content>) -> Self {
         CallToolResult {
-            content,
+            content: Some(content),
+            structured_content: None,
             is_error: Some(false),
         }
     }
-    /// Create an error tool result
+    /// Create an error tool result with unstructured content
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
-            content,
+            content: Some(content),
+            structured_content: None,
+            is_error: Some(true),
+        }
+    }
+    /// Create a successful tool result with structured content
+    pub fn structured(value: Value) -> Self {
+        CallToolResult {
+            content: None,
+            structured_content: Some(value),
+            is_error: Some(false),
+        }
+    }
+    /// Create an error tool result with structured content
+    pub fn structured_error(value: Value) -> Self {
+        CallToolResult {
+            content: None,
+            structured_content: Some(value),
             is_error: Some(true),
         }
     }
