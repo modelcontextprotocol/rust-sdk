@@ -119,6 +119,7 @@ impl ServerHandler for SamplingDemoServer {
                     }))
                     .unwrap(),
                 ),
+                output_schema: None,
                 annotations: None,
             }],
             next_cursor: None,
