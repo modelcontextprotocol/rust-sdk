@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 
 use crate::{
     handler::server::tool::{
-        CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type,
+        CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type, validate_against_schema,
     },
     model::{CallToolResult, Tool, ToolAnnotations},
 };
@@ -242,7 +242,17 @@ where
             .map
             .get(context.name())
             .ok_or_else(|| crate::ErrorData::invalid_params("tool not found", None))?;
-        (item.call)(context).await
+        
+        let result = (item.call)(context).await?;
+        
+        // Validate structured content against output schema if present
+        if let Some(ref output_schema) = item.attr.output_schema {
+            if let Some(ref structured_content) = result.structured_content {
+                validate_against_schema(structured_content, output_schema)?;
+            }
+        }
+        
+        Ok(result)
     }
 
     pub fn list_all(&self) -> Vec<crate::model::Tool> {

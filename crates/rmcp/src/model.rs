@@ -1216,6 +1216,19 @@ impl CallToolResult {
         }
     }
     /// Create a successful tool result with structured content
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    /// 
+    /// let result = CallToolResult::structured(json!({
+    ///     "temperature": 22.5,
+    ///     "humidity": 65,
+    ///     "description": "Partly cloudy"
+    /// }));
+    /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
             content: None,
@@ -1224,6 +1237,23 @@ impl CallToolResult {
         }
     }
     /// Create an error tool result with structured content
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    /// 
+    /// let result = CallToolResult::structured_error(json!({
+    ///     "error_code": "INVALID_INPUT",
+    ///     "message": "Temperature value out of range",
+    ///     "details": {
+    ///         "min": -50,
+    ///         "max": 50,
+    ///         "provided": 100
+    ///     }
+    /// }));
+    /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
             content: None,

@@ -48,8 +48,45 @@
 //! }
 //! ```
 //!
-//! Next also implement [ServerHandler] for `Counter` and start the server inside
-//! `main` by calling `Counter::new().serve(...)`. See the examples directory in the repository for more information.
+//! ### Structured Output
+//!
+//! Tools can also return structured JSON data with schemas. Use the [`handler::server::tool::Structured`] wrapper:
+//!
+//! ```rust
+//! # use rmcp::{tool, tool_router, ErrorData as McpError, handler::server::tool::{ToolRouter, Structured}};
+//! # use schemars::JsonSchema;
+//! # use serde::{Serialize, Deserialize};
+//! #
+//! #[derive(Serialize, Deserialize, JsonSchema)]
+//! struct CalculationResult {
+//!     result: i32,
+//!     operation: String,
+//! }
+//!
+//! # #[derive(Clone)]
+//! # struct Calculator {
+//! #     tool_router: ToolRouter<Self>,
+//! # }
+//! #
+//! # #[tool_router]
+//! # impl Calculator {
+//! #[tool(name = "calculate")]
+//! async fn calculate(&self, a: i32, b: i32, op: String) -> Result<Structured<CalculationResult>, McpError> {
+//!     let result = match op.as_str() {
+//!         "add" => a + b,
+//!         "multiply" => a * b,
+//!         _ => return Err(McpError::invalid_params("Unknown operation", None)),
+//!     };
+//!     
+//!     Ok(Structured(CalculationResult { result, operation: op }))
+//! }
+//! # }
+//! ```
+//!
+//! The `#[tool]` macro automatically generates an output schema from the `CalculationResult` type.
+//!
+//! Next also implement [ServerHandler] for your server type and start the server inside
+//! `main` by calling `.serve(...)`. See the examples directory in the repository for more information.
 //!
 //! ## Client
 //!
@@ -104,6 +141,9 @@ pub use handler::client::ClientHandler;
 #[cfg(feature = "server")]
 #[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub use handler::server::ServerHandler;
+#[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
+pub use handler::server::tool::Structured;
 #[cfg(any(feature = "client", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "client", feature = "server"))))]
 pub use service::{Peer, Service, ServiceError, ServiceExt};
