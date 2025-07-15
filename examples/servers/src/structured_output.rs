@@ -48,6 +48,12 @@ pub struct StructuredOutputServer {
 #[tool_handler(router = self.tool_router)]
 impl rmcp::ServerHandler for StructuredOutputServer {}
 
+impl Default for StructuredOutputServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tool_router(router = tool_router)]
 impl StructuredOutputServer {
     pub fn new() -> Self {
