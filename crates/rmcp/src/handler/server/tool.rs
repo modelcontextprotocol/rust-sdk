@@ -188,6 +188,14 @@ pub trait FromToolCallContextPart<S>: Sized {
 /// into the appropriate [`CallToolResult`] format.
 pub trait IntoCallToolResult {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData>;
+
+    /// Returns the output schema for this type, if any.
+    ///
+    /// This is used by the macro to automatically generate output schemas
+    /// for tool functions that return structured data.
+    fn output_schema() -> Option<Arc<JsonObject>> {
+        None
+    }
 }
 
 impl<T: IntoContents> IntoCallToolResult for T {
@@ -215,7 +223,7 @@ impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
 }
 
 // Implementation for Json<T> to create structured content
-impl<T: Serialize> IntoCallToolResult for Json<T> {
+impl<T: Serialize + JsonSchema + 'static> IntoCallToolResult for Json<T> {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         let value = serde_json::to_value(self.0).map_err(|e| {
             crate::ErrorData::internal_error(
@@ -226,15 +234,25 @@ impl<T: Serialize> IntoCallToolResult for Json<T> {
 
         Ok(CallToolResult::structured(value))
     }
+
+    fn output_schema() -> Option<Arc<JsonObject>> {
+        Some(cached_schema_for_type::<T>())
+    }
 }
 
 // Implementation for Result<Json<T>, E>
-impl<T: Serialize, E: IntoContents> IntoCallToolResult for Result<Json<T>, E> {
+impl<T: Serialize + JsonSchema + 'static, E: IntoContents> IntoCallToolResult
+    for Result<Json<T>, E>
+{
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         match self {
             Ok(value) => value.into_call_tool_result(),
             Err(error) => Ok(CallToolResult::error(error.into_contents())),
         }
+    }
+
+    fn output_schema() -> Option<Arc<JsonObject>> {
+        Json::<T>::output_schema()
     }
 }
 
