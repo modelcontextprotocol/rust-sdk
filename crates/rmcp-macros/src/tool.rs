@@ -99,6 +99,22 @@ fn none_expr() -> Expr {
     syn::parse2::<Expr>(quote! { None }).unwrap()
 }
 
+/// Check if a type is Json<T> and extract the inner type T
+fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(last_segment) = type_path.path.segments.last() {
+            if last_segment.ident == "Json" {
+                if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                        return Some(inner_type);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 // extract doc line from attribute
 fn extract_doc_line(existing_docs: Option<String>, attr: &syn::Attribute) -> Option<String> {
     if !attr.path().is_ident("doc") {
@@ -207,10 +223,15 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         Some(output_schema)
     } else {
         // Try to generate schema from return type
-        // Look for Result<T, E> where T is not CallToolResult
+        // Look for Json<T> or Result<Json<T>, E>
         match &fn_item.sig.output {
             syn::ReturnType::Type(_, ret_type) => {
-                if let syn::Type::Path(type_path) = &**ret_type {
+                // Check if it's directly Json<T>
+                if let Some(inner_type) = extract_json_inner_type(ret_type) {
+                    syn::parse2::<Expr>(quote! {
+                        rmcp::handler::server::tool::cached_schema_for_type::<#inner_type>()
+                    }).ok()
+                } else if let syn::Type::Path(type_path) = &**ret_type {
                     if let Some(last_segment) = type_path.path.segments.last() {
                         if last_segment.ident == "Result" {
                             if let syn::PathArguments::AngleBracketed(args) =
@@ -218,23 +239,10 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
                             {
                                 if let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
                                 {
-                                    // Check if the type is NOT CallToolResult
-                                    let is_call_tool_result =
-                                        if let syn::Type::Path(ok_path) = ok_type {
-                                            ok_path
-                                                .path
-                                                .segments
-                                                .last()
-                                                .map(|seg| seg.ident == "CallToolResult")
-                                                .unwrap_or(false)
-                                        } else {
-                                            false
-                                        };
-
-                                    if !is_call_tool_result {
-                                        // Generate schema for the Ok type
+                                    // Check if the Ok type is Json<T>
+                                    if let Some(inner_type) = extract_json_inner_type(ok_type) {
                                         syn::parse2::<Expr>(quote! {
-                                            rmcp::handler::server::tool::cached_schema_for_type::<#ok_type>()
+                                            rmcp::handler::server::tool::cached_schema_for_type::<#inner_type>()
                                         }).ok()
                                     } else {
                                         None
