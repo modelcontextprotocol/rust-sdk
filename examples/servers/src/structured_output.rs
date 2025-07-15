@@ -1,13 +1,13 @@
 //! Example demonstrating structured output from tools
 //!
 //! This example shows how to:
-//! - Return structured data from tools using the Structured<T> wrapper
+//! - Return structured data from tools using the Json<T> wrapper
 //! - Automatically generate output schemas from Rust types
 //! - Handle both structured and unstructured tool outputs
 
 use rmcp::{
-    ServiceExt, transport::stdio,
-    handler::server::{router::tool::ToolRouter, tool::{Parameters, Structured}},
+    ServiceExt, transport::stdio, Json,
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -58,7 +58,7 @@ impl StructuredOutputServer {
 
     /// Get weather information for a city (returns structured data)
     #[tool(name = "get_weather", description = "Get current weather for a city")]
-    pub async fn get_weather(&self, params: Parameters<WeatherRequest>) -> Result<Structured<WeatherResponse>, String> {
+    pub async fn get_weather(&self, params: Parameters<WeatherRequest>) -> Result<Json<WeatherResponse>, String> {
         // Simulate weather API call
         let weather = WeatherResponse {
             temperature: match params.0.units.as_deref() {
@@ -70,12 +70,12 @@ impl StructuredOutputServer {
             wind_speed: 12.5,
         };
         
-        Ok(Structured(weather))
+        Ok(Json(weather))
     }
 
     /// Perform calculations on a list of numbers (returns structured data)
     #[tool(name = "calculate", description = "Perform calculations on numbers")]
-    pub async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Structured<CalculationResult>, String> {
+    pub async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Json<CalculationResult>, String> {
         let numbers = &params.0.numbers;
         if numbers.is_empty() {
             return Err("No numbers provided".to_string());
@@ -88,7 +88,7 @@ impl StructuredOutputServer {
             _ => return Err(format!("Unknown operation: {}", params.0.operation)),
         };
 
-        Ok(Structured(CalculationResult {
+        Ok(Json(CalculationResult {
             result,
             operation: params.0.operation,
             input_count: numbers.len(),

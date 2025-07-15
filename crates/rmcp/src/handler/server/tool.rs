@@ -1,33 +1,33 @@
 //! Tool handler traits and types for MCP servers.
-//! 
+//!
 //! This module provides the infrastructure for implementing tools that can be called
 //! by MCP clients. Tools can return either unstructured content (text, images) or
 //! structured JSON data with schemas.
-//! 
+//!
 //! # Structured Output
-//! 
-//! Tools can return structured JSON data using the [`Structured`] wrapper type.
-//! When using `Structured<T>`, the framework will:
+//!
+//! Tools can return structured JSON data using the [`Json`](crate::handler::server::wrapper::Json) wrapper type.
+//! When using `Json<T>`, the framework will:
 //! - Automatically generate a JSON schema for the output type
 //! - Validate the output against the schema
 //! - Return the data in the `structured_content` field of [`CallToolResult`]
-//! 
+//!
 //! # Example
-//! 
+//!
 //! ```rust,ignore
-//! use rmcp::{tool, Structured};
+//! use rmcp::{tool, Json};
 //! use schemars::JsonSchema;
 //! use serde::{Serialize, Deserialize};
-//! 
+//!
 //! #[derive(Serialize, Deserialize, JsonSchema)]
 //! struct AnalysisResult {
 //!     score: f64,
 //!     summary: String,
 //! }
-//! 
+//!
 //! #[tool(name = "analyze")]
-//! async fn analyze(&self, text: String) -> Result<Structured<AnalysisResult>, String> {
-//!     Ok(Structured(AnalysisResult {
+//! async fn analyze(&self, text: String) -> Result<Json<AnalysisResult>, String> {
+//!     Ok(Json(AnalysisResult {
 //!         score: 0.95,
 //!         summary: "Positive sentiment".to_string(),
 //!     }))
@@ -46,6 +46,7 @@ use tokio_util::sync::CancellationToken;
 pub use super::router::tool::{ToolRoute, ToolRouter};
 use crate::{
     RoleServer,
+    handler::server::wrapper::Json,
     model::{CallToolRequestParam, CallToolResult, IntoContents, JsonObject},
     schemars::generate::SchemaSettings,
     service::RequestContext,
@@ -175,61 +176,14 @@ pub trait FromToolCallContextPart<S>: Sized {
     ) -> Result<Self, crate::ErrorData>;
 }
 
-/// Marker wrapper to indicate that a type should be serialized as structured content
-/// 
-/// When a tool returns `Structured<T>`, the MCP framework will:
-/// 1. Serialize `T` to JSON and place it in `CallToolResult.structured_content`
-/// 2. Leave `CallToolResult.content` as `None`
-/// 3. Validate the serialized JSON against the tool's output schema (if present)
-/// 
-/// # Example
-/// 
-/// ```rust,ignore
-/// use rmcp::{tool, Structured};
-/// use schemars::JsonSchema;
-/// use serde::{Serialize, Deserialize};
-/// 
-/// #[derive(Serialize, Deserialize, JsonSchema)]
-/// struct WeatherData {
-///     temperature: f64,
-///     description: String,
-/// }
-/// 
-/// #[tool(name = "get_weather")]
-/// async fn get_weather(&self) -> Result<Structured<WeatherData>, String> {
-///     Ok(Structured(WeatherData {
-///         temperature: 22.5,
-///         description: "Sunny".to_string(),
-///     }))
-/// }
-/// ```
-pub struct Structured<T>(pub T);
-
-impl<T> Structured<T> {
-    pub fn new(value: T) -> Self {
-        Structured(value)
-    }
-}
-
-// Implement JsonSchema for Structured<T> to delegate to T's schema
-impl<T: JsonSchema> JsonSchema for Structured<T> {
-    fn schema_name() -> Cow<'static, str> {
-        T::schema_name()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        T::json_schema(generator)
-    }
-}
-
 /// Trait for converting tool return values into [`CallToolResult`].
-/// 
+///
 /// This trait is automatically implemented for:
 /// - Types implementing [`IntoContents`] (returns unstructured content)
 /// - `Result<T, E>` where both `T` and `E` implement [`IntoContents`]
-/// - [`Structured<T>`] where `T` implements [`Serialize`] (returns structured content)
-/// - `Result<Structured<T>, E>` for structured results with errors
-/// 
+/// - [`Json<T>`](crate::handler::server::wrapper::Json) where `T` implements [`Serialize`] (returns structured content)
+/// - `Result<Json<T>, E>` for structured results with errors
+///
 /// The `#[tool]` macro uses this trait to convert tool function return values
 /// into the appropriate [`CallToolResult`] format.
 pub trait IntoCallToolResult {
@@ -260,8 +214,8 @@ impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
     }
 }
 
-// Implementation for Structured<T> to create structured content
-impl<T: Serialize> IntoCallToolResult for Structured<T> {
+// Implementation for Json<T> to create structured content
+impl<T: Serialize> IntoCallToolResult for Json<T> {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         let value = serde_json::to_value(self.0).map_err(|e| {
             crate::ErrorData::internal_error(
@@ -270,17 +224,12 @@ impl<T: Serialize> IntoCallToolResult for Structured<T> {
             )
         })?;
 
-        // Note: Full JSON Schema validation would require a validation library like `jsonschema`.
-        // For now, we ensure the value is properly serialized to JSON.
-        // The actual schema validation should be performed by the tool handler
-        // when it has access to the tool's output_schema.
-
         Ok(CallToolResult::structured(value))
     }
 }
 
-// Implementation for Result<Structured<T>, E>
-impl<T: Serialize, E: IntoContents> IntoCallToolResult for Result<Structured<T>, E> {
+// Implementation for Result<Json<T>, E>
+impl<T: Serialize, E: IntoContents> IntoCallToolResult for Result<Json<T>, E> {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         match self {
             Ok(value) => value.into_call_tool_result(),

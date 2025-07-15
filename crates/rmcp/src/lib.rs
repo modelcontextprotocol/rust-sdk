@@ -50,10 +50,10 @@
 //!
 //! ### Structured Output
 //!
-//! Tools can also return structured JSON data with schemas. Use the [`handler::server::tool::Structured`] wrapper:
+//! Tools can also return structured JSON data with schemas. Use the [`Json`] wrapper:
 //!
 //! ```rust
-//! # use rmcp::{tool, tool_router, handler::server::tool::{ToolRouter, Structured, Parameters}};
+//! # use rmcp::{tool, tool_router, handler::server::tool::{ToolRouter, Parameters}, Json};
 //! # use schemars::JsonSchema;
 //! # use serde::{Serialize, Deserialize};
 //! #
@@ -78,14 +78,14 @@
 //! # #[tool_router]
 //! # impl Calculator {
 //! #[tool(name = "calculate", description = "Perform a calculation")]
-//! async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Structured<CalculationResult>, String> {
+//! async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Json<CalculationResult>, String> {
 //!     let result = match params.0.operation.as_str() {
 //!         "add" => params.0.a + params.0.b,
 //!         "multiply" => params.0.a * params.0.b,
 //!         _ => return Err("Unknown operation".to_string()),
 //!     };
 //!     
-//!     Ok(Structured(CalculationResult { result, operation: params.0.operation }))
+//!     Ok(Json(CalculationResult { result, operation: params.0.operation }))
 //! }
 //! # }
 //! ```
@@ -150,7 +150,7 @@ pub use handler::client::ClientHandler;
 pub use handler::server::ServerHandler;
 #[cfg(feature = "server")]
 #[cfg_attr(docsrs, doc(cfg(feature = "server")))]
-pub use handler::server::tool::Structured;
+pub use handler::server::wrapper::Json;
 #[cfg(any(feature = "client", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "client", feature = "server"))))]
 pub use service::{Peer, Service, ServiceError, ServiceExt};
