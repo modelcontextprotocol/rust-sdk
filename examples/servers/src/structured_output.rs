@@ -6,9 +6,10 @@
 //! - Handle both structured and unstructured tool outputs
 
 use rmcp::{
-    ServiceExt, transport::stdio, Json,
+    Json, ServiceExt,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     tool, tool_handler, tool_router,
+    transport::stdio,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,10 @@ impl StructuredOutputServer {
 
     /// Get weather information for a city (returns structured data)
     #[tool(name = "get_weather", description = "Get current weather for a city")]
-    pub async fn get_weather(&self, params: Parameters<WeatherRequest>) -> Result<Json<WeatherResponse>, String> {
+    pub async fn get_weather(
+        &self,
+        params: Parameters<WeatherRequest>,
+    ) -> Result<Json<WeatherResponse>, String> {
         // Simulate weather API call
         let weather = WeatherResponse {
             temperature: match params.0.units.as_deref() {
@@ -75,13 +79,16 @@ impl StructuredOutputServer {
             humidity: 65,
             wind_speed: 12.5,
         };
-        
+
         Ok(Json(weather))
     }
 
     /// Perform calculations on a list of numbers (returns structured data)
     #[tool(name = "calculate", description = "Perform calculations on numbers")]
-    pub async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Json<CalculationResult>, String> {
+    pub async fn calculate(
+        &self,
+        params: Parameters<CalculationRequest>,
+    ) -> Result<Json<CalculationResult>, String> {
         let numbers = &params.0.numbers;
         if numbers.is_empty() {
             return Err("No numbers provided".to_string());
@@ -124,13 +131,16 @@ async fn main() -> anyhow::Result<()> {
     eprintln!();
 
     let server = StructuredOutputServer::new();
-    
+
     // Print the tools with their schemas for demonstration
     eprintln!("Tool schemas:");
     for tool in server.tool_router.list_all() {
         eprintln!("\n{}: {}", tool.name, tool.description.unwrap_or_default());
         if let Some(output_schema) = &tool.output_schema {
-            eprintln!("  Output schema: {}", serde_json::to_string_pretty(output_schema).unwrap());
+            eprintln!(
+                "  Output schema: {}",
+                serde_json::to_string_pretty(output_schema).unwrap()
+            );
         } else {
             eprintln!("  Output: Unstructured text");
         }
@@ -140,9 +150,9 @@ async fn main() -> anyhow::Result<()> {
     // Start the server
     eprintln!("Starting server. Connect with an MCP client to test the tools.");
     eprintln!("Press Ctrl+C to stop.");
-    
+
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
-    
+
     Ok(())
 }

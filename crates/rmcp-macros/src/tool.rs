@@ -230,7 +230,8 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
                 if let Some(inner_type) = extract_json_inner_type(ret_type) {
                     syn::parse2::<Expr>(quote! {
                         rmcp::handler::server::tool::cached_schema_for_type::<#inner_type>()
-                    }).ok()
+                    })
+                    .ok()
                 } else if let syn::Type::Path(type_path) = &**ret_type {
                     if let Some(last_segment) = type_path.path.segments.last() {
                         if last_segment.ident == "Result" {
