@@ -116,6 +116,13 @@ pub mod auth;
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient};
 
+#[cfg(feature = "auth")]
+#[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
+pub mod auth_server;
+#[cfg(feature = "auth")]
+#[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
+pub use auth_server::{AuthServer, AuthServerConfig, ServerAuthError};
+
 // #[cfg(feature = "transport-ws")]
 // #[cfg_attr(docsrs, doc(cfg(feature = "transport-ws")))]
 // pub mod ws;
