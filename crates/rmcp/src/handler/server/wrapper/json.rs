@@ -1,5 +1,6 @@
-use schemars::JsonSchema;
 use std::borrow::Cow;
+
+use schemars::JsonSchema;
 
 /// Json wrapper for structured output
 ///
