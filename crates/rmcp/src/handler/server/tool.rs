@@ -6,7 +6,7 @@
 //!
 //! # Structured Output
 //!
-//! Tools can return structured JSON data using the [`Json`](crate::handler::server::wrapper::Json) wrapper type.
+//! Tools can return structured JSON data using the [`Json`] wrapper type.
 //! When using `Json<T>`, the framework will:
 //! - Automatically generate a JSON schema for the output type
 //! - Validate the output against the schema
