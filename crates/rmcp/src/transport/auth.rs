@@ -432,7 +432,6 @@ impl AuthorizationManager {
         // exchange token
         let token_result = oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
-            .add_extra_param("client_id", oauth_client.client_id().to_string())
             .set_pkce_verifier(pkce_verifier)
             .request_async(&http_client)
             .await
