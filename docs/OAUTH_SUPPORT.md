@@ -77,12 +77,12 @@ rmcp = { version = "0.1", features = ["auth", "transport-sse-client"] }
 ```
 
 ## Complete Example
-client: Please refer to `examples/clients/src/oauth_client.rs` for a complete usage example.
-server: Please refer to `examples/servers/src/mcp_oauth_server.rs` for a complete usage example.
+client: Please refer to `examples/clients/src/auth/oauth_client.rs` for a complete usage example.
+server: Please refer to `examples/servers/src/complex_auth_sse.rs` for a complete usage example.
 ### Running the Example in server
 ```bash
 # Run example
-cargo run --example mcp_oauth_server
+cargo run --example complex_auth_sse
 ```
 
 ### Running the Example in client
