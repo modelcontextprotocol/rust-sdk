@@ -48,8 +48,52 @@
 //! }
 //! ```
 //!
-//! Next also implement [ServerHandler] for `Counter` and start the server inside
-//! `main` by calling `Counter::new().serve(...)`. See the examples directory in the repository for more information.
+//! ### Structured Output
+//!
+//! Tools can also return structured JSON data with schemas. Use the [`Json`] wrapper:
+//!
+//! ```rust
+//! # use rmcp::{tool, tool_router, handler::server::tool::{ToolRouter, Parameters}, Json};
+//! # use schemars::JsonSchema;
+//! # use serde::{Serialize, Deserialize};
+//! #
+//! #[derive(Serialize, Deserialize, JsonSchema)]
+//! struct CalculationRequest {
+//!     a: i32,
+//!     b: i32,
+//!     operation: String,
+//! }
+//!
+//! #[derive(Serialize, Deserialize, JsonSchema)]
+//! struct CalculationResult {
+//!     result: i32,
+//!     operation: String,
+//! }
+//!
+//! # #[derive(Clone)]
+//! # struct Calculator {
+//! #     tool_router: ToolRouter<Self>,
+//! # }
+//! #
+//! # #[tool_router]
+//! # impl Calculator {
+//! #[tool(name = "calculate", description = "Perform a calculation")]
+//! async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Json<CalculationResult>, String> {
+//!     let result = match params.0.operation.as_str() {
+//!         "add" => params.0.a + params.0.b,
+//!         "multiply" => params.0.a * params.0.b,
+//!         _ => return Err("Unknown operation".to_string()),
+//!     };
+//!     
+//!     Ok(Json(CalculationResult { result, operation: params.0.operation }))
+//! }
+//! # }
+//! ```
+//!
+//! The `#[tool]` macro automatically generates an output schema from the `CalculationResult` type.
+//!
+//! Next also implement [ServerHandler] for your server type and start the server inside
+//! `main` by calling `.serve(...)`. See the examples directory in the repository for more information.
 //!
 //! ## Client
 //!
@@ -104,6 +148,9 @@ pub use handler::client::ClientHandler;
 #[cfg(feature = "server")]
 #[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub use handler::server::ServerHandler;
+#[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
+pub use handler::server::wrapper::Json;
 #[cfg(any(feature = "client", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "client", feature = "server"))))]
 pub use service::{Peer, Service, ServiceError, ServiceExt};

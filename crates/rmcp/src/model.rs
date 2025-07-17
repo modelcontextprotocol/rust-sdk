@@ -1181,31 +1181,125 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+///
+/// Note: `content` and `structured_content` are mutually exclusive - exactly one must be provided.
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
-    pub content: Vec<Content>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<Content>>,
+    /// An optional JSON object that represents the structured result of the tool call
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     /// Whether this result represents an error condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 impl CallToolResult {
-    /// Create a successful tool result
+    /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<Content>) -> Self {
         CallToolResult {
-            content,
+            content: Some(content),
+            structured_content: None,
             is_error: Some(false),
         }
     }
-    /// Create an error tool result
+    /// Create an error tool result with unstructured content
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
-            content,
+            content: Some(content),
+            structured_content: None,
             is_error: Some(true),
         }
+    }
+    /// Create a successful tool result with structured content
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured(json!({
+    ///     "temperature": 22.5,
+    ///     "humidity": 65,
+    ///     "description": "Partly cloudy"
+    /// }));
+    /// ```
+    pub fn structured(value: Value) -> Self {
+        CallToolResult {
+            content: None,
+            structured_content: Some(value),
+            is_error: Some(false),
+        }
+    }
+    /// Create an error tool result with structured content
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured_error(json!({
+    ///     "error_code": "INVALID_INPUT",
+    ///     "message": "Temperature value out of range",
+    ///     "details": {
+    ///         "min": -50,
+    ///         "max": 50,
+    ///         "provided": 100
+    ///     }
+    /// }));
+    /// ```
+    pub fn structured_error(value: Value) -> Self {
+        CallToolResult {
+            content: None,
+            structured_content: Some(value),
+            is_error: Some(true),
+        }
+    }
+
+    /// Validate that content and structured_content are mutually exclusive
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match (&self.content, &self.structured_content) {
+            (Some(_), Some(_)) => Err("content and structured_content are mutually exclusive"),
+            (None, None) => Err("either content or structured_content must be provided"),
+            _ => Ok(()),
+        }
+    }
+}
+
+// Custom deserialize implementation to validate mutual exclusivity
+impl<'de> Deserialize<'de> for CallToolResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CallToolResultHelper {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            content: Option<Vec<Content>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            structured_content: Option<Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            is_error: Option<bool>,
+        }
+
+        let helper = CallToolResultHelper::deserialize(deserializer)?;
+        let result = CallToolResult {
+            content: helper.content,
+            structured_content: helper.structured_content,
+            is_error: helper.is_error,
+        };
+
+        // Validate mutual exclusivity
+        result.validate().map_err(serde::de::Error::custom)?;
+
+        Ok(result)
     }
 }
 
