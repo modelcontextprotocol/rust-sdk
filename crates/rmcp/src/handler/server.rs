@@ -4,6 +4,8 @@ use crate::{
     service::{NotificationContext, RequestContext, RoleServer, Service, ServiceRole},
 };
 
+pub mod common;
+pub mod prompt;
 mod resource;
 pub mod router;
 pub mod tool;
