@@ -13,7 +13,7 @@ readme = { workspace = true }
 publish = false
 
 [dependencies]
-rig-core = "0.13.0"
+rig-core = "0.14.0"
 tokio = { version = "1", features = ["full"] }
 rmcp = { workspace = true, features = [
     "client",
@@ -25,7 +25,7 @@ rmcp = { workspace = true, features = [
 anyhow = "1.0"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "0.9"
 futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
