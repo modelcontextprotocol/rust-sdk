@@ -248,9 +248,24 @@ where
 
         // Validate structured content against output schema if present
         if let Some(ref output_schema) = item.attr.output_schema {
-            if let Some(ref structured_content) = result.structured_content {
-                validate_against_schema(structured_content, output_schema)?;
+            // When output_schema is defined, structured_content is required
+            if result.structured_content.is_none() {
+                return Err(crate::ErrorData::invalid_params(
+                    "Tool with output_schema must return structured_content",
+                    None
+                ));
             }
+            
+            // Ensure content is not used when output_schema is defined
+            if result.content.is_some() {
+                return Err(crate::ErrorData::invalid_params(
+                    "Tool with output_schema cannot use content field",
+                    None
+                ));
+            }
+            
+            // Validate the structured content against the schema
+            validate_against_schema(result.structured_content.as_ref().unwrap(), output_schema)?;
         }
 
         Ok(result)
