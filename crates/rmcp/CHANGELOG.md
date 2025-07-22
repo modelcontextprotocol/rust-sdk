@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.3.0...rmcp-v0.3.1) - 2025-07-22
+
+### Fixed
+
+- Explicitly added client_id as an extra parameter causes bad token requests ([#322](https://github.com/modelcontextprotocol/rust-sdk/pull/322))
+
 ## [0.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.2.1...rmcp-v0.3.0) - 2025-07-15
 
 ### Added
