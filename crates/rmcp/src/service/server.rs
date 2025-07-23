@@ -348,6 +348,10 @@ pub enum ElicitationError {
     /// No response content was provided by the user
     #[error("No response content provided")]
     NoContent,
+    
+    /// Client does not support elicitation capability
+    #[error("Client does not support elicitation - capability not declared during initialization")]
+    CapabilityNotSupported,
 }
 
 impl Peer<RoleServer> {
@@ -366,6 +370,19 @@ impl Peer<RoleServer> {
     // =============================================================================
     // ELICITATION CONVENIENCE METHODS
     // =============================================================================
+
+    /// Check if the client supports elicitation capability
+    ///
+    /// Returns true if the client declared elicitation capability during initialization,
+    /// false otherwise. According to MCP 2025-06-18 specification, clients that support
+    /// elicitation MUST declare the capability during initialization.
+    pub fn supports_elicitation(&self) -> bool {
+        if let Some(client_info) = self.peer_info() {
+            client_info.capabilities.elicitation.is_some()
+        } else {
+            false
+        }
+    }
 
     /// Request structured data from the user using a custom JSON schema.
     ///
@@ -410,7 +427,12 @@ impl Peer<RoleServer> {
         &self,
         message: impl Into<String>,
         schema: &crate::model::JsonObject,
-    ) -> Result<Option<serde_json::Value>, ServiceError> {
+    ) -> Result<Option<serde_json::Value>, ElicitationError> {
+        // Check if client supports elicitation capability
+        if !self.supports_elicitation() {
+            return Err(ElicitationError::CapabilityNotSupported);
+        }
+
         let response = self
             .create_elicitation(CreateElicitationRequestParam {
                 message: message.into(),
@@ -493,6 +515,11 @@ impl Peer<RoleServer> {
     where
         T: schemars::JsonSchema + for<'de> serde::Deserialize<'de>,
     {
+        // Check if client supports elicitation capability
+        if !self.supports_elicitation() {
+            return Err(ElicitationError::CapabilityNotSupported);
+        }
+
         // Generate schema automatically from type
         let schema = crate::handler::server::tool::schema_for_type::<T>();
 
