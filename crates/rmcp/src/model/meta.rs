@@ -66,7 +66,6 @@ variant_extension! {
         UnsubscribeRequest
         CallToolRequest
         ListToolsRequest
-        CreateElicitationRequest
     }
 }
 

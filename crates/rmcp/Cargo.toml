@@ -79,7 +79,7 @@ default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
-elicitation = ["client", "schemars"]
+elicitation = ["server", "schemars"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]

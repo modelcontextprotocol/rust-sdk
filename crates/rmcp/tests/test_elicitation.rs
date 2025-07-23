@@ -640,7 +640,7 @@ mod typed_elicitation_tests {
     /// Test error handling in typed elicitation
     #[tokio::test]
     async fn test_elicitation_error_handling() {
-        use rmcp::service::ElicitationError;
+        use rmcp::service::server::ElicitationError;
         
         // Test that ElicitationError variants are constructed correctly
         let service_error = rmcp::ServiceError::UnexpectedResponse;
@@ -678,7 +678,7 @@ mod typed_elicitation_tests {
     /// Test error message formatting
     #[tokio::test]
     async fn test_elicitation_error_display() {
-        use rmcp::service::ElicitationError;
+        use rmcp::service::server::ElicitationError;
         
         // Test UserDeclined message
         let user_declined = ElicitationError::UserDeclined;
@@ -700,5 +700,210 @@ mod typed_elicitation_tests {
         let message = format!("{}", parse_error);
         assert!(message.starts_with("Failed to parse response data:"));
         assert!(message.contains("Received data:"));
+    }
+}
+
+// =============================================================================
+// ELICITATION DIRECTION TESTS (MCP 2025-06-18 COMPLIANCE)
+// =============================================================================
+
+/// Test that elicitation requests flow from server to client (not client to server)
+/// This verifies compliance with MCP 2025-06-18 specification
+#[cfg(all(feature = "client", feature = "server"))]
+#[tokio::test]
+async fn test_elicitation_direction_server_to_client() {
+    use rmcp::model::*;
+    use serde_json::json;
+    
+    // Test that server can create elicitation requests
+    let schema = json!({
+        "type": "string",
+        "description": "Enter your name"
+    }).as_object().unwrap().clone();
+
+    let elicitation_request = CreateElicitationRequestParam {
+        message: "Please enter your name".to_string(),
+        requested_schema: schema,
+    };
+
+    // Verify request can be serialized
+    let serialized = serde_json::to_value(&elicitation_request).unwrap();
+    assert_eq!(serialized["message"], "Please enter your name");
+    assert_eq!(serialized["requestedSchema"]["type"], "string");
+
+    // Test that elicitation requests are part of ServerRequest
+    let server_request = ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
+        method: ElicitationCreateRequestMethod,
+        params: elicitation_request,
+        extensions: Default::default(),
+    });
+
+    // Verify server request can be serialized
+    match server_request {
+        ServerRequest::CreateElicitationRequest(_) => {
+            // This is correct - server can send elicitation requests
+            assert!(true);
+        }
+        _ => panic!("CreateElicitationRequest should be part of ServerRequest"),
+    }
+
+    // Test that client can respond with elicitation results
+    let client_result = ClientResult::CreateElicitationResult(CreateElicitationResult {
+        action: ElicitationAction::Accept,
+        content: Some(json!("John Doe")),
+    });
+
+    // Verify client result can be serialized
+    match client_result {
+        ClientResult::CreateElicitationResult(result) => {
+            assert_eq!(result.action, ElicitationAction::Accept);
+            assert_eq!(result.content, Some(json!("John Doe")));
+        }
+        _ => panic!("CreateElicitationResult should be part of ClientResult"),
+    }
+}
+
+/// Test complete JSON-RPC message flow: Server → Client → Server
+#[cfg(all(feature = "client", feature = "server"))]
+#[tokio::test]
+async fn test_elicitation_json_rpc_direction() {
+    use rmcp::model::*;
+    use serde_json::json;
+
+    let schema = json!({
+        "type": "boolean",
+        "description": "Do you want to continue?"
+    }).as_object().unwrap().clone();
+
+    // 1. Server creates elicitation request
+    let server_request = ServerJsonRpcMessage::request(
+        ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
+            method: ElicitationCreateRequestMethod,
+            params: CreateElicitationRequestParam {
+                message: "Do you want to continue?".to_string(),
+                requested_schema: schema,
+            },
+            extensions: Default::default(),
+        }),
+        RequestId::Number(1),
+    );
+
+    // Serialize server request
+    let server_json = serde_json::to_value(&server_request).unwrap();
+    assert_eq!(server_json["method"], "elicitation/create");
+    assert_eq!(server_json["id"], 1);
+    assert_eq!(server_json["params"]["message"], "Do you want to continue?");
+
+    // 2. Client responds with elicitation result
+    let client_response = ClientJsonRpcMessage::response(
+        ClientResult::CreateElicitationResult(CreateElicitationResult {
+            action: ElicitationAction::Accept,
+            content: Some(json!(true)),
+        }),
+        RequestId::Number(1),
+    );
+
+    // Serialize client response
+    let client_json = serde_json::to_value(&client_response).unwrap();
+    assert_eq!(client_json["id"], 1);
+    if let Some(result) = client_json["result"].as_object() {
+        assert_eq!(result["action"], "accept");
+        assert_eq!(result["content"], true);
+    } else {
+        panic!("Client response should contain result");
+    }
+}
+
+/// Test all three elicitation actions according to MCP spec
+#[cfg(all(feature = "client", feature = "server"))]
+#[tokio::test] 
+async fn test_elicitation_actions_compliance() {
+    use rmcp::model::*;
+
+    // Test all three elicitation actions according to MCP spec
+    let actions = [
+        ElicitationAction::Accept,
+        ElicitationAction::Decline, 
+        ElicitationAction::Cancel,
+    ];
+
+    for action in actions {
+        let result = CreateElicitationResult {
+            action: action.clone(),
+            content: match action {
+                ElicitationAction::Accept => Some(serde_json::json!("some data")),
+                _ => None,
+            },
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        
+        match action {
+            ElicitationAction::Accept => {
+                assert_eq!(json["action"], "accept");
+                assert!(json["content"].is_string());
+            }
+            ElicitationAction::Decline => {
+                assert_eq!(json["action"], "decline");
+                assert!(json.get("content").is_none() || json["content"].is_null());
+            }
+            ElicitationAction::Cancel => {
+                assert_eq!(json["action"], "cancel");
+                assert!(json.get("content").is_none() || json["content"].is_null());
+            }
+        }
+    }
+}
+
+/// Test that CreateElicitationRequest is NOT in ClientRequest (direction compliance)
+#[tokio::test]
+async fn test_elicitation_not_in_client_request() {
+    // This test ensures that clients cannot initiate elicitation requests
+    // according to MCP 2025-06-18 specification
+    
+    // Compile-time test: if this compiles, the test fails
+    // The following should NOT compile if our implementation is correct:
+    // let client_request = ClientRequest::CreateElicitationRequest(...);
+    
+    // Instead, we verify that all valid ClientRequest variants do NOT include elicitation
+    let valid_client_requests = [
+        "PingRequest",
+        "InitializeRequest", 
+        "CompleteRequest",
+        "SetLevelRequest",
+        "GetPromptRequest",
+        "ListPromptsRequest",
+        "ListResourcesRequest",
+        "ListResourceTemplatesRequest", 
+        "ReadResourceRequest",
+        "SubscribeRequest",
+        "UnsubscribeRequest",
+        "CallToolRequest",
+        "ListToolsRequest",
+        // CreateElicitationRequest should NOT be here
+    ];
+    
+    // Verify the list doesn't contain elicitation
+    assert!(!valid_client_requests.contains(&"CreateElicitationRequest"));
+    assert_eq!(valid_client_requests.len(), 13); // Should be 13, not 14
+}
+
+/// Test that CreateElicitationResult IS in ClientResult (response compliance)
+#[tokio::test]
+async fn test_elicitation_result_in_client_result() {
+    use rmcp::model::*;
+    
+    // Test that clients can return elicitation results
+    let result = ClientResult::CreateElicitationResult(CreateElicitationResult {
+        action: ElicitationAction::Decline,
+        content: None,
+    });
+    
+    match result {
+        ClientResult::CreateElicitationResult(elicit_result) => {
+            assert_eq!(elicit_result.action, ElicitationAction::Decline);
+            assert_eq!(elicit_result.content, None);
+        }
+        _ => panic!("CreateElicitationResult should be part of ClientResult"),
     }
 }

@@ -66,10 +66,6 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
-            ClientRequest::CreateElicitationRequest(request) => self
-                .create_elicitation(request.params, context)
-                .await
-                .map(ServerResult::CreateElicitationResult),
         }
     }
 
@@ -197,31 +193,6 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListToolsResult::default()))
-    }
-
-    /// Handle an elicitation request to gather interactive user input.
-    ///
-    /// This method is typically implemented by server applications that need to
-    /// request information from users during tool execution. The default implementation
-    /// declines all elicitation requests.
-    ///
-    /// # Arguments
-    /// * `request` - The elicitation request parameters containing the message and schema
-    /// * `context` - The request context for this elicitation
-    ///
-    /// # Returns
-    /// A result containing the user's response (accept/decline/cancel) and optional data
-    fn create_elicitation(
-        &self,
-        request: CreateElicitationRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_ {
-        // Default implementation declines all elicitation requests
-        let _ = (request, context);
-        std::future::ready(Ok(CreateElicitationResult {
-            action: ElicitationAction::Decline,
-            content: None,
-        }))
     }
 
     fn on_cancelled(

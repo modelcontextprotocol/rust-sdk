@@ -1374,8 +1374,7 @@ ts_union!(
     | SubscribeRequest
     | UnsubscribeRequest
     | CallToolRequest
-    | ListToolsRequest
-    | CreateElicitationRequest;
+    | ListToolsRequest;
 );
 
 ts_union!(
