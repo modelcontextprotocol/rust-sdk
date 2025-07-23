@@ -211,22 +211,22 @@ async fn test_output_schema_requires_structured_content() {
     // Test that tools with output_schema must use structured_content
     let server = TestServer::new();
     let tools = server.tool_router.list_all();
-    
+
     // The calculate tool should have output_schema
     let calculate_tool = tools.iter().find(|t| t.name == "calculate").unwrap();
     assert!(calculate_tool.output_schema.is_some());
-    
+
     // Directly call the tool and verify its result structure
     let params = rmcp::handler::server::tool::Parameters(CalculationRequest { a: 5, b: 3 });
     let result = server.calculate(params).await.unwrap();
-    
+
     // Convert the Json<CalculationResult> to CallToolResult
-    let call_result: Result<CallToolResult, rmcp::ErrorData> = 
+    let call_result: Result<CallToolResult, rmcp::ErrorData> =
         rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(result);
-    
+
     assert!(call_result.is_ok());
     let call_result = call_result.unwrap();
-    
+
     // Verify it has structured_content and no content
     assert!(call_result.structured_content.is_some());
     assert!(call_result.content.is_none());
@@ -237,7 +237,7 @@ async fn test_output_schema_forbids_regular_content() {
     // This test verifies that our strict validation is working
     // by testing that when a tool with output_schema returns regular content,
     // the validation in ToolRouter::call should fail
-    
+
     // The validation happens in tool.rs around line 250-269
     // This ensures consistency: tools declaring structured output must use it
 }
@@ -246,15 +246,15 @@ async fn test_output_schema_forbids_regular_content() {
 async fn test_output_schema_error_must_be_structured() {
     // Test that errors from tools with output_schema must also use structured_content
     let server = TestServer::new();
-    
+
     // Call get-user with invalid ID to trigger error
     let params = rmcp::handler::server::tool::Parameters("invalid".to_string());
     let result = server.get_user(params).await;
-    
+
     // This returns Err(String) which will be converted to regular content
     assert!(result.is_err());
-    
-    // When converted via IntoCallToolResult for Result<Json<T>, E>, 
+
+    // When converted via IntoCallToolResult for Result<Json<T>, E>,
     // errors use CallToolResult::error() which uses regular content
     // This would fail validation if the tool has output_schema
 }

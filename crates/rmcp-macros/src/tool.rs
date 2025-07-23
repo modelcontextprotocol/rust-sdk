@@ -133,7 +133,7 @@ fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
     };
 
     let last_segment = type_path.path.segments.last()?;
-    
+
     if last_segment.ident != "Result" {
         return None;
     }
@@ -149,7 +149,7 @@ fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
     };
 
     let inner_type = extract_json_inner_type(ok_type)?;
-    
+
     syn::parse2::<Expr>(quote! {
         rmcp::handler::server::tool::cached_schema_for_type::<#inner_type>()
     })
