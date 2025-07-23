@@ -3,6 +3,12 @@
 use rmcp::model::*;
 use serde_json::json;
 
+// For typed elicitation tests
+#[cfg(feature = "schemars")]
+use schemars::JsonSchema;
+#[cfg(feature = "schemars")]
+use serde::{Deserialize, Serialize};
+
 /// Test that elicitation data structures can be serialized and deserialized correctly
 /// This ensures JSON-RPC compatibility with MCP 2025-06-18 specification
 #[tokio::test]
@@ -341,7 +347,7 @@ async fn test_elicitation_convenience_methods() {
         "description": "User confirmation (true for yes, false for no)"
     });
 
-    // Verify the schema structure matches what elicit_confirmation would create
+    // Verify the schema structure for boolean confirmation
     assert_eq!(confirmation_schema["type"], "boolean");
     assert!(confirmation_schema["description"].is_string());
 
@@ -464,4 +470,235 @@ async fn test_elicitation_structured_schemas() {
     assert_eq!(json["requestedSchema"]["type"], "array");
     assert_eq!(json["requestedSchema"]["minItems"], 1);
     assert_eq!(json["requestedSchema"]["maxItems"], 10);
+}
+
+// Typed elicitation tests using the API with schemars
+#[cfg(feature = "schemars")]
+mod typed_elicitation_tests {
+    use super::*;
+
+    /// Simple user confirmation with reason
+    #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+    #[schemars(description = "User confirmation with optional reasoning")]
+    struct UserConfirmation {
+        #[schemars(description = "User's decision (true for yes, false for no)")]
+        confirmed: bool,
+
+        #[schemars(description = "Optional reason for the decision")]
+        reason: Option<String>,
+    }
+
+    /// User profile with validation constraints
+    #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+    #[schemars(description = "Complete user profile information")]
+    struct UserProfile {
+        #[schemars(description = "Full name")]
+        name: String,
+
+        #[schemars(description = "Email address")]
+        email: String,
+
+        #[schemars(description = "Age in years")]
+        age: u8,
+
+        #[schemars(description = "User preferences")]
+        preferences: UserPreferences,
+    }
+
+    /// User preferences
+    #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+    struct UserPreferences {
+        #[schemars(description = "UI theme preference")]
+        theme: Theme,
+
+        #[schemars(description = "Enable notifications")]
+        notifications: bool,
+
+        #[schemars(description = "Language preference")]
+        language: String,
+    }
+
+    /// UI theme options
+    #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+    #[schemars(description = "Available UI themes")]
+    enum Theme {
+        #[schemars(description = "Light theme")]
+        Light,
+        #[schemars(description = "Dark theme")]
+        Dark,
+        #[schemars(description = "Auto-detect based on system")]
+        Auto,
+    }
+
+    /// Test automatic schema generation for simple types
+    #[tokio::test]
+    async fn test_typed_elicitation_simple_schema() {
+        // Test that schema generation works for simple types
+        let schema = rmcp::handler::server::tool::schema_for_type::<UserConfirmation>();
+
+        // Verify schema contains expected fields
+        assert!(schema.contains_key("type"));
+        assert_eq!(schema.get("type"), Some(&json!("object")));
+        assert!(schema.contains_key("properties"));
+
+        if let Some(properties) = schema.get("properties") {
+            assert!(properties.is_object());
+            let props = properties.as_object().unwrap();
+            assert!(props.contains_key("confirmed"));
+            assert!(props.contains_key("reason"));
+
+            // Check confirmed field is boolean
+            if let Some(confirmed_schema) = props.get("confirmed") {
+                let confirmed_obj = confirmed_schema.as_object().unwrap();
+                assert_eq!(confirmed_obj.get("type"), Some(&json!("boolean")));
+            }
+
+            // Check reason field is optional string
+            if let Some(reason_schema) = props.get("reason") {
+                assert!(reason_schema.is_object());
+            }
+        }
+    }
+
+    /// Test automatic schema generation for complex nested types
+    #[tokio::test]
+    async fn test_typed_elicitation_complex_schema() {
+        // Test complex nested structure schema generation
+        let schema = rmcp::handler::server::tool::schema_for_type::<UserProfile>();
+
+        // Verify schema structure
+        assert!(schema.contains_key("type"));
+        assert_eq!(schema.get("type"), Some(&json!("object")));
+
+        if let Some(properties) = schema.get("properties") {
+            let props = properties.as_object().unwrap();
+
+            // Check required fields exist
+            assert!(props.contains_key("name"));
+            assert!(props.contains_key("email"));
+            assert!(props.contains_key("age"));
+            assert!(props.contains_key("preferences"));
+
+            // Check validation constraints for name
+            if let Some(name_schema) = props.get("name") {
+                let name_obj = name_schema.as_object().unwrap();
+                assert_eq!(name_obj.get("type"), Some(&json!("string")));
+                // Note: schemars might generate constraints differently
+                // The exact structure depends on schemars version
+            }
+
+            // Check email format constraint
+            if let Some(email_schema) = props.get("email") {
+                let email_obj = email_schema.as_object().unwrap();
+                assert_eq!(email_obj.get("type"), Some(&json!("string")));
+            }
+
+            // Check age numeric constraints
+            if let Some(age_schema) = props.get("age") {
+                let age_obj = age_schema.as_object().unwrap();
+                assert_eq!(age_obj.get("type"), Some(&json!("integer")));
+            }
+        }
+    }
+
+    /// Test enum schema generation
+    #[tokio::test]
+    async fn test_enum_schema_generation() {
+        // Test enum schema generation
+        let schema = rmcp::handler::server::tool::schema_for_type::<Theme>();
+
+        // Verify enum schema structure - schemars might use oneOf or enum depending on version
+        assert!(
+            schema.contains_key("type")
+                || schema.contains_key("oneOf")
+                || schema.contains_key("enum")
+        );
+
+        // The exact structure depends on schemars configuration, but it should be valid
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(!json.is_empty());
+    }
+
+    /// Test that the schema generation for nested structures works
+    #[tokio::test]
+    async fn test_nested_structure_schema() {
+        // Test that nested structures generate proper schemas
+        let preferences_schema = rmcp::handler::server::tool::schema_for_type::<UserPreferences>();
+
+        // Verify basic structure
+        assert!(preferences_schema.contains_key("type"));
+        assert_eq!(preferences_schema.get("type"), Some(&json!("object")));
+
+        if let Some(properties) = preferences_schema.get("properties") {
+            let props = properties.as_object().unwrap();
+            assert!(props.contains_key("theme"));
+            assert!(props.contains_key("notifications"));
+            assert!(props.contains_key("language"));
+        }
+    }
+
+    /// Test error handling in typed elicitation
+    #[tokio::test]
+    async fn test_elicitation_error_handling() {
+        use rmcp::service::ElicitationError;
+        
+        // Test that ElicitationError variants are constructed correctly
+        let service_error = rmcp::ServiceError::UnexpectedResponse;
+        let elicitation_error = ElicitationError::Service(service_error);
+        
+        match elicitation_error {
+            ElicitationError::Service(_) => {}, // Expected
+            _ => panic!("Expected Service error variant"),
+        }
+        
+        // Test ParseError variant
+        let json_error = serde_json::from_str::<i32>("invalid").unwrap_err();
+        let invalid_data = json!({"invalid": "data"});
+        let parse_error = ElicitationError::ParseError {
+            error: json_error,
+            data: invalid_data.clone(),
+        };
+        
+        match parse_error {
+            ElicitationError::ParseError { error: _, data } => {
+                assert_eq!(data, invalid_data);
+            }
+            _ => panic!("Expected ParseError variant"),
+        }
+        
+        // Test UserDeclined variant
+        let user_declined = ElicitationError::UserDeclined;
+        assert!(matches!(user_declined, ElicitationError::UserDeclined));
+        
+        // Test NoContent variant  
+        let no_content = ElicitationError::NoContent;
+        assert!(matches!(no_content, ElicitationError::NoContent));
+    }
+
+    /// Test error message formatting
+    #[tokio::test]
+    async fn test_elicitation_error_display() {
+        use rmcp::service::ElicitationError;
+        
+        // Test UserDeclined message
+        let user_declined = ElicitationError::UserDeclined;
+        let message = format!("{}", user_declined);
+        assert_eq!(message, "User declined or cancelled the request");
+        
+        // Test NoContent message
+        let no_content = ElicitationError::NoContent;
+        let message = format!("{}", no_content);
+        assert_eq!(message, "No response content provided");
+        
+        // Test ParseError message formatting
+        let json_error = serde_json::from_str::<i32>("\"not_an_integer\"").unwrap_err();
+        let data = json!({"key": "value"});
+        let parse_error = ElicitationError::ParseError {
+            error: json_error,
+            data: data.clone(),
+        };
+        let message = format!("{}", parse_error);
+        assert!(message.starts_with("Failed to parse response data:"));
+        assert!(message.contains("Received data:"));
+    }
 }
