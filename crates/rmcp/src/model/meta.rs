@@ -66,6 +66,7 @@ variant_extension! {
         UnsubscribeRequest
         CallToolRequest
         ListToolsRequest
+        CreateElicitationRequest
     }
 }
 
@@ -74,6 +75,7 @@ variant_extension! {
         PingRequest
         CreateMessageRequest
         ListRootsRequest
+        CreateElicitationRequest
     }
 }
 

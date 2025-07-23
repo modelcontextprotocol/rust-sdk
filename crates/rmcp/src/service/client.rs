@@ -8,6 +8,7 @@ use crate::{
         CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
         CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult,
+        CreateElicitationRequest, CreateElicitationRequestParam, CreateElicitationResult,
         GetPromptRequest, GetPromptRequestParam, GetPromptResult, InitializeRequest,
         InitializedNotification, JsonRpcResponse, ListPromptsRequest, ListPromptsResult,
         ListResourceTemplatesRequest, ListResourceTemplatesResult, ListResourcesRequest,
@@ -305,6 +306,7 @@ impl Peer<RoleClient> {
     method!(peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParam));
     method!(peer_req call_tool CallToolRequest(CallToolRequestParam) => CallToolResult);
     method!(peer_req list_tools ListToolsRequest(PaginatedRequestParam)? => ListToolsResult);
+    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -389,5 +391,253 @@ impl Peer<RoleClient> {
             }
         }
         Ok(resource_templates)
+    }
+
+    // =============================================================================
+    // ELICITATION CONVENIENCE METHODS
+    // =============================================================================
+
+    /// Request a simple yes/no confirmation from the user.
+    ///
+    /// This is a convenience method for requesting boolean confirmation
+    /// from users during tool execution.
+    ///
+    /// # Arguments
+    /// * `message` - The question to ask the user
+    ///
+    /// # Returns
+    /// * `Ok(Some(true))` if user accepted and confirmed
+    /// * `Ok(Some(false))` if user accepted but declined
+    /// * `Ok(None)` if user declined to answer or cancelled
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # async fn example(peer: Peer<RoleClient>) -> Result<(), ServiceError> {
+    /// let confirmed = peer.elicit_confirmation("Delete this file?").await?;
+    /// match confirmed {
+    ///     Some(true) => println!("User confirmed deletion"),
+    ///     Some(false) => println!("User declined deletion"),
+    ///     None => println!("User cancelled or declined to answer"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn elicit_confirmation(
+        &self,
+        message: impl Into<String>,
+    ) -> Result<Option<bool>, ServiceError> {
+        use serde_json::json;
+
+        let response = self
+            .create_elicitation(CreateElicitationRequestParam {
+                message: message.into(),
+                requested_schema: json!({
+                    "type": "boolean",
+                    "description": "User confirmation (true for yes, false for no)"
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            })
+            .await?;
+
+        match response.action {
+            crate::model::ElicitationAction::Accept => {
+                if let Some(value) = response.content {
+                    Ok(value.as_bool())
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Request text input from the user.
+    ///
+    /// This is a convenience method for requesting string input from users.
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `required` - Whether the input is required (cannot be empty)
+    ///
+    /// # Returns
+    /// * `Ok(Some(text))` if user provided input
+    /// * `Ok(None)` if user declined or cancelled
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # async fn example(peer: Peer<RoleClient>) -> Result<(), ServiceError> {
+    /// let name = peer.elicit_text_input("Please enter your name:", false).await?;
+    /// if let Some(name) = name {
+    ///     println!("Hello, {}!", name);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn elicit_text_input(
+        &self,
+        message: impl Into<String>,
+        required: bool,
+    ) -> Result<Option<String>, ServiceError> {
+        use serde_json::json;
+
+        let mut schema = json!({
+            "type": "string",
+            "description": "User text input"
+        });
+
+        if required {
+            schema["minLength"] = json!(1);
+        }
+
+        let response = self
+            .create_elicitation(CreateElicitationRequestParam {
+                message: message.into(),
+                requested_schema: schema.as_object().unwrap().clone(),
+            })
+            .await?;
+
+        match response.action {
+            crate::model::ElicitationAction::Accept => {
+                if let Some(value) = response.content {
+                    Ok(value.as_str().map(|s| s.to_string()))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Request the user to choose from multiple options.
+    ///
+    /// This is a convenience method for presenting users with a list of choices.
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `options` - The available options to choose from
+    ///
+    /// # Returns
+    /// * `Ok(Some(index))` if user selected an option (0-based index)
+    /// * `Ok(None)` if user declined or cancelled
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # async fn example(peer: Peer<RoleClient>) -> Result<(), ServiceError> {
+    /// let options = vec!["Save", "Discard", "Cancel"];
+    /// let choice = peer.elicit_choice("What would you like to do?", &options).await?;
+    /// match choice {
+    ///     Some(0) => println!("User chose to save"),
+    ///     Some(1) => println!("User chose to discard"),
+    ///     Some(2) => println!("User chose to cancel"),
+    ///     _ => println!("User made no choice"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn elicit_choice(
+        &self,
+        message: impl Into<String>,
+        options: &[impl AsRef<str>],
+    ) -> Result<Option<usize>, ServiceError> {
+        use serde_json::json;
+
+        let option_strings: Vec<String> = options.iter().map(|s| s.as_ref().to_string()).collect();
+
+        let response = self
+            .create_elicitation(CreateElicitationRequestParam {
+                message: message.into(),
+                requested_schema: json!({
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": option_strings.len() - 1,
+                    "description": format!("Choose an option: {}", option_strings.join(", "))
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            })
+            .await?;
+
+        match response.action {
+            crate::model::ElicitationAction::Accept => {
+                if let Some(value) = response.content {
+                    if let Some(index) = value.as_u64() {
+                        let index = index as usize;
+                        if index < options.len() {
+                            Ok(Some(index))
+                        } else {
+                            Ok(None) // Invalid index
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Request structured data from the user using a custom JSON schema.
+    ///
+    /// This is the most flexible elicitation method, allowing you to request
+    /// any kind of structured input using JSON Schema validation.
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `schema` - JSON Schema defining the expected data structure
+    ///
+    /// # Returns
+    /// * `Ok(Some(data))` if user provided valid data
+    /// * `Ok(None)` if user declined or cancelled
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # use serde_json::json;
+    /// # async fn example(peer: Peer<RoleClient>) -> Result<(), ServiceError> {
+    /// let schema = json!({
+    ///     "type": "object",
+    ///     "properties": {
+    ///         "name": {"type": "string"},
+    ///         "email": {"type": "string", "format": "email"},
+    ///         "age": {"type": "integer", "minimum": 0}
+    ///     },
+    ///     "required": ["name", "email"]
+    /// });
+    ///
+    /// let user_data = peer.elicit_structured_input(
+    ///     "Please provide your contact information:",
+    ///     schema.as_object().unwrap()
+    /// ).await?;
+    ///
+    /// if let Some(data) = user_data {
+    ///     println!("Received user data: {}", data);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn elicit_structured_input(
+        &self,
+        message: impl Into<String>,
+        schema: &crate::model::JsonObject,
+    ) -> Result<Option<serde_json::Value>, ServiceError> {
+        let response = self
+            .create_elicitation(CreateElicitationRequestParam {
+                message: message.into(),
+                requested_schema: schema.clone(),
+            })
+            .await?;
+
+        match response.action {
+            crate::model::ElicitationAction::Accept => Ok(response.content),
+            _ => Ok(None),
+        }
     }
 }
