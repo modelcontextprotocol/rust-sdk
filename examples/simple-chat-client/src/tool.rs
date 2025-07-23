@@ -3,8 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::{
+    RoleClient,
     model::{CallToolRequestParam, CallToolResult, Tool as McpTool},
-    service::ServerSink,
+    service::{RunningService, ServerSink},
 };
 use serde_json::Value;
 
@@ -70,9 +71,14 @@ impl Tool for McpToolAdapter {
 #[derive(Default)]
 pub struct ToolSet {
     tools: HashMap<String, Arc<dyn Tool>>,
+    clients: HashMap<String, RunningService<RoleClient, ()>>,
 }
 
 impl ToolSet {
+    pub fn set_clients(&mut self, clients: HashMap<String, RunningService<RoleClient, ()>>) {
+        self.clients = clients;
+    }
+
     pub fn add_tool<T: Tool + 'static>(&mut self, tool: T) {
         self.tools.insert(tool.name(), Arc::new(tool));
     }

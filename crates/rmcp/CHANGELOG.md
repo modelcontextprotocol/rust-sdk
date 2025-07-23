@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.2.1...rmcp-v0.3.0) - 2025-07-15
+
+### Added
+
+- unified error type ([#308](https://github.com/modelcontextprotocol/rust-sdk/pull/308))
+- *(transport)* add builder & expose child stderr ([#305](https://github.com/modelcontextprotocol/rust-sdk/pull/305))
+
+### Other
+
+- *(deps)* update schemars requirement from 0.8 to 1.0 ([#258](https://github.com/modelcontextprotocol/rust-sdk/pull/258))
+- *(rmcp)* bump rmcp-macros version to match ([#311](https://github.com/modelcontextprotocol/rust-sdk/pull/311))
+- fix packages used for server example ([#309](https://github.com/modelcontextprotocol/rust-sdk/pull/309))
+
 ## [0.2.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.2.0...rmcp-v0.2.1) - 2025-07-03
 
 ### Other
