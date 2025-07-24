@@ -679,7 +679,6 @@ async fn test_elicitation_direction_server_to_client() {
     match server_request {
         ServerRequest::CreateElicitationRequest(_) => {
             // This is correct - server can send elicitation requests
-            assert!(true);
         }
         _ => panic!("CreateElicitationRequest should be part of ServerRequest"),
     }
