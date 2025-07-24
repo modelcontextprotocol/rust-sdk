@@ -12,8 +12,8 @@ An official Rust Model Context Protocol SDK implementation with tokio async runt
 
 This repository contains the following crates:
 
-- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation( If you want to get more information, please visit [rmcp](crates/rmcp/README.md))
-- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations(If you want to get more information, please visit [rmcp-macros](crates/rmcp-macros/README.md))
+- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation (If you want to get more information, please visit [rmcp](crates/rmcp/README.md))
+- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations (If you want to get more information, please visit [rmcp-macros](crates/rmcp-macros/README.md))
 
 ## Usage
 
