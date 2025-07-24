@@ -1,14 +1,12 @@
 //cargo test --test test_elicitation --features "client server"
 
-use rmcp::model::*;
-use rmcp::service::*;
-use serde_json::json;
-
+use rmcp::{model::*, service::*};
 // For typed elicitation tests
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
 #[cfg(feature = "schemars")]
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Test that elicitation data structures can be serialized and deserialized correctly
 /// This ensures JSON-RPC compatibility with MCP 2025-06-18 specification
@@ -637,7 +635,6 @@ mod typed_elicitation_tests {
             assert!(props.contains_key("language"));
         }
     }
-
 }
 
 // =============================================================================
@@ -651,12 +648,15 @@ mod typed_elicitation_tests {
 async fn test_elicitation_direction_server_to_client() {
     use rmcp::model::*;
     use serde_json::json;
-    
+
     // Test that server can create elicitation requests
     let schema = json!({
         "type": "string",
         "description": "Enter your name"
-    }).as_object().unwrap().clone();
+    })
+    .as_object()
+    .unwrap()
+    .clone();
 
     let elicitation_request = CreateElicitationRequestParam {
         message: "Please enter your name".to_string(),
@@ -710,7 +710,10 @@ async fn test_elicitation_json_rpc_direction() {
     let schema = json!({
         "type": "boolean",
         "description": "Do you want to continue?"
-    }).as_object().unwrap().clone();
+    })
+    .as_object()
+    .unwrap()
+    .clone();
 
     // 1. Server creates elicitation request
     let server_request = ServerJsonRpcMessage::request(
@@ -753,14 +756,14 @@ async fn test_elicitation_json_rpc_direction() {
 
 /// Test all three elicitation actions according to MCP spec
 #[cfg(all(feature = "client", feature = "server"))]
-#[tokio::test] 
+#[tokio::test]
 async fn test_elicitation_actions_compliance() {
     use rmcp::model::*;
 
     // Test all three elicitation actions according to MCP spec
     let actions = [
         ElicitationAction::Accept,
-        ElicitationAction::Decline, 
+        ElicitationAction::Decline,
         ElicitationAction::Cancel,
     ];
 
@@ -774,7 +777,7 @@ async fn test_elicitation_actions_compliance() {
         };
 
         let json = serde_json::to_value(&result).unwrap();
-        
+
         match action {
             ElicitationAction::Accept => {
                 assert_eq!(json["action"], "accept");
@@ -797,21 +800,21 @@ async fn test_elicitation_actions_compliance() {
 async fn test_elicitation_not_in_client_request() {
     // This test ensures that clients cannot initiate elicitation requests
     // according to MCP 2025-06-18 specification
-    
+
     // Compile-time test: if this compiles, the test fails
     // The following should NOT compile if our implementation is correct:
     // let client_request = ClientRequest::CreateElicitationRequest(...);
-    
+
     // Instead, we verify that all valid ClientRequest variants do NOT include elicitation
     let valid_client_requests = [
         "PingRequest",
-        "InitializeRequest", 
+        "InitializeRequest",
         "CompleteRequest",
         "SetLevelRequest",
         "GetPromptRequest",
         "ListPromptsRequest",
         "ListResourcesRequest",
-        "ListResourceTemplatesRequest", 
+        "ListResourceTemplatesRequest",
         "ReadResourceRequest",
         "SubscribeRequest",
         "UnsubscribeRequest",
@@ -819,7 +822,7 @@ async fn test_elicitation_not_in_client_request() {
         "ListToolsRequest",
         // CreateElicitationRequest should NOT be here
     ];
-    
+
     // Verify the list doesn't contain elicitation
     assert!(!valid_client_requests.contains(&"CreateElicitationRequest"));
     assert_eq!(valid_client_requests.len(), 13); // Should be 13, not 14
@@ -829,13 +832,13 @@ async fn test_elicitation_not_in_client_request() {
 #[tokio::test]
 async fn test_elicitation_result_in_client_result() {
     use rmcp::model::*;
-    
+
     // Test that clients can return elicitation results
     let result = ClientResult::CreateElicitationResult(CreateElicitationResult {
         action: ElicitationAction::Decline,
         content: None,
     });
-    
+
     match result {
         ClientResult::CreateElicitationResult(elicit_result) => {
             assert_eq!(elicit_result.action, ElicitationAction::Decline);
@@ -846,34 +849,37 @@ async fn test_elicitation_result_in_client_result() {
 }
 
 // =============================================================================
-// ELICITATION CAPABILITIES TESTS  
+// ELICITATION CAPABILITIES TESTS
 // =============================================================================
 
 /// Test ElicitationCapability structure and serialization
 #[tokio::test]
 async fn test_elicitation_capability_structure() {
-    // Test default ElicitationCapability 
+    // Test default ElicitationCapability
     let default_cap = ElicitationCapability::default();
     assert!(default_cap.schema_validation.is_none());
-    
+
     // Test ElicitationCapability with schema validation enabled
     let cap_with_validation = ElicitationCapability {
         schema_validation: Some(true),
     };
     assert_eq!(cap_with_validation.schema_validation, Some(true));
-    
+
     // Test ElicitationCapability with schema validation disabled
     let cap_without_validation = ElicitationCapability {
         schema_validation: Some(false),
     };
     assert_eq!(cap_without_validation.schema_validation, Some(false));
-    
+
     // Test JSON serialization
     let json = serde_json::to_value(&cap_with_validation).unwrap();
-    assert_eq!(json, serde_json::json!({
-        "schemaValidation": true
-    }));
-    
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "schemaValidation": true
+        })
+    );
+
     // Test JSON deserialization
     let deserialized: ElicitationCapability = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized.schema_validation, Some(true));
@@ -889,24 +895,28 @@ async fn test_client_capabilities_with_elicitation() {
         }),
         ..Default::default()
     };
-    
+
     // Verify elicitation capability is present
     assert!(capabilities.elicitation.is_some());
     assert_eq!(
         capabilities.elicitation.as_ref().unwrap().schema_validation,
         Some(true)
     );
-    
+
     // Test JSON serialization
     let json = serde_json::to_value(&capabilities).unwrap();
-    assert!(json["elicitation"]["schemaValidation"].as_bool().unwrap_or(false));
-    
+    assert!(
+        json["elicitation"]["schemaValidation"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+
     // Test ClientCapabilities without elicitation
     let capabilities_without = ClientCapabilities {
         elicitation: None,
         ..Default::default()
     };
-    
+
     assert!(capabilities_without.elicitation.is_none());
 }
 
@@ -927,26 +937,33 @@ async fn test_initialize_request_with_elicitation() {
             version: "1.0.0".to_string(),
         },
     };
-    
+
     // Verify the structure
     assert!(init_param.capabilities.elicitation.is_some());
     assert_eq!(
-        init_param.capabilities.elicitation.as_ref().unwrap().schema_validation,
+        init_param
+            .capabilities
+            .elicitation
+            .as_ref()
+            .unwrap()
+            .schema_validation,
         Some(true)
     );
-    
+
     // Test JSON serialization
     let json = serde_json::to_value(&init_param).unwrap();
-    assert!(json["capabilities"]["elicitation"]["schemaValidation"]
-        .as_bool()
-        .unwrap_or(false));
+    assert!(
+        json["capabilities"]["elicitation"]["schemaValidation"]
+            .as_bool()
+            .unwrap_or(false)
+    );
 }
 
 /// Test capability checking logic (simulated)
 #[tokio::test]
 async fn test_capability_checking_logic() {
     // Simulate the logic that would be used in supports_elicitation()
-    
+
     // Case 1: Client with elicitation capability
     let client_with_capability = InitializeRequestParam {
         protocol_version: ProtocolVersion::LATEST,
@@ -961,11 +978,11 @@ async fn test_capability_checking_logic() {
             version: "1.0.0".to_string(),
         },
     };
-    
+
     // Simulate supports_elicitation() logic
     let supports_elicitation = client_with_capability.capabilities.elicitation.is_some();
     assert!(supports_elicitation);
-    
+
     // Case 2: Client without elicitation capability
     let client_without_capability = InitializeRequestParam {
         protocol_version: ProtocolVersion::LATEST,
@@ -978,18 +995,17 @@ async fn test_capability_checking_logic() {
             version: "1.0.0".to_string(),
         },
     };
-    
+
     let supports_elicitation = client_without_capability.capabilities.elicitation.is_some();
     assert!(!supports_elicitation);
 }
-
 
 /// Test CapabilityNotSupported error message formatting
 #[tokio::test]
 async fn test_capability_not_supported_error_message() {
     let error = ElicitationError::CapabilityNotSupported;
     let message = format!("{}", error);
-    
+
     assert_eq!(
         message,
         "Client does not support elicitation - capability not declared during initialization"
@@ -1005,26 +1021,23 @@ async fn test_elicitation_error_variants() {
         format!("{}", capability_error),
         "Client does not support elicitation - capability not declared during initialization"
     );
-    
+
     // Test UserDeclined
     let user_declined = ElicitationError::UserDeclined;
     assert_eq!(
         format!("{}", user_declined),
         "User declined or cancelled the request"
     );
-    
+
     // Test NoContent
     let no_content = ElicitationError::NoContent;
-    assert_eq!(
-        format!("{}", no_content),
-        "No response content provided"
-    );
-    
+    assert_eq!(format!("{}", no_content), "No response content provided");
+
     // Test Service error
     let service_error = ElicitationError::Service(ServiceError::UnexpectedResponse);
     let message = format!("{}", service_error);
     assert!(message.starts_with("Service error:"));
-    
+
     // Test ParseError
     let json_error = serde_json::from_str::<i32>("\"not_an_integer\"").unwrap_err();
     let data = serde_json::json!({"key": "value"});
@@ -1035,20 +1048,20 @@ async fn test_elicitation_error_variants() {
     let message = format!("{}", parse_error);
     assert!(message.starts_with("Failed to parse response data:"));
     assert!(message.contains("Received data:"));
-    
+
     // Test error matching
     match capability_error {
-        ElicitationError::CapabilityNotSupported => {}, // Expected
+        ElicitationError::CapabilityNotSupported => {} // Expected
         _ => panic!("Should match CapabilityNotSupported"),
     }
-    
+
     match user_declined {
-        ElicitationError::UserDeclined => {}, // Expected
+        ElicitationError::UserDeclined => {} // Expected
         _ => panic!("Should match UserDeclined"),
     }
-    
+
     match no_content {
-        ElicitationError::NoContent => {}, // Expected
+        ElicitationError::NoContent => {} // Expected
         _ => panic!("Should match NoContent"),
     }
 }
@@ -1057,41 +1070,46 @@ async fn test_elicitation_error_variants() {
 #[tokio::test]
 async fn test_elicitation_capability_serialization() {
     use rmcp::model::ElicitationCapability;
-    
+
     // Test default capability (no schema validation)
     let default_cap = ElicitationCapability::default();
     let json = serde_json::to_value(&default_cap).unwrap();
-    
+
     // Should serialize to empty object when no fields are set
     assert_eq!(json, serde_json::json!({}));
-    
+
     // Test capability with schema validation enabled
     let cap_with_validation = ElicitationCapability {
         schema_validation: Some(true),
     };
     let json = serde_json::to_value(&cap_with_validation).unwrap();
-    
-    assert_eq!(json, serde_json::json!({
-        "schemaValidation": true
-    }));
-    
+
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "schemaValidation": true
+        })
+    );
+
     // Test capability with schema validation disabled
     let cap_without_validation = ElicitationCapability {
         schema_validation: Some(false),
     };
     let json = serde_json::to_value(&cap_without_validation).unwrap();
-    
-    assert_eq!(json, serde_json::json!({
-        "schemaValidation": false
-    }));
-    
-    // Test deserialization
-    let deserialized: ElicitationCapability = serde_json::from_value(
+
+    assert_eq!(
+        json,
         serde_json::json!({
-            "schemaValidation": true
+            "schemaValidation": false
         })
-    ).unwrap();
-    
+    );
+
+    // Test deserialization
+    let deserialized: ElicitationCapability = serde_json::from_value(serde_json::json!({
+        "schemaValidation": true
+    }))
+    .unwrap();
+
     assert_eq!(deserialized.schema_validation, Some(true));
 }
 
@@ -1099,36 +1117,38 @@ async fn test_elicitation_capability_serialization() {
 #[tokio::test]
 async fn test_client_capabilities_elicitation_builder() {
     use rmcp::model::{ClientCapabilities, ElicitationCapability};
-    
+
     // Test enabling elicitation capability
-    let caps = ClientCapabilities::builder()
-        .enable_elicitation()
-        .build();
-    
+    let caps = ClientCapabilities::builder().enable_elicitation().build();
+
     assert!(caps.elicitation.is_some());
     assert_eq!(caps.elicitation.as_ref().unwrap().schema_validation, None);
-    
+
     // Test enabling elicitation with schema validation
     let caps_with_validation = ClientCapabilities::builder()
         .enable_elicitation()
         .enable_elicitation_schema_validation()
         .build();
-    
+
     assert!(caps_with_validation.elicitation.is_some());
     assert_eq!(
-        caps_with_validation.elicitation.as_ref().unwrap().schema_validation,
+        caps_with_validation
+            .elicitation
+            .as_ref()
+            .unwrap()
+            .schema_validation,
         Some(true)
     );
-    
+
     // Test enabling elicitation with custom capability
     let custom_elicitation = ElicitationCapability {
         schema_validation: Some(false),
     };
-    
+
     let caps_custom = ClientCapabilities::builder()
         .enable_elicitation_with(custom_elicitation.clone())
         .build();
-    
+
     assert!(caps_custom.elicitation.is_some());
     assert_eq!(
         caps_custom.elicitation.as_ref().unwrap(),

@@ -21,7 +21,6 @@ use crate::{
     transport::DynamicTransportError,
 };
 
-
 /// It represents the error that may occur when serving the client.
 ///
 /// if you want to handle the error, you can use `serve_client_with_ct` or `serve_client` with `Result<RunningService<RoleClient, S>, ClientError>`
@@ -391,5 +390,4 @@ impl Peer<RoleClient> {
         }
         Ok(resource_templates)
     }
-
 }
