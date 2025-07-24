@@ -327,6 +327,25 @@ macro_rules! method {
     };
 }
 
+impl Peer<RoleServer> {
+    method!(peer_req create_message CreateMessageRequest(CreateMessageRequestParam) => CreateMessageResult);
+    method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
+    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+
+    method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
+    method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
+    method!(peer_not notify_logging_message LoggingMessageNotification(LoggingMessageNotificationParam));
+    method!(peer_not notify_resource_updated ResourceUpdatedNotification(ResourceUpdatedNotificationParam));
+    method!(peer_not notify_resource_list_changed ResourceListChangedNotification);
+    method!(peer_not notify_tool_list_changed ToolListChangedNotification);
+    method!(peer_not notify_prompt_list_changed PromptListChangedNotification);
+}
+
+// =============================================================================
+// ELICITATION CONVENIENCE METHODS
+// These methods are specific to server role and provide typed elicitation functionality
+// =============================================================================
+
 /// Errors that can occur during typed elicitation operations
 #[derive(Error, Debug)]
 pub enum ElicitationError {
@@ -355,22 +374,6 @@ pub enum ElicitationError {
 }
 
 impl Peer<RoleServer> {
-    method!(peer_req create_message CreateMessageRequest(CreateMessageRequestParam) => CreateMessageResult);
-    method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
-    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
-
-    method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
-    method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
-    method!(peer_not notify_logging_message LoggingMessageNotification(LoggingMessageNotificationParam));
-    method!(peer_not notify_resource_updated ResourceUpdatedNotification(ResourceUpdatedNotificationParam));
-    method!(peer_not notify_resource_list_changed ResourceListChangedNotification);
-    method!(peer_not notify_tool_list_changed ToolListChangedNotification);
-    method!(peer_not notify_prompt_list_changed PromptListChangedNotification);
-
-    // =============================================================================
-    // ELICITATION CONVENIENCE METHODS
-    // =============================================================================
-
     /// Check if the client supports elicitation capability
     ///
     /// Returns true if the client declared elicitation capability during initialization,
