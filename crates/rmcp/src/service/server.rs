@@ -400,8 +400,9 @@ impl Peer<RoleServer> {
     /// # Example
     /// ```rust,no_run
     /// # use rmcp::*;
+    /// # use rmcp::service::ElicitationError;
     /// # use serde_json::json;
-    /// # async fn example(peer: Peer<RoleServer>) -> Result<(), ServiceError> {
+    /// # async fn example(peer: Peer<RoleServer>) -> Result<(), ElicitationError> {
     /// let schema = json!({
     ///     "type": "object",
     ///     "properties": {
@@ -481,6 +482,7 @@ impl Peer<RoleServer> {
     ///
     /// ```rust,no_run
     /// # use rmcp::*;
+    /// # use rmcp::service::ElicitationError;
     /// # use serde::{Deserialize, Serialize};
     /// # use schemars::JsonSchema;
     /// #
@@ -498,6 +500,9 @@ impl Peer<RoleServer> {
     /// match peer.elicit::<UserProfile>("Please enter your profile information").await {
     ///     Ok(Some(profile)) => {
     ///         println!("Name: {}, Email: {}, Age: {}", profile.name, profile.email, profile.age);
+    ///     }
+    ///     Ok(None) => {
+    ///         println!("User declined to provide information");
     ///     }
     ///     Err(ElicitationError::UserDeclined) => {
     ///         println!("User declined to provide information");
