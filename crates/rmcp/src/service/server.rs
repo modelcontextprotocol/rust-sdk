@@ -333,22 +333,22 @@ pub enum ElicitationError {
     /// The elicitation request failed at the service level
     #[error("Service error: {0}")]
     Service(#[from] ServiceError),
-    
+
     /// User declined to provide input or cancelled the request  
     #[error("User declined or cancelled the request")]
     UserDeclined,
-    
+
     /// The response data could not be parsed into the requested type
     #[error("Failed to parse response data: {error}\nReceived data: {data}")]
     ParseError {
         error: serde_json::Error,
         data: serde_json::Value,
     },
-    
+
     /// No response content was provided by the user
     #[error("No response content provided")]
     NoContent,
-    
+
     /// Client does not support elicitation capability
     #[error("Client does not support elicitation - capability not declared during initialization")]
     CapabilityNotSupported,
