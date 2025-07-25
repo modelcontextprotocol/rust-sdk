@@ -232,36 +232,3 @@ async fn test_output_schema_requires_structured_content() {
     assert!(call_result.content.is_none());
 }
 
-#[tokio::test]
-async fn test_output_schema_forbids_regular_content() {
-    // This test verifies that our strict validation is working
-    // by testing that when a tool with output_schema returns regular content,
-    // the validation in ToolRouter::call should fail
-
-    // The validation happens in tool.rs around line 250-269
-    // This ensures consistency: tools declaring structured output must use it
-}
-
-#[tokio::test]
-async fn test_output_schema_error_must_be_structured() {
-    // Test that errors from tools with output_schema must also use structured_content
-    let server = TestServer::new();
-
-    // Call get-user with invalid ID to trigger error
-    let params = rmcp::handler::server::tool::Parameters("invalid".to_string());
-    let result = server.get_user(params).await;
-
-    // This returns Err(String) which will be converted to regular content
-    assert!(result.is_err());
-
-    // When converted via IntoCallToolResult for Result<Json<T>, E>,
-    // errors use CallToolResult::error() which uses regular content
-    // This would fail validation if the tool has output_schema
-}
-
-#[tokio::test]
-async fn test_structured_content_schema_validation() {
-    // The validation logic in ToolRouter::call validates structured_content
-    // against the tool's output_schema using validate_against_schema()
-    // This ensures type safety for structured outputs
-}

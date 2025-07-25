@@ -255,15 +255,6 @@ where
                     None,
                 ));
             }
-
-            // Ensure content is not used when output_schema is defined
-            if result.content.is_some() {
-                return Err(crate::ErrorData::invalid_params(
-                    "Tool with output_schema cannot use content field",
-                    None,
-                ));
-            }
-
             // Validate the structured content against the schema
             validate_against_schema(result.structured_content.as_ref().unwrap(), output_schema)?;
         }
