@@ -10,6 +10,8 @@ pub struct ToolAttribute {
     pub description: Option<String>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Option<Expr>,
+    /// An optional JSON Schema object defining the structure of the tool's output
+    pub output_schema: Option<Expr>,
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotationsAttribute>,
 }
@@ -18,6 +20,7 @@ pub struct ResolvedToolAttribute {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Expr,
+    pub output_schema: Option<Expr>,
     pub annotations: Expr,
 }
 
@@ -27,10 +30,16 @@ impl ResolvedToolAttribute {
             name,
             description,
             input_schema,
+            output_schema,
             annotations,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
+        } else {
+            quote! { None }
+        };
+        let output_schema = if let Some(output_schema) = output_schema {
+            quote! { Some(#output_schema) }
         } else {
             quote! { None }
         };
@@ -40,6 +49,7 @@ impl ResolvedToolAttribute {
                     name: #name.into(),
                     description: #description,
                     input_schema: #input_schema,
+                    output_schema: #output_schema,
                     annotations: #annotations,
                 }
             }
@@ -87,6 +97,63 @@ pub struct ToolAnnotationsAttribute {
 
 fn none_expr() -> Expr {
     syn::parse2::<Expr>(quote! { None }).unwrap()
+}
+
+/// Check if a type is Json<T> and extract the inner type T
+fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(last_segment) = type_path.path.segments.last() {
+            if last_segment.ident == "Json" {
+                if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                        return Some(inner_type);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract schema expression from a function's return type
+/// Handles patterns like Json<T> and Result<Json<T>, E>
+fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
+    // First, try direct Json<T>
+    if let Some(inner_type) = extract_json_inner_type(ret_type) {
+        return syn::parse2::<Expr>(quote! {
+            rmcp::handler::server::tool::cached_schema_for_type::<#inner_type>()
+        })
+        .ok();
+    }
+
+    // Then, try Result<Json<T>, E>
+    let type_path = match ret_type {
+        syn::Type::Path(path) => path,
+        _ => return None,
+    };
+
+    let last_segment = type_path.path.segments.last()?;
+
+    if last_segment.ident != "Result" {
+        return None;
+    }
+
+    let args = match &last_segment.arguments {
+        syn::PathArguments::AngleBracketed(args) => args,
+        _ => return None,
+    };
+
+    let ok_type = match args.args.first()? {
+        syn::GenericArgument::Type(ty) => ty,
+        _ => return None,
+    };
+
+    let inner_type = extract_json_inner_type(ok_type)?;
+
+    syn::parse2::<Expr>(quote! {
+        rmcp::handler::server::tool::cached_schema_for_type::<#inner_type>()
+    })
+    .ok()
 }
 
 // extract doc line from attribute
@@ -192,12 +259,22 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     } else {
         none_expr()
     };
+    // Handle output_schema - either explicit or generated from return type
+    let output_schema_expr = attribute.output_schema.or_else(|| {
+        // Try to generate schema from return type
+        match &fn_item.sig.output {
+            syn::ReturnType::Type(_, ret_type) => extract_schema_from_return_type(ret_type),
+            _ => None,
+        }
+    });
+
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
         description: attribute
             .description
             .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line)),
         input_schema: input_schema_expr,
+        output_schema: output_schema_expr,
         annotations: annotations_expr,
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
