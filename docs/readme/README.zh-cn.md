@@ -3,163 +3,121 @@
 ![Release status](https://github.commodelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
 
-一个基于tokio异步运行时的官方Model Context Protocol SDK实现。
+一个基于 tokio 异步运行时的官方 Model Context Protocol SDK 实现。
+
+本项目使用了以下开源库:
+
+- [rmcp](crates/rmcp): 实现 RMCP 协议的核心库 (详见：[rmcp](crates/rmcp/README.md))
+- [rmcp-macros](crates/rmcp-macros): 一个用于生成 RMCP 工具实现的过程宏库。 (详见：[rmcp-macros](crates/rmcp-macros/README.md))
 
 ## 使用
 
 ### 导入
 ```toml
-rmcp = { version = "0.1", features = ["server"] }
-## 或者开发者频道
+rmcp = { version = "0.2.0", features = ["server"] }
+## 或使用最新开发版本
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
 
-### 快速上手
-一行代码启动客户端：
-```rust
+### 第三方依赖库
+基本依赖:
+- [tokio required](https://github.com/tokio-rs/tokio)
+- [serde required](https://github.com/serde-rs/serde)
+
+### 构建客户端
+<details>
+<summary>构建客户端</summary>
+
+```rust, ignore
 use rmcp::{ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
 use tokio::process::Command;
 
-let client = ().serve(TokioChildProcess::new(Command::new("npx").configure(|cmd| {
-    cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
-}))?).await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = ().serve(TokioChildProcess::new(Command::new("npx").configure(|cmd| {
+        cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
+    }))?).await?;
+    Ok(())
+}
 ```
+</details>
 
-#### 1. 构建传输层
+### 构建服务端
+
+<details>
+<summary>构建传输层</summary>
 
 ```rust, ignore
 use tokio::io::{stdin, stdout};
 let transport = (stdin(), stdout());
 ```
 
-传输层类型必须实现 [`IntoTransport`](crate::transport::IntoTransport) trait, 这个特性允许分割成一个sink和一个stream。
+</details>
 
-对于客户端, Sink 的 Item 是 [`ClientJsonRpcMessage`](crate::model::ClientJsonRpcMessage)， Stream 的 Item 是 [`ServerJsonRpcMessage`](crate::model::ServerJsonRpcMessage)
+<details>
+<summary>构建服务</summary>
 
-对于服务端, Sink 的 Item 是 [`ServerJsonRpcMessage`](crate::model::ServerJsonRpcMessage)， Stream 的 Item 是 [`ClientJsonRpcMessage`](crate::model::ClientJsonRpcMessage)
-
-##### 这些类型自动实现了 [`IntoTransport`](crate::transport::IntoTransport) trait
-1. 已经同时实现了 [`Sink`](futures::Sink) 和 [`Stream`](futures::Stream) trait的类型。
-2. 由sink `Tx` 和 stream `Rx`组成的元组: `(Tx, Rx)`。
-3. 同时实现了 [`tokio::io::AsyncRead`] 和 [`tokio::io::AsyncWrite`] trait的类型。
-4. 由 [`tokio::io::AsyncRead`] `R `和 [`tokio::io::AsyncWrite`] `W` 组成的元组:  `(R, W)`。
-
-例如，你可以看到我们如何轻松地通过TCP流或http升级构建传输层。 [examples](examples/README.md)
-
-#### 2. 构建服务
-你可以通过 [`ServerHandler`](crates/rmcp/src/handler/server.rs) 或 [`ClientHandler`](crates/rmcp/src/handler/client.rs) 轻松构建服务
+You can easily build a service by using [`ServerHandler`](crates/rmcp/src/handler/server.rs) or [`ClientHandler`](crates/rmcp/src/handler/client.rs).
 
 ```rust, ignore
 let service = common::counter::Counter::new();
 ```
+</details>
 
-#### 3. 把他们组装到一起
+<details>
+<summary>启动服务端</summary>
+
 ```rust, ignore
-// 这里会自动完成初始化流程
+// this call will finish the initialization process
 let server = service.serve(transport).await?;
 ```
+</details>
 
-#### 4. 与服务交互
-一旦服务初始化完成，你可以发送请求或通知：
+<details>
+<summary>与服务端交互</summary>
+
+Once the server is initialized, you can send requests or notifications:
 
 ```rust, ignore
-// 请求
+// request
 let roots = server.list_roots().await?;
 
-// 或发送通知
+// or send notification
 server.notify_cancelled(...).await?;
 ```
+</details>
 
-#### 5. 等待服务关闭
+<details>
+<summary>等待服务停止</summary>
+
 ```rust, ignore
 let quit_reason = server.waiting().await?;
-// 或取消它
+// 或将其取消
 let quit_reason = server.cancel().await?;
 ```
-
-### 使用宏来声明工具
-使用 `toolbox` 和 `tool` 宏来快速创建工具。
-
-请看这个[文件](examples/servers/src/common/calculator.rs)。
-```rust, ignore
-use rmcp::{ServerHandler, model::ServerInfo, schemars, tool};
-
-use super::counter::Counter;
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct SumRequest {
-    #[schemars(description = "the left hand side number")]
-    pub a: i32,
-    #[schemars(description = "the right hand side number")]
-    pub b: i32,
-}
-#[derive(Debug, Clone)]
-pub struct Calculator;
-
-// create a static toolbox to store the tool attributes
-#[tool_router]
-impl Calculator {
-    // async function
-    #[tool(description = "Calculate the sum of two numbers")]
-    async fn sum(&self, #[tool(aggr)] SumRequest { a, b }: SumRequest) -> String {
-        (a + b).to_string()
-    }
-
-    // sync function
-    #[tool(description = "Calculate the sum of two numbers")]
-    fn sub(
-        &self,
-        #[tool(param)]
-        // this macro will transfer the schemars and serde's attributes
-        #[schemars(description = "the left hand side number")]
-        a: i32,
-        #[tool(param)]
-        #[schemars(description = "the right hand side number")]
-        b: i32,
-    ) -> String {
-        (a - b).to_string()
-    }
-}
-
-// impl call_tool and list_tool by querying static toolbox
-#[tool_handler]
-impl ServerHandler for Calculator {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("A simple calculator".into()),
-            ..Default::default()
-        }
-    }
-}
-
-```
-你要做的唯一事情就是确保函数的返回类型实现了 `IntoCallToolResult`。
-
-你可以为返回类型实现 `IntoContents`，那么返回值将自动标记为成功。
-
-如果返回类型是 `Result<T, E>`，其中 `T` 与 `E` 都实现了 `IntoContents`，那也是可以的。
-
-### 管理多个服务
-在很多情况下你需要在一个集合中管理多个服务，你可以调用 `into_dyn` 来将服务转换为相同类型。
-```rust, ignore
-let service = service.into_dyn();
-```
-
+</details>
 
 ### 示例
 查看 [examples](examples/README.md)
 
-### 功能特性
-- `client`: 使用客户端sdk
-- `server`: 使用服务端sdk
-- `macros`: 宏默认
-#### 传输层
-- `transport-io`: 服务端标准输入输出传输
-- `transport-sse-server`: 服务端SSE传输
-- `transport-child-process`: 客户端标准输入输出传输
-- `transport-sse`: 客户端SSE传输
+## OAuth 支持
+
+查看 [oauth_support](docs/OAUTH_SUPPORT.md)
 
 ## 相关资源
-- [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
 
+- [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
 - [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
+
+## 相关项目
+- [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - 基于 containerd 实现的 MCP 服务
+
+## 开发
+
+### 贡献指南
+
+查看 [docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD)
+
+### 使用 Dev Container
+
+如果你想使用 Dev Container，查看 [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) 获取开发指南。
