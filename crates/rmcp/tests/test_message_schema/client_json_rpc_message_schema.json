@@ -1129,7 +1129,7 @@
         {
           "type": "object",
           "properties": {
-            "mime_type": {
+            "mimeType": {
               "type": [
                 "string",
                 "null"
@@ -1153,7 +1153,7 @@
             "blob": {
               "type": "string"
             },
-            "mime_type": {
+            "mimeType": {
               "type": [
                 "string",
                 "null"

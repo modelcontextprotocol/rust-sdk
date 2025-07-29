@@ -171,3 +171,40 @@ impl IntoContents for () {
         vec![]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn test_image_content_serialization() {
+        let image_content = RawImageContent {
+            data: "base64data".to_string(),
+            mime_type: "image/png".to_string(),
+        };
+
+        let json = serde_json::to_string(&image_content).unwrap();
+        println!("ImageContent JSON: {}", json);
+
+        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_audio_content_serialization() {
+        let audio_content = RawAudioContent {
+            data: "base64audiodata".to_string(),
+            mime_type: "audio/wav".to_string(),
+        };
+
+        let json = serde_json::to_string(&audio_content).unwrap();
+        println!("AudioContent JSON: {}", json);
+
+        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
+    }
+}

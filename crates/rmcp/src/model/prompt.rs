@@ -168,3 +168,25 @@ pub struct PromptArgumentTemplate {
     pub description: Option<String>,
     pub required: Option<bool>,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn test_prompt_message_image_serialization() {
+        let image_content = RawImageContent {
+            data: "base64data".to_string(),
+            mime_type: "image/png".to_string(),
+        };
+
+        let json = serde_json::to_string(&image_content).unwrap();
+        println!("PromptMessage ImageContent JSON: {}", json);
+
+        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
+    }
+}
