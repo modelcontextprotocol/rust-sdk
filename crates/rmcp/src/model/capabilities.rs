@@ -36,6 +36,7 @@ pub struct ToolsCapability {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RootsCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
 }
 
