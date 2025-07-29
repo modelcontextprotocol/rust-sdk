@@ -231,4 +231,3 @@ async fn test_output_schema_requires_structured_content() {
     assert!(call_result.structured_content.is_some());
     assert!(call_result.content.is_none());
 }
-
