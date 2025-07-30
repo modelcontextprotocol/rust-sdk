@@ -153,22 +153,6 @@ impl PromptMessage {
     }
 }
 
-/// A template for a prompt
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PromptTemplate {
-    pub id: String,
-    pub template: String,
-    pub arguments: Vec<PromptArgumentTemplate>,
-}
-
-/// A template for a prompt argument, this should be identical to PromptArgument
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PromptArgumentTemplate {
-    pub name: String,
-    pub description: Option<String>,
-    pub required: Option<bool>,
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json;
