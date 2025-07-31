@@ -1,6 +1,10 @@
 #[allow(unused_imports)]
 use proc_macro::TokenStream;
 
+mod common;
+mod prompt;
+mod prompt_handler;
+mod prompt_router;
 mod tool;
 mod tool_handler;
 mod tool_router;
@@ -157,6 +161,105 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn tool_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
     tool_handler::tool_handler(attr.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// # prompt
+///
+/// This macro is used to mark a function as a prompt handler.
+///
+/// This will generate a function that returns the attribute of this prompt, with type `rmcp::model::Prompt`.
+///
+/// ## Usage
+///
+/// | field             | type     | usage |
+/// | :-                | :-       | :-    |
+/// | `name`            | `String` | The name of the prompt. If not provided, it defaults to the function name. |
+/// | `description`     | `String` | A description of the prompt. The document of this function will be used if not provided. |
+/// | `arguments`       | `Expr`   | An expression that evaluates to `Option<Vec<PromptArgument>>` defining the prompt's arguments. If not provided, it will automatically generate arguments from the `Parameters<T>` type found in the function signature. |
+///
+/// ## Example
+///
+/// ```rust,ignore
+/// #[prompt(name = "code_review", description = "Reviews code for best practices")]
+/// pub async fn code_review_prompt(&self, Parameters(args): Parameters<CodeReviewArgs>) -> Result<Vec<PromptMessage>> {
+///     // Generate prompt messages based on arguments
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn prompt(attr: TokenStream, input: TokenStream) -> TokenStream {
+    prompt::prompt(attr.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// # prompt_router
+///
+/// This macro generates a prompt router based on functions marked with `#[rmcp::prompt]` in an implementation block.
+///
+/// It creates a function that returns a `PromptRouter` instance.
+///
+/// ## Usage
+///
+/// | field     | type          | usage |
+/// | :-        | :-            | :-    |
+/// | `router`  | `Ident`       | The name of the router function to be generated. Defaults to `prompt_router`. |
+/// | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
+///
+/// ## Example
+///
+/// ```rust,ignore
+/// #[prompt_router]
+/// impl MyPromptHandler {
+///     #[prompt]
+///     pub async fn greeting_prompt(&self, Parameters(args): Parameters<GreetingArgs>) -> Result<Vec<PromptMessage>, Error> {
+///         // Generate greeting prompt using args
+///     }
+///
+///     pub fn new() -> Self {
+///         Self {
+///             // the default name of prompt router will be `prompt_router`
+///             prompt_router: Self::prompt_router(),
+///         }
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn prompt_router(attr: TokenStream, input: TokenStream) -> TokenStream {
+    prompt_router::prompt_router(attr.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// # prompt_handler
+///
+/// This macro generates handler methods for `get_prompt` and `list_prompts` in the implementation block, using an existing `PromptRouter` instance.
+///
+/// ## Usage
+///
+/// | field     | type   | usage |
+/// | :-        | :-     | :-    |
+/// | `router`  | `Expr` | The expression to access the `PromptRouter` instance. Defaults to `self.prompt_router`. |
+///
+/// ## Example
+/// ```rust,ignore
+/// #[prompt_handler]
+/// impl ServerHandler for MyPromptHandler {
+///     // ...implement other handler methods
+/// }
+/// ```
+///
+/// or using a custom router expression:
+/// ```rust,ignore
+/// #[prompt_handler(router = self.get_prompt_router())]
+/// impl ServerHandler for MyPromptHandler {
+///    // ...implement other handler methods
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
+    prompt_handler::prompt_handler(attr.into(), input.into())
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
