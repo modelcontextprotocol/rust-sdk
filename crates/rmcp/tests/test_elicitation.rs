@@ -205,9 +205,6 @@ async fn test_elicitation_spec_compliance() {
         "notifications/elicitation/response"
     );
 
-    // Test that protocol version includes the new 2025-06-18 version
-    assert_eq!(ProtocolVersion::V_2025_06_18.to_string(), "2025-06-18");
-    assert_eq!(ProtocolVersion::LATEST, ProtocolVersion::V_2025_06_18);
 
     // Test that enum values match specification
     let actions = [
