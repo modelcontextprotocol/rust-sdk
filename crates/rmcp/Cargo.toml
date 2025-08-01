@@ -79,6 +79,7 @@ default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
+elicitation = []
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -201,3 +202,8 @@ path = "tests/test_message_schema.rs"
 name = "test_progress_subscriber"
 required-features = ["server", "client", "macros"]
 path = "tests/test_progress_subscriber.rs"
+
+[[test]]
+name = "test_elicitation"
+required-features = ["elicitation", "client", "server"]
+path = "tests/test_elicitation.rs"

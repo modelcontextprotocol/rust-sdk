@@ -257,6 +257,17 @@
       "description": "```rust\n# use rmcp::model::ClientCapabilities;\nlet cap = ClientCapabilities::builder()\n    .enable_experimental()\n    .enable_roots()\n    .enable_roots_list_changed()\n    .build();\n```",
       "type": "object",
       "properties": {
+        "elicitation": {
+          "description": "Capability to handle elicitation requests from servers for interactive user input",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "experimental": {
           "type": [
             "object",
@@ -295,6 +306,9 @@
           "$ref": "#/definitions/ListRootsResult"
         },
         {
+          "$ref": "#/definitions/CreateElicitationResult"
+        },
+        {
           "$ref": "#/definitions/EmptyObject"
         }
       ]
@@ -317,6 +331,26 @@
       "required": [
         "ref",
         "argument"
+      ]
+    },
+    "CreateElicitationResult": {
+      "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The user's decision on how to handle the elicitation request",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElicitationAction"
+            }
+          ]
+        },
+        "content": {
+          "description": "The actual data provided by the user, if they accepted the request.\nMust conform to the JSON schema specified in the original request.\nOnly present when action is Accept."
+        }
+      },
+      "required": [
+        "action"
       ]
     },
     "CreateMessageResult": {
@@ -356,6 +390,39 @@
         "role",
         "content"
       ]
+    },
+    "ElicitationAction": {
+      "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
+      "oneOf": [
+        {
+          "description": "User accepts the request and provides the requested information",
+          "type": "string",
+          "const": "accept"
+        },
+        {
+          "description": "User declines to provide the information but allows the operation to continue",
+          "type": "string",
+          "const": "decline"
+        },
+        {
+          "description": "User cancels the entire operation",
+          "type": "string",
+          "const": "cancel"
+        }
+      ]
+    },
+    "ElicitationCapability": {
+      "description": "Capability for handling elicitation requests from servers.\n\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
+      "type": "object",
+      "properties": {
+        "schemaValidation": {
+          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
