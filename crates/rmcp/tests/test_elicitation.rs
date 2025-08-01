@@ -205,7 +205,6 @@ async fn test_elicitation_spec_compliance() {
         "notifications/elicitation/response"
     );
 
-
     // Test that enum values match specification
     let actions = [
         ElicitationAction::Accept,
