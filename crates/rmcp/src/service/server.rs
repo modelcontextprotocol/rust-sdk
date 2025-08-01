@@ -3,11 +3,14 @@ use std::borrow::Cow;
 use thiserror::Error;
 
 use super::*;
+#[cfg(feature = "elicitation")]
+use crate::model::{
+    CreateElicitationRequest, CreateElicitationRequestParam, CreateElicitationResult,
+};
 use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
-        ClientNotification, ClientRequest, ClientResult, CreateElicitationRequest,
-        CreateElicitationRequestParam, CreateElicitationResult, CreateMessageRequest,
+        ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
         CreateMessageRequestParam, CreateMessageResult, ErrorData, ListRootsRequest,
         ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
         ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
@@ -325,12 +328,68 @@ macro_rules! method {
             Ok(())
         }
     };
+
+    // Timeout-only variants (base method should be created separately with peer_req)
+    (peer_req_with_timeout $method_with_timeout:ident $Req:ident() => $Resp: ident) => {
+        pub async fn $method_with_timeout(
+            &self,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<$Resp, ServiceError> {
+            let request = ServerRequest::$Req($Req {
+                method: Default::default(),
+                extensions: Default::default(),
+            });
+            let options = crate::service::PeerRequestOptions {
+                timeout,
+                meta: None,
+            };
+            let result = self
+                .send_request_with_option(request, options)
+                .await?
+                .await_response()
+                .await?;
+            match result {
+                ClientResult::$Resp(result) => Ok(result),
+                _ => Err(ServiceError::UnexpectedResponse),
+            }
+        }
+    };
+
+    (peer_req_with_timeout $method_with_timeout:ident $Req:ident($Param: ident) => $Resp: ident) => {
+        pub async fn $method_with_timeout(
+            &self,
+            params: $Param,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<$Resp, ServiceError> {
+            let request = ServerRequest::$Req($Req {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            });
+            let options = crate::service::PeerRequestOptions {
+                timeout,
+                meta: None,
+            };
+            let result = self
+                .send_request_with_option(request, options)
+                .await?
+                .await_response()
+                .await?;
+            match result {
+                ClientResult::$Resp(result) => Ok(result),
+                _ => Err(ServiceError::UnexpectedResponse),
+            }
+        }
+    };
 }
 
 impl Peer<RoleServer> {
     method!(peer_req create_message CreateMessageRequest(CreateMessageRequestParam) => CreateMessageResult);
     method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
+    #[cfg(feature = "elicitation")]
     method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+    #[cfg(feature = "elicitation")]
+    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -347,6 +406,7 @@ impl Peer<RoleServer> {
 // =============================================================================
 
 /// Errors that can occur during typed elicitation operations
+#[cfg(feature = "elicitation")]
 #[derive(Error, Debug)]
 pub enum ElicitationError {
     /// The elicitation request failed at the service level
@@ -373,6 +433,7 @@ pub enum ElicitationError {
     CapabilityNotSupported,
 }
 
+#[cfg(feature = "elicitation")]
 impl Peer<RoleServer> {
     /// Check if the client supports elicitation capability
     ///
@@ -384,69 +445,6 @@ impl Peer<RoleServer> {
             client_info.capabilities.elicitation.is_some()
         } else {
             false
-        }
-    }
-
-    /// Request structured data from the user using a custom JSON schema.
-    ///
-    /// This is the most flexible elicitation method, allowing you to request
-    /// any kind of structured input using JSON Schema validation.
-    ///
-    /// # Arguments
-    /// * `message` - The prompt message for the user
-    /// * `schema` - JSON Schema defining the expected data structure
-    ///
-    /// # Returns
-    /// * `Ok(Some(data))` if user provided valid data
-    /// * `Ok(None)` if user declined or cancelled
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use rmcp::*;
-    /// # use rmcp::service::ElicitationError;
-    /// # use serde_json::json;
-    /// # async fn example(peer: Peer<RoleServer>) -> Result<(), ElicitationError> {
-    /// let schema = json!({
-    ///     "type": "object",
-    ///     "properties": {
-    ///         "name": {"type": "string"},
-    ///         "email": {"type": "string", "format": "email"},
-    ///         "age": {"type": "integer", "minimum": 0}
-    ///     },
-    ///     "required": ["name", "email"]
-    /// });
-    ///
-    /// let user_data = peer.elicit_structured_input(
-    ///     "Please provide your contact information:",
-    ///     schema.as_object().unwrap()
-    /// ).await?;
-    ///
-    /// if let Some(data) = user_data {
-    ///     println!("Received user data: {}", data);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn elicit_structured_input(
-        &self,
-        message: impl Into<String>,
-        schema: &crate::model::JsonObject,
-    ) -> Result<Option<serde_json::Value>, ElicitationError> {
-        // Check if client supports elicitation capability
-        if !self.supports_elicitation() {
-            return Err(ElicitationError::CapabilityNotSupported);
-        }
-
-        let response = self
-            .create_elicitation(CreateElicitationRequestParam {
-                message: message.into(),
-                requested_schema: schema.clone(),
-            })
-            .await?;
-
-        match response.action {
-            crate::model::ElicitationAction::Accept => Ok(response.content),
-            _ => Ok(None),
         }
     }
 
@@ -518,8 +516,62 @@ impl Peer<RoleServer> {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "schemars")]
+    #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Option<T>, ElicitationError>
+    where
+        T: schemars::JsonSchema + for<'de> serde::Deserialize<'de>,
+    {
+        self.elicit_with_timeout(message, None).await
+    }
+
+    /// Request typed data from the user with custom timeout.
+    ///
+    /// Same as `elicit()` but allows specifying a custom timeout for the request.
+    /// If the user doesn't respond within the timeout, the request will be cancelled.
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `timeout` - Optional timeout duration. If None, uses default timeout behavior
+    ///
+    /// # Returns
+    /// Same as `elicit()` but may also return `ServiceError::Timeout` if timeout expires
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # use rmcp::service::ElicitationError;
+    /// # use serde::{Deserialize, Serialize};
+    /// # use schemars::JsonSchema;
+    /// # use std::time::Duration;
+    /// #
+    /// #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    /// struct QuickResponse {
+    ///     answer: String,
+    /// }
+    ///
+    /// # async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Give user 30 seconds to respond
+    /// let timeout = Some(Duration::from_secs(30));
+    /// match peer.elicit_with_timeout::<QuickResponse>(
+    ///     "Quick question - what's your answer?",
+    ///     timeout
+    /// ).await {
+    ///     Ok(Some(response)) => println!("Got answer: {}", response.answer),
+    ///     Ok(None) => println!("User declined"),
+    ///     Err(ElicitationError::Service(ServiceError::Timeout { .. })) => {
+    ///         println!("User didn't respond in time");
+    ///     }
+    ///     Err(e) => return Err(e.into()),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(all(feature = "schemars", feature = "elicitation"))]
+    pub async fn elicit_with_timeout<T>(
+        &self,
+        message: impl Into<String>,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<T>, ElicitationError>
     where
         T: schemars::JsonSchema + for<'de> serde::Deserialize<'de>,
     {
@@ -532,10 +584,13 @@ impl Peer<RoleServer> {
         let schema = crate::handler::server::tool::schema_for_type::<T>();
 
         let response = self
-            .create_elicitation(CreateElicitationRequestParam {
-                message: message.into(),
-                requested_schema: schema,
-            })
+            .create_elicitation_with_timeout(
+                CreateElicitationRequestParam {
+                    message: message.into(),
+                    requested_schema: schema,
+                },
+                timeout,
+            )
             .await?;
 
         match response.action {

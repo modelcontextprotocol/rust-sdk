@@ -286,6 +286,7 @@ impl<const E: bool, const S: bool>
     }
 }
 
+#[cfg(feature = "elicitation")]
 impl<const E: bool, const R: bool, const S: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, R, S, true>>
 {

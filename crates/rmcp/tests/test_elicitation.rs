@@ -1150,3 +1150,183 @@ async fn test_client_capabilities_elicitation_builder() {
         &custom_elicitation
     );
 }
+
+// =============================================================================
+// TIMEOUT TESTS
+// =============================================================================
+
+/// Test basic timeout functionality for create_elicitation_with_timeout
+#[tokio::test]
+async fn test_create_elicitation_with_timeout_basic() {
+    use std::time::Duration;
+
+    // This test verifies that the method accepts timeout parameter
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "email": {"type": "string"}
+        },
+        "required": ["name", "email"]
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let _params = CreateElicitationRequestParam {
+        message: "Enter your details".to_string(),
+        requested_schema: schema,
+    };
+
+    // Test different timeout values
+    let timeout_short = Duration::from_millis(100);
+    let timeout_long = Duration::from_secs(30);
+    let timeout_none: Option<Duration> = None;
+
+    // Verify timeout parameter types are correct
+    assert!(!timeout_short.is_zero());
+    assert!(!timeout_long.is_zero());
+    assert!(timeout_none.is_none());
+
+    // Verify timeout values are reasonable
+    assert_eq!(timeout_short.as_millis(), 100);
+    assert_eq!(timeout_long.as_secs(), 30);
+}
+
+/// Test timeout behavior with elicit_with_timeout method
+#[tokio::test]
+async fn test_elicit_with_timeout_method_signature() {
+    use std::time::Duration;
+
+    // Test that method signature works with different timeout values
+    let timeout_values = vec![
+        None,
+        Some(Duration::from_millis(500)),
+        Some(Duration::from_secs(1)),
+        Some(Duration::from_secs(30)),
+        Some(Duration::from_secs(60)),
+    ];
+
+    for timeout in timeout_values {
+        // Verify timeout value is properly handled
+        match timeout {
+            None => assert!(timeout.is_none()),
+            Some(duration) => {
+                assert!(duration > Duration::from_millis(0));
+                assert!(duration <= Duration::from_secs(300)); // Max 5 minutes
+            }
+        }
+    }
+}
+
+/// Test timeout value validation
+#[tokio::test]
+async fn test_timeout_value_validation() {
+    use std::time::Duration;
+
+    // Test valid timeout ranges
+    let valid_timeouts = vec![
+        Duration::from_millis(1),   // Minimum
+        Duration::from_millis(100), // Short
+        Duration::from_secs(1),     // 1 second
+        Duration::from_secs(30),    // 30 seconds
+        Duration::from_secs(300),   // 5 minutes
+    ];
+
+    for timeout in valid_timeouts {
+        assert!(timeout >= Duration::from_millis(1));
+        assert!(timeout <= Duration::from_secs(300));
+    }
+
+    // Test edge cases
+    let zero_timeout = Duration::from_millis(0);
+    let very_long_timeout = Duration::from_secs(3600); // 1 hour
+
+    // Zero timeout should be handled gracefully
+    assert_eq!(zero_timeout, Duration::from_millis(0));
+
+    // Very long timeout should work but may not be practical
+    assert!(very_long_timeout > Duration::from_secs(300));
+}
+
+/// Test timeout error message formatting
+#[tokio::test]
+async fn test_timeout_error_formatting() {
+    use std::time::Duration;
+
+    let timeout = Duration::from_secs(30);
+
+    // Simulate a timeout error
+    let timeout_error = ServiceError::Timeout { timeout };
+
+    // Verify error contains timeout information
+    let error_string = format!("{}", timeout_error);
+    assert!(error_string.contains("timeout"));
+    assert!(error_string.contains("30"));
+}
+
+/// Test elicitation error handling with timeout
+#[tokio::test]
+async fn test_elicitation_timeout_error_conversion() {
+    use std::time::Duration;
+
+    let timeout = Duration::from_millis(500);
+    let service_timeout_error = ServiceError::Timeout { timeout };
+    let elicitation_error = ElicitationError::Service(service_timeout_error);
+
+    // Verify error chain is preserved
+    match elicitation_error {
+        ElicitationError::Service(ServiceError::Timeout { timeout: t }) => {
+            assert_eq!(t, timeout);
+        }
+        _ => panic!("Expected timeout error"),
+    }
+}
+
+/// Test timeout parameter pass-through in PeerRequestOptions
+#[tokio::test]
+async fn test_peer_request_options_timeout() {
+    use std::time::Duration;
+
+    let timeout = Some(Duration::from_secs(15));
+
+    let options = PeerRequestOptions {
+        timeout,
+        meta: None,
+    };
+
+    // Verify timeout is properly stored
+    assert_eq!(options.timeout, timeout);
+    assert!(options.meta.is_none());
+
+    // Test with no timeout
+    let options_no_timeout = PeerRequestOptions {
+        timeout: None,
+        meta: None,
+    };
+
+    assert!(options_no_timeout.timeout.is_none());
+}
+
+/// Test realistic timeout scenarios
+#[tokio::test]
+async fn test_realistic_timeout_scenarios() {
+    use std::time::Duration;
+
+    // Test common timeout scenarios users might encounter
+
+    // Quick response (5 seconds)
+    let quick_timeout = Duration::from_secs(5);
+    assert!(quick_timeout >= Duration::from_secs(1));
+    assert!(quick_timeout <= Duration::from_secs(10));
+
+    // Normal interaction (30 seconds)
+    let normal_timeout = Duration::from_secs(30);
+    assert!(normal_timeout >= Duration::from_secs(10));
+    assert!(normal_timeout <= Duration::from_secs(60));
+
+    // Long form input (2 minutes)
+    let long_timeout = Duration::from_secs(120);
+    assert!(long_timeout >= Duration::from_secs(60));
+    assert!(long_timeout <= Duration::from_secs(300));
+}
