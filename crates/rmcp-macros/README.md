@@ -98,7 +98,7 @@ impl MyToolHandler {
         }
     }
 }
-
+```
 
 ### tool_handler
 
