@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.3.2...rmcp-v0.4.0) - 2025-08-05
+
+### Added
+
+- [**breaking**] Add support for `Tool.outputSchema` and `CallToolResult.structuredContent` ([#316](https://github.com/modelcontextprotocol/rust-sdk/pull/316))
+
+### Fixed
+
+- don't wrap errors in streamable http auth client ([#353](https://github.com/modelcontextprotocol/rust-sdk/pull/353))
+- *(prompt)* remove unused code ([#343](https://github.com/modelcontextprotocol/rust-sdk/pull/343))
+
 ## [0.3.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.3.1...rmcp-v0.3.2) - 2025-07-30
 
 ### Fixed
