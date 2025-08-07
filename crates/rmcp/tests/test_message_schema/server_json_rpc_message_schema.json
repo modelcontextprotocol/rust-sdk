@@ -1027,9 +1027,8 @@
         },
         "progress": {
           "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
+          "type": "number",
+          "format": "double"
         },
         "progressToken": {
           "$ref": "#/definitions/ProgressToken"
@@ -1037,11 +1036,10 @@
         "total": {
           "description": "Total number of items to process (or total progress required), if known",
           "type": [
-            "integer",
+            "number",
             "null"
           ],
-          "format": "uint32",
-          "minimum": 0
+          "format": "double"
         }
       },
       "required": [
