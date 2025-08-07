@@ -1181,8 +1181,6 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-///
-/// Note: `content` and `structured_content` are mutually exclusive - exactly one must be provided.
 #[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -1262,10 +1260,9 @@ impl CallToolResult {
         }
     }
 
-    /// Validate that content and structured_content are mutually exclusive
+    /// Validate that content or structured content is provided
     pub fn validate(&self) -> Result<(), &'static str> {
         match (&self.content, &self.structured_content) {
-            (Some(_), Some(_)) => Err("content and structured_content are mutually exclusive"),
             (None, None) => Err("either content or structured_content must be provided"),
             _ => Ok(()),
         }

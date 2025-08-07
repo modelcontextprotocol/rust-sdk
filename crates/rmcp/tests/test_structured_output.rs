@@ -146,7 +146,7 @@ async fn test_structured_error_in_call_result() {
 
 #[tokio::test]
 async fn test_mutual_exclusivity_validation() {
-    // Test that content and structured_content are mutually exclusive
+    // Test that content and structured_content can both be passed separately
     let content_result = CallToolResult::success(vec![Content::text("Hello")]);
     let structured_result = CallToolResult::structured(json!({"message": "Hello"}));
 
@@ -154,15 +154,15 @@ async fn test_mutual_exclusivity_validation() {
     assert!(content_result.validate().is_ok());
     assert!(structured_result.validate().is_ok());
 
-    // Try to create an invalid result with both fields
-    let invalid_json = json!({
+    // Try to create a result with both fields
+    let json_with_both = json!({
         "content": [{"type": "text", "text": "Hello"}],
         "structuredContent": {"message": "Hello"}
     });
 
-    // The deserialization itself should fail due to validation
-    let deserialized: Result<CallToolResult, _> = serde_json::from_value(invalid_json);
-    assert!(deserialized.is_err());
+    // The deserialization itself should not fail
+    let deserialized: Result<CallToolResult, _> = serde_json::from_value(json_with_both);
+    assert!(deserialized.is_ok());
 }
 
 #[tokio::test]

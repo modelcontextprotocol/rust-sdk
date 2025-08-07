@@ -299,7 +299,7 @@
       }
     },
     "CallToolResult": {
-      "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.\n\nNote: `content` and `structured_content` are mutually exclusive - exactly one must be provided.",
+      "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
       "properties": {
         "content": {
@@ -1336,7 +1336,7 @@
         {
           "type": "object",
           "properties": {
-            "mime_type": {
+            "mimeType": {
               "type": [
                 "string",
                 "null"
@@ -1360,7 +1360,7 @@
             "blob": {
               "type": "string"
             },
-            "mime_type": {
+            "mimeType": {
               "type": [
                 "string",
                 "null"
