@@ -758,10 +758,10 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
-    pub progress: u32,
+    pub progress: f64,
     /// Total number of items to process (or total progress required), if known
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<u32>,
+    pub total: Option<f64>,
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
