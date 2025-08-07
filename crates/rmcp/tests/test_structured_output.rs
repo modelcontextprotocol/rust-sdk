@@ -145,27 +145,6 @@ async fn test_structured_error_in_call_result() {
 }
 
 #[tokio::test]
-async fn test_mutual_exclusivity_validation() {
-    // Test that content and structured_content are mutually exclusive
-    let content_result = CallToolResult::success(vec![Content::text("Hello")]);
-    let structured_result = CallToolResult::structured(json!({"message": "Hello"}));
-
-    // Verify the validation
-    assert!(content_result.validate().is_ok());
-    assert!(structured_result.validate().is_ok());
-
-    // Try to create an invalid result with both fields
-    let invalid_json = json!({
-        "content": [{"type": "text", "text": "Hello"}],
-        "structuredContent": {"message": "Hello"}
-    });
-
-    // The deserialization itself should fail due to validation
-    let deserialized: Result<CallToolResult, _> = serde_json::from_value(invalid_json);
-    assert!(deserialized.is_err());
-}
-
-#[tokio::test]
 async fn test_structured_return_conversion() {
     // Test that Json<T> converts to CallToolResult with structured_content
     let calc_result = CalculationResult {

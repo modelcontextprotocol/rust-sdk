@@ -1262,10 +1262,9 @@ impl CallToolResult {
         }
     }
 
-    /// Validate that content and structured_content are mutually exclusive
+    /// Validate that content or structured content is provided
     pub fn validate(&self) -> Result<(), &'static str> {
         match (&self.content, &self.structured_content) {
-            (Some(_), Some(_)) => Err("content and structured_content are mutually exclusive"),
             (None, None) => Err("either content or structured_content must be provided"),
             _ => Ok(()),
         }
