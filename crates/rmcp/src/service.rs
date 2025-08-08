@@ -557,9 +557,9 @@ where
         tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
     let peer_info = peer.peer_info();
     if R::IS_CLIENT {
-        tracing::info!(?peer_info, "Service initialized as client");
+        tracing::trace!(?peer_info, "Service initialized as client");
     } else {
-        tracing::info!(?peer_info, "Service initialized as server");
+        tracing::trace!(?peer_info, "Service initialized as server");
     }
 
     let mut local_responder_pool =
@@ -615,7 +615,7 @@ where
                             Event::PeerMessage(m)
                         } else {
                             // input stream closed
-                            tracing::info!("input stream terminated");
+                            tracing::trace!("input stream terminated");
                             break QuitReason::Closed
                         }
                     }
@@ -642,7 +642,7 @@ where
                         }
                     }
                     _ = serve_loop_ct.cancelled() => {
-                        tracing::info!("task cancelled");
+                        tracing::trace!("task cancelled");
                         break QuitReason::Cancelled
                     }
                 }
@@ -670,7 +670,7 @@ where
                     let _ = responder.send(response);
                     if let Some(param) = cancellation_param {
                         if let Some(responder) = local_responder_pool.remove(&param.request_id) {
-                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
+                            tracing::trace!(id = %param.request_id, reason = param.reason, "cancelled");
                             let _response_result = responder.send(Err(ServiceError::Cancelled {
                                 reason: param.reason.clone(),
                             }));
@@ -782,12 +782,12 @@ where
                     notification,
                     ..
                 })) => {
-                    tracing::info!(?notification, "received notification");
+                    tracing::trace!(?notification, "received notification");
                     // catch cancelled notification
                     let mut notification = match notification.try_into() {
                         Ok::<CancelledNotification, _>(cancelled) => {
                             if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
-                                tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
+                                tracing::trace!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
                                 ct.cancel();
                             }
                             cancelled.into()
@@ -855,7 +855,7 @@ where
         if let Err(e) = sink_close_result {
             tracing::error!(%e, "fail to close sink");
         }
-        tracing::info!(?quit_reason, "serve finished");
+        tracing::trace!(?quit_reason, "serve finished");
         quit_reason
     }.instrument(current_span));
     RunningService {
