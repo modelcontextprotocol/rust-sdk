@@ -48,7 +48,7 @@ url = { version = "2.4", optional = true }
 tower-service = { version = "0.3", optional = true }
 
 # for child process transport
-process-wrap = { version = "8.2", features = ["tokio1"], optional = true }
+process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 
 # for ws transport
 # tokio-tungstenite ={ version = "0.26", optional = true }
