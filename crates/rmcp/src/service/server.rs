@@ -3,6 +3,34 @@ use std::borrow::Cow;
 use thiserror::Error;
 
 use super::*;
+
+/// Validates timeout values to prevent DoS attacks and ensure reasonable limits
+fn validate_timeout(timeout: Option<std::time::Duration>) -> Result<(), ServiceError> {
+    if let Some(duration) = timeout {
+        const MAX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes max
+        const MIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1); // 1ms min
+
+        if duration > MAX_TIMEOUT {
+            return Err(ServiceError::InvalidTimeout {
+                timeout: duration,
+                reason: "Timeout exceeds maximum allowed duration (300 seconds)".to_string(),
+            });
+        }
+        if duration < MIN_TIMEOUT {
+            return Err(ServiceError::InvalidTimeout {
+                timeout: duration,
+                reason: "Timeout must be at least 1 millisecond".to_string(),
+            });
+        }
+        if duration.is_zero() {
+            return Err(ServiceError::InvalidTimeout {
+                timeout: duration,
+                reason: "Timeout cannot be zero".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
 #[cfg(feature = "elicitation")]
 use crate::model::{
     CreateElicitationRequest, CreateElicitationRequestParam, CreateElicitationResult,
@@ -335,6 +363,9 @@ macro_rules! method {
             &self,
             timeout: Option<std::time::Duration>,
         ) -> Result<$Resp, ServiceError> {
+            // Validate timeout to prevent DoS attacks
+            validate_timeout(timeout)?;
+
             let request = ServerRequest::$Req($Req {
                 method: Default::default(),
                 extensions: Default::default(),
@@ -361,6 +392,9 @@ macro_rules! method {
             params: $Param,
             timeout: Option<std::time::Duration>,
         ) -> Result<$Resp, ServiceError> {
+            // Validate timeout to prevent DoS attacks
+            validate_timeout(timeout)?;
+
             let request = ServerRequest::$Req($Req {
                 method: Default::default(),
                 params,

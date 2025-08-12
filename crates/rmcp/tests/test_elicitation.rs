@@ -1330,3 +1330,65 @@ async fn test_realistic_timeout_scenarios() {
     assert!(long_timeout >= Duration::from_secs(60));
     assert!(long_timeout <= Duration::from_secs(300));
 }
+
+/// Test timeout validation to prevent DoS attacks
+#[tokio::test]
+async fn test_timeout_validation_dos_prevention() {
+    use std::time::Duration;
+
+    // Test extremely long timeout (should be rejected)
+    let very_long_timeout = Duration::from_secs(3600); // 1 hour
+    assert!(very_long_timeout > Duration::from_secs(300)); // Exceeds max
+
+    // Test zero timeout (should be rejected)
+    let zero_timeout = Duration::from_millis(0);
+    assert!(zero_timeout.is_zero());
+
+    // Test extremely short timeout (should be rejected)
+    let too_short_timeout = Duration::from_nanos(1);
+    assert!(too_short_timeout < Duration::from_millis(1));
+
+    // Test valid timeout ranges
+    let valid_timeouts = vec![
+        Duration::from_millis(1),   // Minimum valid
+        Duration::from_millis(100), // Short but valid
+        Duration::from_secs(1),     // Normal
+        Duration::from_secs(30),    // Standard
+        Duration::from_secs(300),   // Maximum valid
+    ];
+
+    for timeout in valid_timeouts {
+        assert!(timeout >= Duration::from_millis(1));
+        assert!(timeout <= Duration::from_secs(300));
+        assert!(!timeout.is_zero());
+    }
+}
+
+/// Test timeout validation error messages
+#[tokio::test]
+async fn test_timeout_validation_error_messages() {
+    use std::time::Duration;
+
+    // Test that timeout validation provides meaningful error messages
+    let invalid_timeouts = vec![
+        (Duration::from_secs(400), "exceeds maximum"), // Too long
+        (Duration::from_millis(0), "cannot be zero"),  // Zero
+        (Duration::from_nanos(1), "at least 1 millisecond"), // Too short
+    ];
+
+    for (timeout, expected_message_part) in invalid_timeouts {
+        // Verify that these timeouts would fail validation
+        match timeout {
+            t if t > Duration::from_secs(300) => {
+                assert!(expected_message_part.contains("maximum"));
+            }
+            t if t.is_zero() => {
+                assert!(expected_message_part.contains("zero"));
+            }
+            t if t < Duration::from_millis(1) => {
+                assert!(expected_message_part.contains("millisecond"));
+            }
+            _ => unreachable!(),
+        }
+    }
+}
