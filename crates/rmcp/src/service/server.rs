@@ -447,9 +447,17 @@ pub enum ElicitationError {
     #[error("Service error: {0}")]
     Service(#[from] ServiceError),
 
-    /// User declined to provide input or cancelled the request  
-    #[error("User declined or cancelled the request")]
+    /// User explicitly declined to provide the requested information
+    /// This indicates a conscious decision by the user to reject the request
+    /// (e.g., clicked "Reject", "Decline", "No", etc.)
+    #[error("User explicitly declined the request")]
     UserDeclined,
+
+    /// User dismissed the request without making an explicit choice
+    /// This indicates the user cancelled without explicitly declining
+    /// (e.g., closed dialog, clicked outside, pressed Escape, etc.)
+    #[error("User cancelled/dismissed the request")]
+    UserCancelled,
 
     /// The response data could not be parsed into the requested type
     #[error("Failed to parse response data: {error}\nReceived data: {data}")]
@@ -500,7 +508,8 @@ impl Peer<RoleServer> {
     ///
     /// # Returns
     /// * `Ok(Some(data))` if user provided valid data that matches type T
-    /// * `Err(ElicitationError::UserDeclined)` if user declined or cancelled the request
+    /// * `Err(ElicitationError::UserDeclined)` if user explicitly declined the request
+    /// * `Err(ElicitationError::UserCancelled)` if user cancelled/dismissed the request
     /// * `Err(ElicitationError::ParseError { .. })` if response data couldn't be parsed into type T
     /// * `Err(ElicitationError::NoContent)` if no response content was provided
     /// * `Err(ElicitationError::Service(_))` if the underlying service call failed
@@ -537,10 +546,15 @@ impl Peer<RoleServer> {
     ///         println!("Name: {}, Email: {}, Age: {}", profile.name, profile.email, profile.age);
     ///     }
     ///     Ok(None) => {
-    ///         println!("User declined to provide information");
+    ///         println!("User provided no content");
     ///     }
     ///     Err(ElicitationError::UserDeclined) => {
-    ///         println!("User declined to provide information");
+    ///         println!("User explicitly declined to provide information");
+    ///         // Handle explicit decline - perhaps offer alternatives
+    ///     }
+    ///     Err(ElicitationError::UserCancelled) => {
+    ///         println!("User cancelled the request");
+    ///         // Handle cancellation - perhaps prompt again later
     ///     }
     ///     Err(ElicitationError::ParseError { error, data }) => {
     ///         println!("Failed to parse response: {}\nData: {}", error, data);
@@ -591,7 +605,15 @@ impl Peer<RoleServer> {
     ///     timeout
     /// ).await {
     ///     Ok(Some(response)) => println!("Got answer: {}", response.answer),
-    ///     Ok(None) => println!("User declined"),
+    ///     Ok(None) => println!("User provided no content"),
+    ///     Err(ElicitationError::UserDeclined) => {
+    ///         println!("User explicitly declined");
+    ///         // Handle explicit decline
+    ///     }
+    ///     Err(ElicitationError::UserCancelled) => {
+    ///         println!("User cancelled/dismissed");
+    ///         // Handle cancellation
+    ///     }
     ///     Err(ElicitationError::Service(ServiceError::Timeout { .. })) => {
     ///         println!("User didn't respond in time");
     ///     }
@@ -638,7 +660,8 @@ impl Peer<RoleServer> {
                     Err(ElicitationError::NoContent)
                 }
             }
-            _ => Err(ElicitationError::UserDeclined),
+            crate::model::ElicitationAction::Decline => Err(ElicitationError::UserDeclined),
+            crate::model::ElicitationAction::Cancel => Err(ElicitationError::UserCancelled),
         }
     }
 }

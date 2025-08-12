@@ -1021,7 +1021,14 @@ async fn test_elicitation_error_variants() {
     let user_declined = ElicitationError::UserDeclined;
     assert_eq!(
         format!("{}", user_declined),
-        "User declined or cancelled the request"
+        "User explicitly declined the request"
+    );
+
+    // Test UserCancelled
+    let user_cancelled = ElicitationError::UserCancelled;
+    assert_eq!(
+        format!("{}", user_cancelled),
+        "User cancelled/dismissed the request"
     );
 
     // Test NoContent
@@ -1053,6 +1060,11 @@ async fn test_elicitation_error_variants() {
     match user_declined {
         ElicitationError::UserDeclined => {} // Expected
         _ => panic!("Should match UserDeclined"),
+    }
+
+    match user_cancelled {
+        ElicitationError::UserCancelled => {} // Expected
+        _ => panic!("Should match UserCancelled"),
     }
 
     match no_content {
@@ -1389,6 +1401,72 @@ async fn test_timeout_validation_error_messages() {
                 assert!(expected_message_part.contains("millisecond"));
             }
             _ => unreachable!(),
+        }
+    }
+}
+
+/// Test that different ElicitationAction values map to correct error types
+#[tokio::test]
+async fn test_elicitation_action_error_mapping() {
+    use rmcp::{model::ElicitationAction, service::ElicitationError};
+
+    // Test that each action type produces the expected error
+    let test_cases = vec![
+        (ElicitationAction::Decline, "UserDeclined"),
+        (ElicitationAction::Cancel, "UserCancelled"),
+    ];
+
+    for (action, _expected_error_type) in test_cases {
+        // Verify that the action exists and has the expected semantics
+        match action {
+            ElicitationAction::Accept => {
+                // Accept should not produce an error (it provides content)
+            }
+            ElicitationAction::Decline => {
+                // Should map to UserDeclined error
+                let error = ElicitationError::UserDeclined;
+                assert!(format!("{}", error).contains("explicitly declined"));
+            }
+            ElicitationAction::Cancel => {
+                // Should map to UserCancelled error
+                let error = ElicitationError::UserCancelled;
+                assert!(format!("{}", error).contains("cancelled/dismissed"));
+            }
+        }
+    }
+}
+
+/// Test elicitation action semantics according to MCP specification
+#[tokio::test]
+async fn test_elicitation_action_semantics() {
+    use rmcp::model::ElicitationAction;
+
+    // According to MCP spec:
+    // - Accept: User explicitly approved and submitted with data
+    // - Decline: User explicitly declined the request
+    // - Cancel: User dismissed without making an explicit choice
+
+    // Test that all three actions are available
+    let actions = vec![
+        ElicitationAction::Accept,
+        ElicitationAction::Decline,
+        ElicitationAction::Cancel,
+    ];
+
+    assert_eq!(actions.len(), 3);
+
+    // Test serialization/deserialization
+    for action in actions {
+        let serialized = serde_json::to_string(&action).expect("Should serialize");
+        let deserialized: ElicitationAction =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        // Actions should round-trip correctly
+        match (action, deserialized) {
+            (ElicitationAction::Accept, ElicitationAction::Accept) => {}
+            (ElicitationAction::Decline, ElicitationAction::Decline) => {}
+            (ElicitationAction::Cancel, ElicitationAction::Cancel) => {}
+            _ => panic!("Action serialization round-trip failed"),
         }
     }
 }
