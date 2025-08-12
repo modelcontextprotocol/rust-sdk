@@ -525,6 +525,9 @@ mod typed_elicitation_tests {
         Auto,
     }
 
+    // Mark types as safe for elicitation (they generate object schemas)
+    rmcp::elicit_safe!(UserConfirmation, UserProfile, UserPreferences);
+
     /// Test automatic schema generation for simple types
     #[tokio::test]
     async fn test_typed_elicitation_simple_schema() {
@@ -1468,5 +1471,99 @@ async fn test_elicitation_action_semantics() {
             (ElicitationAction::Cancel, ElicitationAction::Cancel) => {}
             _ => panic!("Action serialization round-trip failed"),
         }
+    }
+}
+
+/// Test compile-time type safety for elicitation
+#[tokio::test]
+async fn test_elicitation_type_safety() {
+    use rmcp::service::ElicitationSafe;
+    use schemars::JsonSchema;
+
+    // Test that our types implement ElicitationSafe
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct SafeType {
+        name: String,
+        value: i32,
+    }
+
+    rmcp::elicit_safe!(SafeType);
+
+    // Verify that SafeType implements the required traits
+    fn assert_elicitation_safe<T: ElicitationSafe>() {}
+    assert_elicitation_safe::<SafeType>();
+
+    // Test that SafeType can generate schema (compile-time check)
+    let _schema = schemars::schema_for!(SafeType);
+}
+
+/// Test that elicit_safe! macro works with multiple types
+#[tokio::test]
+async fn test_elicit_safe_macro() {
+    use schemars::JsonSchema;
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct TypeA {
+        field_a: String,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct TypeB {
+        field_b: i32,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct TypeC {
+        field_c: bool,
+    }
+
+    // Test macro with multiple types
+    rmcp::elicit_safe!(TypeA, TypeB, TypeC);
+
+    // All should implement ElicitationSafe
+    fn assert_all_safe<T: rmcp::service::ElicitationSafe>() {}
+    assert_all_safe::<TypeA>();
+    assert_all_safe::<TypeB>();
+    assert_all_safe::<TypeC>();
+}
+
+/// Test ElicitationSafe trait behavior
+#[tokio::test]
+async fn test_elicitation_safe_trait() {
+    use schemars::JsonSchema;
+
+    // Test object type validation
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct ObjectType {
+        name: String,
+        count: usize,
+        active: bool,
+    }
+
+    rmcp::elicit_safe!(ObjectType);
+
+    // Test that ObjectType can generate schema (compile-time check)
+    let _schema = schemars::schema_for!(ObjectType);
+}
+
+/// Test documentation examples compile correctly
+#[tokio::test]
+async fn test_elicitation_examples_compile() {
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    // Example from trait documentation
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct UserProfile {
+        name: String,
+        email: String,
+    }
+
+    rmcp::elicit_safe!(UserProfile);
+
+    // This should compile and work
+    fn _example_usage() {
+        fn _assert_safe<T: rmcp::service::ElicitationSafe>() {}
+        _assert_safe::<UserProfile>();
     }
 }

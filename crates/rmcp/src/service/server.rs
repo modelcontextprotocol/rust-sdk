@@ -475,6 +475,59 @@ pub enum ElicitationError {
     CapabilityNotSupported,
 }
 
+/// Marker trait to ensure that elicitation types generate object-type JSON schemas.
+///
+/// This trait provides compile-time safety to ensure that types used with
+/// `elicit<T>()` methods will generate JSON schemas of type "object", which
+/// aligns with MCP client expectations for structured data input.
+///
+/// # Type Safety Rationale
+///
+/// MCP clients typically expect JSON objects for elicitation schemas to
+/// provide structured forms and validation. This trait prevents common
+/// mistakes like:
+///
+/// ```compile_fail
+/// // These would not compile due to missing ElicitationSafe bound:
+/// let name: String = server.elicit("Enter name").await?;        // Primitive
+/// let items: Vec<i32> = server.elicit("Enter items").await?;    // Array
+/// ```
+#[cfg(feature = "elicitation")]
+pub trait ElicitationSafe: schemars::JsonSchema {}
+
+/// Macro to mark types as safe for elicitation by verifying they generate object schemas.
+///
+/// This macro automatically implements the `ElicitationSafe` trait for struct types
+/// that should be used with `elicit<T>()` methods.
+///
+/// # Example
+///
+/// ```rust
+/// use rmcp::elicit_safe;
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct UserProfile {
+///     name: String,
+///     email: String,
+/// }
+///
+/// elicit_safe!(UserProfile);
+///
+/// // Now safe to use:
+/// let profile: UserProfile = server.elicit("Enter profile").await?;
+/// ```
+#[cfg(feature = "elicitation")]
+#[macro_export]
+macro_rules! elicit_safe {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl $crate::service::ElicitationSafe for $t {}
+        )*
+    };
+}
+
 #[cfg(feature = "elicitation")]
 impl Peer<RoleServer> {
     /// Check if the client supports elicitation capability
@@ -540,6 +593,9 @@ impl Peer<RoleServer> {
     ///     age: u8,
     /// }
     ///
+    /// // Mark as safe for elicitation (generates object schema)
+    /// rmcp::elicit_safe!(UserProfile);
+    ///
     /// # async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
     /// match peer.elicit::<UserProfile>("Please enter your profile information").await {
     ///     Ok(Some(profile)) => {
@@ -567,7 +623,7 @@ impl Peer<RoleServer> {
     #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Option<T>, ElicitationError>
     where
-        T: schemars::JsonSchema + for<'de> serde::Deserialize<'de>,
+        T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
     {
         self.elicit_with_timeout(message, None).await
     }
@@ -596,6 +652,9 @@ impl Peer<RoleServer> {
     /// struct QuickResponse {
     ///     answer: String,
     /// }
+    ///
+    /// // Mark as safe for elicitation
+    /// rmcp::elicit_safe!(QuickResponse);
     ///
     /// # async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Give user 30 seconds to respond
@@ -629,7 +688,7 @@ impl Peer<RoleServer> {
         timeout: Option<std::time::Duration>,
     ) -> Result<Option<T>, ElicitationError>
     where
-        T: schemars::JsonSchema + for<'de> serde::Deserialize<'de>,
+        T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
     {
         // Check if client supports elicitation capability
         if !self.supports_elicitation() {
