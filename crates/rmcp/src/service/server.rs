@@ -481,8 +481,8 @@ pub trait ElicitationSafe: schemars::JsonSchema {}
 ///
 /// elicit_safe!(UserProfile);
 ///
-/// // Now safe to use:
-/// let profile: UserProfile = server.elicit("Enter profile").await?;
+/// // Now safe to use in async context:
+/// // let profile: UserProfile = server.elicit("Enter profile").await?;
 /// ```
 #[cfg(feature = "elicitation")]
 #[macro_export]
