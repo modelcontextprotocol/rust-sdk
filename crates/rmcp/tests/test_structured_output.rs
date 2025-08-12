@@ -7,7 +7,7 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct CalculationRequest {
@@ -122,8 +122,20 @@ async fn test_structured_content_in_call_result() {
 
     let result = CallToolResult::structured(structured_data.clone());
 
-    assert!(result.content.is_none());
+    assert!(result.content.is_some());
     assert!(result.structured_content.is_some());
+
+    let contents = result.content.unwrap();
+
+    assert_eq!(contents.len(), 1);
+
+    let content_text = contents.first().unwrap().as_text();
+
+    assert!(content_text.is_some());
+
+    let content_value: Value = serde_json::from_str(&content_text.unwrap().text).unwrap();
+
+    assert_eq!(content_value, structured_data);
     assert_eq!(result.structured_content.unwrap(), structured_data);
     assert_eq!(result.is_error, Some(false));
 }
@@ -138,8 +150,20 @@ async fn test_structured_error_in_call_result() {
 
     let result = CallToolResult::structured_error(error_data.clone());
 
-    assert!(result.content.is_none());
+    assert!(result.content.is_some());
     assert!(result.structured_content.is_some());
+
+    let contents = result.content.unwrap();
+
+    assert_eq!(contents.len(), 1);
+
+    let content_text = contents.first().unwrap().as_text();
+
+    assert!(content_text.is_some());
+
+    let content_value: Value = serde_json::from_str(&content_text.unwrap().text).unwrap();
+
+    assert_eq!(content_value, error_data);
     assert_eq!(result.structured_content.unwrap(), error_data);
     assert_eq!(result.is_error, Some(true));
 }
@@ -180,10 +204,24 @@ async fn test_structured_return_conversion() {
     assert!(result.is_ok());
     let call_result = result.unwrap();
 
-    assert!(call_result.content.is_none());
+    // Tools which return structured content should also return a serialized version as
+    // Content::text for backwards compatibility.
+    assert!(call_result.content.is_some());
     assert!(call_result.structured_content.is_some());
 
+    let contents = call_result.content.unwrap();
+
+    assert_eq!(contents.len(), 1);
+
+    let content_text = contents.first().unwrap().as_text();
+
+    assert!(content_text.is_some());
+
+    let content_value: Value = serde_json::from_str(&content_text.unwrap().text).unwrap();
     let structured_value = call_result.structured_content.unwrap();
+
+    assert_eq!(content_value, structured_value);
+
     assert_eq!(structured_value["sum"], 7);
     assert_eq!(structured_value["product"], 12);
 }
@@ -227,7 +265,7 @@ async fn test_output_schema_requires_structured_content() {
     assert!(call_result.is_ok());
     let call_result = call_result.unwrap();
 
-    // Verify it has structured_content and no content
+    // Verify it has structured_content and content
     assert!(call_result.structured_content.is_some());
-    assert!(call_result.content.is_none());
+    assert!(call_result.content.is_some());
 }

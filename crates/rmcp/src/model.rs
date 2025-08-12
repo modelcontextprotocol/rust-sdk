@@ -1229,7 +1229,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
-            content: None,
+            content: Some(vec![Content::text(value.to_string())]),
             structured_content: Some(value),
             is_error: Some(false),
         }
@@ -1254,7 +1254,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
-            content: None,
+            content: Some(vec![Content::text(value.to_string())]),
             structured_content: Some(value),
             is_error: Some(true),
         }
