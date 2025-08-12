@@ -306,10 +306,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     client.delete_session(url, session_id.clone(), None).await;
                 match delete_session_result {
                     Ok(_) => {
-                        tracing::info!(session_id = session_id.as_ref(), "delete session success")
+                        tracing::debug!(session_id = session_id.as_ref(), "delete session success")
                     }
                     Err(StreamableHttpError::SeverDoesNotSupportDeleteSession) => {
-                        tracing::info!(
+                        tracing::debug!(
                             session_id = session_id.as_ref(),
                             "server doesn't support delete session"
                         )

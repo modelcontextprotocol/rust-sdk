@@ -399,7 +399,7 @@ where
                     });
                     Ok(sse_stream_response(
                         ReceiverStream::new(receiver).map(|message| {
-                            tracing::info!(?message);
+                            tracing::trace!(?message);
                             ServerSseMessage {
                                 event_id: None,
                                 message: message.into(),

@@ -883,7 +883,7 @@ pub fn create_local_session(
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(config.channel_capacity);
     let (common_tx, _) = tokio::sync::mpsc::channel(config.channel_capacity);
     let common = CachedTx::new_common(common_tx);
-    tracing::info!(session_id = ?id, "create new session");
+    tracing::debug!(session_id = ?id, "create new session");
     let handle = LocalSessionHandle {
         event_tx,
         id: id.clone(),
