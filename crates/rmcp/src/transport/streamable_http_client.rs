@@ -33,15 +33,17 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("Unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     #[error("Server does not support SSE")]
-    SeverDoesNotSupportSse,
+    ServerDoesNotSupportSse,
     #[error("Server does not support delete session")]
-    SeverDoesNotSupportDeleteSession,
+    ServerDoesNotSupportDeleteSession,
     #[error("Tokio join error: {0}")]
     TokioJoinError(#[from] tokio::task::JoinError),
     #[error("Deserialize error: {0}")]
     Deserialize(#[from] serde_json::Error),
     #[error("Transport channel closed")]
     TransportChannelClosed,
+    #[error("Missing session id in response")]
+    MissingSessionIdInResponse,
     #[cfg(feature = "auth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
@@ -52,6 +54,12 @@ impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
     fn from(e: reqwest::Error) -> Self {
         StreamableHttpError::Client(e)
     }
+}
+
+#[derive(Debug, Clone, Error)]
+pub enum StreamableHttpProtocolError {
+    #[error("Missing session id in response")]
+    MissingSessionIdInResponse,
 }
 
 pub enum StreamableHttpPostResponse {
@@ -288,7 +296,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         } else {
             if !self.config.allow_stateless {
                 return Err(WorkerQuitReason::fatal(
-                    "missing session id in initialize response",
+                    StreamableHttpError::<C::Error>::MissingSessionIdInResponse,
                     "process initialize response",
                 ));
             }
@@ -308,7 +316,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     Ok(_) => {
                         tracing::info!(session_id = session_id.as_ref(), "delete session success")
                     }
-                    Err(StreamableHttpError::SeverDoesNotSupportDeleteSession) => {
+                    Err(StreamableHttpError::ServerDoesNotSupportDeleteSession) => {
                         tracing::info!(
                             session_id = session_id.as_ref(),
                             "server doesn't support delete session"
@@ -373,14 +381,14 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     ));
                     tracing::debug!("got common stream");
                 }
-                Err(StreamableHttpError::SeverDoesNotSupportSse) => {
+                Err(StreamableHttpError::ServerDoesNotSupportSse) => {
                     tracing::debug!("server doesn't support sse, skip common stream");
                 }
                 Err(e) => {
                     // fail to get common stream
                     tracing::error!("fail to get common stream: {e}");
                     return Err(WorkerQuitReason::fatal(
-                        "fail to get general purpose event stream",
+                        e,
                         "get general purpose event stream",
                     ));
                 }

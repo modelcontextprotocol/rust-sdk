@@ -36,7 +36,7 @@ impl StreamableHttpClient for reqwest::Client {
         }
         let response = request_builder.send().await?;
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
-            return Err(StreamableHttpError::SeverDoesNotSupportSse);
+            return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
         let response = response.error_for_status()?;
         match response.headers().get(reqwest::header::CONTENT_TYPE) {

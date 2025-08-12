@@ -12,7 +12,7 @@ pub enum WorkerQuitReason {
     Join(#[from] tokio::task::JoinError),
     #[error("Transport fatal {error}, when {context}")]
     Fatal {
-        error: Cow<'static, str>,
+        error: Box<dyn std::error::Error + Send>,
         context: Cow<'static, str>,
     },
     #[error("Transport canncelled")]
@@ -24,17 +24,20 @@ pub enum WorkerQuitReason {
 }
 
 impl WorkerQuitReason {
-    pub fn fatal(msg: impl Into<Cow<'static, str>>, context: impl Into<Cow<'static, str>>) -> Self {
+    pub fn fatal(
+        error: impl std::error::Error + Send + 'static,
+        context: impl Into<Cow<'static, str>>,
+ ) -> Self {
         Self::Fatal {
-            error: msg.into(),
+            error: Box::new(error),
             context: context.into(),
         }
     }
-    pub fn fatal_context<E: std::error::Error>(
+    pub fn fatal_context<E: std::error::Error + Send + 'static>(
         context: impl Into<Cow<'static, str>>,
     ) -> impl FnOnce(E) -> Self {
         |e| Self::Fatal {
-            error: Cow::Owned(format!("{e}")),
+            error: Box::new(e),
             context: context.into(),
         }
     }

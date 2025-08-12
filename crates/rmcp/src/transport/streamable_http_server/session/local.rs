@@ -317,7 +317,7 @@ enum OutboundChannel {
     RequestWise { id: HttpRequestId, close: bool },
     Common,
 }
-
+#[derive(Debug)]
 pub struct StreamableHttpMessageReceiver {
     pub http_request_id: Option<HttpRequestId>,
     pub inner: Receiver<ServerSseMessage>,
@@ -534,8 +534,8 @@ impl LocalSessionWorker {
         }
     }
 }
-
-enum SessionEvent {
+#[derive(Debug)]
+pub enum SessionEvent {
     ClientMessage {
         message: ClientJsonRpcMessage,
         http_request_id: Option<HttpRequestId>,
@@ -695,6 +695,17 @@ impl LocalSessionHandle {
 
 pub type SessionTransport = WorkerTransport<LocalSessionWorker>;
 
+#[derive(Debug, Error)]
+pub enum LocalSessionError {
+    #[error("transport terminated")]
+    TransportTerminated,
+    #[error("unexpected message: {0:?}")]
+    UnexpectedEvent(SessionEvent),
+    #[error("fail to send initialize request {0}")]
+    FailToSendInitializeRequest(SessionError),
+    #[error("keep alive timeout")]
+    KeepAliveTimeout,
+}
 impl Worker for LocalSessionWorker {
     type Error = SessionError;
     type Role = RoleServer;
@@ -718,11 +729,14 @@ impl Worker for LocalSessionWorker {
         }
         // waiting for initialize request
         let evt = self.event_rx.recv().await.ok_or_else(|| {
-            WorkerQuitReason::fatal("transport terminated", "get initialize request")
+            WorkerQuitReason::fatal(
+                LocalSessionError::TransportTerminated,
+                "get initialize request",
+            )
         })?;
         let SessionEvent::InitializeRequest { request, responder } = evt else {
             return Err(WorkerQuitReason::fatal(
-                "unexpected message",
+                LocalSessionError::UnexpectedEvent(evt),
                 "get initialize request",
             ));
         };
@@ -732,7 +746,9 @@ impl Worker for LocalSessionWorker {
             .send(Ok(send_initialize_response.message))
             .map_err(|_| {
                 WorkerQuitReason::fatal(
-                    "failed to send initialize response to http service",
+                    LocalSessionError::FailToSendInitializeRequest(
+                        SessionError::SessionServiceTerminated,
+                    ),
                     "send initialize response",
                 )
             })?;
@@ -749,7 +765,7 @@ impl Worker for LocalSessionWorker {
                     if let Some(event) = event {
                         InnerEvent::FromHttpService(event)
                     } else {
-                        return Err(WorkerQuitReason::fatal("session dropped", "waiting next session event"))
+                        return Err(WorkerQuitReason::fatal(LocalSessionError::TransportTerminated, "waiting next session event"))
                     }
                 },
                 from_handler = context.recv_from_handler() => {
@@ -759,7 +775,7 @@ impl Worker for LocalSessionWorker {
                     return Err(WorkerQuitReason::Cancelled)
                 }
                 _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::fatal("keep live timeout", "poll next session event"))
+                    return Err(WorkerQuitReason::fatal(LocalSessionError::KeepAliveTimeout, "poll next session event"))
                 }
             };
             match event {
