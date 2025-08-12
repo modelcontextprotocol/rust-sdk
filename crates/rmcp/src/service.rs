@@ -46,8 +46,6 @@ pub enum ServiceError {
     Cancelled { reason: Option<String> },
     #[error("request timeout after {}", chrono::Duration::from_std(*timeout).unwrap_or_default())]
     Timeout { timeout: Duration },
-    #[error("invalid timeout value: {timeout:?} - {reason}")]
-    InvalidTimeout { timeout: Duration, reason: String },
 }
 
 trait TransferObject:
