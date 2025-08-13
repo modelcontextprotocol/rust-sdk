@@ -296,12 +296,8 @@ pub enum SessionError {
     SessionServiceTerminated,
     #[error("Invalid event id")]
     InvalidEventId,
-    #[error("Transport closed")]
-    TransportClosed,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Tokio join error {0}")]
-    TokioJoinError(#[from] tokio::task::JoinError),
 }
 
 impl From<SessionError> for std::io::Error {
@@ -696,24 +692,30 @@ impl LocalSessionHandle {
 pub type SessionTransport = WorkerTransport<LocalSessionWorker>;
 
 #[derive(Debug, Error)]
-pub enum LocalSessionError {
+pub enum LocalSessionWorkerError {
     #[error("transport terminated")]
     TransportTerminated,
     #[error("unexpected message: {0:?}")]
     UnexpectedEvent(SessionEvent),
     #[error("fail to send initialize request {0}")]
     FailToSendInitializeRequest(SessionError),
-    #[error("keep alive timeout")]
-    KeepAliveTimeout,
+    #[error("fail to handle message: {0}")]
+    FailToHandleMessage(SessionError),
+    #[error("keep alive timeout after {}ms", _0.as_millis())]
+    KeepAliveTimeout(Duration),
+    #[error("Transport closed")]
+    TransportClosed,
+    #[error("Tokio join error {0}")]
+    TokioJoinError(#[from] tokio::task::JoinError),
 }
 impl Worker for LocalSessionWorker {
-    type Error = SessionError;
+    type Error = LocalSessionWorkerError;
     type Role = RoleServer;
     fn err_closed() -> Self::Error {
-        SessionError::TransportClosed
+        LocalSessionWorkerError::TransportClosed
     }
     fn err_join(e: tokio::task::JoinError) -> Self::Error {
-        SessionError::TokioJoinError(e)
+        LocalSessionWorkerError::TokioJoinError(e)
     }
     fn config(&self) -> crate::transport::worker::WorkerConfig {
         crate::transport::worker::WorkerConfig {
@@ -722,7 +724,10 @@ impl Worker for LocalSessionWorker {
         }
     }
     #[instrument(name = "streamable_http_session", skip_all, fields(id = self.id.as_ref()))]
-    async fn run(mut self, mut context: WorkerContext<Self>) -> Result<(), WorkerQuitReason> {
+    async fn run(
+        mut self,
+        mut context: WorkerContext<Self>,
+    ) -> Result<(), WorkerQuitReason<Self::Error>> {
         enum InnerEvent {
             FromHttpService(SessionEvent),
             FromHandler(WorkerSendRequest<LocalSessionWorker>),
@@ -730,13 +735,13 @@ impl Worker for LocalSessionWorker {
         // waiting for initialize request
         let evt = self.event_rx.recv().await.ok_or_else(|| {
             WorkerQuitReason::fatal(
-                LocalSessionError::TransportTerminated,
+                LocalSessionWorkerError::TransportTerminated,
                 "get initialize request",
             )
         })?;
         let SessionEvent::InitializeRequest { request, responder } = evt else {
             return Err(WorkerQuitReason::fatal(
-                LocalSessionError::UnexpectedEvent(evt),
+                LocalSessionWorkerError::UnexpectedEvent(evt),
                 "get initialize request",
             ));
         };
@@ -746,7 +751,7 @@ impl Worker for LocalSessionWorker {
             .send(Ok(send_initialize_response.message))
             .map_err(|_| {
                 WorkerQuitReason::fatal(
-                    LocalSessionError::FailToSendInitializeRequest(
+                    LocalSessionWorkerError::FailToSendInitializeRequest(
                         SessionError::SessionServiceTerminated,
                     ),
                     "send initialize response",
@@ -765,7 +770,7 @@ impl Worker for LocalSessionWorker {
                     if let Some(event) = event {
                         InnerEvent::FromHttpService(event)
                     } else {
-                        return Err(WorkerQuitReason::fatal(LocalSessionError::TransportTerminated, "waiting next session event"))
+                        return Err(WorkerQuitReason::fatal(LocalSessionWorkerError::TransportTerminated, "waiting next session event"))
                     }
                 },
                 from_handler = context.recv_from_handler() => {
@@ -775,7 +780,7 @@ impl Worker for LocalSessionWorker {
                     return Err(WorkerQuitReason::Cancelled)
                 }
                 _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::fatal(LocalSessionError::KeepAliveTimeout, "poll next session event"))
+                    return Err(WorkerQuitReason::fatal(LocalSessionWorkerError::KeepAliveTimeout(keep_alive), "poll next session event"))
                 }
             };
             match event {
@@ -795,7 +800,10 @@ impl Worker for LocalSessionWorker {
                             // no need to unregister resource
                         }
                     };
-                    let handle_result = self.handle_server_message(message).await;
+                    let handle_result = self
+                        .handle_server_message(message)
+                        .await
+                        .map_err(LocalSessionWorkerError::FailToHandleMessage);
                     let _ = responder.send(handle_result).inspect_err(|error| {
                         tracing::warn!(?error, "failed to send message to http service handler");
                     });

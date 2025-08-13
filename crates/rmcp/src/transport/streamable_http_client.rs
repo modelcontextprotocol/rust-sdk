@@ -269,7 +269,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     async fn run(
         self,
         mut context: super::worker::WorkerContext<Self>,
-    ) -> Result<(), WorkerQuitReason> {
+    ) -> Result<(), WorkerQuitReason<Self::Error>> {
         let channel_buffer_capacity = self.config.channel_buffer_capacity;
         let (sse_worker_tx, mut sse_worker_rx) =
             tokio::sync::mpsc::channel::<ServerJsonRpcMessage>(channel_buffer_capacity);
@@ -286,7 +286,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             .post_message(config.uri.clone(), initialize_request, None, None)
             .await
             .map_err(WorkerQuitReason::fatal_context("send initialize request"))?
-            .expect_initialized::<Self::Error>()
+            .expect_initialized::<C::Error>()
             .await
             .map_err(WorkerQuitReason::fatal_context(
                 "process initialize response",
@@ -346,7 +346,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             .map_err(WorkerQuitReason::fatal_context(
                 "send initialized notification",
             ))?
-            .expect_accepted::<Self::Error>()
+            .expect_accepted::<C::Error>()
             .map_err(WorkerQuitReason::fatal_context(
                 "process initialized notification response",
             ))?;
