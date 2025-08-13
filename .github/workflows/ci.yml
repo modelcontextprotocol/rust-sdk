@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           
@@ -39,7 +39,7 @@ jobs:
     name: Code Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust fmt
         run: rustup toolchain install nightly --component rustfmt
@@ -51,7 +51,7 @@ jobs:
     name: Lint with Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -65,7 +65,7 @@ jobs:
     name: spell check with typos
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - name: Spell Check Repo
       uses: crate-ci/typos@master
 
@@ -73,7 +73,7 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       # install nodejs
       - name: Setup Node.js
@@ -104,7 +104,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # install nodejs
       - name: Setup Node.js
@@ -139,7 +139,7 @@ jobs:
     name: Example test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # install nodejs
       - name: Setup Node.js
@@ -195,7 +195,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -212,7 +212,7 @@ jobs:
     name: Generate Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -239,7 +239,7 @@ jobs:
       # This happened recently in the attack on `tj-actions/changed-files`, but
       # has happened many times before as well.
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Update Rust
         run: | 

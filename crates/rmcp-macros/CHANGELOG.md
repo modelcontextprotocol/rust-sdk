@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.3.2...rmcp-macros-v0.4.0) - 2025-08-05
+
+### Added
+
+- [**breaking**] Add support for `Tool.outputSchema` and `CallToolResult.structuredContent` ([#316](https://github.com/modelcontextprotocol/rust-sdk/pull/316))
+
+### Other
+
+- README.md codeblock terminator ([#348](https://github.com/modelcontextprotocol/rust-sdk/pull/348))
+
 ## [0.3.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.3.0...rmcp-macros-v0.3.1) - 2025-07-29
 
 ### Other

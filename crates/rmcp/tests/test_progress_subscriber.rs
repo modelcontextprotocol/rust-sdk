@@ -69,8 +69,8 @@ impl MyServer {
             let _ = client
                 .notify_progress(ProgressNotificationParam {
                     progress_token: progress_token.clone(),
-                    progress: step,
-                    total: Some(10),
+                    progress: (step as f64),
+                    total: Some(10.0),
                     message: Some("Some message".into()),
                 })
                 .await;

@@ -758,10 +758,10 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
-    pub progress: u32,
+    pub progress: f64,
     /// Total number of items to process (or total progress required), if known
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<u32>,
+    pub total: Option<f64>,
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -1181,8 +1181,6 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-///
-/// Note: `content` and `structured_content` are mutually exclusive - exactly one must be provided.
 #[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -1231,7 +1229,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
-            content: None,
+            content: Some(vec![Content::text(value.to_string())]),
             structured_content: Some(value),
             is_error: Some(false),
         }
@@ -1256,16 +1254,15 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
-            content: None,
+            content: Some(vec![Content::text(value.to_string())]),
             structured_content: Some(value),
             is_error: Some(true),
         }
     }
 
-    /// Validate that content and structured_content are mutually exclusive
+    /// Validate that content or structured content is provided
     pub fn validate(&self) -> Result<(), &'static str> {
         match (&self.content, &self.structured_content) {
-            (Some(_), Some(_)) => Err("content and structured_content are mutually exclusive"),
             (None, None) => Err("either content or structured_content must be provided"),
             _ => Ok(()),
         }

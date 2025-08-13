@@ -6,7 +6,7 @@ impl<C> StreamableHttpClient for AuthClient<C>
 where
     C: StreamableHttpClient + Send + Sync,
 {
-    type Error = StreamableHttpError<C::Error>;
+    type Error = C::Error;
 
     async fn delete_session(
         &self,
@@ -21,7 +21,6 @@ where
         self.http_client
             .delete_session(uri, session_id, auth_token)
             .await
-            .map_err(StreamableHttpError::Client)
     }
 
     async fn get_stream(
@@ -40,7 +39,6 @@ where
         self.http_client
             .get_stream(uri, session_id, last_event_id, auth_token)
             .await
-            .map_err(StreamableHttpError::Client)
     }
 
     async fn post_message(
@@ -59,6 +57,5 @@ where
         self.http_client
             .post_message(uri, message, session_id, auth_token)
             .await
-            .map_err(StreamableHttpError::Client)
     }
 }
