@@ -72,6 +72,16 @@ A simplified OAuth example showing basic token-based authentication.
 - Simplified authentication flow
 - Good starting point for adding authentication to MCP servers
 
+### Prompt Standard I/O Server (`prompt_stdio.rs`)
+
+A server demonstrating the prompt framework capabilities.
+
+- Shows how to implement prompts in MCP servers
+- Provides code review and debugging prompts
+- Demonstrates prompt argument handling with JSON schema
+- Uses standard I/O transport
+- Good example of prompt implementation patterns
+
 ## How to Run
 
 Each example can be run using Cargo:
@@ -97,6 +107,9 @@ cargo run --example servers_complex_auth_sse
 
 # Run the simple OAuth SSE server
 cargo run --example servers_simple_auth_sse
+
+# Run the prompt standard I/O server
+cargo run --example servers_prompt_stdio
 ```
 
 ## Testing with MCP Inspector
