@@ -51,10 +51,10 @@ impl Default for StreamableHttpServerConfig {
 /// The http service will consume the request body, however the rest part will be remain and injected into [`crate::model::Extensions`],
 /// which you can get from [`crate::service::RequestContext`].
 /// ```rust
-/// use rmcp::tool::Extension;
+/// use rmcp::handler::server::tool::Extension;
 /// use http::request::Parts;
 /// async fn my_tool(Extension(parts): Extension<Parts>) {
-///     tracing::info("http parts:{parts:?}")
+///     tracing::info!("http parts:{parts:?}")
 /// }
 /// ```
 pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {
