@@ -668,19 +668,11 @@ async fn test_elicitation_direction_server_to_client() {
     assert_eq!(serialized["requestedSchema"]["type"], "string");
 
     // Test that elicitation requests are part of ServerRequest
-    let server_request = ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
+    let _server_request = ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
         method: ElicitationCreateRequestMethod,
         params: elicitation_request,
         extensions: Default::default(),
     });
-
-    // Verify server request can be serialized
-    match server_request {
-        ServerRequest::CreateElicitationRequest(_) => {
-            // This is correct - server can send elicitation requests
-        }
-        _ => panic!("CreateElicitationRequest should be part of ServerRequest"),
-    }
 
     // Test that client can respond with elicitation results
     let client_result = ClientResult::CreateElicitationResult(CreateElicitationResult {
@@ -791,39 +783,6 @@ async fn test_elicitation_actions_compliance() {
             }
         }
     }
-}
-
-/// Test that CreateElicitationRequest is NOT in ClientRequest (direction compliance)
-#[tokio::test]
-async fn test_elicitation_not_in_client_request() {
-    // This test ensures that clients cannot initiate elicitation requests
-    // according to MCP 2025-06-18 specification
-
-    // Compile-time test: if this compiles, the test fails
-    // The following should NOT compile if our implementation is correct:
-    // let client_request = ClientRequest::CreateElicitationRequest(...);
-
-    // Instead, we verify that all valid ClientRequest variants do NOT include elicitation
-    let valid_client_requests = [
-        "PingRequest",
-        "InitializeRequest",
-        "CompleteRequest",
-        "SetLevelRequest",
-        "GetPromptRequest",
-        "ListPromptsRequest",
-        "ListResourcesRequest",
-        "ListResourceTemplatesRequest",
-        "ReadResourceRequest",
-        "SubscribeRequest",
-        "UnsubscribeRequest",
-        "CallToolRequest",
-        "ListToolsRequest",
-        // CreateElicitationRequest should NOT be here
-    ];
-
-    // Verify the list doesn't contain elicitation
-    assert!(!valid_client_requests.contains(&"CreateElicitationRequest"));
-    assert_eq!(valid_client_requests.len(), 13); // Should be 13, not 14
 }
 
 /// Test that CreateElicitationResult IS in ClientResult (response compliance)
