@@ -170,13 +170,24 @@ async fn test_structured_error_in_call_result() {
 
 #[tokio::test]
 async fn test_mutual_exclusivity_validation() {
+    #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+    pub struct Response {
+        message: String,
+    }
+    let response = Response {
+        message: "Hello".into(),
+    };
     // Test that content and structured_content can both be passed separately
-    let content_result = CallToolResult::success(vec![Content::text("Hello")]);
+    let content_result = CallToolResult::success(vec![Content::json(response.clone()).unwrap()]);
     let structured_result = CallToolResult::structured(json!({"message": "Hello"}));
 
     // Verify the validation
-    assert!(content_result.validate().is_ok());
-    assert!(structured_result.validate().is_ok());
+    content_result
+        .into_typed::<Response>()
+        .expect("Failed to extract content");
+    structured_result
+        .into_typed::<Response>()
+        .expect("Failed to extract content");
 
     // Try to create a result with both fields
     let json_with_both = json!({

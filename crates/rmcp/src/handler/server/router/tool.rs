@@ -6,7 +6,6 @@ use schemars::JsonSchema;
 use crate::{
     handler::server::tool::{
         CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type,
-        validate_against_schema,
     },
     model::{CallToolResult, Tool, ToolAnnotations},
 };
@@ -245,19 +244,6 @@ where
             .ok_or_else(|| crate::ErrorData::invalid_params("tool not found", None))?;
 
         let result = (item.call)(context).await?;
-
-        // Validate structured content against output schema if present
-        if let Some(ref output_schema) = item.attr.output_schema {
-            // When output_schema is defined, structured_content is required
-            if result.structured_content.is_none() {
-                return Err(crate::ErrorData::invalid_params(
-                    "Tool with output_schema must return structured_content",
-                    None,
-                ));
-            }
-            // Validate the structured content against the schema
-            validate_against_schema(result.structured_content.as_ref().unwrap(), output_schema)?;
-        }
 
         Ok(result)
     }
