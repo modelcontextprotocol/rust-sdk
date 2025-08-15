@@ -48,11 +48,6 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Auth(#[from] crate::transport::auth::AuthError),
 }
 
-impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
-    fn from(e: reqwest::Error) -> Self {
-        StreamableHttpError::Client(e)
-    }
-}
 
 pub enum StreamableHttpPostResponse {
     Accepted,
@@ -483,9 +478,77 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     }
 }
 
+/// A client-agnostic HTTP transport for RMCP that supports streaming responses.
+///
+/// This transport allows you to choose your preferred HTTP client implementation
+/// by implementing the [`StreamableHttpClient`] trait. The transport handles
+/// session management, SSE streaming, and automatic reconnection.
+///
+/// # Usage
+///
+/// ## Using reqwest
+///
+/// ```rust
+/// use rmcp::transport::StreamableHttpClientTransport;
+///
+/// // Enable the reqwest feature in Cargo.toml:
+/// // rmcp = { version = "0.5", features = ["transport-streamable-http-client-reqwest"] }
+///
+/// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+/// ```
+///
+/// ## Using a custom HTTP client
+///
+/// ```rust
+/// use rmcp::transport::streamable_http_client::{
+///     StreamableHttpClient, 
+///     StreamableHttpClientTransport,
+///     StreamableHttpClientTransportConfig
+/// };
+///
+/// struct MyHttpClient;
+/// impl StreamableHttpClient for MyHttpClient {
+///     type Error = MyError;
+///     // ... implement the trait methods
+/// }
+///
+/// let transport = StreamableHttpClientTransport::with_client(
+///     MyHttpClient,
+///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
+/// );
+/// ```
+///
+/// # Feature Flags
+///
+/// - `transport-streamable-http-client`: Base feature providing the generic transport infrastructure
+/// - `transport-streamable-http-client-reqwest`: Includes reqwest HTTP client support with convenience methods
 pub type StreamableHttpClientTransport<C> = WorkerTransport<StreamableHttpClientWorker<C>>;
 
 impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
+    /// Creates a new transport with a custom HTTP client implementation.
+    ///
+    /// This method allows you to use any HTTP client that implements the [`StreamableHttpClient`] trait.
+    /// Use this when you want to use a custom HTTP client or when the reqwest feature is not enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Your HTTP client implementation
+    /// * `config` - Transport configuration including the server URI
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rmcp::transport::streamable_http_client::{
+    ///     StreamableHttpClient, 
+    ///     StreamableHttpClientTransport,
+    ///     StreamableHttpClientTransportConfig
+    /// };
+    ///
+    /// let transport = StreamableHttpClientTransport::with_client(
+    ///     MyHttpClient,
+    ///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
+    /// );
+    /// ```
     pub fn with_client(client: C, config: StreamableHttpClientTransportConfig) -> Self {
         let worker = StreamableHttpClientWorker::new(client, config);
         WorkerTransport::spawn(worker)
