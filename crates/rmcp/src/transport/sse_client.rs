@@ -3,7 +3,7 @@ use std::{pin::Pin, sync::Arc};
 
 use futures::{StreamExt, future::BoxFuture};
 use http::Uri;
-use reqwest::header::HeaderValue;
+
 use sse_stream::Error as SseError;
 use thiserror::Error;
 
@@ -28,7 +28,7 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,
     #[error("Unexpected content type: {0:?}")]
-    UnexpectedContentType(Option<HeaderValue>),
+    UnexpectedContentType(Option<String>),
     #[cfg(feature = "auth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
@@ -37,12 +37,6 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     InvalidUri(#[from] http::uri::InvalidUri),
     #[error("Invalid uri parts: {0}")]
     InvalidUriParts(#[from] http::uri::InvalidUriParts),
-}
-
-impl From<reqwest::Error> for SseTransportError<reqwest::Error> {
-    fn from(e: reqwest::Error) -> Self {
-        SseTransportError::Client(e)
-    }
 }
 
 pub trait SseClient: Clone + Send + Sync + 'static {
@@ -77,6 +71,48 @@ impl<C: SseClient> SseStreamReconnect for SseClientReconnect<C> {
     }
 }
 type ServerMessageStream<C> = Pin<Box<SseAutoReconnectStream<SseClientReconnect<C>>>>;
+
+/// A client-agnostic SSE transport for RMCP that supports Server-Sent Events.
+///
+/// This transport allows you to choose your preferred HTTP client implementation
+/// by implementing the [`SseClient`] trait. The transport handles SSE streaming
+/// and automatic reconnection.
+///
+/// # Usage
+///
+/// ## Using reqwest (most common)
+///
+/// ```rust
+/// use rmcp::transport::SseClientTransport;
+///
+/// // Enable the reqwest feature in Cargo.toml:
+/// // rmcp = { version = "0.5", features = ["transport-sse-client-reqwest"] }
+///
+/// let transport = SseClientTransport::start("http://localhost:8000/sse").await?;
+/// ```
+///
+/// ## Using a custom HTTP client
+///
+/// ```rust
+/// use rmcp::transport::sse_client::{SseClient, SseClientTransport, SseClientConfig};
+///
+/// struct MyHttpClient;
+/// impl SseClient for MyHttpClient {
+///     type Error = MyError;
+///     // ... implement the trait methods
+/// }
+///
+/// let config = SseClientConfig {
+///     sse_endpoint: "http://localhost:8000/sse".into(),
+///     ..Default::default()
+/// };
+/// let transport = SseClientTransport::start_with_client(MyHttpClient, config).await?;
+/// ```
+///
+/// # Feature Flags
+///
+/// - `transport-sse-client`: Base feature providing the generic transport infrastructure
+/// - `transport-sse-client-reqwest`: Includes reqwest HTTP client support with convenience methods
 pub struct SseClientTransport<C: SseClient> {
     client: C,
     config: SseClientConfig,
