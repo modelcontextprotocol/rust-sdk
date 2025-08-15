@@ -88,7 +88,7 @@ async fn sse_handler(
     parts: Parts,
 ) -> Result<Sse<impl Stream<Item = Result<Event, io::Error>>>, Response<String>> {
     let session = session_id();
-    tracing::info!(%session, ?parts, "sse connection");
+    tracing::debug!(%session, ?parts, "sse connection");
     use tokio_stream::{StreamExt, wrappers::ReceiverStream};
     use tokio_util::sync::PollSender;
     let (from_client_tx, from_client_rx) = tokio::sync::mpsc::channel(64);
@@ -246,7 +246,7 @@ impl SseServer {
         let ct = sse_server.config.ct.child_token();
         let server = axum::serve(listener, service).with_graceful_shutdown(async move {
             ct.cancelled().await;
-            tracing::info!("sse server cancelled");
+            tracing::debug!("sse server cancelled");
         });
         tokio::spawn(
             async move {

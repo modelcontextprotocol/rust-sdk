@@ -213,7 +213,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        tracing::info!("client initialized");
+        tracing::debug!("client initialized");
         std::future::ready(())
     }
     fn on_roots_list_changed(
