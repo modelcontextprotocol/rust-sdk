@@ -48,11 +48,6 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Auth(#[from] crate::transport::auth::AuthError),
 }
 
-impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
-    fn from(e: reqwest::Error) -> Self {
-        StreamableHttpError::Client(e)
-    }
-}
 
 pub enum StreamableHttpPostResponse {
     Accepted,

@@ -14,6 +14,12 @@ use crate::{
     },
 };
 
+impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
+    fn from(e: reqwest::Error) -> Self {
+        StreamableHttpError::Client(e)
+    }
+}
+
 impl StreamableHttpClient for reqwest::Client {
     type Error = reqwest::Error;
 

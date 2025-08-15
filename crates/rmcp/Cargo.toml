@@ -107,7 +107,7 @@ transport-worker = ["dep:tokio-stream"]
 
 
 # Streamable HTTP client
-transport-streamable-http-client = ["client-side-sse", "transport-worker"]
+transport-streamable-http-client = ["client-side-sse", "transport-worker", "reqwest"]
 
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
