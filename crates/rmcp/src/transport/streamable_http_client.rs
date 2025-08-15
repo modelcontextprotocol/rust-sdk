@@ -42,7 +42,7 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Deserialize(#[from] serde_json::Error),
     #[error("Transport channel closed")]
     TransportChannelClosed,
-    #[error("Missing session id in response")]
+    #[error("Missing session id in HTTP response")]
     MissingSessionIdInResponse,
     #[cfg(feature = "auth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
