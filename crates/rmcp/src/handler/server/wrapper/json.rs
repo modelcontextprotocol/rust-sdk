@@ -1,28 +1,22 @@
-use serde::Serialize;
+use std::borrow::Cow;
 
-use crate::model::IntoContents;
+use schemars::JsonSchema;
 
-/// Json wrapper
+/// Json wrapper for structured output
 ///
-/// This is used to tell the SDK to serialize the inner value into json
+/// When used with tools, this wrapper indicates that the value should be
+/// serialized as structured JSON content with an associated schema.
+/// The framework will place the JSON in the `structured_content` field
+/// of the tool result rather than the regular `content` field.
 pub struct Json<T>(pub T);
 
-impl<T> IntoContents for Json<T>
-where
-    T: Serialize,
-{
-    fn into_contents(self) -> Vec<crate::model::Content> {
-        let result = crate::model::Content::json(self.0);
-        debug_assert!(
-            result.is_ok(),
-            "Json wrapped content should be able to serialized into json"
-        );
-        match result {
-            Ok(content) => vec![content],
-            Err(e) => {
-                tracing::error!("failed to convert json content: {e}");
-                vec![]
-            }
-        }
+// Implement JsonSchema for Json<T> to delegate to T's schema
+impl<T: JsonSchema> JsonSchema for Json<T> {
+    fn schema_name() -> Cow<'static, str> {
+        T::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        T::json_schema(generator)
     }
 }

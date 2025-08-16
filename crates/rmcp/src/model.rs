@@ -15,7 +15,7 @@ pub use extension::*;
 pub use meta::*;
 pub use prompt::*;
 pub use resource::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 pub use tool::*;
 
@@ -760,10 +760,10 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
-    pub progress: u32,
+    pub progress: f64,
     /// Total number of items to process (or total progress required), if known
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<u32>,
+    pub total: Option<f64>,
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -1252,31 +1252,146 @@ pub type CreateElicitationRequest =
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
-    pub content: Vec<Content>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<Content>>,
+    /// An optional JSON object that represents the structured result of the tool call
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     /// Whether this result represents an error condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 impl CallToolResult {
-    /// Create a successful tool result
+    /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<Content>) -> Self {
         CallToolResult {
-            content,
+            content: Some(content),
+            structured_content: None,
             is_error: Some(false),
         }
     }
-    /// Create an error tool result
+    /// Create an error tool result with unstructured content
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
-            content,
+            content: Some(content),
+            structured_content: None,
             is_error: Some(true),
         }
+    }
+    /// Create a successful tool result with structured content
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured(json!({
+    ///     "temperature": 22.5,
+    ///     "humidity": 65,
+    ///     "description": "Partly cloudy"
+    /// }));
+    /// ```
+    pub fn structured(value: Value) -> Self {
+        CallToolResult {
+            content: Some(vec![Content::text(value.to_string())]),
+            structured_content: Some(value),
+            is_error: Some(false),
+        }
+    }
+    /// Create an error tool result with structured content
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured_error(json!({
+    ///     "error_code": "INVALID_INPUT",
+    ///     "message": "Temperature value out of range",
+    ///     "details": {
+    ///         "min": -50,
+    ///         "max": 50,
+    ///         "provided": 100
+    ///     }
+    /// }));
+    /// ```
+    pub fn structured_error(value: Value) -> Self {
+        CallToolResult {
+            content: Some(vec![Content::text(value.to_string())]),
+            structured_content: Some(value),
+            is_error: Some(true),
+        }
+    }
+
+    /// Convert the `structured_content` part of response into a certain type.
+    ///
+    /// # About json schema validation
+    /// Since rust is a strong type language, we don't need to do json schema validation here.
+    ///
+    /// But if you do have to validate the response data, you can use [`jsonschema`](https://crates.io/crates/jsonschema) crate.
+    pub fn into_typed<T>(self) -> Result<T, serde_json::Error>
+    where
+        T: DeserializeOwned,
+    {
+        let raw_text = match (self.structured_content, &self.content) {
+            (Some(value), _) => return serde_json::from_value(value),
+            (None, Some(contents)) => {
+                if let Some(text) = contents.first().and_then(|c| c.as_text()) {
+                    let text = &text.text;
+                    Some(text)
+                } else {
+                    None
+                }
+            }
+            (None, None) => None,
+        };
+        if let Some(text) = raw_text {
+            return serde_json::from_str(text);
+        }
+        serde_json::from_value(serde_json::Value::Null)
+    }
+}
+
+// Custom deserialize implementation to validate mutual exclusivity
+impl<'de> Deserialize<'de> for CallToolResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CallToolResultHelper {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            content: Option<Vec<Content>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            structured_content: Option<Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            is_error: Option<bool>,
+        }
+
+        let helper = CallToolResultHelper::deserialize(deserializer)?;
+        let result = CallToolResult {
+            content: helper.content,
+            structured_content: helper.structured_content,
+            is_error: helper.is_error,
+        };
+
+        // Validate mutual exclusivity
+        if result.content.is_none() && result.structured_content.is_none() {
+            return Err(serde::de::Error::custom(
+                "CallToolResult must have either content or structured_content",
+            ));
+        }
+
+        Ok(result)
     }
 }
 

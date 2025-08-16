@@ -153,18 +153,24 @@ impl PromptMessage {
     }
 }
 
-/// A template for a prompt
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PromptTemplate {
-    pub id: String,
-    pub template: String,
-    pub arguments: Vec<PromptArgumentTemplate>,
-}
+#[cfg(test)]
+mod tests {
+    use serde_json;
 
-/// A template for a prompt argument, this should be identical to PromptArgument
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PromptArgumentTemplate {
-    pub name: String,
-    pub description: Option<String>,
-    pub required: Option<bool>,
+    use super::*;
+
+    #[test]
+    fn test_prompt_message_image_serialization() {
+        let image_content = RawImageContent {
+            data: "base64data".to_string(),
+            mime_type: "image/png".to_string(),
+        };
+
+        let json = serde_json::to_string(&image_content).unwrap();
+        println!("PromptMessage ImageContent JSON: {}", json);
+
+        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
+    }
 }

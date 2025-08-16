@@ -242,7 +242,10 @@ where
             .map
             .get(context.name())
             .ok_or_else(|| crate::ErrorData::invalid_params("tool not found", None))?;
-        (item.call)(context).await
+
+        let result = (item.call)(context).await?;
+
+        Ok(result)
     }
 
     pub fn list_all(&self) -> Vec<crate::model::Tool> {

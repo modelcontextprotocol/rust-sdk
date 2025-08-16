@@ -30,7 +30,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use tower::*;
-use tracing::instrument;
+use tracing::{Instrument as _, instrument};
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ServiceError {
@@ -573,6 +573,7 @@ where
     // let mut stream = std::pin::pin!(stream);
     let serve_loop_ct = ct.child_token();
     let peer_return: Peer<R> = peer.clone();
+    let current_span = tracing::Span::current();
     let handle = tokio::spawn(async move {
         let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
@@ -687,12 +688,13 @@ where
                             ct.cancel();
                         }
                         let send = transport.send(m);
+                        let current_span = tracing::Span::current();
                         tokio::spawn(async move {
                             let send_result = send.await;
                             if let Err(error) = send_result {
                                 tracing::error!(%error, "fail to response message");
                             }
-                        });
+                        }.instrument(current_span));
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Request {
@@ -704,10 +706,11 @@ where
                     let send = transport.send(JsonRpcMessage::request(request, id.clone()));
                     {
                         let id = id.clone();
+                        let current_span = tracing::Span::current();
                         send_task_set.spawn(send.map(move |r| SendTaskResult::Request {
                             id,
                             result: r.map_err(DynamicTransportError::new::<T, R>),
-                        }));
+                        }).instrument(current_span));
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Notification {
@@ -724,11 +727,12 @@ where
                         Err(notification) => notification,
                     };
                     let send = transport.send(JsonRpcMessage::notification(notification));
+                    let current_span = tracing::Span::current();
                     send_task_set.spawn(send.map(move |result| SendTaskResult::Notification {
                         responder,
                         cancellation_param,
                         result: result.map_err(DynamicTransportError::new::<T, R>),
-                    }));
+                    }).instrument(current_span));
                 }
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
                     id,
@@ -755,8 +759,11 @@ where
                             meta,
                             extensions,
                         };
+                        let current_span = tracing::Span::current();
                         tokio::spawn(async move {
-                            let result = service.handle_request(request, context).await;
+                            let result = service
+                                .handle_request(request, context)
+                                .await;
                             let response = match result {
                                 Ok(result) => {
                                     tracing::debug!(%id, ?result, "response message");
@@ -768,7 +775,7 @@ where
                                 }
                             };
                             let _send_result = sink.send(response).await;
-                        });
+                        }.instrument(current_span));
                     }
                 }
                 Event::PeerMessage(JsonRpcMessage::Notification(JsonRpcNotification {
@@ -799,12 +806,13 @@ where
                             meta,
                             extensions,
                         };
+                        let current_span = tracing::Span::current();
                         tokio::spawn(async move {
                             let result = service.handle_notification(notification, context).await;
                             if let Err(error) = result {
                                 tracing::warn!(%error, "Error sending notification");
                             }
-                        });
+                        }.instrument(current_span));
                     }
                 }
                 Event::PeerMessage(JsonRpcMessage::Response(JsonRpcResponse {
@@ -849,7 +857,7 @@ where
         }
         tracing::info!(?quit_reason, "serve finished");
         quit_reason
-    });
+    }.instrument(current_span));
     RunningService {
         service,
         peer: peer_return,

@@ -221,7 +221,8 @@ where
         item: TxJsonRpcMessage<R>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let sender = self.sender.clone();
-        let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_));
+        let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_))
+            || matches!(item, TxJsonRpcMessage::<R>::Error(_));
         let signal = self.finished_signal.clone();
         async move {
             sender.send(item).await?;

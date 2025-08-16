@@ -44,6 +44,19 @@ impl Default for StreamableHttpServerConfig {
     }
 }
 
+/// # Streamable Http Server
+///
+/// ## Extract information from raw http request
+///
+/// The http service will consume the request body, however the rest part will be remain and injected into [`crate::model::Extensions`],
+/// which you can get from [`crate::service::RequestContext`].
+/// ```rust
+/// use rmcp::handler::server::tool::Extension;
+/// use http::request::Parts;
+/// async fn my_tool(Extension(parts): Extension<Parts>) {
+///     tracing::info!("http parts:{parts:?}")
+/// }
+/// ```
 pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {
     pub config: StreamableHttpServerConfig,
     session_manager: Arc<M>,
@@ -111,15 +124,20 @@ where
         B::Error: Display,
     {
         let method = request.method().clone();
-        let result = match method {
-            Method::GET => self.handle_get(request).await,
-            Method::POST => self.handle_post(request).await,
-            Method::DELETE => self.handle_delete(request).await,
+        let allowed_methods = match self.config.stateful_mode {
+            true => "GET, POST, DELETE",
+            false => "POST",
+        };
+        let result = match (method, self.config.stateful_mode) {
+            (Method::POST, _) => self.handle_post(request).await,
+            // if we're not in stateful mode, we don't support GET or DELETE because there is no session
+            (Method::GET, true) => self.handle_get(request).await,
+            (Method::DELETE, true) => self.handle_delete(request).await,
             _ => {
                 // Handle other methods or return an error
                 let response = Response::builder()
                     .status(http::StatusCode::METHOD_NOT_ALLOWED)
-                    .header(ALLOW, "GET, POST, DELETE")
+                    .header(ALLOW, allowed_methods)
                     .body(Full::new(Bytes::from("Method Not Allowed")).boxed())
                     .expect("valid response");
                 return response;
