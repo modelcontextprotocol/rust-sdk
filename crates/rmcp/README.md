@@ -199,8 +199,10 @@ RMCP uses feature flags to control which components are included:
   - `transport-async-rw`: Async read/write support
   - `transport-io`: I/O stream support
   - `transport-child-process`: Child process support
-  - `transport-sse-client` / `transport-sse-server`: SSE support
-  - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming
+  - `transport-sse-client` / `transport-sse-server`: SSE support (client agnostic)
+    - `transport-sse-client-reqwest`: a default `reqwest` implementation of the SSE client
+  - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming (client agnostic, see [`StreamableHttpClientTransport`] for details)
+    - `transport-streamable-http-client-reqwest`: a default `reqwest` implementation of the streamable http client
 - `auth`: OAuth2 authentication support
 - `schemars`: JSON Schema generation (for tool definitions)
 

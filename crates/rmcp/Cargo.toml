@@ -102,12 +102,14 @@ server-side-http = [
 client-side-sse = ["dep:sse-stream", "dep:http"]
 
 transport-sse-client = ["client-side-sse", "transport-worker"]
+transport-sse-client-reqwest = ["transport-sse-client", "reqwest"]
 
 transport-worker = ["dep:tokio-stream"]
 
 
 # Streamable HTTP client
-transport-streamable-http-client = ["client-side-sse", "transport-worker", "reqwest"]
+transport-streamable-http-client = ["client-side-sse", "transport-worker"]
+transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "reqwest"]
 
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]

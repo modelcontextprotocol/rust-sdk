@@ -48,7 +48,6 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Auth(#[from] crate::transport::auth::AuthError),
 }
 
-
 pub enum StreamableHttpPostResponse {
     Accepted,
     Json(ServerJsonRpcMessage, Option<String>),
@@ -478,9 +477,170 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     }
 }
 
+/// A client-agnostic HTTP transport for RMCP that supports streaming responses.
+///
+/// This transport allows you to choose your preferred HTTP client implementation
+/// by implementing the [`StreamableHttpClient`] trait. The transport handles
+/// session management, SSE streaming, and automatic reconnection.
+///
+/// # Usage
+///
+/// ## Using reqwest
+///
+/// ```rust,no_run
+/// use rmcp::transport::StreamableHttpClientTransport;
+///
+/// // Enable the reqwest feature in Cargo.toml:
+/// // rmcp = { version = "0.5", features = ["transport-streamable-http-client-reqwest"] }
+///
+/// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+/// ```
+///
+/// ## Using a custom HTTP client
+///
+/// ```rust,no_run
+/// use rmcp::transport::streamable_http_client::{
+///     StreamableHttpClient,
+///     StreamableHttpClientTransport,
+///     StreamableHttpClientTransportConfig
+/// };
+/// use std::sync::Arc;
+/// use futures::stream::BoxStream;
+/// use rmcp::model::ClientJsonRpcMessage;
+/// use sse_stream::{Sse, Error as SseError};
+///
+/// #[derive(Clone)]
+/// struct MyHttpClient;
+///
+/// #[derive(Debug, thiserror::Error)]
+/// struct MyError;
+///
+/// impl std::fmt::Display for MyError {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         write!(f, "MyError")
+///     }
+/// }
+///
+/// impl StreamableHttpClient for MyHttpClient {
+///     type Error = MyError;
+///     
+///     async fn post_message(
+///         &self,
+///         _uri: Arc<str>,
+///         _message: ClientJsonRpcMessage,
+///         _session_id: Option<Arc<str>>,
+///         _auth_header: Option<String>,
+///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+///         todo!()
+///     }
+///     
+///     async fn delete_session(
+///         &self,
+///         _uri: Arc<str>,
+///         _session_id: Arc<str>,
+///         _auth_header: Option<String>,
+///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+///         todo!()
+///     }
+///     
+///     async fn get_stream(
+///         &self,
+///         _uri: Arc<str>,
+///         _session_id: Arc<str>,
+///         _last_event_id: Option<String>,
+///         _auth_header: Option<String>,
+///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+///         todo!()
+///     }
+/// }
+///
+/// let transport = StreamableHttpClientTransport::with_client(
+///     MyHttpClient,
+///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
+/// );
+/// ```
+///
+/// # Feature Flags
+///
+/// - `transport-streamable-http-client`: Base feature providing the generic transport infrastructure
+/// - `transport-streamable-http-client-reqwest`: Includes reqwest HTTP client support with convenience methods
 pub type StreamableHttpClientTransport<C> = WorkerTransport<StreamableHttpClientWorker<C>>;
 
 impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
+    /// Creates a new transport with a custom HTTP client implementation.
+    ///
+    /// This method allows you to use any HTTP client that implements the [`StreamableHttpClient`] trait.
+    /// Use this when you want to use a custom HTTP client or when the reqwest feature is not enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Your HTTP client implementation
+    /// * `config` - Transport configuration including the server URI
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rmcp::transport::streamable_http_client::{
+    ///     StreamableHttpClient,
+    ///     StreamableHttpClientTransport,
+    ///     StreamableHttpClientTransportConfig
+    /// };
+    /// use std::sync::Arc;
+    /// use futures::stream::BoxStream;
+    /// use rmcp::model::ClientJsonRpcMessage;
+    /// use sse_stream::{Sse, Error as SseError};
+    ///
+    /// // Define your custom client
+    /// #[derive(Clone)]
+    /// struct MyHttpClient;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// struct MyError;
+    ///
+    /// impl std::fmt::Display for MyError {
+    ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    ///         write!(f, "MyError")
+    ///     }
+    /// }
+    ///
+    /// impl StreamableHttpClient for MyHttpClient {
+    ///     type Error = MyError;
+    ///     
+    ///     async fn post_message(
+    ///         &self,
+    ///         _uri: Arc<str>,
+    ///         _message: ClientJsonRpcMessage,
+    ///         _session_id: Option<Arc<str>>,
+    ///         _auth_header: Option<String>,
+    ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+    ///         todo!()
+    ///     }
+    ///     
+    ///     async fn delete_session(
+    ///         &self,
+    ///         _uri: Arc<str>,
+    ///         _session_id: Arc<str>,
+    ///         _auth_header: Option<String>,
+    ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+    ///         todo!()
+    ///     }
+    ///     
+    ///     async fn get_stream(
+    ///         &self,
+    ///         _uri: Arc<str>,
+    ///         _session_id: Arc<str>,
+    ///         _last_event_id: Option<String>,
+    ///         _auth_header: Option<String>,
+    ///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+    ///         todo!()
+    ///     }
+    /// }
+    ///
+    /// let transport = StreamableHttpClientTransport::with_client(
+    ///     MyHttpClient,
+    ///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
+    /// );
+    /// ```
     pub fn with_client(client: C, config: StreamableHttpClientTransportConfig) -> Self {
         let worker = StreamableHttpClientWorker::new(client, config);
         WorkerTransport::spawn(worker)

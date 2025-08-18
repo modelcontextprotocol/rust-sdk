@@ -131,6 +131,30 @@ impl StreamableHttpClient for reqwest::Client {
 }
 
 impl StreamableHttpClientTransport<reqwest::Client> {
+    /// Creates a new transport using reqwest with the specified URI.
+    ///
+    /// This is a convenience method that creates a transport using the default
+    /// reqwest client. This method is only available when the
+    /// `transport-streamable-http-client-reqwest` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `uri` - The server URI to connect to
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rmcp::transport::StreamableHttpClientTransport;
+    ///
+    /// // Enable the reqwest feature in Cargo.toml:
+    /// // rmcp = { version = "0.5", features = ["transport-streamable-http-client-reqwest"] }
+    ///
+    /// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+    /// ```
+    ///
+    /// # Feature requirement
+    ///
+    /// This method requires the `transport-streamable-http-client-reqwest` feature.
     pub fn from_uri(uri: impl Into<Arc<str>>) -> Self {
         StreamableHttpClientTransport::with_client(
             reqwest::Client::default(),
