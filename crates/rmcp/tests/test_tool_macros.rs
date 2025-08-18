@@ -301,8 +301,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     let result_text = result
         .content
-        .as_ref()
-        .and_then(|contents| contents.first())
+        .first()
         .and_then(|content| content.raw.as_text())
         .map(|text| text.text.as_str())
         .expect("Expected text content");
@@ -330,8 +329,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     let some_result_text = some_result
         .content
-        .as_ref()
-        .and_then(|contents| contents.first())
+        .first()
         .and_then(|content| content.raw.as_text())
         .map(|text| text.text.as_str())
         .expect("Expected text content");

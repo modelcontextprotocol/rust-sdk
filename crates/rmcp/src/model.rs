@@ -181,7 +181,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
 pub enum NumberOrString {
     /// A numeric identifier
     Number(u32),
-    /// A string identifier  
+    /// A string identifier
     String(Arc<str>),
 }
 
@@ -1186,8 +1186,7 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<Content>>,
+    pub content: Vec<Content>,
     /// An optional JSON object that represents the structured result of the tool call
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
@@ -1200,7 +1199,7 @@ impl CallToolResult {
     /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<Content>) -> Self {
         CallToolResult {
-            content: Some(content),
+            content,
             structured_content: None,
             is_error: Some(false),
         }
@@ -1208,7 +1207,7 @@ impl CallToolResult {
     /// Create an error tool result with unstructured content
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
-            content: Some(content),
+            content,
             structured_content: None,
             is_error: Some(true),
         }
@@ -1229,7 +1228,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
-            content: Some(vec![Content::text(value.to_string())]),
+            content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
         }
@@ -1254,7 +1253,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
-            content: Some(vec![Content::text(value.to_string())]),
+            content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
         }
@@ -1270,10 +1269,10 @@ impl CallToolResult {
     where
         T: DeserializeOwned,
     {
-        let raw_text = match (self.structured_content, &self.content) {
+        let raw_text = match (self.structured_content, &self.content.first()) {
             (Some(value), _) => return serde_json::from_value(value),
             (None, Some(contents)) => {
-                if let Some(text) = contents.first().and_then(|c| c.as_text()) {
+                if let Some(text) = contents.as_text() {
                     let text = &text.text;
                     Some(text)
                 } else {
@@ -1308,13 +1307,13 @@ impl<'de> Deserialize<'de> for CallToolResult {
 
         let helper = CallToolResultHelper::deserialize(deserializer)?;
         let result = CallToolResult {
-            content: helper.content,
+            content: helper.content.unwrap_or_default(),
             structured_content: helper.structured_content,
             is_error: helper.is_error,
         };
 
         // Validate mutual exclusivity
-        if result.content.is_none() && result.structured_content.is_none() {
+        if result.content.is_empty() && result.structured_content.is_none() {
             return Err(serde::de::Error::custom(
                 "CallToolResult must have either content or structured_content",
             ));

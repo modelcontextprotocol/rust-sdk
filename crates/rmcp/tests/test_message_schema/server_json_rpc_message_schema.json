@@ -304,10 +304,7 @@
       "properties": {
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": "array",
           "items": {
             "$ref": "#/definitions/Annotated"
           }
@@ -322,7 +319,10 @@
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
-      }
+      },
+      "required": [
+        "content"
+      ]
     },
     "CancelledNotificationMethod": {
       "type": "string",
