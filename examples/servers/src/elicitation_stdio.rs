@@ -2,18 +2,19 @@
 //!
 //! Demonstrates user name collection via elicitation
 
+use std::sync::Arc;
+
 use anyhow::Result;
-use rmcp::schemars::JsonSchema;
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt, elicit_safe,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::*,
+    schemars::JsonSchema,
     service::{RequestContext, RoleServer},
     tool, tool_handler, tool_router,
     transport::stdio,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing_subscriber::{self, EnvFilter};
 
@@ -39,6 +40,12 @@ pub struct GreetRequest {
 pub struct ElicitationServer {
     user_name: Arc<Mutex<Option<String>>>,
     tool_router: ToolRouter<ElicitationServer>,
+}
+
+impl Default for ElicitationServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[tool_router]
