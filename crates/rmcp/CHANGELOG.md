@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- [**breaking**] match shape of the calltoolresult schema ([#377](https://github.com/modelcontextprotocol/rust-sdk/pull/377))
+- match shape of the calltoolresult schema ([#377](https://github.com/modelcontextprotocol/rust-sdk/pull/377))
 - make stdio shutdown more graceful ([#364](https://github.com/modelcontextprotocol/rust-sdk/pull/364))
 - *(tool)* remove unnecessary schema validation ([#375](https://github.com/modelcontextprotocol/rust-sdk/pull/375))
 - *(rmcp)* return serialized json with structured content ([#368](https://github.com/modelcontextprotocol/rust-sdk/pull/368))
