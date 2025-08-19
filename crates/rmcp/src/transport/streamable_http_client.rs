@@ -55,6 +55,7 @@ pub enum StreamableHttpProtocolError {
     #[error("Missing session id in response")]
     MissingSessionIdInResponse,
 }
+
 pub enum StreamableHttpPostResponse {
     Accepted,
     Json(ServerJsonRpcMessage, Option<String>),

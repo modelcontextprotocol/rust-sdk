@@ -21,6 +21,10 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 .list_roots(context)
                 .await
                 .map(ClientResult::ListRootsResult),
+            ServerRequest::CreateElicitationRequest(request) => self
+                .create_elicitation(request.params, context)
+                .await
+                .map(ClientResult::CreateElicitationResult),
         }
     }
 
@@ -84,6 +88,35 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<ListRootsResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListRootsResult::default()))
+    }
+
+    /// Handle an elicitation request from a server asking for user input.
+    ///
+    /// This method is called when a server needs interactive input from the user
+    /// during tool execution. Implementations should present the message to the user,
+    /// collect their input according to the requested schema, and return the result.
+    ///
+    /// # Arguments
+    /// * `request` - The elicitation request with message and schema
+    /// * `context` - The request context
+    ///
+    /// # Returns
+    /// The user's response including action (accept/decline/cancel) and optional data
+    ///
+    /// # Default Behavior
+    /// The default implementation automatically declines all elicitation requests.
+    /// Real clients should override this to provide user interaction.
+    fn create_elicitation(
+        &self,
+        request: CreateElicitationRequestParam,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_ {
+        // Default implementation declines all requests - real clients should override this
+        let _ = (request, context);
+        std::future::ready(Ok(CreateElicitationResult {
+            action: ElicitationAction::Decline,
+            content: None,
+        }))
     }
 
     fn on_cancelled(

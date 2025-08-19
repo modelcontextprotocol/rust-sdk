@@ -40,6 +40,22 @@ pub struct RootsCapabilities {
     pub list_changed: Option<bool>,
 }
 
+/// Capability for handling elicitation requests from servers.
+///
+/// Elicitation allows servers to request interactive input from users during tool execution.
+/// This capability indicates that a client can handle elicitation requests and present
+/// appropriate UI to users for collecting the requested information.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ElicitationCapability {
+    /// Whether the client supports JSON Schema validation for elicitation responses.
+    /// When true, the client will validate user input against the requested_schema
+    /// before sending the response back to the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_validation: Option<bool>,
+}
+
 ///
 /// # Builder
 /// ```rust
@@ -59,6 +75,9 @@ pub struct ClientCapabilities {
     pub roots: Option<RootsCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<JsonObject>,
+    /// Capability to handle elicitation requests from servers for interactive user input
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationCapability>,
 }
 
 ///
@@ -253,6 +272,7 @@ builder! {
         experimental: ExperimentalCapabilities,
         roots: RootsCapabilities,
         sampling: JsonObject,
+        elicitation: ElicitationCapability,
     }
 }
 
@@ -262,6 +282,21 @@ impl<const E: bool, const S: bool>
     pub fn enable_roots_list_changed(mut self) -> Self {
         if let Some(c) = self.roots.as_mut() {
             c.list_changed = Some(true);
+        }
+        self
+    }
+}
+
+#[cfg(feature = "elicitation")]
+impl<const E: bool, const R: bool, const S: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, R, S, true>>
+{
+    /// Enable JSON Schema validation for elicitation responses.
+    /// When enabled, the client will validate user input against the requested_schema
+    /// before sending responses back to the server.
+    pub fn enable_elicitation_schema_validation(mut self) -> Self {
+        if let Some(c) = self.elicitation.as_mut() {
+            c.schema_validation = Some(true);
         }
         self
     }

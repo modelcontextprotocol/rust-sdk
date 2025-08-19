@@ -3,6 +3,10 @@ use std::borrow::Cow;
 use thiserror::Error;
 
 use super::*;
+#[cfg(feature = "elicitation")]
+use crate::model::{
+    CreateElicitationRequest, CreateElicitationRequestParam, CreateElicitationResult,
+};
 use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
@@ -324,11 +328,68 @@ macro_rules! method {
             Ok(())
         }
     };
+
+    // Timeout-only variants (base method should be created separately with peer_req)
+    (peer_req_with_timeout $method_with_timeout:ident $Req:ident() => $Resp: ident) => {
+        pub async fn $method_with_timeout(
+            &self,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<$Resp, ServiceError> {
+            let request = ServerRequest::$Req($Req {
+                method: Default::default(),
+                extensions: Default::default(),
+            });
+            let options = crate::service::PeerRequestOptions {
+                timeout,
+                meta: None,
+            };
+            let result = self
+                .send_request_with_option(request, options)
+                .await?
+                .await_response()
+                .await?;
+            match result {
+                ClientResult::$Resp(result) => Ok(result),
+                _ => Err(ServiceError::UnexpectedResponse),
+            }
+        }
+    };
+
+    (peer_req_with_timeout $method_with_timeout:ident $Req:ident($Param: ident) => $Resp: ident) => {
+        pub async fn $method_with_timeout(
+            &self,
+            params: $Param,
+            timeout: Option<std::time::Duration>,
+        ) -> Result<$Resp, ServiceError> {
+            let request = ServerRequest::$Req($Req {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            });
+            let options = crate::service::PeerRequestOptions {
+                timeout,
+                meta: None,
+            };
+            let result = self
+                .send_request_with_option(request, options)
+                .await?
+                .await_response()
+                .await?;
+            match result {
+                ClientResult::$Resp(result) => Ok(result),
+                _ => Err(ServiceError::UnexpectedResponse),
+            }
+        }
+    };
 }
 
 impl Peer<RoleServer> {
     method!(peer_req create_message CreateMessageRequest(CreateMessageRequestParam) => CreateMessageResult);
     method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
+    #[cfg(feature = "elicitation")]
+    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+    #[cfg(feature = "elicitation")]
+    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -337,4 +398,295 @@ impl Peer<RoleServer> {
     method!(peer_not notify_resource_list_changed ResourceListChangedNotification);
     method!(peer_not notify_tool_list_changed ToolListChangedNotification);
     method!(peer_not notify_prompt_list_changed PromptListChangedNotification);
+}
+
+// =============================================================================
+// ELICITATION CONVENIENCE METHODS
+// These methods are specific to server role and provide typed elicitation functionality
+// =============================================================================
+
+/// Errors that can occur during typed elicitation operations
+#[cfg(feature = "elicitation")]
+#[derive(Error, Debug)]
+pub enum ElicitationError {
+    /// The elicitation request failed at the service level
+    #[error("Service error: {0}")]
+    Service(#[from] ServiceError),
+
+    /// User explicitly declined to provide the requested information
+    /// This indicates a conscious decision by the user to reject the request
+    /// (e.g., clicked "Reject", "Decline", "No", etc.)
+    #[error("User explicitly declined the request")]
+    UserDeclined,
+
+    /// User dismissed the request without making an explicit choice
+    /// This indicates the user cancelled without explicitly declining
+    /// (e.g., closed dialog, clicked outside, pressed Escape, etc.)
+    #[error("User cancelled/dismissed the request")]
+    UserCancelled,
+
+    /// The response data could not be parsed into the requested type
+    #[error("Failed to parse response data: {error}\nReceived data: {data}")]
+    ParseError {
+        error: serde_json::Error,
+        data: serde_json::Value,
+    },
+
+    /// No response content was provided by the user
+    #[error("No response content provided")]
+    NoContent,
+
+    /// Client does not support elicitation capability
+    #[error("Client does not support elicitation - capability not declared during initialization")]
+    CapabilityNotSupported,
+}
+
+/// Marker trait to ensure that elicitation types generate object-type JSON schemas.
+///
+/// This trait provides compile-time safety to ensure that types used with
+/// `elicit<T>()` methods will generate JSON schemas of type "object", which
+/// aligns with MCP client expectations for structured data input.
+///
+/// # Type Safety Rationale
+///
+/// MCP clients typically expect JSON objects for elicitation schemas to
+/// provide structured forms and validation. This trait prevents common
+/// mistakes like:
+///
+/// ```compile_fail
+/// // These would not compile due to missing ElicitationSafe bound:
+/// let name: String = server.elicit("Enter name").await?;        // Primitive
+/// let items: Vec<i32> = server.elicit("Enter items").await?;    // Array
+/// ```
+#[cfg(feature = "elicitation")]
+pub trait ElicitationSafe: schemars::JsonSchema {}
+
+/// Macro to mark types as safe for elicitation by verifying they generate object schemas.
+///
+/// This macro automatically implements the `ElicitationSafe` trait for struct types
+/// that should be used with `elicit<T>()` methods.
+///
+/// # Example
+///
+/// ```rust
+/// use rmcp::elicit_safe;
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// struct UserProfile {
+///     name: String,
+///     email: String,
+/// }
+///
+/// elicit_safe!(UserProfile);
+///
+/// // Now safe to use in async context:
+/// // let profile: UserProfile = server.elicit("Enter profile").await?;
+/// ```
+#[cfg(feature = "elicitation")]
+#[macro_export]
+macro_rules! elicit_safe {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl $crate::service::ElicitationSafe for $t {}
+        )*
+    };
+}
+
+#[cfg(feature = "elicitation")]
+impl Peer<RoleServer> {
+    /// Check if the client supports elicitation capability
+    ///
+    /// Returns true if the client declared elicitation capability during initialization,
+    /// false otherwise. According to MCP 2025-06-18 specification, clients that support
+    /// elicitation MUST declare the capability during initialization.
+    pub fn supports_elicitation(&self) -> bool {
+        if let Some(client_info) = self.peer_info() {
+            client_info.capabilities.elicitation.is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Request typed data from the user with automatic schema generation.
+    ///
+    /// This method automatically generates the JSON schema from the Rust type using `schemars`,
+    /// eliminating the need to manually create schemas. The response is automatically parsed
+    /// into the requested type.
+    ///
+    /// **Requires the `elicitation` feature to be enabled.**
+    ///
+    /// # Type Requirements
+    /// The type `T` must implement:
+    /// - `schemars::JsonSchema` - for automatic schema generation
+    /// - `serde::Deserialize` - for parsing the response
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    ///
+    /// # Returns
+    /// * `Ok(Some(data))` if user provided valid data that matches type T
+    /// * `Err(ElicitationError::UserDeclined)` if user explicitly declined the request
+    /// * `Err(ElicitationError::UserCancelled)` if user cancelled/dismissed the request
+    /// * `Err(ElicitationError::ParseError { .. })` if response data couldn't be parsed into type T
+    /// * `Err(ElicitationError::NoContent)` if no response content was provided
+    /// * `Err(ElicitationError::Service(_))` if the underlying service call failed
+    ///
+    /// # Example
+    ///
+    /// Add to your `Cargo.toml`:
+    /// ```toml
+    /// [dependencies]
+    /// rmcp = { version = "0.3", features = ["elicitation"] }
+    /// serde = { version = "1.0", features = ["derive"] }
+    /// schemars = "1.0"
+    /// ```
+    ///
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # use rmcp::service::ElicitationError;
+    /// # use serde::{Deserialize, Serialize};
+    /// # use schemars::JsonSchema;
+    /// #
+    /// #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    /// struct UserProfile {
+    ///     #[schemars(description = "Full name")]
+    ///     name: String,
+    ///     #[schemars(description = "Email address")]
+    ///     email: String,
+    ///     #[schemars(description = "Age")]
+    ///     age: u8,
+    /// }
+    ///
+    /// // Mark as safe for elicitation (generates object schema)
+    /// rmcp::elicit_safe!(UserProfile);
+    ///
+    /// # async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// match peer.elicit::<UserProfile>("Please enter your profile information").await {
+    ///     Ok(Some(profile)) => {
+    ///         println!("Name: {}, Email: {}, Age: {}", profile.name, profile.email, profile.age);
+    ///     }
+    ///     Ok(None) => {
+    ///         println!("User provided no content");
+    ///     }
+    ///     Err(ElicitationError::UserDeclined) => {
+    ///         println!("User explicitly declined to provide information");
+    ///         // Handle explicit decline - perhaps offer alternatives
+    ///     }
+    ///     Err(ElicitationError::UserCancelled) => {
+    ///         println!("User cancelled the request");
+    ///         // Handle cancellation - perhaps prompt again later
+    ///     }
+    ///     Err(ElicitationError::ParseError { error, data }) => {
+    ///         println!("Failed to parse response: {}\nData: {}", error, data);
+    ///     }
+    ///     Err(e) => return Err(e.into()),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(all(feature = "schemars", feature = "elicitation"))]
+    pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Option<T>, ElicitationError>
+    where
+        T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
+    {
+        self.elicit_with_timeout(message, None).await
+    }
+
+    /// Request typed data from the user with custom timeout.
+    ///
+    /// Same as `elicit()` but allows specifying a custom timeout for the request.
+    /// If the user doesn't respond within the timeout, the request will be cancelled.
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `timeout` - Optional timeout duration. If None, uses default timeout behavior
+    ///
+    /// # Returns
+    /// Same as `elicit()` but may also return `ServiceError::Timeout` if timeout expires
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # use rmcp::service::ElicitationError;
+    /// # use serde::{Deserialize, Serialize};
+    /// # use schemars::JsonSchema;
+    /// # use std::time::Duration;
+    /// #
+    /// #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    /// struct QuickResponse {
+    ///     answer: String,
+    /// }
+    ///
+    /// // Mark as safe for elicitation
+    /// rmcp::elicit_safe!(QuickResponse);
+    ///
+    /// # async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Give user 30 seconds to respond
+    /// let timeout = Some(Duration::from_secs(30));
+    /// match peer.elicit_with_timeout::<QuickResponse>(
+    ///     "Quick question - what's your answer?",
+    ///     timeout
+    /// ).await {
+    ///     Ok(Some(response)) => println!("Got answer: {}", response.answer),
+    ///     Ok(None) => println!("User provided no content"),
+    ///     Err(ElicitationError::UserDeclined) => {
+    ///         println!("User explicitly declined");
+    ///         // Handle explicit decline
+    ///     }
+    ///     Err(ElicitationError::UserCancelled) => {
+    ///         println!("User cancelled/dismissed");
+    ///         // Handle cancellation
+    ///     }
+    ///     Err(ElicitationError::Service(ServiceError::Timeout { .. })) => {
+    ///         println!("User didn't respond in time");
+    ///     }
+    ///     Err(e) => return Err(e.into()),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(all(feature = "schemars", feature = "elicitation"))]
+    pub async fn elicit_with_timeout<T>(
+        &self,
+        message: impl Into<String>,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<T>, ElicitationError>
+    where
+        T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
+    {
+        // Check if client supports elicitation capability
+        if !self.supports_elicitation() {
+            return Err(ElicitationError::CapabilityNotSupported);
+        }
+
+        // Generate schema automatically from type
+        let schema = crate::handler::server::tool::schema_for_type::<T>();
+
+        let response = self
+            .create_elicitation_with_timeout(
+                CreateElicitationRequestParam {
+                    message: message.into(),
+                    requested_schema: schema,
+                },
+                timeout,
+            )
+            .await?;
+
+        match response.action {
+            crate::model::ElicitationAction::Accept => {
+                if let Some(value) = response.content {
+                    match serde_json::from_value::<T>(value.clone()) {
+                        Ok(parsed) => Ok(Some(parsed)),
+                        Err(error) => Err(ElicitationError::ParseError { error, data: value }),
+                    }
+                } else {
+                    Err(ElicitationError::NoContent)
+                }
+            }
+            crate::model::ElicitationAction::Decline => Err(ElicitationError::UserDeclined),
+            crate::model::ElicitationAction::Cancel => Err(ElicitationError::UserCancelled),
+        }
+    }
 }

@@ -143,6 +143,7 @@ impl std::fmt::Display for ProtocolVersion {
 }
 
 impl ProtocolVersion {
+    pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
     pub const LATEST: Self = Self::V_2025_03_26;
@@ -167,6 +168,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
         match s.as_str() {
             "2024-11-05" => return Ok(ProtocolVersion::V_2024_11_05),
             "2025-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
+            "2025-06-18" => return Ok(ProtocolVersion::V_2025_06_18),
             _ => {}
         }
         Ok(ProtocolVersion(Cow::Owned(s)))
@@ -181,7 +183,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
 pub enum NumberOrString {
     /// A numeric identifier
     Number(u32),
-    /// A string identifier  
+    /// A string identifier
     String(Arc<str>),
 }
 
@@ -1174,6 +1176,75 @@ const_string!(RootsListChangedNotificationMethod = "notifications/roots/list_cha
 pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNotificationMethod>;
 
 // =============================================================================
+// ELICITATION (INTERACTIVE USER INPUT)
+// =============================================================================
+
+// Method constants for elicitation operations.
+// Elicitation allows servers to request interactive input from users during tool execution.
+const_string!(ElicitationCreateRequestMethod = "elicitation/create");
+const_string!(ElicitationResponseNotificationMethod = "notifications/elicitation/response");
+
+/// Represents the possible actions a user can take in response to an elicitation request.
+///
+/// When a server requests user input through elicitation, the user can:
+/// - Accept: Provide the requested information and continue
+/// - Decline: Refuse to provide the information but continue the operation
+/// - Cancel: Stop the entire operation
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum ElicitationAction {
+    /// User accepts the request and provides the requested information
+    Accept,
+    /// User declines to provide the information but allows the operation to continue
+    Decline,
+    /// User cancels the entire operation
+    Cancel,
+}
+
+/// Parameters for creating an elicitation request to gather user input.
+///
+/// This structure contains everything needed to request interactive input from a user:
+/// - A human-readable message explaining what information is needed
+/// - A JSON schema defining the expected structure of the response
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CreateElicitationRequestParam {
+    /// Human-readable message explaining what input is needed from the user.
+    /// This should be clear and provide sufficient context for the user to understand
+    /// what information they need to provide.
+    pub message: String,
+
+    /// JSON Schema defining the expected structure and validation rules for the user's response.
+    /// This allows clients to validate input and provide appropriate UI controls.
+    /// Must be a valid JSON Schema Draft 2020-12 object.
+    pub requested_schema: JsonObject,
+}
+
+/// The result returned by a client in response to an elicitation request.
+///
+/// Contains the user's decision (accept/decline/cancel) and optionally their input data
+/// if they chose to accept the request.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CreateElicitationResult {
+    /// The user's decision on how to handle the elicitation request
+    pub action: ElicitationAction,
+
+    /// The actual data provided by the user, if they accepted the request.
+    /// Must conform to the JSON schema specified in the original request.
+    /// Only present when action is Accept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+}
+
+/// Request type for creating an elicitation to gather user input
+pub type CreateElicitationRequest =
+    Request<ElicitationCreateRequestMethod, CreateElicitationRequestParam>;
+
+// =============================================================================
 // TOOL EXECUTION RESULTS
 // =============================================================================
 
@@ -1186,8 +1257,7 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<Content>>,
+    pub content: Vec<Content>,
     /// An optional JSON object that represents the structured result of the tool call
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
@@ -1200,7 +1270,7 @@ impl CallToolResult {
     /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<Content>) -> Self {
         CallToolResult {
-            content: Some(content),
+            content,
             structured_content: None,
             is_error: Some(false),
         }
@@ -1208,7 +1278,7 @@ impl CallToolResult {
     /// Create an error tool result with unstructured content
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
-            content: Some(content),
+            content,
             structured_content: None,
             is_error: Some(true),
         }
@@ -1229,7 +1299,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
-            content: Some(vec![Content::text(value.to_string())]),
+            content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
         }
@@ -1254,7 +1324,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
-            content: Some(vec![Content::text(value.to_string())]),
+            content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
         }
@@ -1270,10 +1340,10 @@ impl CallToolResult {
     where
         T: DeserializeOwned,
     {
-        let raw_text = match (self.structured_content, &self.content) {
+        let raw_text = match (self.structured_content, &self.content.first()) {
             (Some(value), _) => return serde_json::from_value(value),
             (None, Some(contents)) => {
-                if let Some(text) = contents.first().and_then(|c| c.as_text()) {
+                if let Some(text) = contents.as_text() {
                     let text = &text.text;
                     Some(text)
                 } else {
@@ -1308,13 +1378,13 @@ impl<'de> Deserialize<'de> for CallToolResult {
 
         let helper = CallToolResultHelper::deserialize(deserializer)?;
         let result = CallToolResult {
-            content: helper.content,
+            content: helper.content.unwrap_or_default(),
             structured_content: helper.structured_content,
             is_error: helper.is_error,
         };
 
         // Validate mutual exclusivity
-        if result.content.is_none() && result.structured_content.is_none() {
+        if result.content.is_empty() && result.structured_content.is_none() {
             return Err(serde::de::Error::custom(
                 "CallToolResult must have either content or structured_content",
             ));
@@ -1430,7 +1500,7 @@ ts_union!(
 );
 
 ts_union!(
-    export type ClientResult = CreateMessageResult | ListRootsResult | EmptyResult;
+    export type ClientResult = CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
 );
 
 impl ClientResult {
@@ -1445,7 +1515,8 @@ ts_union!(
     export type ServerRequest =
     | PingRequest
     | CreateMessageRequest
-    | ListRootsRequest;
+    | ListRootsRequest
+    | CreateElicitationRequest;
 );
 
 ts_union!(
@@ -1470,6 +1541,7 @@ ts_union!(
     | ReadResourceResult
     | CallToolResult
     | ListToolsResult
+    | CreateElicitationResult
     | EmptyResult
     ;
 );

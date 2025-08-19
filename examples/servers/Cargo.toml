@@ -14,6 +14,8 @@ rmcp = { workspace = true, features = [
     "transport-io",
     "transport-streamable-http-server",
     "auth",
+    "elicitation",
+    "schemars",
 ] }
 tokio = { version = "1", features = [
     "macros",
@@ -34,7 +36,7 @@ tracing-subscriber = { version = "0.3", features = [
 futures = "0.3"
 rand = { version = "0.9", features = ["std"] }
 axum = { version = "0.8", features = ["macros"] }
-schemars = { version = "1.0" }
+schemars = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
 chrono = "0.4"
 uuid = { version = "1.6", features = ["v4", "serde"] }
@@ -87,3 +89,7 @@ path = "src/sampling_stdio.rs"
 [[example]]
 name = "servers_structured_output"
 path = "src/structured_output.rs"
+
+[[example]]
+name = "servers_elicitation_stdio"
+path = "src/elicitation_stdio.rs"

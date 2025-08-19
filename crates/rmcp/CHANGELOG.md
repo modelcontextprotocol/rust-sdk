@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.5.0...rmcp-v0.6.0) - 2025-08-19
+
+### Added
+
+- Add MCP Elicitation support ([#332](https://github.com/modelcontextprotocol/rust-sdk/pull/332))
+- keep internal error in worker's quit reason ([#372](https://github.com/modelcontextprotocol/rust-sdk/pull/372))
+
+### Fixed
+
+- match shape of the calltoolresult schema ([#377](https://github.com/modelcontextprotocol/rust-sdk/pull/377))
+- make stdio shutdown more graceful ([#364](https://github.com/modelcontextprotocol/rust-sdk/pull/364))
+- *(tool)* remove unnecessary schema validation ([#375](https://github.com/modelcontextprotocol/rust-sdk/pull/375))
+- *(rmcp)* return serialized json with structured content ([#368](https://github.com/modelcontextprotocol/rust-sdk/pull/368))
+
+### Other
+
+- add related project rustfs-mcp ([#378](https://github.com/modelcontextprotocol/rust-sdk/pull/378))
+- *(streamable)* add document for extracting http info ([#373](https://github.com/modelcontextprotocol/rust-sdk/pull/373))
+
 ## [0.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.4.1...rmcp-v0.5.0) - 2025-08-07
 
 ### Fixed

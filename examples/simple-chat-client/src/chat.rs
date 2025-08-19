@@ -85,8 +85,8 @@ impl ChatSession {
                         if result.is_error.is_some_and(|b| b) {
                             self.messages
                                 .push(Message::user("tool call failed, mcp call error"));
-                        } else if let Some(contents) = &result.content {
-                            contents.iter().for_each(|content| {
+                        } else {
+                            result.content.iter().for_each(|content| {
                                 if let Some(content_text) = content.as_text() {
                                     let json_result = serde_json::from_str::<serde_json::Value>(
                                         &content_text.text,
