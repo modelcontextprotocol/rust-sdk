@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt, elicit_safe,
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     schemars::JsonSchema,
     service::{RequestContext, RoleServer},
@@ -42,6 +42,15 @@ pub struct ElicitationServer {
     tool_router: ToolRouter<ElicitationServer>,
 }
 
+impl ElicitationServer {
+    pub fn new() -> Self {
+        Self {
+            user_name: Arc::new(Mutex::new(None)),
+            tool_router: Self::tool_router(),
+        }
+    }
+}
+
 impl Default for ElicitationServer {
     fn default() -> Self {
         Self::new()
@@ -50,13 +59,6 @@ impl Default for ElicitationServer {
 
 #[tool_router]
 impl ElicitationServer {
-    pub fn new() -> Self {
-        Self {
-            user_name: Arc::new(Mutex::new(None)),
-            tool_router: Self::tool_router(),
-        }
-    }
-
     #[tool(description = "Greet user with name collection")]
     async fn greet_user(
         &self,

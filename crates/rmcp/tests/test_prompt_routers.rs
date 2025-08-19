@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use futures::future::BoxFuture;
 use rmcp::{
     ServerHandler,
-    handler::server::prompt::Parameters,
+    handler::server::wrapper::Parameters,
     model::{GetPromptResult, PromptMessage, PromptMessageRole},
 };
 
@@ -81,10 +81,10 @@ fn test_prompt_router() {
             async_function_prompt_attr(),
             |mut context| {
                 Box::pin(async move {
-                    use rmcp::handler::server::prompt::{
-                        FromPromptContextPart, IntoGetPromptResult,
+                    use rmcp::handler::server::{
+                        common::FromContextPart, prompt::IntoGetPromptResult,
                     };
-                    let params = Parameters::<Request>::from_prompt_context_part(&mut context)?;
+                    let params = Parameters::<Request>::from_context_part(&mut context)?;
                     let result = async_function(params).await;
                     result.into_get_prompt_result()
                 })

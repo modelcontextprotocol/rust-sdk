@@ -9,10 +9,11 @@ use std::{future::Future, marker::PhantomData};
 use futures::future::{BoxFuture, FutureExt};
 use serde::de::DeserializeOwned;
 
-use super::common::AsRequestContext;
-pub use super::common::{Extension, Parameters, RequestId};
+use super::common::{AsRequestContext, FromContextPart};
+pub use super::common::{Extension, RequestId};
 use crate::{
     RoleServer,
+    handler::server::wrapper::Parameters,
     model::{GetPromptResult, PromptMessage},
     service::RequestContext,
 };
@@ -67,7 +68,7 @@ pub type DynGetPromptHandler<S> = dyn for<'a> Fn(PromptContext<'a, S>) -> BoxFut
 /// Adapter type for async methods that return Vec<PromptMessage>
 pub struct AsyncMethodAdapter<T>(PhantomData<T>);
 
-/// Adapter type for async methods with parameters that return Vec<PromptMessage>  
+/// Adapter type for async methods with parameters that return Vec<PromptMessage>
 pub struct AsyncMethodWithArgsAdapter<T>(PhantomData<T>);
 
 /// Adapter types for macro-generated implementations
@@ -139,85 +140,21 @@ where
     }
 }
 
-/// Keep the original trait for backward compatibility
-pub trait FromPromptContextPart<S>: Sized {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData>;
-}
-
-// Implement for common extractors that use AsRequestContext
-impl<S> FromPromptContextPart<S> for RequestContext<RoleServer> {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        Ok(context.context.clone())
-    }
-}
-
-impl<S> FromPromptContextPart<S> for tokio_util::sync::CancellationToken {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        Ok(context.context.ct.clone())
-    }
-}
-
-impl<S> FromPromptContextPart<S> for crate::model::Extensions {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        Ok(context.context.extensions.clone())
-    }
-}
-
-impl<S, T> FromPromptContextPart<S> for Extension<T>
-where
-    T: Send + Sync + 'static + Clone,
-{
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        let extension = context
-            .context
-            .extensions
-            .get::<T>()
-            .cloned()
-            .ok_or_else(|| {
-                crate::ErrorData::invalid_params(
-                    format!("missing extension {}", std::any::type_name::<T>()),
-                    None,
-                )
-            })?;
-        Ok(Extension(extension))
-    }
-}
-
-impl<S> FromPromptContextPart<S> for crate::Peer<RoleServer> {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        Ok(context.context.peer.clone())
-    }
-}
-
-impl<S> FromPromptContextPart<S> for crate::model::Meta {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        let mut meta = crate::model::Meta::default();
-        std::mem::swap(&mut meta, &mut context.context.meta);
-        Ok(meta)
-    }
-}
-
-impl<S> FromPromptContextPart<S> for RequestId {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
-        Ok(RequestId(context.context.id.clone()))
-    }
-}
-
 // Prompt-specific extractor for prompt name
 pub struct PromptName(pub String);
 
-impl<S> FromPromptContextPart<S> for PromptName {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
+impl<S> FromContextPart<PromptContext<'_, S>> for PromptName {
+    fn from_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
         Ok(Self(context.name.clone()))
     }
 }
 
 // Special implementation for Parameters that handles prompt arguments
-impl<S, P> FromPromptContextPart<S> for Parameters<P>
+impl<S, P> FromContextPart<PromptContext<'_, S>> for Parameters<P>
 where
     P: DeserializeOwned,
 {
-    fn from_prompt_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
+    fn from_context_part(context: &mut PromptContext<S>) -> Result<Self, crate::ErrorData> {
         let params = if let Some(args_map) = context.arguments.take() {
             let args_value = serde_json::Value::Object(args_map);
             serde_json::from_value::<P>(args_value).map_err(|e| {
@@ -254,7 +191,7 @@ macro_rules! impl_prompt_handler_for {
         impl<$($Tn,)* S, F, R> GetPromptHandler<S, ($($Tn,)*)> for F
         where
             $(
-                $Tn: FromPromptContextPart<S> + Send,
+                $Tn: for<'a> FromContextPart<PromptContext<'a, S>> + Send,
             )*
             F: FnOnce(&S, $($Tn,)*) -> BoxFuture<'_, R> + Send,
             R: IntoGetPromptResult + Send + 'static,
@@ -267,7 +204,7 @@ macro_rules! impl_prompt_handler_for {
             ) -> BoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
             {
                 $(
-                    let result = $Tn::from_prompt_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),
@@ -287,7 +224,7 @@ macro_rules! impl_prompt_handler_for {
         impl<$($Tn,)* S, F, R> GetPromptHandler<S, SyncPromptMethodAdapter<($($Tn,)*), R>> for F
         where
             $(
-                $Tn: FromPromptContextPart<S> + Send,
+                $Tn: for<'a> FromContextPart<PromptContext<'a, S>> + Send,
             )*
             F: FnOnce(&S, $($Tn,)*) -> R + Send,
             R: IntoGetPromptResult + Send,
@@ -300,7 +237,7 @@ macro_rules! impl_prompt_handler_for {
             ) -> BoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
             {
                 $(
-                    let result = $Tn::from_prompt_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),
@@ -317,7 +254,7 @@ macro_rules! impl_prompt_handler_for {
         impl<$($Tn,)* S, F, Fut, R> GetPromptHandler<S, AsyncPromptAdapter<($($Tn,)*), Fut, R>> for F
         where
             $(
-                $Tn: FromPromptContextPart<S> + Send + 'static,
+                $Tn: for<'a> FromContextPart<PromptContext<'a, S>> + Send + 'static,
             )*
             F: FnOnce($($Tn,)*) -> Fut + Send + 'static,
             Fut: Future<Output = Result<R, crate::ErrorData>> + Send + 'static,
@@ -332,7 +269,7 @@ macro_rules! impl_prompt_handler_for {
             {
                 // Extract all parameters before moving into the async block
                 $(
-                    let result = $Tn::from_prompt_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),
@@ -353,7 +290,7 @@ macro_rules! impl_prompt_handler_for {
         impl<$($Tn,)* S, F, R> GetPromptHandler<S, SyncPromptAdapter<($($Tn,)*), R>> for F
         where
             $(
-                $Tn: FromPromptContextPart<S> + Send + 'static,
+                $Tn: for<'a> FromContextPart<PromptContext<'a, S>> + Send + 'static,
             )*
             F: FnOnce($($Tn,)*) -> Result<R, crate::ErrorData> + Send + 'static,
             R: IntoGetPromptResult + Send + 'static,
@@ -366,7 +303,7 @@ macro_rules! impl_prompt_handler_for {
             ) -> BoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
             {
                 $(
-                    let result = $Tn::from_prompt_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),

@@ -37,23 +37,26 @@ impl ClientHandler for MyClient {
     }
 }
 
-impl Default for MyServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub struct MyServer {
     tool_router: ToolRouter<Self>,
 }
 
-#[tool_router]
 impl MyServer {
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
         }
     }
+}
+
+impl Default for MyServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[tool_router]
+impl MyServer {
     #[tool]
     pub async fn some_progress(
         meta: Meta,

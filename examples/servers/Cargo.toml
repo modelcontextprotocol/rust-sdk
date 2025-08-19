@@ -98,7 +98,3 @@ path = "src/structured_output.rs"
 [[example]]
 name = "servers_elicitation_stdio"
 path = "src/elicitation_stdio.rs"
-
-[[example]]
-name = "servers_prompt_with_extractors"
-path = "src/prompt_with_extractors.rs"

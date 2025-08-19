@@ -4,9 +4,8 @@ use std::sync::Arc;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
-        prompt::Parameters as PromptParameters,
         router::{prompt::PromptRouter, tool::ToolRouter},
-        tool::Parameters as ToolParameters,
+        wrapper::Parameters,
     },
     model::*,
     prompt, prompt_handler, prompt_router, schemars,
@@ -91,10 +90,7 @@ impl Counter {
     }
 
     #[tool(description = "Repeat what you say")]
-    fn echo(
-        &self,
-        ToolParameters(object): ToolParameters<JsonObject>,
-    ) -> Result<CallToolResult, McpError> {
+    fn echo(&self, Parameters(object): Parameters<JsonObject>) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::Value::Object(object).to_string(),
         )]))
@@ -103,7 +99,7 @@ impl Counter {
     #[tool(description = "Calculate the sum of two numbers")]
     fn sum(
         &self,
-        ToolParameters(StructRequest { a, b }): ToolParameters<StructRequest>,
+        Parameters(StructRequest { a, b }): Parameters<StructRequest>,
     ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(
             (a + b).to_string(),
@@ -117,7 +113,7 @@ impl Counter {
     #[prompt(name = "example_prompt")]
     async fn example_prompt(
         &self,
-        PromptParameters(args): PromptParameters<ExamplePromptArgs>,
+        Parameters(args): Parameters<ExamplePromptArgs>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<Vec<PromptMessage>, McpError> {
         let prompt = format!(
@@ -134,7 +130,7 @@ impl Counter {
     #[prompt(name = "counter_analysis")]
     async fn counter_analysis(
         &self,
-        PromptParameters(args): PromptParameters<CounterAnalysisArgs>,
+        Parameters(args): Parameters<CounterAnalysisArgs>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         let strategy = args.strategy.unwrap_or_else(|| "careful".to_string());

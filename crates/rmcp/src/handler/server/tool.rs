@@ -8,12 +8,13 @@ use futures::future::{BoxFuture, FutureExt};
 use serde::de::DeserializeOwned;
 
 use super::common::{AsRequestContext, FromContextPart};
-pub use super::common::{
-    Extension, Parameters, RequestId, cached_schema_for_type, schema_for_type,
+pub use super::{
+    common::{Extension, RequestId, cached_schema_for_type, schema_for_type},
+    router::tool::{ToolRoute, ToolRouter},
 };
-pub use super::router::tool::{ToolRoute, ToolRouter};
 use crate::{
     RoleServer,
+    handler::server::wrapper::Parameters,
     model::{CallToolRequestParam, CallToolResult, IntoContents, JsonObject},
     service::RequestContext,
 };
@@ -63,13 +64,6 @@ impl<S> AsRequestContext for ToolCallContext<'_, S> {
     fn as_request_context_mut(&mut self) -> &mut RequestContext<RoleServer> {
         &mut self.request_context
     }
-}
-
-// Keep the original trait for backward compatibility
-pub trait FromToolCallContextPart<S>: Sized {
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData>;
 }
 
 pub trait IntoCallToolResult {
@@ -179,26 +173,6 @@ where
     }
 }
 
-// Also implement the old trait directly for Parameters to support macro-generated code
-impl<S, P> FromToolCallContextPart<S> for Parameters<P>
-where
-    P: DeserializeOwned,
-{
-    fn from_tool_call_context_part(
-        context: &mut ToolCallContext<S>,
-    ) -> Result<Self, crate::ErrorData> {
-        let arguments = context.arguments.take().unwrap_or_default();
-        let value: P =
-            serde_json::from_value(serde_json::Value::Object(arguments)).map_err(|e| {
-                crate::ErrorData::invalid_params(
-                    format!("failed to deserialize parameters: {error}", error = e),
-                    None,
-                )
-            })?;
-        Ok(Parameters(value))
-    }
-}
-
 // Special implementation for JsonObject that takes tool arguments
 impl<S> FromContextPart<ToolCallContext<'_, S>> for JsonObject {
     fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
@@ -238,7 +212,7 @@ macro_rules! impl_for {
         impl<$($Tn,)* S, F,  R> CallToolHandler<S, AsyncMethodAdapter<($($Tn,)*), R>> for F
         where
             $(
-                $Tn: FromToolCallContextPart<S> ,
+                $Tn: for<'a> FromContextPart<ToolCallContext<'a, S>> ,
             )*
             F: FnOnce(&S, $($Tn,)*) -> BoxFuture<'_, R>,
 
@@ -253,7 +227,7 @@ macro_rules! impl_for {
                 mut context: ToolCallContext<'_, S>,
             ) -> BoxFuture<'_, Result<CallToolResult, crate::ErrorData>>{
                 $(
-                    let result = $Tn::from_tool_call_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),
@@ -271,7 +245,7 @@ macro_rules! impl_for {
         impl<$($Tn,)* S, F, Fut, R> CallToolHandler<S, AsyncAdapter<($($Tn,)*), Fut, R>> for F
         where
             $(
-                $Tn: FromToolCallContextPart<S> ,
+                $Tn: for<'a> FromContextPart<ToolCallContext<'a, S>> ,
             )*
             F: FnOnce($($Tn,)*) -> Fut + Send + ,
             Fut: Future<Output = R> + Send + 'static,
@@ -284,7 +258,7 @@ macro_rules! impl_for {
                 mut context: ToolCallContext<S>,
             ) -> BoxFuture<'static, Result<CallToolResult, crate::ErrorData>>{
                 $(
-                    let result = $Tn::from_tool_call_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),
@@ -301,7 +275,7 @@ macro_rules! impl_for {
         impl<$($Tn,)* S, F, R> CallToolHandler<S, SyncMethodAdapter<($($Tn,)*), R>> for F
         where
             $(
-                $Tn: FromToolCallContextPart<S> + ,
+                $Tn: for<'a> FromContextPart<ToolCallContext<'a, S>> + ,
             )*
             F: FnOnce(&S, $($Tn,)*) -> R + Send + ,
             R: IntoCallToolResult + Send + ,
@@ -313,7 +287,7 @@ macro_rules! impl_for {
                 mut context: ToolCallContext<S>,
             ) -> BoxFuture<'static, Result<CallToolResult, crate::ErrorData>> {
                 $(
-                    let result = $Tn::from_tool_call_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),
@@ -326,7 +300,7 @@ macro_rules! impl_for {
         impl<$($Tn,)* S, F, R> CallToolHandler<S, SyncAdapter<($($Tn,)*), R>> for F
         where
             $(
-                $Tn: FromToolCallContextPart<S> + ,
+                $Tn: for<'a> FromContextPart<ToolCallContext<'a, S>> + ,
             )*
             F: FnOnce($($Tn,)*) -> R + Send + ,
             R: IntoCallToolResult + Send + ,
@@ -338,7 +312,7 @@ macro_rules! impl_for {
                 mut context: ToolCallContext<S>,
             ) -> BoxFuture<'static, Result<CallToolResult, crate::ErrorData>>  {
                 $(
-                    let result = $Tn::from_tool_call_context_part(&mut context);
+                    let result = $Tn::from_context_part(&mut context);
                     let $Tn = match result {
                         Ok(value) => value,
                         Err(e) => return std::future::ready(Err(e)).boxed(),

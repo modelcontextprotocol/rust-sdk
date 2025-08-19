@@ -53,7 +53,7 @@
 //! Tools can also return structured JSON data with schemas. Use the [`Json`] wrapper:
 //!
 //! ```rust
-//! # use rmcp::{tool, tool_router, handler::server::tool::{ToolRouter, Parameters}, Json};
+//! # use rmcp::{tool, tool_router, handler::server::{tool::ToolRouter, wrapper::Parameters}, Json};
 //! # use schemars::JsonSchema;
 //! # use serde::{Serialize, Deserialize};
 //! #

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rmcp::{
     ClientHandler, RoleServer, ServerHandler, ServiceExt,
-    handler::server::{prompt::Parameters, router::prompt::PromptRouter},
+    handler::server::{router::prompt::PromptRouter, wrapper::Parameters},
     model::{
         ClientInfo, GetPromptRequestParam, GetPromptResult, ListPromptsResult,
         PaginatedRequestParam, PromptMessage, PromptMessageRole,

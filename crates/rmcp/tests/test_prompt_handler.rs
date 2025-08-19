@@ -16,6 +16,12 @@ pub struct TestPromptServer {
     prompt_router: PromptRouter<Self>,
 }
 
+impl Default for TestPromptServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestPromptServer {
     pub fn new() -> Self {
         Self {
@@ -30,6 +36,12 @@ impl ServerHandler for TestPromptServer {}
 #[derive(Debug, Clone)]
 pub struct CustomRouterServer {
     custom_router: PromptRouter<Self>,
+}
+
+impl Default for CustomRouterServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CustomRouterServer {
@@ -51,6 +63,12 @@ impl ServerHandler for CustomRouterServer {}
 pub struct GenericPromptServer<T: Send + Sync + 'static> {
     prompt_router: PromptRouter<Self>,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: Send + Sync + 'static> Default for GenericPromptServer<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T: Send + Sync + 'static> GenericPromptServer<T> {

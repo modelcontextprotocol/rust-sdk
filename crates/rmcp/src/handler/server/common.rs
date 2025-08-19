@@ -20,7 +20,10 @@ pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
     let object = serde_json::to_value(schema).expect("failed to serialize schema");
     match object {
         serde_json::Value::Object(object) => object,
-        _ => panic!("unexpected schema value"),
+        _ => panic!(
+            "Schema serialization produced non-object value: expected JSON object but got {:?}",
+            object
+        ),
     }
 }
 
@@ -51,21 +54,6 @@ pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject
 /// Trait for extracting parts from a context, unifying tool and prompt extraction
 pub trait FromContextPart<C>: Sized {
     fn from_context_part(context: &mut C) -> Result<Self, crate::ErrorData>;
-}
-
-/// Parameter Extractor
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct Parameters<P>(pub P);
-
-impl<P: JsonSchema> JsonSchema for Parameters<P> {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        P::schema_name()
-    }
-
-    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        P::json_schema(generator)
-    }
 }
 
 /// Common extractors that can be used by both tool and prompt handlers

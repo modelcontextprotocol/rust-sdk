@@ -7,7 +7,7 @@
 
 use rmcp::{
     Json, ServiceExt,
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     tool, tool_handler, tool_router,
     transport::stdio,
 };

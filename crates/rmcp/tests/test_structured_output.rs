@@ -1,7 +1,7 @@
 //cargo test --test test_structured_output --features "client server macros"
 use rmcp::{
     Json, ServerHandler,
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
     model::{CallToolResult, Content, Tool},
     tool, tool_handler, tool_router,
 };
@@ -266,12 +266,12 @@ async fn test_output_schema_requires_structured_content() {
     assert!(calculate_tool.output_schema.is_some());
 
     // Directly call the tool and verify its result structure
-    let params = rmcp::handler::server::tool::Parameters(CalculationRequest { a: 5, b: 3 });
+    let params = Parameters(CalculationRequest { a: 5, b: 3 });
     let result = server.calculate(params).await.unwrap();
 
     // Convert the Json<CalculationResult> to CallToolResult
     let call_result: Result<CallToolResult, rmcp::ErrorData> =
-        rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(result);
+        IntoCallToolResult::into_call_tool_result(result);
 
     assert!(call_result.is_ok());
     let call_result = call_result.unwrap();

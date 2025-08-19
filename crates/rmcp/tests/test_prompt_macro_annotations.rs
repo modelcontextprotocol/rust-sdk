@@ -3,7 +3,7 @@
 
 use rmcp::{
     ServerHandler,
-    handler::server::prompt::Parameters,
+    handler::server::wrapper::Parameters,
     model::{GetPromptResult, Prompt, PromptMessage, PromptMessageRole},
     prompt,
 };
@@ -31,7 +31,7 @@ struct ComplexArgs {
     /// Optional string field
     #[schemars(description = "An optional string parameter")]
     optional_string: Option<String>,
-    /// Optional number field  
+    /// Optional number field
     optional_number: Option<i64>,
     /// Array field
     items: Vec<String>,
