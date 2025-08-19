@@ -3,7 +3,6 @@ use std::{pin::Pin, sync::Arc};
 
 use futures::{StreamExt, future::BoxFuture};
 use http::Uri;
-
 use sse_stream::Error as SseError;
 use thiserror::Error;
 

@@ -15,7 +15,7 @@ pub use extension::*;
 pub use meta::*;
 pub use prompt::*;
 pub use resource::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 pub use tool::*;
 
@@ -1260,12 +1260,32 @@ impl CallToolResult {
         }
     }
 
-    /// Validate that content or structured content is provided
-    pub fn validate(&self) -> Result<(), &'static str> {
-        match (&self.content, &self.structured_content) {
-            (None, None) => Err("either content or structured_content must be provided"),
-            _ => Ok(()),
+    /// Convert the `structured_content` part of response into a certain type.
+    ///
+    /// # About json schema validation
+    /// Since rust is a strong type language, we don't need to do json schema validation here.
+    ///
+    /// But if you do have to validate the response data, you can use [`jsonschema`](https://crates.io/crates/jsonschema) crate.
+    pub fn into_typed<T>(self) -> Result<T, serde_json::Error>
+    where
+        T: DeserializeOwned,
+    {
+        let raw_text = match (self.structured_content, &self.content) {
+            (Some(value), _) => return serde_json::from_value(value),
+            (None, Some(contents)) => {
+                if let Some(text) = contents.first().and_then(|c| c.as_text()) {
+                    let text = &text.text;
+                    Some(text)
+                } else {
+                    None
+                }
+            }
+            (None, None) => None,
+        };
+        if let Some(text) = raw_text {
+            return serde_json::from_str(text);
         }
+        serde_json::from_value(serde_json::Value::Null)
     }
 }
 
@@ -1294,7 +1314,11 @@ impl<'de> Deserialize<'de> for CallToolResult {
         };
 
         // Validate mutual exclusivity
-        result.validate().map_err(serde::de::Error::custom)?;
+        if result.content.is_none() && result.structured_content.is_none() {
+            return Err(serde::de::Error::custom(
+                "CallToolResult must have either content or structured_content",
+            ));
+        }
 
         Ok(result)
     }

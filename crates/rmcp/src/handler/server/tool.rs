@@ -67,43 +67,6 @@ pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
     }
 }
 
-/// Validate that a JSON value conforms to basic type constraints from a schema.
-///
-/// Note: This is a basic validation that only checks type compatibility.
-/// For full JSON Schema validation, a dedicated validation library would be needed.
-pub fn validate_against_schema(
-    value: &serde_json::Value,
-    schema: &JsonObject,
-) -> Result<(), crate::ErrorData> {
-    // Basic type validation
-    if let Some(schema_type) = schema.get("type").and_then(|t| t.as_str()) {
-        let value_type = get_json_value_type(value);
-
-        if schema_type != value_type {
-            return Err(crate::ErrorData::invalid_params(
-                format!(
-                    "Value type does not match schema. Expected '{}', got '{}'",
-                    schema_type, value_type
-                ),
-                None,
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn get_json_value_type(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
-
 /// Call [`schema_for_type`] with a cache
 pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     thread_local! {
