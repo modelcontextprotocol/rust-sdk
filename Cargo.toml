@@ -1,5 +1,3 @@
-
-
 [workspace]
 members = ["crates/rmcp", "crates/rmcp-macros", "examples/*"]
 resolver = "2"
@@ -12,7 +10,7 @@ rmcp-macros = { version = "0.6.0", path = "./crates/rmcp-macros" }
 edition = "2024"
 version = "0.6.0"
 authors = ["4t145 <u4t145@163.com>"]
-license = "MIT/Apache-2.0"
+license = "MIT"
 repository = "https://github.com/modelcontextprotocol/rust-sdk/"
 description = "Rust SDK for Model Context Protocol"
 keywords = ["mcp", "sdk", "tokio", "modelcontextprotocol"]
