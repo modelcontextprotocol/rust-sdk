@@ -234,7 +234,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     // modify the the input function
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
-        // 2. make return type: `std::pin::Pin<Box<dyn Future<Output = #ReturnType> + Send + '_>>`
+        // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> + Send + '_>>`
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
@@ -249,10 +249,10 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
             }
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> futures::future::BoxFuture<#lt, ()> }
+                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send + #lt>> }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> futures::future::BoxFuture<#lt, #ty> }
+                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + Send + #lt>> }
                 }
             }
         })?;

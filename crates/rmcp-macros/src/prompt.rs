@@ -108,10 +108,10 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
             }
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> futures::future::BoxFuture<#lt, ()> }
+                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send + #lt>> }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> futures::future::BoxFuture<#lt, #ty> }
+                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + Send + #lt>> }
                 }
             }
         })?;
