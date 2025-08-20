@@ -336,7 +336,7 @@ impl PromptServer {
             description: Some(format!(
                 "Debugging {} error in {}",
                 args.error_message.chars().take(50).collect::<String>(),
-                args.stack.first().unwrap_or(&"unknown".to_string())
+                args.stack.first().map(|s| s.as_str()).unwrap_or("unknown")
             )),
             messages,
         })

@@ -65,10 +65,10 @@ pub type DynGetPromptHandler<S> = dyn for<'a> Fn(PromptContext<'a, S>) -> BoxFut
     + Send
     + Sync;
 
-/// Adapter type for async methods that return Vec<PromptMessage>
+/// Adapter type for async methods that return `Vec<PromptMessage>`
 pub struct AsyncMethodAdapter<T>(PhantomData<T>);
 
-/// Adapter type for async methods with parameters that return Vec<PromptMessage>
+/// Adapter type for async methods with parameters that return `Vec<PromptMessage>`
 pub struct AsyncMethodWithArgsAdapter<T>(PhantomData<T>);
 
 /// Adapter types for macro-generated implementations
