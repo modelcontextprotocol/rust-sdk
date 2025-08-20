@@ -1,8 +1,0 @@
-client.py
-pyproject.toml
-server.py
-test_with_python.egg-info/PKG-INFO
-test_with_python.egg-info/SOURCES.txt
-test_with_python.egg-info/dependency_links.txt
-test_with_python.egg-info/requires.txt
-test_with_python.egg-info/top_level.txt

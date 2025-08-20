@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: test_with_python
-Version: 0.1.0
-Summary: Test Python client for RMCP
-Requires-Dist: fastmcp
