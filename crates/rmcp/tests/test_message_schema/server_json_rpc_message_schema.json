@@ -302,6 +302,14 @@
       "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Reserved field for protocol-level metadata",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
