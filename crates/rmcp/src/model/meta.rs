@@ -97,8 +97,9 @@ variant_extension! {
         PromptListChangedNotification
     }
 }
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 #[serde(transparent)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Meta(pub JsonObject);
 const PROGRESS_TOKEN_FIELD: &str = "progressToken";
 impl Meta {

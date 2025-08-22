@@ -1190,6 +1190,9 @@ pub struct CallToolResult {
     /// Whether this result represents an error condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+    /// Reserved field for protocol-level metadata
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl CallToolResult {
@@ -1198,6 +1201,7 @@ impl CallToolResult {
         CallToolResult {
             content,
             is_error: Some(false),
+            meta: None,
         }
     }
     /// Create an error tool result
@@ -1205,6 +1209,23 @@ impl CallToolResult {
         CallToolResult {
             content,
             is_error: Some(true),
+            meta: None,
+        }
+    }
+    /// Create a successful tool result with metadata
+    pub fn success_with_meta(content: Vec<Content>, meta: Meta) -> Self {
+        CallToolResult {
+            content,
+            is_error: Some(false),
+            meta: Some(meta),
+        }
+    }
+    /// Create an error tool result with metadata
+    pub fn error_with_meta(content: Vec<Content>, meta: Meta) -> Self {
+        CallToolResult {
+            content,
+            is_error: Some(true),
+            meta: Some(meta),
         }
     }
 }
