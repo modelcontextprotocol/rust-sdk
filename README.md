@@ -119,6 +119,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
 
 ## Related Projects
+- [rustfs-mcp](https://github.com/rustfs/rustfs/tree/main/crates/mcp) - High-performance MCP server providing S3-compatible object storage operations for AI/LLM integration
 - [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
 
 ## Development

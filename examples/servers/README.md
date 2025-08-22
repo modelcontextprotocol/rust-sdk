@@ -47,6 +47,7 @@ A server using streamable HTTP transport for MCP communication, with axum.
 ### Counter Streamable HTTP Server with Hyper (`counter_hyper_streamable_http.rs`)
 
 A server using streamable HTTP transport for MCP communication, with hyper.
+
 - Runs on HTTP with streaming capabilities
 - Provides counter tools via HTTP streaming
 - Demonstrates streamable HTTP transport configuration
@@ -71,6 +72,26 @@ A simplified OAuth example showing basic token-based authentication.
 - Token generation API
 - Simplified authentication flow
 - Good starting point for adding authentication to MCP servers
+
+### Elicitation Demo (`elicitation_stdio.rs`)
+
+A working MCP server demonstrating elicitation for user name collection.
+
+- Real MCP server using rmcp library
+- `context.peer.elicit::<T>()` API usage
+- Type-safe elicitation with `elicit_safe!` macro  
+- JSON Schema validation with schemars
+- Tools: `greet_user` (collects name), `reset_name` (clears stored name)
+
+### Prompt Standard I/O Server (`prompt_stdio.rs`)
+
+A server demonstrating the prompt framework capabilities.
+
+- Shows how to implement prompts in MCP servers
+- Provides code review and debugging prompts
+- Demonstrates prompt argument handling with JSON schema
+- Uses standard I/O transport
+- Good example of prompt implementation patterns
 
 ## How to Run
 
@@ -97,6 +118,12 @@ cargo run --example servers_complex_auth_sse
 
 # Run the simple OAuth SSE server
 cargo run --example servers_simple_auth_sse
+
+# Run the elicitation standard I/O server
+cargo run --example servers_elicitation_stdio
+
+# Run the prompt standard I/O server
+cargo run --example servers_prompt_stdio
 ```
 
 ## Testing with MCP Inspector
@@ -120,6 +147,7 @@ These examples use the following main dependencies:
 - `uuid`: UUID generation (used in OAuth examples)
 - `chrono`: Date and time handling (used in OAuth examples)
 - `rand`: Random number generation (used in OAuth examples)
+- `schemars`: JSON Schema generation (used in elicitation examples)
 
 ## Common Module
 
@@ -129,4 +157,4 @@ The `common/` directory contains shared code used across examples:
 - `calculator.rs`: Calculator tool examples
 - `generic_service.rs`: Generic service implementations
 
-This modular approach allows for code reuse and demonstrates how to structure larger MCP server applications. 
+This modular approach allows for code reuse and demonstrates how to structure larger MCP server applications.

@@ -120,7 +120,7 @@ pub struct OAuthClientConfig {
 
 // add type aliases for oauth2 types
 type OAuthErrorResponse = oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>;
-type OAuthTokenResponse = StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>;
+pub type OAuthTokenResponse = StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>;
 type OAuthTokenIntrospection =
     oauth2::StandardTokenIntrospectionResponse<EmptyExtraTokenFields, BasicTokenType>;
 type OAuthRevocableToken = oauth2::StandardRevocableToken;

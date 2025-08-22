@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.5.0...rmcp-v0.6.0) - 2025-08-19
+
+### Added
+
+- Add MCP Elicitation support ([#332](https://github.com/modelcontextprotocol/rust-sdk/pull/332))
+- keep internal error in worker's quit reason ([#372](https://github.com/modelcontextprotocol/rust-sdk/pull/372))
+
+### Fixed
+
+- match shape of the calltoolresult schema ([#377](https://github.com/modelcontextprotocol/rust-sdk/pull/377))
+- make stdio shutdown more graceful ([#364](https://github.com/modelcontextprotocol/rust-sdk/pull/364))
+- *(tool)* remove unnecessary schema validation ([#375](https://github.com/modelcontextprotocol/rust-sdk/pull/375))
+- *(rmcp)* return serialized json with structured content ([#368](https://github.com/modelcontextprotocol/rust-sdk/pull/368))
+
+### Other
+
+- add related project rustfs-mcp ([#378](https://github.com/modelcontextprotocol/rust-sdk/pull/378))
+- *(streamable)* add document for extracting http info ([#373](https://github.com/modelcontextprotocol/rust-sdk/pull/373))
+
+## [0.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.4.1...rmcp-v0.5.0) - 2025-08-07
+
+### Fixed
+
+- correct numeric types in progress notifications ([#361](https://github.com/modelcontextprotocol/rust-sdk/pull/361))
+
+## [0.4.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.4.0...rmcp-v0.4.1) - 2025-08-07
+
+### Fixed
+
+- *(rmcp)* allow both content and structured content ([#359](https://github.com/modelcontextprotocol/rust-sdk/pull/359))
+
+## [0.4.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.3.2...rmcp-v0.4.0) - 2025-08-05
+
+### Added
+
+- [**breaking**] Add support for `Tool.outputSchema` and `CallToolResult.structuredContent` ([#316](https://github.com/modelcontextprotocol/rust-sdk/pull/316))
+
+### Fixed
+
+- don't wrap errors in streamable http auth client ([#353](https://github.com/modelcontextprotocol/rust-sdk/pull/353))
+- *(prompt)* remove unused code ([#343](https://github.com/modelcontextprotocol/rust-sdk/pull/343))
+
+## [0.3.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.3.1...rmcp-v0.3.2) - 2025-07-30
+
+### Fixed
+
+- *(capabilities)* do not serialize None as null for `list_changed` ([#341](https://github.com/modelcontextprotocol/rust-sdk/pull/341))
+- *(Transport)* close oneshot transport on error ([#340](https://github.com/modelcontextprotocol/rust-sdk/pull/340))
+- *(oauth)* expose OAuthTokenResponse publicly ([#335](https://github.com/modelcontextprotocol/rust-sdk/pull/335))
+
+## [0.3.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.3.0...rmcp-v0.3.1) - 2025-07-29
+
+### Fixed
+
+- use mimeType instead of mime_type for MCP specification compliance ([#339](https://github.com/modelcontextprotocol/rust-sdk/pull/339))
+- return a 405 for GET and DELETE if stateful_mode=false ([#331](https://github.com/modelcontextprotocol/rust-sdk/pull/331))
+- propagate tracing spans when spawning new tokio tasks ([#334](https://github.com/modelcontextprotocol/rust-sdk/pull/334))
+- Explicitly added client_id as an extra parameter causes bad token requests ([#322](https://github.com/modelcontextprotocol/rust-sdk/pull/322))
+
+### Other
+
+- Fix formatting in crate descriptions in README.md ([#333](https://github.com/modelcontextprotocol/rust-sdk/pull/333))
+
 ## [0.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.2.1...rmcp-v0.3.0) - 2025-07-15
 
 ### Added

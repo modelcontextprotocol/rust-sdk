@@ -9,9 +9,9 @@ publish = false
 [dependencies]
 rmcp = { workspace = true, features = [
     "client",
-    "transport-sse-client",
+    "transport-sse-client-reqwest",
     "reqwest",
-    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
     "transport-child-process",
     "tower",
     "auth"

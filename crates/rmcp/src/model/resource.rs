@@ -42,15 +42,17 @@ pub struct RawResourceTemplate {
 pub type ResourceTemplate = Annotated<RawResourceTemplate>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase", untagged)]
+#[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum ResourceContents {
+    #[serde(rename_all = "camelCase")]
     TextResourceContents {
         uri: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         mime_type: Option<String>,
         text: String,
     },
+    #[serde(rename_all = "camelCase")]
     BlobResourceContents {
         uri: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,5 +81,46 @@ impl RawResource {
             mime_type: None,
             size: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn test_resource_serialization() {
+        let resource = RawResource {
+            uri: "file:///test.txt".to_string(),
+            name: "test".to_string(),
+            description: Some("Test resource".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            size: Some(100),
+        };
+
+        let json = serde_json::to_string(&resource).unwrap();
+        println!("Serialized JSON: {}", json);
+
+        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_resource_contents_serialization() {
+        let text_contents = ResourceContents::TextResourceContents {
+            uri: "file:///test.txt".to_string(),
+            mime_type: Some("text/plain".to_string()),
+            text: "Hello world".to_string(),
+        };
+
+        let json = serde_json::to_string(&text_contents).unwrap();
+        println!("ResourceContents JSON: {}", json);
+
+        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
     }
 }

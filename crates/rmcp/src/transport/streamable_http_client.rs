@@ -33,25 +33,27 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("Unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     #[error("Server does not support SSE")]
-    SeverDoesNotSupportSse,
+    ServerDoesNotSupportSse,
     #[error("Server does not support delete session")]
-    SeverDoesNotSupportDeleteSession,
+    ServerDoesNotSupportDeleteSession,
     #[error("Tokio join error: {0}")]
     TokioJoinError(#[from] tokio::task::JoinError),
     #[error("Deserialize error: {0}")]
     Deserialize(#[from] serde_json::Error),
     #[error("Transport channel closed")]
     TransportChannelClosed,
+    #[error("Missing session id in HTTP response")]
+    MissingSessionIdInResponse,
     #[cfg(feature = "auth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
 }
 
-impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
-    fn from(e: reqwest::Error) -> Self {
-        StreamableHttpError::Client(e)
-    }
+#[derive(Debug, Clone, Error)]
+pub enum StreamableHttpProtocolError {
+    #[error("Missing session id in response")]
+    MissingSessionIdInResponse,
 }
 
 pub enum StreamableHttpPostResponse {
@@ -261,7 +263,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     async fn run(
         self,
         mut context: super::worker::WorkerContext<Self>,
-    ) -> Result<(), WorkerQuitReason> {
+    ) -> Result<(), WorkerQuitReason<Self::Error>> {
         let channel_buffer_capacity = self.config.channel_buffer_capacity;
         let (sse_worker_tx, mut sse_worker_rx) =
             tokio::sync::mpsc::channel::<ServerJsonRpcMessage>(channel_buffer_capacity);
@@ -278,7 +280,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             .post_message(config.uri.clone(), initialize_request, None, None)
             .await
             .map_err(WorkerQuitReason::fatal_context("send initialize request"))?
-            .expect_initialized::<Self::Error>()
+            .expect_initialized::<C::Error>()
             .await
             .map_err(WorkerQuitReason::fatal_context(
                 "process initialize response",
@@ -288,7 +290,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         } else {
             if !self.config.allow_stateless {
                 return Err(WorkerQuitReason::fatal(
-                    "missing session id in initialize response",
+                    StreamableHttpError::<C::Error>::MissingSessionIdInResponse,
                     "process initialize response",
                 ));
             }
@@ -308,7 +310,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     Ok(_) => {
                         tracing::info!(session_id = session_id.as_ref(), "delete session success")
                     }
-                    Err(StreamableHttpError::SeverDoesNotSupportDeleteSession) => {
+                    Err(StreamableHttpError::ServerDoesNotSupportDeleteSession) => {
                         tracing::info!(
                             session_id = session_id.as_ref(),
                             "server doesn't support delete session"
@@ -338,7 +340,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             .map_err(WorkerQuitReason::fatal_context(
                 "send initialized notification",
             ))?
-            .expect_accepted::<Self::Error>()
+            .expect_accepted::<C::Error>()
             .map_err(WorkerQuitReason::fatal_context(
                 "process initialized notification response",
             ))?;
@@ -373,14 +375,14 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     ));
                     tracing::debug!("got common stream");
                 }
-                Err(StreamableHttpError::SeverDoesNotSupportSse) => {
+                Err(StreamableHttpError::ServerDoesNotSupportSse) => {
                     tracing::debug!("server doesn't support sse, skip common stream");
                 }
                 Err(e) => {
                     // fail to get common stream
                     tracing::error!("fail to get common stream: {e}");
                     return Err(WorkerQuitReason::fatal(
-                        "fail to get general purpose event stream",
+                        e,
                         "get general purpose event stream",
                     ));
                 }
@@ -483,9 +485,170 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     }
 }
 
+/// A client-agnostic HTTP transport for RMCP that supports streaming responses.
+///
+/// This transport allows you to choose your preferred HTTP client implementation
+/// by implementing the [`StreamableHttpClient`] trait. The transport handles
+/// session management, SSE streaming, and automatic reconnection.
+///
+/// # Usage
+///
+/// ## Using reqwest
+///
+/// ```rust,no_run
+/// use rmcp::transport::StreamableHttpClientTransport;
+///
+/// // Enable the reqwest feature in Cargo.toml:
+/// // rmcp = { version = "0.5", features = ["transport-streamable-http-client-reqwest"] }
+///
+/// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+/// ```
+///
+/// ## Using a custom HTTP client
+///
+/// ```rust,no_run
+/// use rmcp::transport::streamable_http_client::{
+///     StreamableHttpClient,
+///     StreamableHttpClientTransport,
+///     StreamableHttpClientTransportConfig
+/// };
+/// use std::sync::Arc;
+/// use futures::stream::BoxStream;
+/// use rmcp::model::ClientJsonRpcMessage;
+/// use sse_stream::{Sse, Error as SseError};
+///
+/// #[derive(Clone)]
+/// struct MyHttpClient;
+///
+/// #[derive(Debug, thiserror::Error)]
+/// struct MyError;
+///
+/// impl std::fmt::Display for MyError {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         write!(f, "MyError")
+///     }
+/// }
+///
+/// impl StreamableHttpClient for MyHttpClient {
+///     type Error = MyError;
+///     
+///     async fn post_message(
+///         &self,
+///         _uri: Arc<str>,
+///         _message: ClientJsonRpcMessage,
+///         _session_id: Option<Arc<str>>,
+///         _auth_header: Option<String>,
+///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+///         todo!()
+///     }
+///     
+///     async fn delete_session(
+///         &self,
+///         _uri: Arc<str>,
+///         _session_id: Arc<str>,
+///         _auth_header: Option<String>,
+///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+///         todo!()
+///     }
+///     
+///     async fn get_stream(
+///         &self,
+///         _uri: Arc<str>,
+///         _session_id: Arc<str>,
+///         _last_event_id: Option<String>,
+///         _auth_header: Option<String>,
+///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+///         todo!()
+///     }
+/// }
+///
+/// let transport = StreamableHttpClientTransport::with_client(
+///     MyHttpClient,
+///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
+/// );
+/// ```
+///
+/// # Feature Flags
+///
+/// - `transport-streamable-http-client`: Base feature providing the generic transport infrastructure
+/// - `transport-streamable-http-client-reqwest`: Includes reqwest HTTP client support with convenience methods
 pub type StreamableHttpClientTransport<C> = WorkerTransport<StreamableHttpClientWorker<C>>;
 
 impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
+    /// Creates a new transport with a custom HTTP client implementation.
+    ///
+    /// This method allows you to use any HTTP client that implements the [`StreamableHttpClient`] trait.
+    /// Use this when you want to use a custom HTTP client or when the reqwest feature is not enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Your HTTP client implementation
+    /// * `config` - Transport configuration including the server URI
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rmcp::transport::streamable_http_client::{
+    ///     StreamableHttpClient,
+    ///     StreamableHttpClientTransport,
+    ///     StreamableHttpClientTransportConfig
+    /// };
+    /// use std::sync::Arc;
+    /// use futures::stream::BoxStream;
+    /// use rmcp::model::ClientJsonRpcMessage;
+    /// use sse_stream::{Sse, Error as SseError};
+    ///
+    /// // Define your custom client
+    /// #[derive(Clone)]
+    /// struct MyHttpClient;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// struct MyError;
+    ///
+    /// impl std::fmt::Display for MyError {
+    ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    ///         write!(f, "MyError")
+    ///     }
+    /// }
+    ///
+    /// impl StreamableHttpClient for MyHttpClient {
+    ///     type Error = MyError;
+    ///     
+    ///     async fn post_message(
+    ///         &self,
+    ///         _uri: Arc<str>,
+    ///         _message: ClientJsonRpcMessage,
+    ///         _session_id: Option<Arc<str>>,
+    ///         _auth_header: Option<String>,
+    ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+    ///         todo!()
+    ///     }
+    ///     
+    ///     async fn delete_session(
+    ///         &self,
+    ///         _uri: Arc<str>,
+    ///         _session_id: Arc<str>,
+    ///         _auth_header: Option<String>,
+    ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+    ///         todo!()
+    ///     }
+    ///     
+    ///     async fn get_stream(
+    ///         &self,
+    ///         _uri: Arc<str>,
+    ///         _session_id: Arc<str>,
+    ///         _last_event_id: Option<String>,
+    ///         _auth_header: Option<String>,
+    ///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
+    ///         todo!()
+    ///     }
+    /// }
+    ///
+    /// let transport = StreamableHttpClientTransport::with_client(
+    ///     MyHttpClient,
+    ///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
+    /// );
+    /// ```
     pub fn with_client(client: C, config: StreamableHttpClientTransportConfig) -> Self {
         let worker = StreamableHttpClientWorker::new(client, config);
         WorkerTransport::spawn(worker)

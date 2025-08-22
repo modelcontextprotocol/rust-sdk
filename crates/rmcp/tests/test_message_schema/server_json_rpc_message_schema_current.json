@@ -302,17 +302,12 @@
       "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
       "properties": {
-        "_meta": {
-          "description": "Reserved field for protocol-level metadata",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
-          "type": "array",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "$ref": "#/definitions/Annotated"
           }
@@ -323,11 +318,11 @@
             "boolean",
             "null"
           ]
+        },
+        "structuredContent": {
+          "description": "An optional JSON object that represents the structured result of the tool call"
         }
-      },
-      "required": [
-        "content"
-      ]
+      }
     },
     "CancelledNotificationMethod": {
       "type": "string",
@@ -1032,9 +1027,8 @@
         },
         "progress": {
           "description": "The progress thus far. This should increase every time progress is made, even if the total is unknown.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
+          "type": "number",
+          "format": "double"
         },
         "progressToken": {
           "$ref": "#/definitions/ProgressToken"
@@ -1042,11 +1036,10 @@
         "total": {
           "description": "Total number of items to process (or total progress required), if known",
           "type": [
-            "integer",
+            "number",
             "null"
           ],
-          "format": "uint32",
-          "minimum": 0
+          "format": "double"
         }
       },
       "required": [
@@ -1341,7 +1334,7 @@
         {
           "type": "object",
           "properties": {
-            "mime_type": {
+            "mimeType": {
               "type": [
                 "string",
                 "null"
@@ -1365,7 +1358,7 @@
             "blob": {
               "type": "string"
             },
-            "mime_type": {
+            "mimeType": {
               "type": [
                 "string",
                 "null"
@@ -1588,6 +1581,14 @@
         "name": {
           "description": "The name of the tool",
           "type": "string"
+        },
+        "outputSchema": {
+          "description": "An optional JSON Schema object defining the structure of the tool's output",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       },
       "required": [

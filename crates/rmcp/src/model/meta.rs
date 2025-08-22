@@ -74,6 +74,7 @@ variant_extension! {
         PingRequest
         CreateMessageRequest
         ListRootsRequest
+        CreateElicitationRequest
     }
 }
 

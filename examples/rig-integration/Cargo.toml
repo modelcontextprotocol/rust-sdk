@@ -17,10 +17,9 @@ rig-core = "0.15.1"
 tokio = { version = "1", features = ["full"] }
 rmcp = { workspace = true, features = [
     "client",
-    "reqwest",
     "transport-child-process",
-    "transport-sse-client",
-    "transport-streamable-http-client"
+    "transport-sse-client-reqwest",
+    "transport-streamable-http-client-reqwest"
 ] }
 anyhow = "1.0"
 serde_json = "1"

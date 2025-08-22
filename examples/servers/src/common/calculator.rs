@@ -2,7 +2,10 @@
 
 use rmcp::{
     ServerHandler,
-    handler::server::{router::tool::ToolRouter, tool::Parameters, wrapper::Json},
+    handler::server::{
+        router::tool::ToolRouter,
+        wrapper::{Json, Parameters},
+    },
     model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
 };
