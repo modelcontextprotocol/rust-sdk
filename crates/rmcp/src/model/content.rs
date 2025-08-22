@@ -1,7 +1,7 @@
 //! Content sent around agents, extensions, and LLMs
 //! NOTE: This file models MCP ContentBlock union types. Keep in sync with MCP draft schema.
 
-//! The various content types can be display to humans but also understood by models
+//! The various content types can be displayed to humans but also understood by models
 //! They include optional annotations used to help inform agent usage
 use serde::{Deserialize, Serialize};
 use serde_json::json;
