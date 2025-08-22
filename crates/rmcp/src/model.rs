@@ -1292,6 +1292,7 @@ impl CallToolResult {
     pub fn success_with_meta(content: Vec<Content>, meta: Meta) -> Self {
         CallToolResult {
             content,
+            structured_content: None,
             is_error: Some(false),
             meta: Some(meta),
         }
@@ -1300,6 +1301,7 @@ impl CallToolResult {
     pub fn error_with_meta(content: Vec<Content>, meta: Meta) -> Self {
         CallToolResult {
             content,
+            structured_content: None,
             is_error: Some(true),
             meta: Some(meta),
         }
@@ -1323,6 +1325,7 @@ impl CallToolResult {
             content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
+            meta: None,
         }
     }
     /// Create an error tool result with structured content
@@ -1348,6 +1351,7 @@ impl CallToolResult {
             content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
+            meta: None,
         }
     }
 
@@ -1395,6 +1399,8 @@ impl<'de> Deserialize<'de> for CallToolResult {
             structured_content: Option<Value>,
             #[serde(skip_serializing_if = "Option::is_none")]
             is_error: Option<bool>,
+            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+            meta: Option<Meta>,
         }
 
         let helper = CallToolResultHelper::deserialize(deserializer)?;
@@ -1402,6 +1408,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
             content: helper.content.unwrap_or_default(),
             structured_content: helper.structured_content,
             is_error: helper.is_error,
+            meta: helper.meta,
         };
 
         // Validate mutual exclusivity
