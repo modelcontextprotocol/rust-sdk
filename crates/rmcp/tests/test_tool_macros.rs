@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolRequestParam, ClientInfo},
     tool, tool_handler, tool_router,
 };
@@ -26,6 +26,14 @@ pub struct Server {
     tool_router: ToolRouter<Self>,
 }
 
+impl Server {
+    pub fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+}
+
 impl Default for Server {
     fn default() -> Self {
         Self::new()
@@ -34,12 +42,6 @@ impl Default for Server {
 
 #[tool_router(router = tool_router)]
 impl Server {
-    pub fn new() -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-        }
-    }
-
     /// This tool is used to get the weather of a city.
     #[tool(name = "get-weather", description = "Get the weather of a city.")]
     pub async fn get_weather(&self, city: Parameters<GetWeatherRequest>) -> String {

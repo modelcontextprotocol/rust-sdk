@@ -7,12 +7,12 @@ use super::{IntoTransport, Transport};
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 #[derive(Debug, thiserror::Error)]
-pub enum WorkerQuitReason {
+pub enum WorkerQuitReason<E> {
     #[error("Join error {0}")]
     Join(#[from] tokio::task::JoinError),
     #[error("Transport fatal {error}, when {context}")]
     Fatal {
-        error: Cow<'static, str>,
+        error: E,
         context: Cow<'static, str>,
     },
     #[error("Transport canncelled")]
@@ -23,18 +23,16 @@ pub enum WorkerQuitReason {
     HandlerTerminated,
 }
 
-impl WorkerQuitReason {
-    pub fn fatal(msg: impl Into<Cow<'static, str>>, context: impl Into<Cow<'static, str>>) -> Self {
+impl<E: std::error::Error + Send + 'static> WorkerQuitReason<E> {
+    pub fn fatal(error: E, context: impl Into<Cow<'static, str>>) -> Self {
         Self::Fatal {
-            error: msg.into(),
+            error,
             context: context.into(),
         }
     }
-    pub fn fatal_context<E: std::error::Error>(
-        context: impl Into<Cow<'static, str>>,
-    ) -> impl FnOnce(E) -> Self {
+    pub fn fatal_context(context: impl Into<Cow<'static, str>>) -> impl FnOnce(E) -> Self {
         |e| Self::Fatal {
-            error: Cow::Owned(format!("{e}")),
+            error: e,
             context: context.into(),
         }
     }
@@ -48,7 +46,7 @@ pub trait Worker: Sized + Send + 'static {
     fn run(
         self,
         context: WorkerContext<Self>,
-    ) -> impl Future<Output = Result<(), WorkerQuitReason>> + Send;
+    ) -> impl Future<Output = Result<(), WorkerQuitReason<Self::Error>>> + Send;
     fn config(&self) -> WorkerConfig {
         WorkerConfig::default()
     }
@@ -62,7 +60,7 @@ pub struct WorkerSendRequest<W: Worker> {
 pub struct WorkerTransport<W: Worker> {
     rx: tokio::sync::mpsc::Receiver<RxJsonRpcMessage<W::Role>>,
     send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
-    join_handle: Option<tokio::task::JoinHandle<Result<(), WorkerQuitReason>>>,
+    join_handle: Option<tokio::task::JoinHandle<Result<(), WorkerQuitReason<W::Error>>>>,
     _drop_guard: tokio_util::sync::DropGuard,
     ct: CancellationToken,
 }
@@ -159,14 +157,16 @@ impl<W: Worker> WorkerContext<W> {
     pub async fn send_to_handler(
         &mut self,
         item: RxJsonRpcMessage<W::Role>,
-    ) -> Result<(), WorkerQuitReason> {
+    ) -> Result<(), WorkerQuitReason<W::Error>> {
         self.to_handler_tx
             .send(item)
             .await
             .map_err(|_| WorkerQuitReason::HandlerTerminated)
     }
 
-    pub async fn recv_from_handler(&mut self) -> Result<WorkerSendRequest<W>, WorkerQuitReason> {
+    pub async fn recv_from_handler(
+        &mut self,
+    ) -> Result<WorkerSendRequest<W>, WorkerQuitReason<W::Error>> {
         self.from_handler_rx
             .recv()
             .await

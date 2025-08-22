@@ -11,6 +11,12 @@ use crate::transport::{
     sse_client::{SseClient, SseClientConfig, SseTransportError},
 };
 
+impl From<reqwest::Error> for SseTransportError<reqwest::Error> {
+    fn from(e: reqwest::Error) -> Self {
+        SseTransportError::Client(e)
+    }
+}
+
 impl SseClient for reqwest::Client {
     type Error = reqwest::Error;
 
@@ -55,7 +61,9 @@ impl SseClient for reqwest::Client {
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
             Some(ct) => {
                 if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) {
-                    return Err(SseTransportError::UnexpectedContentType(Some(ct.clone())));
+                    return Err(SseTransportError::UnexpectedContentType(Some(
+                        String::from_utf8_lossy(ct.as_bytes()).to_string(),
+                    )));
                 }
             }
             None => {
@@ -68,6 +76,33 @@ impl SseClient for reqwest::Client {
 }
 
 impl SseClientTransport<reqwest::Client> {
+    /// Creates a new transport using reqwest with the specified SSE endpoint.
+    ///
+    /// This is a convenience method that creates a transport using the default
+    /// reqwest client. This method is only available when the
+    /// `transport-sse-client-reqwest` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `uri` - The SSE endpoint to connect to
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rmcp::transport::SseClientTransport;
+    ///
+    /// // Enable the reqwest feature in Cargo.toml:
+    /// // rmcp = { version = "0.5", features = ["transport-sse-client-reqwest"] }
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let transport = SseClientTransport::start("http://localhost:8000/sse").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Feature requirement
+    ///
+    /// This method requires the `transport-sse-client-reqwest` feature.
     pub async fn start(
         uri: impl Into<Arc<str>>,
     ) -> Result<Self, SseTransportError<reqwest::Error>> {

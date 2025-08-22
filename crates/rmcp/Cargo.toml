@@ -62,7 +62,7 @@ http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 # macro
-rmcp-macros = { version = "0.2.1", workspace = true, optional = true }
+rmcp-macros = { workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 chrono = { version = "0.4.38", features = ["serde"] }
 
@@ -79,6 +79,7 @@ default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "dep:schemars"]
 macros = ["dep:rmcp-macros", "dep:paste"]
+elicitation = []
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -102,12 +103,14 @@ server-side-http = [
 client-side-sse = ["dep:sse-stream", "dep:http"]
 
 transport-sse-client = ["client-side-sse", "transport-worker"]
+transport-sse-client-reqwest = ["transport-sse-client", "reqwest"]
 
 transport-worker = ["dep:tokio-stream"]
 
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
+transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "reqwest"]
 
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
@@ -201,3 +204,8 @@ path = "tests/test_message_schema.rs"
 name = "test_progress_subscriber"
 required-features = ["server", "client", "macros"]
 path = "tests/test_progress_subscriber.rs"
+
+[[test]]
+name = "test_elicitation"
+required-features = ["elicitation", "client", "server"]
+path = "tests/test_elicitation.rs"
