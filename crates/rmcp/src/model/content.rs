@@ -1,4 +1,6 @@
 //! Content sent around agents, extensions, and LLMs
+//! NOTE: This file models MCP ContentBlock union types. Keep in sync with MCP draft schema.
+
 //! The various content types can be display to humans but also understood by models
 //! They include optional annotations used to help inform agent usage
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,7 @@ pub struct RawTextContent {
     pub text: String,
 }
 pub type TextContent = Annotated<RawTextContent>;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -56,8 +59,12 @@ pub type AudioContent = Annotated<RawAudioContent>;
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),
+    /// Embedded resource payload
     Resource(RawEmbeddedResource),
-    Audio(AudioContent),
+    /// A link to a server resource that can be fetched on-demand
+    #[serde(rename = "resource_link")]
+    ResourceLink(super::resource::RawResource),
+    Audio(RawAudioContent),
 }
 
 pub type Content = Annotated<RawContent>;
@@ -73,6 +80,11 @@ impl RawContent {
             )
         })?;
         Ok(RawContent::text(json))
+    }
+
+    /// Create a resource link content block
+    pub fn resource_link(link: super::resource::RawResource) -> Self {
+        RawContent::ResourceLink(link)
     }
 
     pub fn text<S: Into<String>>(text: S) -> Self {
@@ -94,7 +106,7 @@ impl RawContent {
         RawContent::Resource(RawEmbeddedResource {
             resource: ResourceContents::TextResourceContents {
                 uri: uri.into(),
-                mime_type: Some("text".to_string()),
+                mime_type: Some("text/plain".to_string()),
                 text: content.into(),
             },
         })
@@ -136,6 +148,10 @@ impl Content {
 
     pub fn resource(resource: ResourceContents) -> Self {
         RawContent::resource(resource).no_annotation()
+    }
+
+    pub fn resource_link(link: super::resource::RawResource) -> Self {
+        RawContent::resource_link(link).no_annotation()
     }
 
     pub fn embedded_text<S: Into<String>, T: Into<String>>(uri: S, content: T) -> Self {
@@ -206,5 +222,34 @@ mod tests {
         // Verify it contains mimeType (camelCase) not mime_type (snake_case)
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_resource_link_serialization() {
+        use crate::model::resource::RawResource;
+
+        let link = RawResource {
+            uri: "file:///example.pdf".to_string(),
+            name: "Example PDF".to_string(),
+            description: Some("A test PDF".to_string()),
+            mime_type: Some("application/pdf".to_string()),
+            size: Some(1234),
+        };
+
+        let content = RawContent::resource_link(link);
+        let json = serde_json::to_string(&content).unwrap();
+
+        assert!(json.contains("\"type\":\"resource_link\""));
+        assert!(json.contains("\"uri\":\"file:///example.pdf\""));
+        assert!(json.contains("\"name\":\"Example PDF\""));
+        assert!(json.contains("mimeType"));
+        assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_embedded_text_uses_text_plain() {
+        let content = RawContent::embedded_text("file:///example.txt", "hello");
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("\"mimeType\":\"text/plain\""));
     }
 }

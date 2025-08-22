@@ -78,6 +78,12 @@ pub enum PromptMessageContent {
     },
     /// Embedded server-side resource
     Resource { resource: EmbeddedResource },
+    /// A link to a resource
+    #[serde(rename = "resource_link")]
+    ResourceLink {
+        #[serde(flatten)]
+        link: super::resource::Resource,
+    },
 }
 
 impl PromptMessageContent {
@@ -123,6 +129,20 @@ impl PromptMessage {
                     mime_type,
                 }
                 .optional_annotate(annotations),
+            },
+        }
+    }
+
+    /// Create a new resource link message
+    pub fn new_resource_link(
+        role: PromptMessageRole,
+        link: super::resource::RawResource,
+        annotations: Option<Annotations>,
+    ) -> Self {
+        Self {
+            role,
+            content: PromptMessageContent::ResourceLink {
+                link: link.optional_annotate(annotations),
             },
         }
     }
@@ -173,4 +193,14 @@ mod tests {
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
     }
+}
+
+#[test]
+fn test_prompt_message_resource_link() {
+    use super::resource::RawResource;
+    let link = RawResource::new("file:///example.txt", "example");
+    let msg = PromptMessage::new_resource_link(PromptMessageRole::Assistant, link, None);
+    let json = serde_json::to_string(&msg).unwrap();
+    assert!(json.contains("\"type\":\"resource_link\""));
+    assert!(json.contains("\"uri\":\"file:///example.txt\""));
 }
