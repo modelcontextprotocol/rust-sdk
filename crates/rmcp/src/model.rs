@@ -58,6 +58,9 @@ pub struct EmptyObject {}
 
 pub trait ConstString: Default {
     const VALUE: &str;
+    fn as_str(&self) -> &'static str {
+        Self::VALUE
+    }
 }
 #[macro_export]
 macro_rules! const_string {
@@ -1490,6 +1493,26 @@ ts_union!(
     | CallToolRequest
     | ListToolsRequest;
 );
+
+impl ClientRequest {
+    pub fn method(&self) -> &'static str {
+        match &self {
+            ClientRequest::PingRequest(r) => r.method.as_str(),
+            ClientRequest::InitializeRequest(r) => r.method.as_str(),
+            ClientRequest::CompleteRequest(r) => r.method.as_str(),
+            ClientRequest::SetLevelRequest(r) => r.method.as_str(),
+            ClientRequest::GetPromptRequest(r) => r.method.as_str(),
+            ClientRequest::ListPromptsRequest(r) => r.method.as_str(),
+            ClientRequest::ListResourcesRequest(r) => r.method.as_str(),
+            ClientRequest::ListResourceTemplatesRequest(r) => r.method.as_str(),
+            ClientRequest::ReadResourceRequest(r) => r.method.as_str(),
+            ClientRequest::SubscribeRequest(r) => r.method.as_str(),
+            ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
+            ClientRequest::CallToolRequest(r) => r.method.as_str(),
+            ClientRequest::ListToolsRequest(r) => r.method.as_str(),
+        }
+    }
+}
 
 ts_union!(
     export type ClientNotification =
