@@ -66,7 +66,7 @@ pub enum PromptMessageRole {
 
 /// Content types that can be included in prompt messages
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum PromptMessageContent {
     /// Plain text content
@@ -78,11 +78,21 @@ pub enum PromptMessageContent {
     },
     /// Embedded server-side resource
     Resource { resource: EmbeddedResource },
+    /// A link to a resource that can be fetched separately
+    ResourceLink {
+        #[serde(flatten)]
+        link: super::resource::Resource,
+    },
 }
 
 impl PromptMessageContent {
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
+    }
+
+    /// Create a resource link content
+    pub fn resource_link(resource: super::resource::Resource) -> Self {
+        Self::ResourceLink { link: resource }
     }
 }
 
@@ -151,6 +161,14 @@ impl PromptMessage {
             },
         }
     }
+
+    /// Create a new resource link message
+    pub fn new_resource_link(role: PromptMessageRole, resource: super::resource::Resource) -> Self {
+        Self {
+            role,
+            content: PromptMessageContent::ResourceLink { link: resource },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -172,5 +190,44 @@ mod tests {
         // Verify it contains mimeType (camelCase) not mime_type (snake_case)
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_prompt_message_resource_link_serialization() {
+        use super::super::resource::RawResource;
+
+        let resource = RawResource::new("file:///test.txt", "test.txt");
+        let message =
+            PromptMessage::new_resource_link(PromptMessageRole::User, resource.no_annotation());
+
+        let json = serde_json::to_string(&message).unwrap();
+        println!("PromptMessage with ResourceLink JSON: {}", json);
+
+        // Verify it contains the correct type tag
+        assert!(json.contains("\"type\":\"resource_link\""));
+        assert!(json.contains("\"uri\":\"file:///test.txt\""));
+        assert!(json.contains("\"name\":\"test.txt\""));
+    }
+
+    #[test]
+    fn test_prompt_message_content_resource_link_deserialization() {
+        let json = r#"{
+            "type": "resource_link",
+            "uri": "file:///example.txt",
+            "name": "example.txt",
+            "description": "Example file",
+            "mimeType": "text/plain"
+        }"#;
+
+        let content: PromptMessageContent = serde_json::from_str(json).unwrap();
+
+        if let PromptMessageContent::ResourceLink { link } = content {
+            assert_eq!(link.uri, "file:///example.txt");
+            assert_eq!(link.name, "example.txt");
+            assert_eq!(link.description, Some("Example file".to_string()));
+            assert_eq!(link.mime_type, Some("text/plain".to_string()));
+        } else {
+            panic!("Expected ResourceLink variant");
+        }
     }
 }

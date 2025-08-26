@@ -51,13 +51,14 @@ pub struct RawAudioContent {
 pub type AudioContent = Annotated<RawAudioContent>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),
     Resource(RawEmbeddedResource),
     Audio(AudioContent),
+    ResourceLink(super::resource::RawResource),
 }
 
 pub type Content = Annotated<RawContent>;
@@ -123,6 +124,19 @@ impl RawContent {
             _ => None,
         }
     }
+
+    /// Get the resource link if this is a ResourceLink variant
+    pub fn as_resource_link(&self) -> Option<&super::resource::RawResource> {
+        match self {
+            RawContent::ResourceLink(link) => Some(link),
+            _ => None,
+        }
+    }
+
+    /// Create a resource link content
+    pub fn resource_link(resource: super::resource::RawResource) -> Self {
+        RawContent::ResourceLink(resource)
+    }
 }
 
 impl Content {
@@ -144,6 +158,11 @@ impl Content {
 
     pub fn json<S: Serialize>(json: S) -> Result<Self, crate::ErrorData> {
         RawContent::json(json).map(|c| c.no_annotation())
+    }
+
+    /// Create a resource link content
+    pub fn resource_link(resource: super::resource::RawResource) -> Self {
+        RawContent::resource_link(resource).no_annotation()
     }
 }
 
@@ -206,5 +225,48 @@ mod tests {
         // Verify it contains mimeType (camelCase) not mime_type (snake_case)
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_resource_link_serialization() {
+        use super::super::resource::RawResource;
+
+        let resource_link = RawContent::ResourceLink(RawResource {
+            uri: "file:///test.txt".to_string(),
+            name: "test.txt".to_string(),
+            description: Some("A test file".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            size: Some(100),
+        });
+
+        let json = serde_json::to_string(&resource_link).unwrap();
+        println!("ResourceLink JSON: {}", json);
+
+        // Verify it contains the correct type tag
+        assert!(json.contains("\"type\":\"resource_link\""));
+        assert!(json.contains("\"uri\":\"file:///test.txt\""));
+        assert!(json.contains("\"name\":\"test.txt\""));
+    }
+
+    #[test]
+    fn test_resource_link_deserialization() {
+        let json = r#"{
+            "type": "resource_link",
+            "uri": "file:///example.txt",
+            "name": "example.txt",
+            "description": "Example file",
+            "mimeType": "text/plain"
+        }"#;
+
+        let content: RawContent = serde_json::from_str(json).unwrap();
+
+        if let RawContent::ResourceLink(resource) = content {
+            assert_eq!(resource.uri, "file:///example.txt");
+            assert_eq!(resource.name, "example.txt");
+            assert_eq!(resource.description, Some("Example file".to_string()));
+            assert_eq!(resource.mime_type, Some("text/plain".to_string()));
+        } else {
+            panic!("Expected ResourceLink variant");
+        }
     }
 }

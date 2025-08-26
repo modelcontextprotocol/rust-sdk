@@ -133,6 +133,23 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -1278,6 +1295,62 @@
             "type",
             "resource"
           ]
+        },
+        {
+          "description": "A link to a resource that can be fetched separately",
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "description": "Optional description of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mimeType": {
+              "description": "MIME type of the resource content (\"text\" or \"blob\")",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of the resource",
+              "type": "string"
+            },
+            "size": {
+              "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            },
+            "uri": {
+              "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "uri",
+            "name"
+          ]
         }
       ]
     },
@@ -1329,6 +1402,47 @@
       "required": [
         "data",
         "mimeType"
+      ]
+    },
+    "RawResource": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
       ]
     },
     "RawTextContent": {

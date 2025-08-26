@@ -133,6 +133,23 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -304,10 +321,7 @@
       "properties": {
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": "array",
           "items": {
             "$ref": "#/definitions/Annotated"
           }
@@ -322,7 +336,10 @@
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
-      }
+      },
+      "required": [
+        "content"
+      ]
     },
     "CancelledNotificationMethod": {
       "type": "string",
@@ -405,6 +422,45 @@
         }
       ]
     },
+    "CreateElicitationRequestParam": {
+      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A JSON schema defining the expected structure of the response",
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "Human-readable message explaining what input is needed from the user.\nThis should be clear and provide sufficient context for the user to understand\nwhat information they need to provide.",
+          "type": "string"
+        },
+        "requestedSchema": {
+          "description": "JSON Schema defining the expected structure and validation rules for the user's response.\nThis allows clients to validate input and provide appropriate UI controls.\nMust be a valid JSON Schema Draft 2020-12 object.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "message",
+        "requestedSchema"
+      ]
+    },
+    "CreateElicitationResult": {
+      "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The user's decision on how to handle the elicitation request",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElicitationAction"
+            }
+          ]
+        },
+        "content": {
+          "description": "The actual data provided by the user, if they accepted the request.\nMust conform to the JSON schema specified in the original request.\nOnly present when action is Accept."
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
     "CreateMessageRequestMethod": {
       "type": "string",
       "format": "const",
@@ -482,6 +538,31 @@
         "messages",
         "maxTokens"
       ]
+    },
+    "ElicitationAction": {
+      "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
+      "oneOf": [
+        {
+          "description": "User accepts the request and provides the requested information",
+          "type": "string",
+          "const": "accept"
+        },
+        {
+          "description": "User declines to provide the information but allows the operation to continue",
+          "type": "string",
+          "const": "decline"
+        },
+        {
+          "description": "User cancels the entire operation",
+          "type": "string",
+          "const": "cancel"
+        }
+      ]
+    },
+    "ElicitationCreateRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "elicitation/create"
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
@@ -686,6 +767,9 @@
         },
         {
           "$ref": "#/definitions/RequestNoParam2"
+        },
+        {
+          "$ref": "#/definitions/Request2"
         }
       ],
       "required": [
@@ -1211,6 +1295,62 @@
             "type",
             "resource"
           ]
+        },
+        {
+          "description": "A link to a resource that can be fetched separately",
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "description": "Optional description of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mimeType": {
+              "description": "MIME type of the resource content (\"text\" or \"blob\")",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of the resource",
+              "type": "string"
+            },
+            "size": {
+              "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            },
+            "uri": {
+              "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "uri",
+            "name"
+          ]
         }
       ]
     },
@@ -1264,6 +1404,47 @@
         "mimeType"
       ]
     },
+    "RawResource": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
     "RawTextContent": {
       "type": "object",
       "properties": {
@@ -1300,6 +1481,22 @@
         },
         "params": {
           "$ref": "#/definitions/CreateMessageRequestParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request2": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ElicitationCreateRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CreateElicitationRequestParam"
         }
       },
       "required": [
@@ -1545,6 +1742,9 @@
         },
         {
           "$ref": "#/definitions/ListToolsResult"
+        },
+        {
+          "$ref": "#/definitions/CreateElicitationResult"
         },
         {
           "$ref": "#/definitions/EmptyObject"
