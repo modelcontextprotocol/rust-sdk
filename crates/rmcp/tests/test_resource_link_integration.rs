@@ -3,7 +3,6 @@ use rmcp::model::{
     AnnotateAble, CallToolResult, Content, PromptMessage, PromptMessageContent, PromptMessageRole,
     RawResource, Resource,
 };
-use serde_json;
 
 #[test]
 fn test_tool_and_prompt_resource_link_compatibility() {
