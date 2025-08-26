@@ -1,5 +1,4 @@
 use rmcp::model::{CallToolResult, Content, RawResource};
-use serde_json;
 
 #[test]
 fn test_resource_link_in_tool_result() {
