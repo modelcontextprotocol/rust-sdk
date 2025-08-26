@@ -282,7 +282,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let _ = responder.send(Ok(()));
         let (message, session_id) = self
             .client
-            .post_message(config.uri.clone(), initialize_request, None, None)
+            .post_message(
+                config.uri.clone(),
+                initialize_request,
+                None,
+                self.config.auth_header,
+            )
             .await
             .map_err(WorkerQuitReason::fatal_context("send initialize request"))?
             .expect_initialized::<C::Error>()
@@ -339,7 +344,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 config.uri.clone(),
                 initialized_notification.message,
                 session_id.clone(),
-                None,
+                config.auth_header.clone(),
             )
             .await
             .map_err(WorkerQuitReason::fatal_context(
@@ -426,7 +431,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     let WorkerSendRequest { message, responder } = send_request;
                     let response = self
                         .client
-                        .post_message(config.uri.clone(), message, session_id.clone(), None)
+                        .post_message(
+                            config.uri.clone(),
+                            message,
+                            session_id.clone(),
+                            config.auth_header.clone(),
+                        )
                         .await;
                     let send_result = match response {
                         Err(e) => Err(e),
@@ -505,6 +515,8 @@ pub struct StreamableHttpClientTransportConfig {
     pub channel_buffer_capacity: usize,
     /// if true, the transport will not require a session to be established
     pub allow_stateless: bool,
+    /// The value to send in the authorization header
+    pub auth_header: Option<String>,
 }
 
 impl StreamableHttpClientTransportConfig {
@@ -513,6 +525,17 @@ impl StreamableHttpClientTransportConfig {
             uri: uri.into(),
             ..Default::default()
         }
+    }
+
+    /// Set the authorization header to send with requests
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The value to set
+    pub fn auth_header<T: Into<String>>(mut self, value: T) -> Self {
+        // set our authorization header
+        self.auth_header = Some(value.into());
+        self
     }
 }
 
@@ -523,6 +546,7 @@ impl Default for StreamableHttpClientTransportConfig {
             retry_config: Arc::new(ExponentialBackoff::default()),
             channel_buffer_capacity: 16,
             allow_stateless: true,
+            auth_header: None,
         }
     }
 }

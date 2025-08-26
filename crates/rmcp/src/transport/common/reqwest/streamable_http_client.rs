@@ -130,8 +130,18 @@ impl StreamableHttpClientTransport<reqwest::Client> {
             reqwest::Client::default(),
             StreamableHttpClientTransportConfig {
                 uri: uri.into(),
+                auth_header: None,
                 ..Default::default()
             },
         )
+    }
+
+    /// Build this transport form a config
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The config to use with this transport
+    pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
+        StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
     }
 }
