@@ -249,6 +249,102 @@ async fn test_fuzzy_matching() {
     assert!(no_matches.is_empty());
 }
 
+#[tokio::test]
+async fn test_fuzzy_matching_with_typos_and_missing_chars() {
+    let provider = DefaultCompletionProvider::new();
+    let candidates = vec![
+        "javascript".to_string(),
+        "typescript".to_string(),
+        "python".to_string(),
+        "rust_analyzer".to_string(),
+        "cargo_test".to_string(),
+        "github_actions".to_string(),
+        "dockerfile".to_string(),
+        "requirements_txt".to_string(),
+    ];
+
+    // Test missing characters (subsequence matching)
+    let matches = provider.fuzzy_match("jscrt", &candidates);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"javascript".to_string()));
+
+    // Test with missing middle characters
+    let matches = provider.fuzzy_match("tpscpt", &candidates);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"typescript".to_string()));
+
+    // Test abbreviated matching
+    let matches = provider.fuzzy_match("py", &candidates);
+    assert!(matches.contains(&"python".to_string()));
+
+    // Test underscore separated words
+    let matches = provider.fuzzy_match("rust_anl", &candidates);
+    assert!(matches.contains(&"rust_analyzer".to_string()));
+
+    // Test partial word matching
+    let matches = provider.fuzzy_match("crg", &candidates);
+    assert!(matches.contains(&"cargo_test".to_string()));
+
+    // Test case insensitive matching
+    let matches = provider.fuzzy_match("GITHUB", &candidates);
+    assert!(matches.contains(&"github_actions".to_string()));
+
+    // Test file extension patterns
+    let matches = provider.fuzzy_match("dock", &candidates);
+    assert!(matches.contains(&"dockerfile".to_string()));
+
+    // Test complex subsequence
+    let matches = provider.fuzzy_match("req_txt", &candidates);
+    assert!(matches.contains(&"requirements_txt".to_string()));
+}
+
+#[tokio::test]
+async fn test_fuzzy_matching_scoring_priority() {
+    let provider = DefaultCompletionProvider::new();
+    let candidates = vec![
+        "test".to_string(),      // Exact match - highest priority
+        "testing".to_string(),   // Prefix match - high priority
+        "contest".to_string(),   // Contains substring - medium priority
+        "temporary".to_string(), // Subsequence match - lower priority
+    ];
+
+    // Test that exact matches come first
+    let matches = provider.fuzzy_match("test", &candidates);
+    assert!(!matches.is_empty());
+    assert_eq!(matches[0], "test");
+
+    // Test prefix matching gets higher priority than substring
+    let matches = provider.fuzzy_match("temp", &candidates);
+    assert!(!matches.is_empty());
+    // "temporary" should be first since it's a prefix match
+    assert_eq!(matches[0], "temporary");
+}
+
+#[tokio::test]
+async fn test_fuzzy_matching_edge_cases() {
+    let provider = DefaultCompletionProvider::new();
+    let candidates = vec![
+        "a".to_string(),
+        "ab".to_string(),
+        "abc".to_string(),
+        "abcd".to_string(),
+        "xyz".to_string(),
+    ];
+
+    // Test single character matching
+    let matches = provider.fuzzy_match("a", &candidates);
+    assert!(matches.len() >= 4); // Should match a, ab, abc, abcd
+
+    // Test query longer than some candidates
+    let matches = provider.fuzzy_match("abcdef", &candidates);
+    assert!(matches.is_empty()); // No candidate contains all characters
+
+    // Test repeated characters
+    let candidates_with_repeats = vec!["aaa".to_string(), "aba".to_string(), "bbb".to_string()];
+    let matches = provider.fuzzy_match("aa", &candidates_with_repeats);
+    assert!(matches.contains(&"aaa".to_string()));
+}
+
 #[test]
 fn test_mcp_schema_compliance() {
     // Test that our types serialize correctly according to MCP specification
