@@ -104,10 +104,13 @@ impl TokioChildProcess {
 
     /// Gracefully shutdown the child process
     ///
-    /// This will first wait for the child process to exit normally with a timeout.
+    /// This will first close the transport to the child process (the server),
+    /// and wait for the child process to exit normally with a timeout.
     /// If the child process doesn't exit within the timeout, it will be killed.
     pub async fn graceful_shutdown(&mut self) -> std::io::Result<()> {
         if let Some(mut child) = self.child.inner.take() {
+            self.transport.close().await?;
+
             let wait_fut = Box::into_pin(child.wait());
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(MAX_WAIT_ON_DROP_SECS)) => {
