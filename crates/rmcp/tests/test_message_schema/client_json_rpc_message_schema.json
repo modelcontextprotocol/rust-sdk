@@ -324,6 +324,17 @@
         "argument": {
           "$ref": "#/definitions/ArgumentInfo"
         },
+        "context": {
+          "description": "Optional context containing previously resolved argument values",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CompletionContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "ref": {
           "$ref": "#/definitions/Reference"
         }
@@ -332,6 +343,22 @@
         "ref",
         "argument"
       ]
+    },
+    "CompletionContext": {
+      "description": "Context for completion requests providing previously resolved arguments.\n\nThis enables context-aware completion where subsequent argument completions\ncan take into account the values of previously resolved arguments.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "Previously resolved argument values that can inform completion suggestions",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
     },
     "CreateElicitationResult": {
       "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",

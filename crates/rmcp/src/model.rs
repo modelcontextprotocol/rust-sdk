@@ -1091,17 +1091,64 @@ pub struct ModelHint {
 // COMPLETION AND AUTOCOMPLETE
 // =============================================================================
 
+/// Context for completion requests providing previously resolved arguments.
+///
+/// This enables context-aware completion where subsequent argument completions
+/// can take into account the values of previously resolved arguments.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CompletionContext {
+    /// Previously resolved argument values that can inform completion suggestions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<std::collections::HashMap<String, String>>,
+}
+
+impl CompletionContext {
+    /// Create a new empty completion context
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a completion context with the given arguments
+    pub fn with_arguments(arguments: std::collections::HashMap<String, String>) -> Self {
+        Self {
+            arguments: Some(arguments),
+        }
+    }
+
+    /// Get a specific argument value by name
+    pub fn get_argument(&self, name: &str) -> Option<&String> {
+        self.arguments.as_ref()?.get(name)
+    }
+
+    /// Check if the context has any arguments
+    pub fn has_arguments(&self) -> bool {
+        self.arguments.as_ref().is_some_and(|args| !args.is_empty())
+    }
+
+    /// Get all argument names
+    pub fn argument_names(&self) -> Vec<&str> {
+        self.arguments
+            .as_ref()
+            .map_or_else(Vec::new, |args| args.keys().map(|k| k.as_str()).collect())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompleteRequestParam {
     pub r#ref: Reference,
     pub argument: ArgumentInfo,
+    /// Optional context containing previously resolved argument values
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<CompletionContext>,
 }
 
 pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParam>;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompletionInfo {
@@ -1112,7 +1159,74 @@ pub struct CompletionInfo {
     pub has_more: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+impl CompletionInfo {
+    /// Maximum number of completion values allowed per response according to MCP specification
+    pub const MAX_VALUES: usize = 100;
+
+    /// Create a new CompletionInfo with validation for maximum values
+    pub fn new(values: Vec<String>) -> Result<Self, String> {
+        if values.len() > Self::MAX_VALUES {
+            return Err(format!(
+                "Too many completion values: {} (max: {})",
+                values.len(),
+                Self::MAX_VALUES
+            ));
+        }
+        Ok(Self {
+            values,
+            total: None,
+            has_more: None,
+        })
+    }
+
+    /// Create CompletionInfo with all values and no pagination
+    pub fn with_all_values(values: Vec<String>) -> Result<Self, String> {
+        let completion = Self::new(values)?;
+        Ok(Self {
+            total: Some(completion.values.len() as u32),
+            has_more: Some(false),
+            ..completion
+        })
+    }
+
+    /// Create CompletionInfo with pagination information
+    pub fn with_pagination(
+        values: Vec<String>,
+        total: Option<u32>,
+        has_more: bool,
+    ) -> Result<Self, String> {
+        let completion = Self::new(values)?;
+        Ok(Self {
+            total,
+            has_more: Some(has_more),
+            ..completion
+        })
+    }
+
+    /// Check if this completion response indicates more results are available
+    pub fn has_more_results(&self) -> bool {
+        self.has_more.unwrap_or(false)
+    }
+
+    /// Get the total number of available completions, if known
+    pub fn total_available(&self) -> Option<u32> {
+        self.total
+    }
+
+    /// Validate that the completion info complies with MCP specification
+    pub fn validate(&self) -> Result<(), String> {
+        if self.values.len() > Self::MAX_VALUES {
+            return Err(format!(
+                "Too many completion values: {} (max: {})",
+                self.values.len(),
+                Self::MAX_VALUES
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompleteResult {
@@ -1127,6 +1241,42 @@ pub enum Reference {
     Resource(ResourceReference),
     #[serde(rename = "ref/prompt")]
     Prompt(PromptReference),
+}
+
+impl Reference {
+    /// Create a prompt reference
+    pub fn for_prompt(name: impl Into<String>) -> Self {
+        Self::Prompt(PromptReference { name: name.into() })
+    }
+
+    /// Create a resource reference
+    pub fn for_resource(uri: impl Into<String>) -> Self {
+        Self::Resource(ResourceReference { uri: uri.into() })
+    }
+
+    /// Get the reference type as a string
+    pub fn reference_type(&self) -> &'static str {
+        match self {
+            Self::Prompt(_) => "ref/prompt",
+            Self::Resource(_) => "ref/resource",
+        }
+    }
+
+    /// Extract prompt name if this is a prompt reference
+    pub fn as_prompt_name(&self) -> Option<&str> {
+        match self {
+            Self::Prompt(prompt_ref) => Some(&prompt_ref.name),
+            _ => None,
+        }
+    }
+
+    /// Extract resource URI if this is a resource reference
+    pub fn as_resource_uri(&self) -> Option<&str> {
+        match self {
+            Self::Resource(resource_ref) => Some(&resource_ref.uri),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
