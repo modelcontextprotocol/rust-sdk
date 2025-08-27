@@ -1471,6 +1471,14 @@ macro_rules! ts_union {
         pub enum $U {
             $($V($V),)*
         }
+
+        $(
+            impl From<$V> for $U {
+                fn from(value: $V) -> Self {
+                    $U::$V(value)
+                }
+            }
+        )*
     };
 }
 
@@ -1573,17 +1581,6 @@ impl TryInto<CancelledNotification> for ClientNotification {
         } else {
             Err(self)
         }
-    }
-}
-impl From<CancelledNotification> for ServerNotification {
-    fn from(value: CancelledNotification) -> Self {
-        ServerNotification::CancelledNotification(value)
-    }
-}
-
-impl From<CancelledNotification> for ClientNotification {
-    fn from(value: CancelledNotification) -> Self {
-        ClientNotification::CancelledNotification(value)
     }
 }
 
