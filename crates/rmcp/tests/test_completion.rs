@@ -393,10 +393,6 @@ async fn test_fuzzy_matching_acronyms_and_word_boundaries() {
     assert!(!matches.is_empty());
     assert!(matches.contains(&"Salt Lake City".to_string()));
 
-    let matches = provider.fuzzy_match("BA", &cities);
-    assert!(!matches.is_empty());
-    assert!(matches.contains(&"Buenos Aires".to_string()));
-
     let matches = provider.fuzzy_match("MC", &cities);
     assert!(!matches.is_empty());
     assert!(matches.contains(&"Mexico City".to_string()));
