@@ -345,6 +345,159 @@ async fn test_fuzzy_matching_edge_cases() {
     assert!(matches.contains(&"aaa".to_string()));
 }
 
+#[tokio::test]
+async fn test_fuzzy_matching_acronyms_and_word_boundaries() {
+    let provider = DefaultCompletionProvider::new();
+    let cities = vec![
+        "New York".to_string(),
+        "Los Angeles".to_string(),
+        "San Francisco".to_string(),
+        "Las Vegas".to_string(),
+        "Salt Lake City".to_string(),
+        "New Orleans".to_string(),
+        "San Diego".to_string(),
+        "San Antonio".to_string(),
+        "Buenos Aires".to_string(),
+        "Mexico City".to_string(),
+        "Rio de Janeiro".to_string(),
+        "Hong Kong".to_string(),
+        "Toronto".to_string(),
+        "Frankfurt am Main".to_string(),
+        "Beijing".to_string(),
+        "Shanghai".to_string(),
+        "Guangzhou".to_string(),
+        "Shenzhen".to_string(),
+        "Chengdu".to_string(),
+        "Hangzhou".to_string(),
+    ];
+
+    // Test acronym matching for two-word cities
+    let matches = provider.fuzzy_match("NY", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"New York".to_string()));
+
+    let matches = provider.fuzzy_match("LA", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Los Angeles".to_string()));
+
+    let matches = provider.fuzzy_match("SF", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"San Francisco".to_string()));
+
+    let matches = provider.fuzzy_match("LV", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Las Vegas".to_string()));
+
+    // Test acronym matching for three-word cities
+    let matches = provider.fuzzy_match("SLC", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Salt Lake City".to_string()));
+
+    let matches = provider.fuzzy_match("BA", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Buenos Aires".to_string()));
+
+    let matches = provider.fuzzy_match("MC", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Mexico City".to_string()));
+
+    // Test acronym matching for cities with more complex names
+    let matches = provider.fuzzy_match("HK", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Hong Kong".to_string()));
+
+    // Test partial word matching still works
+    let matches = provider.fuzzy_match("san", &cities);
+    assert!(!matches.is_empty());
+    // Should match San Francisco, San Diego, San Antonio
+    assert!(
+        matches.contains(&"San Francisco".to_string())
+            || matches.contains(&"San Diego".to_string())
+            || matches.contains(&"San Antonio".to_string())
+    );
+
+    let matches = provider.fuzzy_match("new", &cities);
+    assert!(!matches.is_empty());
+    // Should match New York, New Orleans
+    assert!(
+        matches.contains(&"New York".to_string()) || matches.contains(&"New Orleans".to_string())
+    );
+
+    // Test case insensitive acronyms
+    let matches = provider.fuzzy_match("ny", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"New York".to_string()));
+
+    let matches = provider.fuzzy_match("la", &cities);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"Los Angeles".to_string()));
+}
+
+#[tokio::test]
+async fn test_fuzzy_matching_scoring_priority_with_acronyms() {
+    let provider = DefaultCompletionProvider::new();
+    let candidates = vec![
+        "Los Angeles".to_string(), // Should match "LA" as acronym
+        "Louisiana".to_string(),   // Should match "LA" as prefix
+        "Las Vegas".to_string(),   // Should match "LA" as prefix
+        "Laos".to_string(),        // Should match "LA" as prefix
+        "Latvia".to_string(),      // Should match "LA" as prefix
+        "Salt Lake".to_string(),   // Should match "LA" as substring
+    ];
+
+    // Test that acronym matching gets appropriate priority
+    let matches = provider.fuzzy_match("LA", &candidates);
+    assert!(!matches.is_empty());
+
+    // Los Angeles should be found (acronym match)
+    assert!(matches.contains(&"Los Angeles".to_string()));
+
+    // Prefix matches should also be found
+    assert!(
+        matches.contains(&"Louisiana".to_string())
+            || matches.contains(&"Las Vegas".to_string())
+            || matches.contains(&"Laos".to_string())
+            || matches.contains(&"Latvia".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_fuzzy_matching_edge_cases_with_spaces() {
+    let provider = DefaultCompletionProvider::new();
+    let candidates = vec![
+        "A".to_string(),
+        "A B".to_string(),
+        "A B C".to_string(),
+        "AA BB".to_string(),
+        "ABC DEF".to_string(),
+        "X Y Z W".to_string(),
+    ];
+
+    // Test single character acronym
+    let matches = provider.fuzzy_match("A", &candidates);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"A".to_string()));
+
+    // Test two character acronym
+    let matches = provider.fuzzy_match("AB", &candidates);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"A B".to_string()));
+
+    // Test three character acronym
+    let matches = provider.fuzzy_match("ABC", &candidates);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"A B C".to_string()));
+
+    // Test four character acronym
+    let matches = provider.fuzzy_match("XYZW", &candidates);
+    assert!(!matches.is_empty());
+    assert!(matches.contains(&"X Y Z W".to_string()));
+
+    // Test that wrong number of characters doesn't match as acronym
+    let _matches = provider.fuzzy_match("ABCD", &candidates);
+    // Should not match any acronyms, but might match as substring/subsequence
+}
+
 #[test]
 fn test_mcp_schema_compliance() {
     // Test that our types serialize correctly according to MCP specification
