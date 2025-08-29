@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.0...rmcp-v0.6.1) - 2025-08-29
+
+### Added
+
+- *(rmcp)* add authorization header support for the streamable http client ([#390](https://github.com/modelcontextprotocol/rust-sdk/pull/390))
+- *(model)* add helpers to build enum from concrete values ([#393](https://github.com/modelcontextprotocol/rust-sdk/pull/393))
+- *(model)* expose client method name ([#391](https://github.com/modelcontextprotocol/rust-sdk/pull/391))
+- add resource_link support to tools and prompts ([#381](https://github.com/modelcontextprotocol/rust-sdk/pull/381))
+- Add prompt support ([#351](https://github.com/modelcontextprotocol/rust-sdk/pull/351))
+- include reqwest in transport-streamble-http-client feature ([#376](https://github.com/modelcontextprotocol/rust-sdk/pull/376))
+
+### Fixed
+
+- *(auth)* url parse is not correct ([#402](https://github.com/modelcontextprotocol/rust-sdk/pull/402))
+- *(readme)* missing use declarations, more accurate server instructions ([#399](https://github.com/modelcontextprotocol/rust-sdk/pull/399))
+- enhance transport graceful shutdown with proper writer closure ([#392](https://github.com/modelcontextprotocol/rust-sdk/pull/392))
+
+### Other
+
+- simplify remove_route method signature ([#401](https://github.com/modelcontextprotocol/rust-sdk/pull/401))
+
 ## [0.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.5.0...rmcp-v0.6.0) - 2025-08-19
 
 ### Added
