@@ -228,7 +228,7 @@ where
         }
     }
 
-    pub fn remove_route<H, A>(&mut self, name: &str) {
+    pub fn remove_route(&mut self, name: &str) {
         self.map.remove(name);
     }
     pub fn has_route(&self, name: &str) -> bool {
