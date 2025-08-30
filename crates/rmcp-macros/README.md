@@ -18,7 +18,7 @@ This will generate a function that return the attribute of this tool, with type 
 
 #### Usage
 
-| feied             | type                       | usage |
+| field             | type                       | usage |
 | :-                | :-                         | :-    |
 | `name`            | `String`                   | The name of the tool. If not provided, it defaults to the function name. |
 | `description`     | `String`                   | A description of the tool. The document of this function will be used. |
@@ -44,7 +44,7 @@ In most case, you need to add a field for handler to store the router informatio
 
 #### Usage
 
-| feied     | type          | usage |
+| field     | type          | usage |
 | :-        | :-            | :-    |
 | `router`  | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
 | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |

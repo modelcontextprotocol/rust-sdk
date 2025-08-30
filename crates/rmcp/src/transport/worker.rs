@@ -15,7 +15,7 @@ pub enum WorkerQuitReason<E> {
         error: E,
         context: Cow<'static, str>,
     },
-    #[error("Transport canncelled")]
+    #[error("Transport cancelled")]
     Cancelled,
     #[error("Transport closed")]
     TransportClosed,
