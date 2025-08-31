@@ -121,6 +121,8 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 ## Related Projects
 - [rustfs-mcp](https://github.com/rustfs/rustfs/tree/main/crates/mcp) - High-performance MCP server providing S3-compatible object storage operations for AI/LLM integration
 - [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
+- [rmcp-actix-web](https://gitlab.com/lx-industries/rmcp-actix-web) - An `actix_web` backend for `rmcp`
+- [rmcp-openapi](https://gitlab.com/lx-industries/rmcp-openapi) - Expose OpenAPI definition endpoints as MCP tools
 
 ## Development
 
