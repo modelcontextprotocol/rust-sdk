@@ -129,6 +129,7 @@ transport-sse-server = [
 transport-streamable-http-server = [
   "transport-streamable-http-server-session",
   "server-side-http",
+  "transport-worker",
 ]
 transport-streamable-http-server-session = [
   "transport-async-rw",
