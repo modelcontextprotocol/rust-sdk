@@ -302,7 +302,6 @@ impl<T: DeserializeOwned> Decoder for JsonRpcMessageCodec<T> {
                         Ok(Some(item)) => item,
                         Ok(None) => return Ok(None), // Skip non-standard message
                         Err(e) => {
-                            dbg!(e);
                             // Ignore lines that do not parse
                             continue;
                         },
