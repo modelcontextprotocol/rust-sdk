@@ -52,7 +52,7 @@ impl<S: Send + Sync + 'static> ToolRoute<S> {
     where
         C: for<'a> Fn(
                 ToolCallContext<'a, S>,
-            ) -> BoxFuture<'a, Result<CallToolResult, crate::Error>>
+            ) -> BoxFuture<'a, Result<CallToolResult, crate::ErrorData>>
             + Send
             + Sync
             + 'static,
@@ -228,7 +228,7 @@ where
         }
     }
 
-    pub fn remove_route<H, A>(&mut self, name: &str) {
+    pub fn remove_route(&mut self, name: &str) {
         self.map.remove(name);
     }
     pub fn has_route(&self, name: &str) -> bool {
@@ -237,12 +237,15 @@ where
     pub async fn call(
         &self,
         context: ToolCallContext<'_, S>,
-    ) -> Result<CallToolResult, crate::Error> {
+    ) -> Result<CallToolResult, crate::ErrorData> {
         let item = self
             .map
             .get(context.name())
-            .ok_or_else(|| crate::Error::invalid_params("tool not found", None))?;
-        (item.call)(context).await
+            .ok_or_else(|| crate::ErrorData::invalid_params("tool not found", None))?;
+
+        let result = (item.call)(context).await?;
+
+        Ok(result)
     }
 
     pub fn list_all(&self) -> Vec<crate::model::Tool> {

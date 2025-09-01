@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
 use http::{Method, Request, Response, header::ALLOW};
 use http_body::Body;
-use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::session::SessionManager;
@@ -44,6 +44,19 @@ impl Default for StreamableHttpServerConfig {
     }
 }
 
+/// # Streamable Http Server
+///
+/// ## Extract information from raw http request
+///
+/// The http service will consume the request body, however the rest part will be remain and injected into [`crate::model::Extensions`],
+/// which you can get from [`crate::service::RequestContext`].
+/// ```rust
+/// use rmcp::handler::server::tool::Extension;
+/// use http::request::Parts;
+/// async fn my_tool(Extension(parts): Extension<Parts>) {
+///     tracing::info!("http parts:{parts:?}")
+/// }
+/// ```
 pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {
     pub config: StreamableHttpServerConfig,
     session_manager: Arc<M>,
@@ -105,22 +118,27 @@ where
     fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
     }
-    pub async fn handle<B>(&self, request: Request<B>) -> Response<UnsyncBoxBody<Bytes, Infallible>>
+    pub async fn handle<B>(&self, request: Request<B>) -> Response<BoxBody<Bytes, Infallible>>
     where
         B: Body + Send + 'static,
         B::Error: Display,
     {
         let method = request.method().clone();
-        let result = match method {
-            Method::GET => self.handle_get(request).await,
-            Method::POST => self.handle_post(request).await,
-            Method::DELETE => self.handle_delete(request).await,
+        let allowed_methods = match self.config.stateful_mode {
+            true => "GET, POST, DELETE",
+            false => "POST",
+        };
+        let result = match (method, self.config.stateful_mode) {
+            (Method::POST, _) => self.handle_post(request).await,
+            // if we're not in stateful mode, we don't support GET or DELETE because there is no session
+            (Method::GET, true) => self.handle_get(request).await,
+            (Method::DELETE, true) => self.handle_delete(request).await,
             _ => {
                 // Handle other methods or return an error
                 let response = Response::builder()
                     .status(http::StatusCode::METHOD_NOT_ALLOWED)
-                    .header(ALLOW, "GET, POST, DELETE")
-                    .body(Full::new(Bytes::from("Method Not Allowed")).boxed_unsync())
+                    .header(ALLOW, allowed_methods)
+                    .body(Full::new(Bytes::from("Method Not Allowed")).boxed())
                     .expect("valid response");
                 return response;
             }
@@ -148,7 +166,7 @@ where
                     Full::new(Bytes::from(
                         "Not Acceptable: Client must accept text/event-stream",
                     ))
-                    .boxed_unsync(),
+                    .boxed(),
                 )
                 .expect("valid response"));
         }
@@ -162,7 +180,7 @@ where
             // unauthorized
             return Ok(Response::builder()
                 .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed_unsync())
+                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // check if session exists
@@ -175,7 +193,7 @@ where
             // unauthorized
             return Ok(Response::builder()
                 .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed_unsync())
+                .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
                 .expect("valid response"));
         }
         // check if last event id is provided
@@ -219,7 +237,7 @@ where
         {
             return Ok(Response::builder()
                 .status(http::StatusCode::NOT_ACCEPTABLE)
-                .body(Full::new(Bytes::from("Not Acceptable: Client must accept both application/json and text/event-stream")).boxed_unsync())
+                .body(Full::new(Bytes::from("Not Acceptable: Client must accept both application/json and text/event-stream")).boxed())
                 .expect("valid response"));
         }
 
@@ -236,7 +254,7 @@ where
                     Full::new(Bytes::from(
                         "Unsupported Media Type: Content-Type must be application/json",
                     ))
-                    .boxed_unsync(),
+                    .boxed(),
                 )
                 .expect("valid response"));
         }
@@ -265,10 +283,7 @@ where
                     // unauthorized
                     return Ok(Response::builder()
                         .status(http::StatusCode::UNAUTHORIZED)
-                        .body(
-                            Full::new(Bytes::from("Unauthorized: Session not found"))
-                                .boxed_unsync(),
-                        )
+                        .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
                         .expect("valid response"));
                 }
 
@@ -425,7 +440,7 @@ where
             // unauthorized
             return Ok(Response::builder()
                 .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed_unsync())
+                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // close session

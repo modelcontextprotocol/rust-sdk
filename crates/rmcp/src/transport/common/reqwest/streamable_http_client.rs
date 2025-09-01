@@ -14,6 +14,12 @@ use crate::{
     },
 };
 
+impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
+    fn from(e: reqwest::Error) -> Self {
+        StreamableHttpError::Client(e)
+    }
+}
+
 impl StreamableHttpClient for reqwest::Client {
     type Error = reqwest::Error;
 
@@ -36,7 +42,7 @@ impl StreamableHttpClient for reqwest::Client {
         }
         let response = request_builder.send().await?;
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
-            return Err(StreamableHttpError::SeverDoesNotSupportSse);
+            return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
         let response = response.error_for_status()?;
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
@@ -125,13 +131,47 @@ impl StreamableHttpClient for reqwest::Client {
 }
 
 impl StreamableHttpClientTransport<reqwest::Client> {
+    /// Creates a new transport using reqwest with the specified URI.
+    ///
+    /// This is a convenience method that creates a transport using the default
+    /// reqwest client. This method is only available when the
+    /// `transport-streamable-http-client-reqwest` feature is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `uri` - The server URI to connect to
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rmcp::transport::StreamableHttpClientTransport;
+    ///
+    /// // Enable the reqwest feature in Cargo.toml:
+    /// // rmcp = { version = "0.5", features = ["transport-streamable-http-client-reqwest"] }
+    ///
+    /// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+    /// ```
+    ///
+    /// # Feature requirement
+    ///
+    /// This method requires the `transport-streamable-http-client-reqwest` feature.
     pub fn from_uri(uri: impl Into<Arc<str>>) -> Self {
         StreamableHttpClientTransport::with_client(
             reqwest::Client::default(),
             StreamableHttpClientTransportConfig {
                 uri: uri.into(),
+                auth_header: None,
                 ..Default::default()
             },
         )
+    }
+
+    /// Build this transport form a config
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The config to use with this transport
+    pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
+        StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
     }
 }

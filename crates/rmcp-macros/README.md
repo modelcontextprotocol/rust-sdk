@@ -18,7 +18,7 @@ This will generate a function that return the attribute of this tool, with type 
 
 #### Usage
 
-| feied             | type                       | usage |
+| field             | type                       | usage |
 | :-                | :-                         | :-    |
 | `name`            | `String`                   | The name of the tool. If not provided, it defaults to the function name. |
 | `description`     | `String`                   | A description of the tool. The document of this function will be used. |
@@ -44,7 +44,7 @@ In most case, you need to add a field for handler to store the router informatio
 
 #### Usage
 
-| feied     | type          | usage |
+| field     | type          | usage |
 | :-        | :-            | :-    |
 | `router`  | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
 | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
@@ -98,7 +98,7 @@ impl MyToolHandler {
         }
     }
 }
-
+```
 
 ### tool_handler
 
@@ -134,7 +134,7 @@ impl ServerHandler for MyToolHandler {
         &self,
         request: CallToolRequestParam,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let tcc = ToolCallContext::new(self, request, context);
         self.tool_router.call(tcc).await
     }
@@ -143,7 +143,7 @@ impl ServerHandler for MyToolHandler {
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, rmcp::Error> {
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
         let items = self.tool_router.list_all();
         Ok(ListToolsResult::with_all_items(items))
     }

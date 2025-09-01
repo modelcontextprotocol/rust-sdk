@@ -24,14 +24,14 @@ impl<S, R: ServiceRole> TowerHandler<S, R> {
 impl<S, R: ServiceRole> Service<R> for TowerHandler<S, R>
 where
     S: TowerService<R::PeerReq, Response = R::Resp> + Sync + Send + Clone + 'static,
-    S::Error: Into<crate::Error>,
+    S::Error: Into<crate::ErrorData>,
     S::Future: Send,
 {
     async fn handle_request(
         &self,
         request: R::PeerReq,
         _context: RequestContext<R>,
-    ) -> Result<R::Resp, crate::Error> {
+    ) -> Result<R::Resp, crate::ErrorData> {
         let mut service = self.service.clone();
         poll_fn(|cx| service.poll_ready(cx))
             .await
@@ -44,7 +44,7 @@ where
         &self,
         _notification: R::PeerNot,
         _context: NotificationContext<R>,
-    ) -> impl Future<Output = Result<(), crate::Error>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), crate::ErrorData>> + Send + '_ {
         std::future::ready(Ok(()))
     }
 

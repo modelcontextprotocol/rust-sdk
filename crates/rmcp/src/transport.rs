@@ -64,7 +64,7 @@
 //! }
 //! ```
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
@@ -141,6 +141,9 @@ where
     R: ServiceRole,
 {
     type Error: std::error::Error + Send + Sync + 'static;
+    fn name() -> Cow<'static, str> {
+        std::any::type_name::<Self>().into()
+    }
     /// Send a message to the transport
     ///
     /// Notice that the future returned by this function should be `Send` and `'static`.
@@ -218,7 +221,8 @@ where
         item: TxJsonRpcMessage<R>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
         let sender = self.sender.clone();
-        let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_));
+        let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_))
+            || matches!(item, TxJsonRpcMessage::<R>::Error(_));
         let signal = self.finished_signal.clone();
         async move {
             sender.send(item).await?;
@@ -239,5 +243,38 @@ where
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
         self.message.take();
         std::future::ready(Ok(()))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Transport [{transport_name}] error: {error}")]
+pub struct DynamicTransportError {
+    pub transport_name: Cow<'static, str>,
+    pub transport_type_id: std::any::TypeId,
+    #[source]
+    pub error: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl DynamicTransportError {
+    pub fn new<T: Transport<R> + 'static, R: ServiceRole>(e: T::Error) -> Self {
+        Self {
+            transport_name: T::name(),
+            transport_type_id: std::any::TypeId::of::<T>(),
+            error: Box::new(e),
+        }
+    }
+    pub fn downcast<T: Transport<R> + 'static, R: ServiceRole>(self) -> Result<T::Error, Self> {
+        if !self.is::<T, R>() {
+            Err(self)
+        } else {
+            Ok(self
+                .error
+                .downcast::<T::Error>()
+                .map(|e| *e)
+                .expect("type is checked"))
+        }
+    }
+    pub fn is<T: Transport<R> + 'static, R: ServiceRole>(&self) -> bool {
+        self.error.is::<T::Error>() && self.transport_type_id == std::any::TypeId::of::<T>()
     }
 }

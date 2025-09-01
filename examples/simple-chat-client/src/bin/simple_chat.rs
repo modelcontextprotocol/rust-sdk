@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
             if config.mcp.is_some() {
                 let mcp_clients = config.create_mcp_clients().await?;
 
-                for (name, client) in mcp_clients {
+                for (name, client) in mcp_clients.iter() {
                     println!("load MCP tool: {}", name);
                     let server = client.peer().clone();
                     let tools = get_mcp_tools(server).await?;
@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
                         tool_set.add_tool(tool);
                     }
                 }
+                tool_set.set_clients(mcp_clients);
             }
 
             // create chat session

@@ -1,6 +1,6 @@
 mod tests {
     use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
-    use schemars::schema_for;
+    use schemars::generate::SchemaSettings;
 
     fn compare_schemas(name: &str, actual: &str, expected_file: &str) {
         let expected = match std::fs::read_to_string(expected_file) {
@@ -48,7 +48,10 @@ mod tests {
 
     #[test]
     fn test_client_json_rpc_message_schema() {
-        let schema = schema_for!(ClientJsonRpcMessage);
+        let settings = SchemaSettings::draft07();
+        let schema = settings
+            .into_generator()
+            .into_root_schema_for::<ClientJsonRpcMessage>();
         let schema_str = serde_json::to_string_pretty(&schema).expect("Failed to serialize schema");
 
         compare_schemas(
@@ -60,7 +63,10 @@ mod tests {
 
     #[test]
     fn test_server_json_rpc_message_schema() {
-        let schema = schema_for!(ServerJsonRpcMessage);
+        let settings = SchemaSettings::draft07();
+        let schema = settings
+            .into_generator()
+            .into_root_schema_for::<ServerJsonRpcMessage>();
         let schema_str = serde_json::to_string_pretty(&schema).expect("Failed to serialize schema");
 
         compare_schemas(

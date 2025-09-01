@@ -3,26 +3,24 @@
 </div>
 
 # RMCP
-Wait for the first release.
-<!-- [![Crates.io Version](todo)](todo) -->
+[![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
 <!-- ![Release status](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg) -->
 <!-- [![docs.rs](todo)](todo) -->
 ![Coverage](docs/coverage.svg)
 
-An official rust Model Context Protocol SDK implementation with tokio async runtime.
-
+An official Rust Model Context Protocol SDK implementation with tokio async runtime.
 
 This repository contains the following crates:
 
-- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation( If you want to get more information, please visit [rmcp](crates/rmcp/README.md))
-- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations(If you want to get more information, please visit [rmcp-macros](crates/rmcp-macros/README.md))
+- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation (If you want to get more information, please visit [rmcp](crates/rmcp/README.md))
+- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations (If you want to get more information, please visit [rmcp-macros](crates/rmcp-macros/README.md))
 
 ## Usage
 
 ### Import the crate
 
 ```toml
-rmcp = { version = "0.1", features = ["server"] }
+rmcp = { version = "0.2.0", features = ["server"] }
 ## or dev channel
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
@@ -115,19 +113,21 @@ See [examples](examples/README.md)
 
 See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
-
 ## Related Resources
 
 - [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
 - [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
 
 ## Related Projects
+- [rustfs-mcp](https://github.com/rustfs/rustfs/tree/main/crates/mcp) - High-performance MCP server providing S3-compatible object storage operations for AI/LLM integration
 - [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
 
 ## Development
 
 ### Tips for Contributors
+
 See [docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD) to get some tips for contributing.
 
 ### Using Dev Container
+
 If you want to use dev container, see [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.

@@ -15,7 +15,11 @@ wait for the first release.
 Creating a server with tools is simple using the `#[tool]` macro:
 
 ```rust, ignore
-use rmcp::{Error as McpError, ServiceExt, model::*, tool, tool_router, transport::stdio, handler::server::tool::ToolCallContext, handler::server::router::tool::ToolRouter};
+use rmcp::{
+    handler::server::router::tool::ToolRouter, model::*, tool, tool_handler, tool_router,
+    transport::stdio, ErrorData as McpError, ServiceExt,
+};
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -57,7 +61,7 @@ impl Counter {
 impl rmcp::ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            instructions: Some("A simple calculator".into()),
+            instructions: Some("A simple counter that tallies the number of times the increment tool has been used".into()),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
@@ -199,8 +203,10 @@ RMCP uses feature flags to control which components are included:
   - `transport-async-rw`: Async read/write support
   - `transport-io`: I/O stream support
   - `transport-child-process`: Child process support
-  - `transport-sse-client` / `transport-sse-server`: SSE support
-  - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming
+  - `transport-sse-client` / `transport-sse-server`: SSE support (client agnostic)
+    - `transport-sse-client-reqwest`: a default `reqwest` implementation of the SSE client
+  - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming (client agnostic, see [`StreamableHttpClientTransport`] for details)
+    - `transport-streamable-http-client-reqwest`: a default `reqwest` implementation of the streamable http client
 - `auth`: OAuth2 authentication support
 - `schemars`: JSON Schema generation (for tool definitions)
 

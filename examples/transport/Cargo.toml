@@ -10,12 +10,13 @@ keywords = { workspace = true }
 homepage = { workspace = true }
 categories = { workspace = true }
 readme = { workspace = true }
+publish = false
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
-rmcp = { path = "../../crates/rmcp", features = ["server", "client"] }
+rmcp = { workspace = true, features = ["server", "client"] }
 tokio = { version = "1", features = [
     "macros",
     "rt",
@@ -36,7 +37,7 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 futures = "0.3"
 rand = { version = "0.9" }
-schemars = { version = "0.8", optional = true }
+schemars = { version = "1.0", optional = true }
 hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio-tungstenite = "0.27.0"

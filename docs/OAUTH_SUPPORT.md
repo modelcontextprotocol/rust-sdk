@@ -70,19 +70,19 @@ rmcp = { version = "0.1", features = ["auth", "transport-sse-client"] }
     let client = client_service.serve(transport).await?;
 ```
 
-### 5. May you can use Authorized HTTP Client after authorized
+### 5. Use Authorized HTTP Client after authorized
 
 ```rust ignore
     let client = oauth_state.to_authorized_http_client().await?;
 ```
 
 ## Complete Example
-client: Please refer to `examples/clients/src/oauth_client.rs` for a complete usage example.
-server: Please refer to `examples/servers/src/mcp_oauth_server.rs` for a complete usage example.
+client: Please refer to `examples/clients/src/auth/oauth_client.rs` for a complete usage example.
+server: Please refer to `examples/servers/src/complex_auth_sse.rs` for a complete usage example.
 ### Running the Example in server
 ```bash
 # Run example
-cargo run --example mcp_oauth_server
+cargo run --example complex_auth_sse
 ```
 
 ### Running the Example in client

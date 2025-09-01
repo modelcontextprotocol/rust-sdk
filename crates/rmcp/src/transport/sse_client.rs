@@ -3,7 +3,6 @@ use std::{pin::Pin, sync::Arc};
 
 use futures::{StreamExt, future::BoxFuture};
 use http::Uri;
-use reqwest::header::HeaderValue;
 use sse_stream::Error as SseError;
 use thiserror::Error;
 
@@ -28,7 +27,7 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,
     #[error("Unexpected content type: {0:?}")]
-    UnexpectedContentType(Option<HeaderValue>),
+    UnexpectedContentType(Option<String>),
     #[cfg(feature = "auth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
@@ -37,12 +36,6 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     InvalidUri(#[from] http::uri::InvalidUri),
     #[error("Invalid uri parts: {0}")]
     InvalidUriParts(#[from] http::uri::InvalidUriParts),
-}
-
-impl From<reqwest::Error> for SseTransportError<reqwest::Error> {
-    fn from(e: reqwest::Error) -> Self {
-        SseTransportError::Client(e)
-    }
 }
 
 pub trait SseClient: Clone + Send + Sync + 'static {
@@ -77,6 +70,87 @@ impl<C: SseClient> SseStreamReconnect for SseClientReconnect<C> {
     }
 }
 type ServerMessageStream<C> = Pin<Box<SseAutoReconnectStream<SseClientReconnect<C>>>>;
+
+/// A client-agnostic SSE transport for RMCP that supports Server-Sent Events.
+///
+/// This transport allows you to choose your preferred HTTP client implementation
+/// by implementing the [`SseClient`] trait. The transport handles SSE streaming
+/// and automatic reconnection.
+///
+/// # Usage
+///
+/// ## Using reqwest
+///
+/// ```rust
+/// use rmcp::transport::SseClientTransport;
+///
+/// // Enable the reqwest feature in Cargo.toml:
+/// // rmcp = { version = "0.5", features = ["transport-sse-client-reqwest"] }
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let transport = SseClientTransport::start("http://localhost:8000/sse").await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ## Using a custom HTTP client
+///
+/// ```rust
+/// use rmcp::transport::sse_client::{SseClient, SseClientTransport, SseClientConfig};
+/// use std::sync::Arc;
+/// use futures::stream::BoxStream;
+/// use rmcp::model::ClientJsonRpcMessage;
+/// use sse_stream::{Sse, Error as SseError};
+/// use http::Uri;
+///
+/// #[derive(Clone)]
+/// struct MyHttpClient;
+///
+/// #[derive(Debug, thiserror::Error)]
+/// struct MyError;
+///
+/// impl std::fmt::Display for MyError {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         write!(f, "MyError")
+///     }
+/// }
+///
+/// impl SseClient for MyHttpClient {
+///     type Error = MyError;
+///     
+///     async fn post_message(
+///         &self,
+///         _uri: Uri,
+///         _message: ClientJsonRpcMessage,
+///         _auth_token: Option<String>,
+///     ) -> Result<(), rmcp::transport::sse_client::SseTransportError<Self::Error>> {
+///         todo!()
+///     }
+///     
+///     async fn get_stream(
+///         &self,
+///         _uri: Uri,
+///         _last_event_id: Option<String>,
+///         _auth_token: Option<String>,
+///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::sse_client::SseTransportError<Self::Error>> {
+///         todo!()
+///     }
+/// }
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let config = SseClientConfig {
+///     sse_endpoint: "http://localhost:8000/sse".into(),
+///     ..Default::default()
+/// };
+/// let transport = SseClientTransport::start_with_client(MyHttpClient, config).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Feature Flags
+///
+/// - `transport-sse-client`: Base feature providing the generic transport infrastructure
+/// - `transport-sse-client-reqwest`: Includes reqwest HTTP client support with convenience methods
 pub struct SseClientTransport<C: SseClient> {
     client: C,
     config: SseClientConfig,

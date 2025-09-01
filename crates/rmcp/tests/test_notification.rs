@@ -27,7 +27,7 @@ impl ServerHandler for Server {
         &self,
         request: rmcp::model::SubscribeRequestParam,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<(), rmcp::Error> {
+    ) -> Result<(), rmcp::ErrorData> {
         let uri = request.uri;
         let peer = context.peer;
 

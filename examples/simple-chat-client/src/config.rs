@@ -29,6 +29,9 @@ pub struct McpServerConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "protocol", rename_all = "lowercase")]
 pub enum McpServerTransportConfig {
+    Streamable {
+        url: String,
+    },
     Sse {
         url: String,
     },
@@ -44,6 +47,11 @@ pub enum McpServerTransportConfig {
 impl McpServerTransportConfig {
     pub async fn start(&self) -> Result<RunningService<RoleClient, ()>> {
         let client = match self {
+            McpServerTransportConfig::Streamable { url } => {
+                let transport =
+                    rmcp::transport::StreamableHttpClientTransport::from_uri(url.to_string());
+                ().serve(transport).await?
+            }
             McpServerTransportConfig::Sse { url } => {
                 let transport =
                     rmcp::transport::sse_client::SseClientTransport::start(url.to_owned()).await?;

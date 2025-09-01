@@ -37,28 +37,34 @@ impl ClientHandler for MyClient {
     }
 }
 
-impl Default for MyServer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub struct MyServer {
     tool_router: ToolRouter<Self>,
 }
 
-#[tool_router]
 impl MyServer {
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
         }
     }
+}
+
+impl Default for MyServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[tool_router]
+impl MyServer {
     #[tool]
-    pub async fn some_progress(meta: Meta, client: Peer<RoleServer>) -> Result<(), rmcp::Error> {
+    pub async fn some_progress(
+        meta: Meta,
+        client: Peer<RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
         let progress_token = meta
             .get_progress_token()
-            .ok_or(rmcp::Error::invalid_params(
+            .ok_or(rmcp::ErrorData::invalid_params(
                 "Progress token is required for this tool",
                 None,
             ))?;
@@ -66,8 +72,8 @@ impl MyServer {
             let _ = client
                 .notify_progress(ProgressNotificationParam {
                     progress_token: progress_token.clone(),
-                    progress: step,
-                    total: Some(10),
+                    progress: (step as f64),
+                    total: Some(10.0),
                     message: Some("Some message".into()),
                 })
                 .await;

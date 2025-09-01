@@ -3,10 +3,7 @@ use std::collections::HashMap;
 use futures::future::BoxFuture;
 use rmcp::{
     ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        tool::{CallToolHandler, Parameters},
-    },
+    handler::server::{router::tool::ToolRouter, tool::CallToolHandler, wrapper::Parameters},
 };
 
 #[derive(Debug, Default)]

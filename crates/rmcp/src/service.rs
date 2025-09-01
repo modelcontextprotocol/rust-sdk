@@ -2,13 +2,13 @@ use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 
 use crate::{
-    error::Error as McpError,
+    error::ErrorData as McpError,
     model::{
         CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
         JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta,
         NumberOrString, ProgressToken, RequestId, ServerJsonRpcMessage,
     },
-    transport::{IntoTransport, Transport},
+    transport::{DynamicTransportError, IntoTransport, Transport},
 };
 #[cfg(feature = "client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
@@ -29,14 +29,14 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use tower::*;
-use tracing::instrument;
+use tracing::{Instrument as _, instrument};
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ServiceError {
     #[error("Mcp error: {0}")]
     McpError(McpError),
     #[error("Transport send error: {0}")]
-    TransportSend(Box<dyn std::error::Error + Send + Sync>),
+    TransportSend(DynamicTransportError),
     #[error("Transport closed")]
     TransportClosed,
     #[error("Unexpected response type")]
@@ -47,7 +47,6 @@ pub enum ServiceError {
     Timeout { timeout: Duration },
 }
 
-impl ServiceError {}
 trait TransferObject:
     std::fmt::Debug + Clone + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static
 {
@@ -78,7 +77,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
         + TransferObject
         + GetMeta
         + GetExtensions;
-    type InitializeError<E>;
+    type InitializeError;
     const IS_CLIENT: bool;
     type Info: TransferObject;
     type PeerInfo: TransferObject;
@@ -116,10 +115,10 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn serve<T, E, A>(
         self,
         transport: T,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError<E>>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
     where
         T: IntoTransport<R, E, A>,
-        E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static,
         Self: Sized,
     {
         Self::serve_with_ct(self, transport, Default::default())
@@ -128,10 +127,10 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError<E>>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
     where
         T: IntoTransport<R, E, A>,
-        E: std::error::Error + From<std::io::Error> + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static,
         Self: Sized;
 }
 
@@ -162,12 +161,12 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> BoxFuture<Result<R::Resp, McpError>>;
+    ) -> BoxFuture<'_, Result<R::Resp, McpError>>;
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> BoxFuture<Result<(), McpError>>;
+    ) -> BoxFuture<'_, Result<(), McpError>>;
     fn get_info(&self) -> R::Info;
 }
 
@@ -176,14 +175,14 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> BoxFuture<Result<R::Resp, McpError>> {
+    ) -> BoxFuture<'_, Result<R::Resp, McpError>> {
         Box::pin(self.handle_request(request, context))
     }
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> BoxFuture<Result<(), McpError>> {
+    ) -> BoxFuture<'_, Result<(), McpError>> {
         Box::pin(self.handle_notification(notification, context))
     }
     fn get_info(&self) -> R::Info {
@@ -536,11 +535,11 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let (peer, peer_rx) = Peer::new(Arc::new(AtomicU32RequestIdProvider::default()), peer_info);
-    serve_inner(service, transport, peer, peer_rx, ct)
+    serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
 }
 
 #[instrument(skip_all)]
-fn serve_inner<R, S, T, E, A>(
+fn serve_inner<R, S, T>(
     service: S,
     transport: T,
     peer: Peer<R>,
@@ -550,8 +549,7 @@ fn serve_inner<R, S, T, E, A>(
 where
     R: ServiceRole,
     S: Service<R>,
-    T: IntoTransport<R, E, A>,
-    E: std::error::Error + Send + Sync + 'static,
+    T: Transport<R> + 'static,
 {
     const SINK_PROXY_BUFFER_SIZE: usize = 64;
     let (sink_proxy_tx, mut sink_proxy_rx) =
@@ -574,28 +572,29 @@ where
     // let mut stream = std::pin::pin!(stream);
     let serve_loop_ct = ct.child_token();
     let peer_return: Peer<R> = peer.clone();
+    let current_span = tracing::Span::current();
     let handle = tokio::spawn(async move {
         let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
-        let mut send_task_set = tokio::task::JoinSet::<SendTaskResult<E>>::new();
+        let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
         #[derive(Debug)]
-        enum SendTaskResult<E> {
+        enum SendTaskResult {
             Request {
                 id: RequestId,
-                result: Result<(), E>,
+                result: Result<(), DynamicTransportError>,
             },
             Notification {
                 responder: Responder<Result<(), ServiceError>>,
                 cancellation_param: Option<CancelledNotificationParam>,
-                result: Result<(), E>,
+                result: Result<(), DynamicTransportError>,
             },
         }
         #[derive(Debug)]
-        enum Event<R: ServiceRole, E> {
+        enum Event<R: ServiceRole> {
             ProxyMessage(PeerSinkMessage<R>),
             PeerMessage(RxJsonRpcMessage<R>),
             ToSink(TxJsonRpcMessage<R>),
-            SendTaskResult(SendTaskResult<E>),
+            SendTaskResult(SendTaskResult),
         }
 
         let quit_reason = loop {
@@ -653,7 +652,7 @@ where
                 Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
                     if let Err(e) = result {
                         if let Some(responder) = local_responder_pool.remove(&id) {
-                            let _ = responder.send(Err(ServiceError::TransportSend(Box::new(e))));
+                            let _ = responder.send(Err(ServiceError::TransportSend(e)));
                         }
                     }
                 }
@@ -663,7 +662,7 @@ where
                     cancellation_param,
                 }) => {
                     let response = if let Err(e) = result {
-                        Err(ServiceError::TransportSend(Box::new(e)))
+                        Err(ServiceError::TransportSend(e))
                     } else {
                         Ok(())
                     };
@@ -688,12 +687,13 @@ where
                             ct.cancel();
                         }
                         let send = transport.send(m);
+                        let current_span = tracing::Span::current();
                         tokio::spawn(async move {
                             let send_result = send.await;
                             if let Err(error) = send_result {
                                 tracing::error!(%error, "fail to response message");
                             }
-                        });
+                        }.instrument(current_span));
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Request {
@@ -705,8 +705,11 @@ where
                     let send = transport.send(JsonRpcMessage::request(request, id.clone()));
                     {
                         let id = id.clone();
-                        send_task_set
-                            .spawn(send.map(move |r| SendTaskResult::Request { id, result: r }));
+                        let current_span = tracing::Span::current();
+                        send_task_set.spawn(send.map(move |r| SendTaskResult::Request {
+                            id,
+                            result: r.map_err(DynamicTransportError::new::<T, R>),
+                        }).instrument(current_span));
                     }
                 }
                 Event::ProxyMessage(PeerSinkMessage::Notification {
@@ -723,11 +726,12 @@ where
                         Err(notification) => notification,
                     };
                     let send = transport.send(JsonRpcMessage::notification(notification));
+                    let current_span = tracing::Span::current();
                     send_task_set.spawn(send.map(move |result| SendTaskResult::Notification {
                         responder,
                         cancellation_param,
-                        result,
-                    }));
+                        result: result.map_err(DynamicTransportError::new::<T, R>),
+                    }).instrument(current_span));
                 }
                 Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
                     id,
@@ -754,8 +758,11 @@ where
                             meta,
                             extensions,
                         };
+                        let current_span = tracing::Span::current();
                         tokio::spawn(async move {
-                            let result = service.handle_request(request, context).await;
+                            let result = service
+                                .handle_request(request, context)
+                                .await;
                             let response = match result {
                                 Ok(result) => {
                                     tracing::debug!(%id, ?result, "response message");
@@ -767,7 +774,7 @@ where
                                 }
                             };
                             let _send_result = sink.send(response).await;
-                        });
+                        }.instrument(current_span));
                     }
                 }
                 Event::PeerMessage(JsonRpcMessage::Notification(JsonRpcNotification {
@@ -798,12 +805,13 @@ where
                             meta,
                             extensions,
                         };
+                        let current_span = tracing::Span::current();
                         tokio::spawn(async move {
                             let result = service.handle_notification(notification, context).await;
                             if let Err(error) = result {
                                 tracing::warn!(%error, "Error sending notification");
                             }
-                        });
+                        }.instrument(current_span));
                     }
                 }
                 Event::PeerMessage(JsonRpcMessage::Response(JsonRpcResponse {
@@ -834,7 +842,7 @@ where
         }
         tracing::info!(?quit_reason, "serve finished");
         quit_reason
-    });
+    }.instrument(current_span));
     RunningService {
         service,
         peer: peer_return,

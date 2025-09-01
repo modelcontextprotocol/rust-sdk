@@ -4,7 +4,7 @@ use std::{
 };
 
 use rmcp::{
-    ClientHandler, Error as McpError, RoleClient, RoleServer, ServerHandler,
+    ClientHandler, ErrorData as McpError, RoleClient, RoleServer, ServerHandler,
     model::*,
     service::{NotificationContext, RequestContext},
 };

@@ -42,9 +42,11 @@ where
     }
 }
 
+pub type TransportWriter<Role, W> = FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<Role>>>;
+
 pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     read: FramedRead<R, JsonRpcMessageCodec<RxJsonRpcMessage<Role>>>,
-    write: Arc<Mutex<FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<Role>>>>>,
+    write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
 }
 
 impl<Role: ServiceRole, R, W> AsyncRwTransport<Role, R, W>
@@ -57,10 +59,10 @@ where
             read,
             JsonRpcMessageCodec::<RxJsonRpcMessage<Role>>::default(),
         );
-        let write = Arc::new(Mutex::new(FramedWrite::new(
+        let write = Arc::new(Mutex::new(Some(FramedWrite::new(
             write,
             JsonRpcMessageCodec::<TxJsonRpcMessage<Role>>::default(),
-        )));
+        ))));
         Self { read, write }
     }
 }
@@ -103,7 +105,14 @@ where
         let lock = self.write.clone();
         async move {
             let mut write = lock.lock().await;
-            write.send(item).await.map_err(Into::into)
+            if let Some(ref mut write) = *write {
+                write.send(item).await.map_err(Into::into)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "Transport is closed",
+                ))
+            }
         }
     }
 
@@ -120,6 +129,8 @@ where
     }
 
     async fn close(&mut self) -> Result<(), Self::Error> {
+        let mut write = self.write.lock().await;
+        drop(write.take());
         Ok(())
     }
 }
