@@ -298,9 +298,14 @@ impl<T: DeserializeOwned> Decoder for JsonRpcMessageCodec<T> {
                     let line = without_carriage_return(line);
 
                     // Use compatibility handling function
-                    let item = match try_parse_with_compatibility(line, "decode")? {
-                        Some(item) => item,
-                        None => return Ok(None), // Skip non-standard message
+                    let item = match try_parse_with_compatibility(line, "decode") {
+                        Ok(Some(item)) => item,
+                        Ok(None) => return Ok(None), // Skip non-standard message
+                        Err(e) => {
+                            dbg!(e);
+                            // Ignore lines that do not parse
+                            continue;
+                        },
                     };
                     return Ok(Some(item));
                 }
