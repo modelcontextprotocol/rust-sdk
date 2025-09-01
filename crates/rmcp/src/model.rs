@@ -488,40 +488,6 @@ impl ErrorData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum JsonRpcBatchRequestItem<Req, Not> {
-    Request(JsonRpcRequest<Req>),
-    Notification(JsonRpcNotification<Not>),
-}
-
-impl<Req, Not> JsonRpcBatchRequestItem<Req, Not> {
-    pub fn into_non_batch_message<Resp>(self) -> JsonRpcMessage<Req, Resp, Not> {
-        match self {
-            JsonRpcBatchRequestItem::Request(r) => JsonRpcMessage::Request(r),
-            JsonRpcBatchRequestItem::Notification(n) => JsonRpcMessage::Notification(n),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum JsonRpcBatchResponseItem<Resp> {
-    Response(JsonRpcResponse<Resp>),
-    Error(JsonRpcError),
-}
-
-impl<Resp> JsonRpcBatchResponseItem<Resp> {
-    pub fn into_non_batch_message<Req, Not>(self) -> JsonRpcMessage<Req, Resp, Not> {
-        match self {
-            JsonRpcBatchResponseItem::Response(r) => JsonRpcMessage::Response(r),
-            JsonRpcBatchResponseItem::Error(e) => JsonRpcMessage::Error(e),
-        }
-    }
-}
-
 /// Represents any JSON-RPC message that can be sent or received.
 ///
 /// This enum covers all possible message types in the JSON-RPC protocol:
@@ -537,10 +503,6 @@ pub enum JsonRpcMessage<Req = Request, Resp = DefaultResponse, Noti = Notificati
     Response(JsonRpcResponse<Resp>),
     /// A one-way notification (no response expected)
     Notification(JsonRpcNotification<Noti>),
-    /// Multiple requests sent together
-    BatchRequest(Vec<JsonRpcBatchRequestItem<Req, Noti>>),
-    /// Multiple responses sent together
-    BatchResponse(Vec<JsonRpcBatchResponseItem<Resp>>),
     /// An error response
     Error(JsonRpcError),
 }

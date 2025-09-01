@@ -472,10 +472,6 @@ impl LocalSessionWorker {
                     OutboundChannel::Common
                 }
             }
-            ServerJsonRpcMessage::BatchRequest(_) | ServerJsonRpcMessage::BatchResponse(_) => {
-                // the server side should never yield a batch request or response now
-                unreachable!("server side won't yield batch request or response")
-            }
         }
     }
     async fn handle_server_message(
@@ -799,20 +795,6 @@ impl Worker for LocalSessionWorker {
                         }
                         crate::model::JsonRpcMessage::Notification(notification) => {
                             self.catch_cancellation_notification(notification)
-                        }
-                        crate::model::JsonRpcMessage::BatchRequest(items) => {
-                            for r in items {
-                                match r {
-                                    crate::model::JsonRpcBatchRequestItem::Request(request) => {
-                                        if let Some(http_request_id) = http_request_id {
-                                            self.register_request(request, http_request_id)
-                                        }
-                                    }
-                                    crate::model::JsonRpcBatchRequestItem::Notification(
-                                        notification,
-                                    ) => self.catch_cancellation_notification(notification),
-                                }
-                            }
                         }
                         _ => {}
                     }

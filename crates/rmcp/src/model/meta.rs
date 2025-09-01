@@ -170,24 +170,6 @@ where
                     .extensions_mut()
                     .insert(value);
             }
-            JsonRpcMessage::BatchRequest(json_rpc_batch_request_items) => {
-                for item in json_rpc_batch_request_items {
-                    match item {
-                        super::JsonRpcBatchRequestItem::Request(json_rpc_request) => {
-                            json_rpc_request
-                                .request
-                                .extensions_mut()
-                                .insert(value.clone());
-                        }
-                        super::JsonRpcBatchRequestItem::Notification(json_rpc_notification) => {
-                            json_rpc_notification
-                                .notification
-                                .extensions_mut()
-                                .insert(value.clone());
-                        }
-                    }
-                }
-            }
             _ => {}
         }
     }

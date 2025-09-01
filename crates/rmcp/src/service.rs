@@ -5,9 +5,8 @@ use crate::{
     error::Error as McpError,
     model::{
         CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
-        JsonRpcBatchRequestItem, JsonRpcBatchResponseItem, JsonRpcError, JsonRpcMessage,
-        JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta, NumberOrString, ProgressToken,
-        RequestId, ServerJsonRpcMessage,
+        JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta,
+        NumberOrString, ProgressToken, RequestId, ServerJsonRpcMessage,
     },
     transport::{IntoTransport, Transport},
 };
@@ -826,20 +825,6 @@ where
                             tracing::warn!(%id, "Error sending response");
                         }
                     }
-                }
-                Event::PeerMessage(JsonRpcMessage::BatchRequest(batch)) => {
-                    batch_messages.extend(
-                        batch
-                            .into_iter()
-                            .map(JsonRpcBatchRequestItem::into_non_batch_message),
-                    );
-                }
-                Event::PeerMessage(JsonRpcMessage::BatchResponse(batch)) => {
-                    batch_messages.extend(
-                        batch
-                            .into_iter()
-                            .map(JsonRpcBatchResponseItem::into_non_batch_message),
-                    );
                 }
             }
         };
