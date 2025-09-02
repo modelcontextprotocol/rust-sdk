@@ -149,12 +149,14 @@ impl PromptMessage {
             uri,
             mime_type: Some(mime_type),
             text: text.unwrap_or_default(),
+            meta: None,
         };
 
         Self {
             role,
             content: PromptMessageContent::Resource {
                 resource: RawEmbeddedResource {
+                    meta: None,
                     resource: resource_contents,
                 }
                 .optional_annotate(annotations),
