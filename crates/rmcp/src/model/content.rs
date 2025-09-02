@@ -90,7 +90,10 @@ impl RawContent {
     }
 
     pub fn resource(resource: ResourceContents) -> Self {
-        RawContent::Resource(RawEmbeddedResource { meta: None, resource })
+        RawContent::Resource(RawEmbeddedResource {
+            meta: None,
+            resource,
+        })
     }
 
     pub fn embedded_text<S: Into<String>, T: Into<String>>(uri: S, content: T) -> Self {

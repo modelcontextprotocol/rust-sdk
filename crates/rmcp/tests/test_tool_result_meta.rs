@@ -1,5 +1,5 @@
-use serde_json::{json, Value};
 use rmcp::model::{CallToolResult, Content, Meta};
+use serde_json::{Value, json};
 
 #[test]
 fn serialize_tool_result_with_meta() {

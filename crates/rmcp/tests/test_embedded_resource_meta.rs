@@ -1,7 +1,5 @@
+use rmcp::model::{AnnotateAble, Content, Meta, RawContent, ResourceContents};
 use serde_json::json;
-use rmcp::model::AnnotateAble;
-
-use rmcp::model::{Content, Meta, RawContent, ResourceContents};
 
 #[test]
 fn serialize_embedded_text_resource_with_meta() {
@@ -85,7 +83,9 @@ fn deserialize_embedded_text_resource_with_meta() {
 
     // inner contents _meta
     match &raw.resource {
-        ResourceContents::TextResourceContents { meta, uri, text, .. } => {
+        ResourceContents::TextResourceContents {
+            meta, uri, text, ..
+        } => {
             assert_eq!(uri, "str://from-json");
             assert_eq!(text, "ok");
             let inner = meta.as_ref().expect("inner meta missing");
