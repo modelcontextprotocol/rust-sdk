@@ -115,9 +115,9 @@ impl PromptMessage {
         }
     }
 
-    /// Create a new image message with optional meta
+    /// Create a new image message. `meta` and `annotations` are optional.
     #[cfg(feature = "base64")]
-    pub fn new_image_with_meta(
+    pub fn new_image(
         role: PromptMessageRole,
         data: &[u8],
         mime_type: &str,
@@ -138,8 +138,8 @@ impl PromptMessage {
         }
     }
 
-    /// Create a new resource message with optional meta on both the embedded resource and inner contents
-    pub fn new_resource_with_meta(
+    /// Create a new resource message. `top_meta`, `inner_meta`, and `annotations` are optional.
+    pub fn new_resource(
         role: PromptMessageRole,
         uri: String,
         mime_type: Option<String>,
@@ -182,56 +182,6 @@ impl PromptMessage {
         _meta: Option<crate::model::Meta>,
     ) -> Self {
         Self::new_text(role, text)
-    }
-    #[cfg(feature = "base64")]
-    pub fn new_image(
-        role: PromptMessageRole,
-        data: &[u8],
-        mime_type: &str,
-        annotations: Option<Annotations>,
-    ) -> Self {
-        let mime_type = mime_type.into();
-
-        let base64 = BASE64_STANDARD.encode(data);
-
-        Self {
-            role,
-            content: PromptMessageContent::Image {
-                image: RawImageContent {
-                    data: base64,
-                    mime_type,
-                    meta: None,
-                }
-                .optional_annotate(annotations),
-            },
-        }
-    }
-
-    /// Create a new resource message
-    pub fn new_resource(
-        role: PromptMessageRole,
-        uri: String,
-        mime_type: String,
-        text: Option<String>,
-        annotations: Option<Annotations>,
-    ) -> Self {
-        let resource_contents = ResourceContents::TextResourceContents {
-            uri,
-            mime_type: Some(mime_type),
-            text: text.unwrap_or_default(),
-            meta: None,
-        };
-
-        Self {
-            role,
-            content: PromptMessageContent::Resource {
-                resource: RawEmbeddedResource {
-                    meta: None,
-                    resource: resource_contents,
-                }
-                .optional_annotate(annotations),
-            },
-        }
     }
 
     /// Create a new resource link message
