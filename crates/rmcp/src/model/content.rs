@@ -86,7 +86,10 @@ impl RawContent {
     }
 
     pub fn text<S: Into<String>>(text: S) -> Self {
-        RawContent::Text(RawTextContent { text: text.into(), meta: None })
+        RawContent::Text(RawTextContent {
+            text: text.into(),
+            meta: None,
+        })
     }
 
     pub fn image<S: Into<String>, T: Into<String>>(data: S, mime_type: T) -> Self {
