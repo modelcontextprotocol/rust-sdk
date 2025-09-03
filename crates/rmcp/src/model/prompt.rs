@@ -114,6 +114,27 @@ impl PromptMessage {
             content: PromptMessageContent::Text { text: text.into() },
         }
     }
+
+    /// Create a new text message with meta
+    pub fn new_text_with_meta<S: Into<String>>(
+        role: PromptMessageRole,
+        text: S,
+        meta: Option<crate::model::Meta>,
+    ) -> Self {
+        use crate::model::{AnnotateAble, RawTextContent};
+        let annotated = RawTextContent {
+            text: text.into(),
+            meta,
+        }
+        .no_annotation();
+        // Map into Content using same tagging as PromptMessageContent::Text
+        Self {
+            role,
+            content: PromptMessageContent::Text {
+                text: annotated.raw.text,
+            },
+        }
+    }
     #[cfg(feature = "base64")]
     pub fn new_image(
         role: PromptMessageRole,
@@ -131,6 +152,7 @@ impl PromptMessage {
                 image: RawImageContent {
                     data: base64,
                     mime_type,
+                    meta: None,
                 }
                 .optional_annotate(annotations),
             },
@@ -184,6 +206,7 @@ mod tests {
         let image_content = RawImageContent {
             data: "base64data".to_string(),
             mime_type: "image/png".to_string(),
+            meta: None,
         };
 
         let json = serde_json::to_string(&image_content).unwrap();
