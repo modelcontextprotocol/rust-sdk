@@ -181,6 +181,13 @@
     "Annotated3": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "annotations": {
           "anyOf": [
             {
@@ -319,6 +326,14 @@
       "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
@@ -1380,6 +1395,13 @@
     "RawEmbeddedResource": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "resource": {
           "$ref": "#/definitions/ResourceContents"
         }
@@ -1531,6 +1553,13 @@
         {
           "type": "object",
           "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "mimeType": {
               "type": [
                 "string",
@@ -1552,6 +1581,13 @@
         {
           "type": "object",
           "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "blob": {
               "type": "string"
             },

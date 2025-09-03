@@ -27,6 +27,8 @@ pub type ImageContent = Annotated<RawImageContent>;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawEmbeddedResource {
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
     pub resource: ResourceContents,
 }
 pub type EmbeddedResource = Annotated<RawEmbeddedResource>;
@@ -88,15 +90,20 @@ impl RawContent {
     }
 
     pub fn resource(resource: ResourceContents) -> Self {
-        RawContent::Resource(RawEmbeddedResource { resource })
+        RawContent::Resource(RawEmbeddedResource {
+            meta: None,
+            resource,
+        })
     }
 
     pub fn embedded_text<S: Into<String>, T: Into<String>>(uri: S, content: T) -> Self {
         RawContent::Resource(RawEmbeddedResource {
+            meta: None,
             resource: ResourceContents::TextResourceContents {
                 uri: uri.into(),
                 mime_type: Some("text".to_string()),
                 text: content.into(),
+                meta: None,
             },
         })
     }

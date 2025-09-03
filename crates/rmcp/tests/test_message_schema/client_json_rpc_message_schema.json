@@ -892,6 +892,13 @@
     "RawEmbeddedResource": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "resource": {
           "$ref": "#/definitions/ResourceContents"
         }
@@ -1252,6 +1259,13 @@
         {
           "type": "object",
           "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "mimeType": {
               "type": [
                 "string",
@@ -1273,6 +1287,13 @@
         {
           "type": "object",
           "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "blob": {
               "type": "string"
             },

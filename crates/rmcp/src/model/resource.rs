@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::Annotated;
+use super::{Annotated, Meta};
 
 /// Represents a resource in the extension with metadata
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -51,6 +51,8 @@ pub enum ResourceContents {
         #[serde(skip_serializing_if = "Option::is_none")]
         mime_type: Option<String>,
         text: String,
+        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
     },
     #[serde(rename_all = "camelCase")]
     BlobResourceContents {
@@ -58,6 +60,8 @@ pub enum ResourceContents {
         #[serde(skip_serializing_if = "Option::is_none")]
         mime_type: Option<String>,
         blob: String,
+        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
     },
 }
 
@@ -67,6 +71,7 @@ impl ResourceContents {
             uri: uri.into(),
             mime_type: Some("text".into()),
             text: text.into(),
+            meta: None,
         }
     }
 }
@@ -114,6 +119,7 @@ mod tests {
             uri: "file:///test.txt".to_string(),
             mime_type: Some("text/plain".to_string()),
             text: "Hello world".to_string(),
+            meta: None,
         };
 
         let json = serde_json::to_string(&text_contents).unwrap();
