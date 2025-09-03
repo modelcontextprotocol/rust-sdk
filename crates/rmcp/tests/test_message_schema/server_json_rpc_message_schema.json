@@ -28,20 +28,6 @@
       ]
     },
     {
-      "description": "Multiple requests sent together",
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/JsonRpcBatchRequestItem"
-      }
-    },
-    {
-      "description": "Multiple responses sent together",
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/JsonRpcBatchResponseItem"
-      }
-    },
-    {
       "description": "An error response",
       "allOf": [
         {
@@ -688,26 +674,6 @@
         "protocolVersion",
         "capabilities",
         "serverInfo"
-      ]
-    },
-    "JsonRpcBatchRequestItem": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/JsonRpcRequest"
-        },
-        {
-          "$ref": "#/definitions/JsonRpcNotification"
-        }
-      ]
-    },
-    "JsonRpcBatchResponseItem": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/JsonRpcResponse"
-        },
-        {
-          "$ref": "#/definitions/JsonRpcError"
-        }
       ]
     },
     "JsonRpcError": {
