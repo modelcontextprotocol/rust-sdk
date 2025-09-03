@@ -115,25 +115,73 @@ impl PromptMessage {
         }
     }
 
-    /// Create a new text message with meta
+    /// Create a new image message with optional meta
+    #[cfg(feature = "base64")]
+    pub fn new_image_with_meta(
+        role: PromptMessageRole,
+        data: &[u8],
+        mime_type: &str,
+        meta: Option<crate::model::Meta>,
+        annotations: Option<Annotations>,
+    ) -> Self {
+        let base64 = BASE64_STANDARD.encode(data);
+        Self {
+            role,
+            content: PromptMessageContent::Image {
+                image: RawImageContent {
+                    data: base64,
+                    mime_type: mime_type.into(),
+                    meta,
+                }
+                .optional_annotate(annotations),
+            },
+        }
+    }
+
+    /// Create a new resource message with optional meta on both the embedded resource and inner contents
+    pub fn new_resource_with_meta(
+        role: PromptMessageRole,
+        uri: String,
+        mime_type: Option<String>,
+        text: Option<String>,
+        top_meta: Option<crate::model::Meta>,
+        inner_meta: Option<crate::model::Meta>,
+        annotations: Option<Annotations>,
+    ) -> Self {
+        let resource_contents = match text {
+            Some(t) => ResourceContents::TextResourceContents {
+                uri,
+                mime_type,
+                text: t,
+                meta: inner_meta,
+            },
+            None => ResourceContents::BlobResourceContents {
+                uri,
+                mime_type,
+                blob: String::new(),
+                meta: inner_meta,
+            },
+        };
+        Self {
+            role,
+            content: PromptMessageContent::Resource {
+                resource: RawEmbeddedResource {
+                    meta: top_meta,
+                    resource: resource_contents,
+                }
+                .optional_annotate(annotations),
+            },
+        }
+    }
+
+    /// Note: PromptMessage text content does not carry protocol-level _meta per current schema.
+    /// This function exists for API symmetry but ignores the meta parameter.
     pub fn new_text_with_meta<S: Into<String>>(
         role: PromptMessageRole,
         text: S,
-        meta: Option<crate::model::Meta>,
+        _meta: Option<crate::model::Meta>,
     ) -> Self {
-        use crate::model::{AnnotateAble, RawTextContent};
-        let annotated = RawTextContent {
-            text: text.into(),
-            meta,
-        }
-        .no_annotation();
-        // Map into Content using same tagging as PromptMessageContent::Text
-        Self {
-            role,
-            content: PromptMessageContent::Text {
-                text: annotated.raw.text,
-            },
-        }
+        Self::new_text(role, text)
     }
     #[cfg(feature = "base64")]
     pub fn new_image(
