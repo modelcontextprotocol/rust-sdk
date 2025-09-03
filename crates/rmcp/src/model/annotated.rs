@@ -16,8 +16,8 @@ pub struct Annotations {
     pub audience: Option<Vec<Role>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "lastModified")]
+    pub last_modified: Option<DateTime<Utc>>,
 }
 
 impl Annotations {
@@ -30,7 +30,7 @@ impl Annotations {
         );
         Annotations {
             priority: Some(priority),
-            timestamp: Some(timestamp),
+            last_modified: Some(timestamp),
             audience: None,
         }
     }
@@ -72,7 +72,7 @@ impl<T: AnnotateAble> Annotated<T> {
         self.annotations.as_ref().and_then(|a| a.priority)
     }
     pub fn timestamp(&self) -> Option<DateTime<Utc>> {
-        self.annotations.as_ref().and_then(|a| a.timestamp)
+        self.annotations.as_ref().and_then(|a| a.last_modified)
     }
     pub fn with_audience(self, audience: Vec<Role>) -> Annotated<T>
     where
@@ -92,7 +92,7 @@ impl<T: AnnotateAble> Annotated<T> {
                 annotations: Some(Annotations {
                     audience: Some(audience),
                     priority: None,
-                    timestamp: None,
+                    last_modified: None,
                 }),
             }
         }
@@ -114,7 +114,7 @@ impl<T: AnnotateAble> Annotated<T> {
                 raw: self.raw,
                 annotations: Some(Annotations {
                     priority: Some(priority),
-                    timestamp: None,
+                    last_modified: None,
                     audience: None,
                 }),
             }
@@ -128,7 +128,7 @@ impl<T: AnnotateAble> Annotated<T> {
             Annotated {
                 raw: self.raw,
                 annotations: Some(Annotations {
-                    timestamp: Some(timestamp),
+                    last_modified: Some(timestamp),
                     ..annotations
                 }),
             }
@@ -136,7 +136,7 @@ impl<T: AnnotateAble> Annotated<T> {
             Annotated {
                 raw: self.raw,
                 annotations: Some(Annotations {
-                    timestamp: Some(timestamp),
+                    last_modified: Some(timestamp),
                     priority: None,
                     audience: None,
                 }),
@@ -211,7 +211,7 @@ pub trait AnnotateAble: sealed::Sealed {
         Self: Sized,
     {
         self.annotate(Annotations {
-            timestamp: Some(timestamp),
+            last_modified: Some(timestamp),
             ..Default::default()
         })
     }

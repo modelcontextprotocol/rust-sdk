@@ -293,19 +293,19 @@
             "$ref": "#/definitions/Role"
           }
         },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
         "priority": {
           "type": [
             "number",
             "null"
           ],
           "format": "float"
-        },
-        "timestamp": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
         }
       }
     },
