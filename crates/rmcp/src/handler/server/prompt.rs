@@ -350,6 +350,7 @@ pub fn cached_arguments_from_schema<T: schemars::JsonSchema + std::any::Any>()
 
             arguments.push(crate::model::PromptArgument {
                 name: name.clone(),
+                title: None,
                 description,
                 required: Some(required.contains(name.as_str())),
             });

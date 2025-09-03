@@ -15,6 +15,9 @@ use super::JsonObject;
 pub struct Tool {
     /// The name of the tool
     pub name: Cow<'static, str>,
+    /// A human-readable title for the tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// A description of what the tool does
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<Cow<'static, str>>,
@@ -138,6 +141,7 @@ impl Tool {
     {
         Tool {
             name: name.into(),
+            title: None,
             description: Some(description.into()),
             input_schema: input_schema.into(),
             output_schema: None,

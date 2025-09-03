@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonRpcMessage",
-  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, batch operations, and errors.\nIt serves as the top-level message container for MCP communication.",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, and errors.\nIt serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
       "description": "A single request expecting a response",

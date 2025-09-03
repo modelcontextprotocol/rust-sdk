@@ -11,6 +11,9 @@ pub struct RawResource {
     pub uri: String,
     /// Name of the resource
     pub name: String,
+    /// Human-readable title of the resource
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Optional description of the resource
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -33,6 +36,8 @@ pub type Resource = Annotated<RawResource>;
 pub struct RawResourceTemplate {
     pub uri_template: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,6 +87,7 @@ impl RawResource {
         Self {
             uri: uri.into(),
             name: name.into(),
+            title: None,
             description: None,
             mime_type: None,
             size: None,
@@ -99,6 +105,7 @@ mod tests {
     fn test_resource_serialization() {
         let resource = RawResource {
             uri: "file:///test.txt".to_string(),
+            title: None,
             name: "test".to_string(),
             description: Some("Test resource".to_string()),
             mime_type: Some("text/plain".to_string()),

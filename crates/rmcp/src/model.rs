@@ -493,7 +493,7 @@ impl ErrorData {
 /// Represents any JSON-RPC message that can be sent or received.
 ///
 /// This enum covers all possible message types in the JSON-RPC protocol:
-/// individual requests/responses, notifications, batch operations, and errors.
+/// individual requests/responses, notifications, and errors.
 /// It serves as the top-level message container for MCP communication.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
@@ -686,6 +686,8 @@ impl Default for ClientInfo {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Implementation {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub version: String,
 }
 
@@ -699,6 +701,7 @@ impl Implementation {
     pub fn from_build_env() -> Self {
         Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
+            title: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
         }
     }
@@ -1104,6 +1107,8 @@ pub struct ResourceReference {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptReference {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 const_string!(CompleteRequestMethod = "completion/complete");
@@ -1441,6 +1446,7 @@ macro_rules! ts_union {
         export type $U: ident =
             $(|)?$($V: ident)|*;
     ) => {
+        #[allow(clippy::large_enum_variant)]
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

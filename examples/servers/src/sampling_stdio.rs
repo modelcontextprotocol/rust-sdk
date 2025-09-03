@@ -105,6 +105,7 @@ impl ServerHandler for SamplingDemoServer {
         Ok(ListToolsResult {
             tools: vec![Tool {
                 name: "ask_llm".into(),
+                title: None,
                 description: Some("Ask a question to the LLM through sampling".into()),
                 input_schema: Arc::new(
                     serde_json::from_value(serde_json::json!({

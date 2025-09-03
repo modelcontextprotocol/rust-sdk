@@ -66,6 +66,8 @@ fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
 pub struct ToolAttribute {
     /// The name of the tool
     pub name: Option<String>,
+    /// Human readable title of tool
+    pub title: Option<String>,
     pub description: Option<String>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Option<Expr>,
@@ -77,6 +79,7 @@ pub struct ToolAttribute {
 
 pub struct ResolvedToolAttribute {
     pub name: String,
+    pub title: Option<String>,
     pub description: Option<String>,
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
@@ -88,6 +91,7 @@ impl ResolvedToolAttribute {
         let Self {
             name,
             description,
+            title,
             input_schema,
             output_schema,
             annotations,
@@ -102,10 +106,16 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
+        let title = if let Some(title) = title {
+            quote! { Some(#title.into()) }
+        } else {
+            quote! { None }
+        };
         let tokens = quote! {
             pub fn #fn_ident() -> rmcp::model::Tool {
                 rmcp::model::Tool {
                     name: #name.into(),
+                    title: #title,
                     description: #description,
                     input_schema: #input_schema,
                     output_schema: #output_schema,
@@ -229,6 +239,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         input_schema: input_schema_expr,
         output_schema: output_schema_expr,
         annotations: annotations_expr,
+        title: attribute.title,
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
     // modify the the input function
