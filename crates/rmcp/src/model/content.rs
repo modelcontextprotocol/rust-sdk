@@ -11,6 +11,9 @@ use super::{AnnotateAble, Annotated, resource::ResourceContents};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawTextContent {
     pub text: String,
+    /// Optional protocol-level metadata for this content block
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
 }
 pub type TextContent = Annotated<RawTextContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +23,9 @@ pub struct RawImageContent {
     /// The base64-encoded image
     pub data: String,
     pub mime_type: String,
+    /// Optional protocol-level metadata for this content block
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
 }
 
 pub type ImageContent = Annotated<RawImageContent>;
@@ -27,6 +33,7 @@ pub type ImageContent = Annotated<RawImageContent>;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawEmbeddedResource {
+    /// Optional protocol-level metadata for this content block
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<super::Meta>,
     pub resource: ResourceContents,
@@ -79,13 +86,14 @@ impl RawContent {
     }
 
     pub fn text<S: Into<String>>(text: S) -> Self {
-        RawContent::Text(RawTextContent { text: text.into() })
+        RawContent::Text(RawTextContent { text: text.into(), meta: None })
     }
 
     pub fn image<S: Into<String>, T: Into<String>>(data: S, mime_type: T) -> Self {
         RawContent::Image(RawImageContent {
             data: data.into(),
             mime_type: mime_type.into(),
+            meta: None,
         })
     }
 
@@ -209,6 +217,7 @@ mod tests {
         let image_content = RawImageContent {
             data: "base64data".to_string(),
             mime_type: "image/png".to_string(),
+            meta: None,
         };
 
         let json = serde_json::to_string(&image_content).unwrap();
