@@ -384,7 +384,22 @@ macro_rules! method {
 }
 
 impl Peer<RoleServer> {
-    method!(peer_req create_message CreateMessageRequest(CreateMessageRequestParam) => CreateMessageResult);
+    pub async fn create_message(
+        &self,
+        params: CreateMessageRequestParam,
+    ) -> Result<CreateMessageResult, ServiceError> {
+        let result = self
+            .send_request(ServerRequest::CreateMessageRequest(CreateMessageRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ClientResult::CreateMessageResult(result) => Ok(*result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
     method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
     #[cfg(feature = "elicitation")]
     method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);

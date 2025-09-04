@@ -1443,25 +1443,50 @@ pub struct GetPromptResult {
 
 macro_rules! ts_union {
     (
-        export type $U: ident =
-            $(|)?$($V: ident)|*;
+        export type $U:ident =
+            $($rest:tt)*
     ) => {
-        #[allow(clippy::large_enum_variant)]
+        ts_union!(@declare $U { $($rest)* });
+        ts_union!(@impl_from $U { $($rest)* });
+    };
+    (@declare $U:ident { $($variant:tt)* }) => {
+        ts_union!(@declare_variant $U { } {$($variant)*} );
+    };
+    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? box $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $U { $($declared)* $V(Box<$V>), }  {$($rest)*});
+    };
+    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $U { $($declared)* $V($V), } {$($rest)*});
+    };
+    (@declare_variant $U:ident { $($declared:tt)* }  { ; }) => {
+        ts_union!(@declare_end $U { $($declared)* } );
+    };
+    (@declare_end $U:ident { $($declared:tt)* }) => {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub enum $U {
-            $($V($V),)*
+            $($declared)*
         }
-
-        $(
-            impl From<$V> for $U {
-                fn from(value: $V) -> Self {
-                    $U::$V(value)
-                }
-            }
-        )*
     };
+    (@impl_from $U: ident {$(|)? box $V:ident $($rest:tt)*}) => {
+        impl From<$V> for $U {
+            fn from(value: $V) -> Self {
+                $U::$V(Box::new(value))
+            }
+        }
+        ts_union!(@impl_from $U {$($rest)*});
+    };
+    (@impl_from $U: ident {$(|)? $V:ident $($rest:tt)*}) => {
+        impl From<$V> for $U {
+            fn from(value: $V) -> Self {
+                $U::$V(value)
+            }
+        }
+        ts_union!(@impl_from $U {$($rest)*});
+    };
+    (@impl_from $U: ident  { ; }) => {};
+    (@impl_from $U: ident  { }) => {};
 }
 
 ts_union!(
@@ -1510,7 +1535,7 @@ ts_union!(
 );
 
 ts_union!(
-    export type ClientResult = CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
+    export type ClientResult = box CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
 );
 
 impl ClientResult {
