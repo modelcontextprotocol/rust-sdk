@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.1...rmcp-v0.6.2) - 2025-09-04
+
+### Added
+
+- *(rmcp)* add optional _meta to CallToolResult, EmbeddedResource, and ResourceContents ([#386](https://github.com/modelcontextprotocol/rust-sdk/pull/386))
+
+### Fixed
+
+- resolve compatibility issues with servers sending LSP notifications ([#413](https://github.com/modelcontextprotocol/rust-sdk/pull/413))
+- remove batched json rpc  support ([#408](https://github.com/modelcontextprotocol/rust-sdk/pull/408))
+- transport-streamable-http-server depends on transport-worker ([#405](https://github.com/modelcontextprotocol/rust-sdk/pull/405))
+- *(typo)* correct typo in error message for transport cancellation and field. ([#404](https://github.com/modelcontextprotocol/rust-sdk/pull/404))
+
+### Other
+
+- Spec conformance: meta support and spec updates ([#415](https://github.com/modelcontextprotocol/rust-sdk/pull/415))
+- add the rmcp-openapi and rmcp-actix-web related projects ([#406](https://github.com/modelcontextprotocol/rust-sdk/pull/406))
+
 ## [0.6.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.0...rmcp-v0.6.1) - 2025-08-29
 
 ### Added
