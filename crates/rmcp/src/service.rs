@@ -193,7 +193,7 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
 use std::{
     collections::{HashMap, VecDeque},
     ops::Deref,
-    sync::{Arc, atomic::AtomicU32},
+    sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
@@ -212,20 +212,21 @@ pub type AtomicU32ProgressTokenProvider = AtomicU32Provider;
 
 #[derive(Debug, Default)]
 pub struct AtomicU32Provider {
-    id: AtomicU32,
+    id: AtomicU64,
 }
 
 impl RequestIdProvider for AtomicU32Provider {
     fn next_request_id(&self) -> RequestId {
-        RequestId::Number(self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+        let id = self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Safe conversion: we start at 0 and increment by 1, so we won't overflow i64::MAX in practice
+        RequestId::Number(id as i64)
     }
 }
 
 impl ProgressTokenProvider for AtomicU32Provider {
     fn next_progress_token(&self) -> ProgressToken {
-        ProgressToken(NumberOrString::Number(
-            self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-        ))
+        let id = self.id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ProgressToken(NumberOrString::Number(id as i64))
     }
 }
 

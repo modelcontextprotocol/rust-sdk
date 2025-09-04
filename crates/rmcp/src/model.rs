@@ -185,7 +185,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NumberOrString {
     /// A numeric identifier
-    Number(u32),
+    Number(i64),
     /// A string identifier
     String(Arc<str>),
 }
@@ -227,10 +227,20 @@ impl<'de> Deserialize<'de> for NumberOrString {
     {
         let value: Value = Deserialize::deserialize(deserializer)?;
         match value {
-            Value::Number(n) => Ok(NumberOrString::Number(
-                n.as_u64()
-                    .ok_or(serde::de::Error::custom("Expect an integer"))? as u32,
-            )),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(NumberOrString::Number(i))
+                } else if let Some(u) = n.as_u64() {
+                    // Handle large unsigned numbers that fit in i64
+                    if u <= i64::MAX as u64 {
+                        Ok(NumberOrString::Number(u as i64))
+                    } else {
+                        Err(serde::de::Error::custom("Number too large for i64"))
+                    }
+                } else {
+                    Err(serde::de::Error::custom("Expected an integer"))
+                }
+            }
             Value::String(s) => Ok(NumberOrString::String(s.into())),
             _ => Err(serde::de::Error::custom("Expect number or string")),
         }
@@ -1734,6 +1744,85 @@ mod tests {
         let server_response_json: Value = serde_json::to_value(&server_response).expect("msg");
 
         assert_eq!(server_response_json, raw_response_json);
+    }
+
+    #[test]
+    fn test_negative_and_large_request_ids() {
+        // Test negative ID
+        let negative_id_json = json!({
+            "jsonrpc": "2.0",
+            "id": -1,
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage =
+            serde_json::from_value(negative_id_json.clone()).expect("Should parse negative ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(-1));
+            }
+            _ => panic!("Expected Request"),
+        }
+
+        // Test roundtrip serialization
+        let serialized = serde_json::to_value(&message).expect("Should serialize");
+        assert_eq!(serialized, negative_id_json);
+
+        // Test large negative ID
+        let large_negative_json = json!({
+            "jsonrpc": "2.0",
+            "id": -9007199254740991i64,  // JavaScript's MIN_SAFE_INTEGER
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage = serde_json::from_value(large_negative_json.clone())
+            .expect("Should parse large negative ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(-9007199254740991i64));
+            }
+            _ => panic!("Expected Request"),
+        }
+
+        // Test large positive ID (JavaScript's MAX_SAFE_INTEGER)
+        let large_positive_json = json!({
+            "jsonrpc": "2.0",
+            "id": 9007199254740991i64,
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage = serde_json::from_value(large_positive_json.clone())
+            .expect("Should parse large positive ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(9007199254740991i64));
+            }
+            _ => panic!("Expected Request"),
+        }
+
+        // Test zero ID
+        let zero_id_json = json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage =
+            serde_json::from_value(zero_id_json.clone()).expect("Should parse zero ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(0));
+            }
+            _ => panic!("Expected Request"),
+        }
     }
 
     #[test]

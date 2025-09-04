@@ -116,9 +116,19 @@ impl Meta {
     pub fn get_progress_token(&self) -> Option<ProgressToken> {
         self.0.get(PROGRESS_TOKEN_FIELD).and_then(|v| match v {
             Value::String(s) => Some(ProgressToken(NumberOrString::String(s.to_string().into()))),
-            Value::Number(n) => n
-                .as_u64()
-                .map(|n| ProgressToken(NumberOrString::Number(n as u32))),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Some(ProgressToken(NumberOrString::Number(i)))
+                } else if let Some(u) = n.as_u64() {
+                    if u <= i64::MAX as u64 {
+                        Some(ProgressToken(NumberOrString::Number(u as i64)))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         })
     }
