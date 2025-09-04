@@ -138,14 +138,14 @@ impl PromptMessage {
         }
     }
 
-    /// Create a new resource message. `top_meta`, `inner_meta`, and `annotations` are optional.
+    /// Create a new resource message. `resource_meta`, `resource_content_meta`, and `annotations` are optional.
     pub fn new_resource(
         role: PromptMessageRole,
         uri: String,
         mime_type: Option<String>,
         text: Option<String>,
-        top_meta: Option<crate::model::Meta>,
-        inner_meta: Option<crate::model::Meta>,
+        resource_meta: Option<crate::model::Meta>,
+        resource_content_meta: Option<crate::model::Meta>,
         annotations: Option<Annotations>,
     ) -> Self {
         let resource_contents = match text {
@@ -153,20 +153,20 @@ impl PromptMessage {
                 uri,
                 mime_type,
                 text: t,
-                meta: inner_meta,
+                meta: resource_content_meta,
             },
             None => ResourceContents::BlobResourceContents {
                 uri,
                 mime_type,
                 blob: String::new(),
-                meta: inner_meta,
+                meta: resource_content_meta,
             },
         };
         Self {
             role,
             content: PromptMessageContent::Resource {
                 resource: RawEmbeddedResource {
-                    meta: top_meta,
+                    meta: resource_meta,
                     resource: resource_contents,
                 }
                 .optional_annotate(annotations),

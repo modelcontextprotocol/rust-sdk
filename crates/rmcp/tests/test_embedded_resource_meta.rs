@@ -4,20 +4,20 @@ use serde_json::json;
 #[test]
 fn serialize_embedded_text_resource_with_meta() {
     // Inner contents meta
-    let mut inner_meta = Meta::new();
-    inner_meta.insert("inner".to_string(), json!(2));
+    let mut resource_content_meta = Meta::new();
+    resource_content_meta.insert("inner".to_string(), json!(2));
 
     // Top-level embedded resource meta
-    let mut top_meta = Meta::new();
-    top_meta.insert("top".to_string(), json!(1));
+    let mut resource_meta = Meta::new();
+    resource_meta.insert("top".to_string(), json!(1));
 
     let content: Content = RawContent::Resource(rmcp::model::RawEmbeddedResource {
-        meta: Some(top_meta),
+        meta: Some(resource_meta),
         resource: ResourceContents::TextResourceContents {
             uri: "str://example".to_string(),
             mime_type: Some("text/plain".to_string()),
             text: "hello".to_string(),
-            meta: Some(inner_meta),
+            meta: Some(resource_content_meta),
         },
     })
     .no_annotation();
@@ -97,19 +97,19 @@ fn deserialize_embedded_text_resource_with_meta() {
 
 #[test]
 fn serialize_embedded_blob_resource_with_meta() {
-    let mut inner_meta = Meta::new();
-    inner_meta.insert("blob_inner".to_string(), json!(true));
+    let mut resource_content_meta = Meta::new();
+    resource_content_meta.insert("blob_inner".to_string(), json!(true));
 
-    let mut top_meta = Meta::new();
-    top_meta.insert("blob_top".to_string(), json!("t"));
+    let mut resource_meta = Meta::new();
+    resource_meta.insert("blob_top".to_string(), json!("t"));
 
     let content: Content = RawContent::Resource(rmcp::model::RawEmbeddedResource {
-        meta: Some(top_meta),
+        meta: Some(resource_meta),
         resource: ResourceContents::BlobResourceContents {
             uri: "str://blob".to_string(),
             mime_type: Some("application/octet-stream".to_string()),
             blob: "Zm9v".to_string(),
-            meta: Some(inner_meta),
+            meta: Some(resource_content_meta),
         },
     })
     .no_annotation();
