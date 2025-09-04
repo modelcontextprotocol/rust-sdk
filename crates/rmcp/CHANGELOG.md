@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.2...rmcp-v0.6.3) - 2025-09-04
+
+### Fixed
+
+- change JSON-RPC request ID type from u32 to i64 ([#416](https://github.com/modelcontextprotocol/rust-sdk/pull/416))
+
 ## [0.6.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.1...rmcp-v0.6.2) - 2025-09-04
 
 ### Added
