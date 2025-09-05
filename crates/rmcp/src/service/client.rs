@@ -85,11 +85,6 @@ where
     T: Transport<RoleClient>,
     S: Service<RoleClient>,
 {
-    let notification_context = NotificationContext {
-        meta: Meta::new(),
-        extensions: Default::default(),
-        peer,
-    };
     loop {
         let message = expect_next_message(transport, context).await?;
         match message {
@@ -98,14 +93,27 @@ where
                 break Ok((result, id));
             }
             // Server could send logging messages before handshake
-            ServerJsonRpcMessage::Notification(notification)
-                if matches!(
-                    notification.notification,
-                    ServerNotification::LoggingMessageNotification(_)
-                ) =>
-            {
+            ServerJsonRpcMessage::Notification(mut notification) => {
+                let ServerNotification::LoggingMessageNotification(logging) =
+                    &mut notification.notification
+                else {
+                    tracing::warn!(?notification, "Received unexpected message");
+                    continue;
+                };
+
+                let mut context = NotificationContext {
+                    peer: peer.clone(),
+                    meta: Meta::default(),
+                    extensions: Extensions::default(),
+                };
+
+                if let Some(meta) = logging.extensions.get_mut::<Meta>() {
+                    std::mem::swap(&mut context.meta, meta);
+                }
+                std::mem::swap(&mut context.extensions, &mut logging.extensions);
+
                 if let Err(error) = service
-                    .handle_notification(notification.notification, notification_context.clone())
+                    .handle_notification(notification.notification, context)
                     .await
                 {
                     tracing::warn!(?error, "Handle logging before handshake failed.");
