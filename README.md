@@ -130,6 +130,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [rustfs-mcp](https://github.com/rustfs/rustfs/tree/main/crates/mcp) - High-performance MCP server providing S3-compatible object storage operations for AI/LLM integration
 - [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
 - [rmcp-openapi-server](https://gitlab.com/lx-industries/rmcp-openapi/-/tree/main/crates/rmcp-openapi-server) - High-performance MCP server that exposes OpenAPI definition endpoints as MCP tools
+- [nvim-mcp](https://github.com/linw1995/nvim-mcp) - A MCP server to interact with Neovim
 
 ## Development
 
