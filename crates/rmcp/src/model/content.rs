@@ -66,7 +66,7 @@ pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),
     Resource(RawEmbeddedResource),
-    Audio(AudioContent),
+    Audio(RawAudioContent),
     ResourceLink(super::resource::RawResource),
 }
 
@@ -253,6 +253,7 @@ mod tests {
         let resource_link = RawContent::ResourceLink(RawResource {
             uri: "file:///test.txt".to_string(),
             name: "test.txt".to_string(),
+            title: None,
             description: Some("A test file".to_string()),
             mime_type: Some("text/plain".to_string()),
             size: Some(100),

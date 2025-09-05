@@ -892,6 +892,7 @@ async fn test_initialize_request_with_elicitation() {
         client_info: Implementation {
             name: "test-client".to_string(),
             version: "1.0.0".to_string(),
+            title: None,
         },
     };
 
@@ -933,6 +934,7 @@ async fn test_capability_checking_logic() {
         client_info: Implementation {
             name: "test-client".to_string(),
             version: "1.0.0".to_string(),
+            title: None,
         },
     };
 
@@ -950,6 +952,7 @@ async fn test_capability_checking_logic() {
         client_info: Implementation {
             name: "test-client".to_string(),
             version: "1.0.0".to_string(),
+            title: None,
         },
     };
 

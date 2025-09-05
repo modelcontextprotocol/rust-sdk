@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonRpcMessage",
-  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, batch operations, and errors.\nIt serves as the top-level message container for MCP communication.",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, and errors.\nIt serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
       "description": "A single request expecting a response",
@@ -113,7 +113,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated2"
+              "$ref": "#/definitions/RawAudioContent"
             }
           ],
           "required": [
@@ -137,31 +137,6 @@
             "type"
           ]
         }
-      ]
-    },
-    "Annotated2": {
-      "type": "object",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
       ]
     },
     "Annotations": {
@@ -490,6 +465,12 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "version": {
           "type": "string"
@@ -845,6 +826,12 @@
       "properties": {
         "name": {
           "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -854,6 +841,21 @@
     "ProtocolVersion": {
       "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
+    },
+    "RawAudioContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
     },
     "RawEmbeddedResource": {
       "type": "object",
@@ -928,6 +930,13 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "uri": {
           "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",

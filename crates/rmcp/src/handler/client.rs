@@ -16,6 +16,7 @@ impl<H: ClientHandler> Service<RoleClient> for H {
             ServerRequest::CreateMessageRequest(request) => self
                 .create_message(request.params, context)
                 .await
+                .map(Box::new)
                 .map(ClientResult::CreateMessageResult),
             ServerRequest::ListRootsRequest(_) => self
                 .list_roots(context)

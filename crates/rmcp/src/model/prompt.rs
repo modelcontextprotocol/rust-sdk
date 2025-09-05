@@ -14,6 +14,8 @@ use super::{
 pub struct Prompt {
     /// The name of the prompt
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Optional description of what the prompt does
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -35,6 +37,7 @@ impl Prompt {
     {
         Prompt {
             name: name.into(),
+            title: None,
             description: description.map(Into::into),
             arguments,
         }
@@ -47,6 +50,9 @@ impl Prompt {
 pub struct PromptArgument {
     /// The name of the argument
     pub name: String,
+    /// A human-readable title for the argument
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// A description of what the argument is used for
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

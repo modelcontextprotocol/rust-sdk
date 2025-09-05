@@ -504,7 +504,7 @@ impl ErrorData {
 /// Represents any JSON-RPC message that can be sent or received.
 ///
 /// This enum covers all possible message types in the JSON-RPC protocol:
-/// individual requests/responses, notifications, batch operations, and errors.
+/// individual requests/responses, notifications, and errors.
 /// It serves as the top-level message container for MCP communication.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
@@ -697,6 +697,8 @@ impl Default for ClientInfo {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Implementation {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub version: String,
 }
 
@@ -710,6 +712,7 @@ impl Implementation {
     pub fn from_build_env() -> Self {
         Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
+            title: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
         }
     }
@@ -1115,6 +1118,8 @@ pub struct ResourceReference {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptReference {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 const_string!(CompleteRequestMethod = "completion/complete");
@@ -1449,24 +1454,50 @@ pub struct GetPromptResult {
 
 macro_rules! ts_union {
     (
-        export type $U: ident =
-            $(|)?$($V: ident)|*;
+        export type $U:ident =
+            $($rest:tt)*
     ) => {
+        ts_union!(@declare $U { $($rest)* });
+        ts_union!(@impl_from $U { $($rest)* });
+    };
+    (@declare $U:ident { $($variant:tt)* }) => {
+        ts_union!(@declare_variant $U { } {$($variant)*} );
+    };
+    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? box $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $U { $($declared)* $V(Box<$V>), }  {$($rest)*});
+    };
+    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $U { $($declared)* $V($V), } {$($rest)*});
+    };
+    (@declare_variant $U:ident { $($declared:tt)* }  { ; }) => {
+        ts_union!(@declare_end $U { $($declared)* } );
+    };
+    (@declare_end $U:ident { $($declared:tt)* }) => {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub enum $U {
-            $($V($V),)*
+            $($declared)*
         }
-
-        $(
-            impl From<$V> for $U {
-                fn from(value: $V) -> Self {
-                    $U::$V(value)
-                }
-            }
-        )*
     };
+    (@impl_from $U: ident {$(|)? box $V:ident $($rest:tt)*}) => {
+        impl From<$V> for $U {
+            fn from(value: $V) -> Self {
+                $U::$V(Box::new(value))
+            }
+        }
+        ts_union!(@impl_from $U {$($rest)*});
+    };
+    (@impl_from $U: ident {$(|)? $V:ident $($rest:tt)*}) => {
+        impl From<$V> for $U {
+            fn from(value: $V) -> Self {
+                $U::$V(value)
+            }
+        }
+        ts_union!(@impl_from $U {$($rest)*});
+    };
+    (@impl_from $U: ident  { ; }) => {};
+    (@impl_from $U: ident  { }) => {};
 }
 
 ts_union!(
@@ -1515,7 +1546,7 @@ ts_union!(
 );
 
 ts_union!(
-    export type ClientResult = CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
+    export type ClientResult = box CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
 );
 
 impl ClientResult {

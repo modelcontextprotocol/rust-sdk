@@ -10,6 +10,8 @@ use crate::common::{extract_doc_line, none_expr};
 pub struct PromptAttribute {
     /// The name of the prompt
     pub name: Option<String>,
+    /// Human readable title of prompt
+    pub title: Option<String>,
     /// Optional description of what the prompt does
     pub description: Option<String>,
     /// Arguments that can be passed to the prompt
@@ -18,6 +20,7 @@ pub struct PromptAttribute {
 
 pub struct ResolvedPromptAttribute {
     pub name: String,
+    pub title: Option<String>,
     pub description: Option<String>,
     pub arguments: Expr,
 }
@@ -28,9 +31,15 @@ impl ResolvedPromptAttribute {
             name,
             description,
             arguments,
+            title,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
+        } else {
+            quote! { None }
+        };
+        let title = if let Some(title) = title {
+            quote! { Some(#title.into()) }
         } else {
             quote! { None }
         };
@@ -40,6 +49,7 @@ impl ResolvedPromptAttribute {
                     name: #name.into(),
                     description: #description,
                     arguments: #arguments,
+                    title: #title,
                 }
             }
         };
@@ -87,6 +97,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
         name: name.clone(),
         description: description.clone(),
         arguments: arguments.clone(),
+        title: attribute.title,
     };
     let prompt_attr_fn = resolved_prompt_attr.into_fn(prompt_attr_fn_ident.clone())?;
 

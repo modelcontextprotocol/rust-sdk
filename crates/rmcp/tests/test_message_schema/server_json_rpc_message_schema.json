@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonRpcMessage",
-  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, batch operations, and errors.\nIt serves as the top-level message container for MCP communication.",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, and errors.\nIt serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
       "description": "A single request expecting a response",
@@ -113,7 +113,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated2"
+              "$ref": "#/definitions/RawAudioContent"
             }
           ],
           "required": [
@@ -142,31 +142,6 @@
     "Annotated2": {
       "type": "object",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
-      ]
-    },
-    "Annotated3": {
-      "type": "object",
-      "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block",
           "type": [
@@ -193,7 +168,7 @@
         "resource"
       ]
     },
-    "Annotated4": {
+    "Annotated3": {
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
       "properties": {
@@ -234,6 +209,13 @@
           "format": "uint32",
           "minimum": 0
         },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "uri": {
           "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
           "type": "string"
@@ -244,7 +226,7 @@
         "name"
       ]
     },
-    "Annotated5": {
+    "Annotated4": {
       "type": "object",
       "properties": {
         "annotations": {
@@ -271,6 +253,12 @@
         },
         "name": {
           "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "uriTemplate": {
           "type": "string"
@@ -626,6 +614,12 @@
         "name": {
           "type": "string"
         },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "version": {
           "type": "string"
         }
@@ -815,7 +809,7 @@
         "resourceTemplates": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated5"
+            "$ref": "#/definitions/Annotated4"
           }
         }
       },
@@ -835,7 +829,7 @@
         "resources": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated4"
+            "$ref": "#/definitions/Annotated3"
           }
         }
       },
@@ -1145,6 +1139,12 @@
         "name": {
           "description": "The name of the prompt",
           "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1170,6 +1170,13 @@
           "description": "Whether this argument is required",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "A human-readable title for the argument",
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -1274,7 +1281,7 @@
           "type": "object",
           "properties": {
             "resource": {
-              "$ref": "#/definitions/Annotated3"
+              "$ref": "#/definitions/Annotated2"
             },
             "type": {
               "type": "string",
@@ -1327,6 +1334,13 @@
               "format": "uint32",
               "minimum": 0
             },
+            "title": {
+              "description": "Human-readable title of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "type": "string",
               "const": "resource_link"
@@ -1366,6 +1380,21 @@
     "ProtocolVersion": {
       "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
+    },
+    "RawAudioContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
     },
     "RawEmbeddedResource": {
       "type": "object",
@@ -1440,6 +1469,13 @@
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "uri": {
           "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
@@ -1817,6 +1853,13 @@
             "null"
           ],
           "additionalProperties": true
+        },
+        "title": {
+          "description": "A human-readable title for the tool",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
