@@ -220,50 +220,58 @@ impl SqlQueryServer {
                 ),
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
-                    format!("Great! For a {} operation, I need to know which table you want to work with. \
-                            What's the name of your database table?", args.operation),
+                    format!(
+                        "Great! For a {} operation, I need to know which table you want to work with. \
+                            What's the name of your database table?",
+                        args.operation
+                    ),
                 ),
             ]
         } else {
             // Build the SQL query based on filled arguments
             let query = match args.operation.to_uppercase().as_str() {
                 "SELECT" => {
-                    let cols = args.columns
+                    let cols = args
+                        .columns
                         .as_ref()
                         .filter(|c| !c.is_empty())
                         .map(|c| c.as_str())
                         .unwrap_or("*");
-                    let where_part = args.where_clause
+                    let where_part = args
+                        .where_clause
                         .as_ref()
                         .map(|w| format!(" WHERE {}", w))
                         .unwrap_or_default();
                     format!("SELECT {} FROM {}{}", cols, args.table, where_part)
-                },
-                "INSERT" => {
-                    match &args.values {
-                        Some(vals) if !vals.is_empty() => format!("INSERT INTO {} VALUES ({})", args.table, vals),
-                        _ => format!("INSERT INTO {} (...) VALUES (...)", args.table),
+                }
+                "INSERT" => match &args.values {
+                    Some(vals) if !vals.is_empty() => {
+                        format!("INSERT INTO {} VALUES ({})", args.table, vals)
                     }
+                    _ => format!("INSERT INTO {} (...) VALUES (...)", args.table),
                 },
                 "UPDATE" => {
-                    let set_part = args.columns
+                    let set_part = args
+                        .columns
                         .as_ref()
                         .filter(|c| !c.is_empty())
                         .map(|c| c.as_str())
                         .unwrap_or("...");
-                    let where_part = args.where_clause
+                    let where_part = args
+                        .where_clause
                         .as_ref()
                         .map(|w| format!(" WHERE {}", w))
                         .unwrap_or_default();
                     format!("UPDATE {} SET {}{}", args.table, set_part, where_part)
-                },
+                }
                 "DELETE" => {
-                    let where_part = args.where_clause
+                    let where_part = args
+                        .where_clause
                         .as_ref()
                         .map(|w| format!(" WHERE {}", w))
                         .unwrap_or_default();
                     format!("DELETE FROM {}{}", args.table, where_part)
-                },
+                }
                 _ => format!("{} FROM {}", args.operation, args.table),
             };
 
@@ -274,8 +282,12 @@ impl SqlQueryServer {
                 ),
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
-                    format!("Here's your SQL query:\n\n```sql\n{}\n```\n\nThis query will {} the {} table.", 
-                           query, args.operation.to_lowercase(), args.table),
+                    format!(
+                        "Here's your SQL query:\n\n```sql\n{}\n```\n\nThis query will {} the {} table.",
+                        query,
+                        args.operation.to_lowercase(),
+                        args.table
+                    ),
                 ),
             ]
         };
@@ -283,8 +295,16 @@ impl SqlQueryServer {
         Ok(GetPromptResult {
             description: Some(format!(
                 "SQL Query: {} on {}",
-                if args.operation.is_empty() { "Unknown" } else { &args.operation },
-                if args.table.is_empty() { "table" } else { &args.table }
+                if args.operation.is_empty() {
+                    "Unknown"
+                } else {
+                    &args.operation
+                },
+                if args.table.is_empty() {
+                    "table"
+                } else {
+                    &args.table
+                }
             )),
             messages,
         })
@@ -322,14 +342,17 @@ impl ServerHandler for SqlQueryServer {
     ) -> Result<CompleteResult, McpError> {
         let candidates = match &request.r#ref {
             Reference::Prompt(prompt_ref) if prompt_ref.name == "sql_query" => {
-                
-                let filled_fields: Vec<&str> = request.context
+                let filled_fields: Vec<&str> = request
+                    .context
                     .as_ref()
                     .map(|ctx| ctx.argument_names().collect())
                     .unwrap_or_default();
 
-                tracing::debug!("SQL completion - filled fields: {:?}, completing: {}", 
-                              filled_fields, request.argument.name);
+                tracing::debug!(
+                    "SQL completion - filled fields: {:?}, completing: {}",
+                    filled_fields,
+                    request.argument.name
+                );
 
                 match request.argument.name.as_str() {
                     "operation" => vec!["SELECT", "INSERT", "UPDATE", "DELETE"],
@@ -339,7 +362,9 @@ impl ServerHandler for SqlQueryServer {
                         if let Some(context) = &request.context {
                             if let Some(operation) = context.get_argument("operation") {
                                 match operation.to_uppercase().as_str() {
-                                    "SELECT" | "UPDATE" => vec!["id", "name", "email", "created_at", "updated_at", "*"],
+                                    "SELECT" | "UPDATE" => {
+                                        vec!["id", "name", "email", "created_at", "updated_at", "*"]
+                                    }
                                     _ => vec!["Not applicable for this operation"],
                                 }
                             } else {
@@ -348,13 +373,15 @@ impl ServerHandler for SqlQueryServer {
                         } else {
                             vec!["Choose operation first"]
                         }
-                    },
+                    }
                     "values" => {
                         // Only show values completion for INSERT
                         if let Some(context) = &request.context {
                             if let Some(operation) = context.get_argument("operation") {
                                 match operation.to_uppercase().as_str() {
-                                    "INSERT" => vec!["'John Doe'", "'jane@example.com'", "123", "NOW()"],
+                                    "INSERT" => {
+                                        vec!["'John Doe'", "'jane@example.com'", "123", "NOW()"]
+                                    }
                                     _ => vec!["Not applicable for this operation"],
                                 }
                             } else {
@@ -363,14 +390,19 @@ impl ServerHandler for SqlQueryServer {
                         } else {
                             vec!["Choose operation first"]
                         }
-                    },
+                    }
                     "where_clause" => {
                         // WHERE clause suggestions based on filled fields count
                         match filled_fields.len() {
                             0..=1 => vec!["Complete operation and table first"],
-                            _ => vec!["id = 1", "name = 'example'", "created_at > '2023-01-01'", "status = 'active'"],
+                            _ => vec![
+                                "id = 1",
+                                "name = 'example'",
+                                "created_at > '2023-01-01'",
+                                "status = 'active'",
+                            ],
                         }
-                    },
+                    }
                     _ => vec![],
                 }
             }
@@ -401,7 +433,7 @@ async fn main() -> Result<()> {
     println!();
     println!("This server demonstrates argument_names() value with progressive completion:");
     println!("1. Start with operation type (SELECT, INSERT, UPDATE, DELETE)");
-    println!("2. Choose table name (users, orders, products)");  
+    println!("2. Choose table name (users, orders, products)");
     println!("3. Only relevant fields appear based on your operation!");
     println!("   • SELECT/UPDATE: shows columns field");
     println!("   • INSERT: shows values field");
