@@ -122,7 +122,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         request: CompleteRequestParam,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<CompleteRequestMethod>()))
+        std::future::ready(Ok(CompleteResult::default()))
     }
     fn set_level(
         &self,
