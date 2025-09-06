@@ -5,7 +5,6 @@ use crate::{
 };
 
 pub mod common;
-pub mod completion;
 pub mod prompt;
 mod resource;
 pub mod router;

@@ -1128,10 +1128,12 @@ impl CompletionContext {
     }
 
     /// Get all argument names
-    pub fn argument_names(&self) -> Vec<&str> {
+    pub fn argument_names(&self) -> impl Iterator<Item = &str> {
         self.arguments
             .as_ref()
-            .map_or_else(Vec::new, |args| args.keys().map(|k| k.as_str()).collect())
+            .into_iter()
+            .flat_map(|args| args.keys())
+            .map(|k| k.as_str())
     }
 }
 
