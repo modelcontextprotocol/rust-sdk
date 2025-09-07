@@ -110,7 +110,7 @@ async fn test_tool_macros() {
 async fn test_tool_macros_with_empty_param() {
     let _attr = Server::empty_param_tool_attr();
     println!("{_attr:?}");
-    assert_eq!(_attr.input_schema.get("type").unwrap(), "object");
+    assert!(_attr.input_schema.get("type").is_none());
     assert!(_attr.input_schema.get("properties").is_none());
 }
 

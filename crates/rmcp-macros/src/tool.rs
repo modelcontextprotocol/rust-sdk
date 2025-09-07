@@ -176,9 +176,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
                 rmcp::handler::server::common::cached_schema_for_type::<#params_ty>()
             })?
         } else {
-            // if not found, use the default EmptyObject schema
+            // if not found, use a simple empty JSON object
             syn::parse2::<Expr>(quote! {
-                rmcp::handler::server::common::cached_schema_for_type::<rmcp::model::EmptyObject>()
+                std::sync::Arc::new(serde_json::Map::new())
             })?
         }
     };
