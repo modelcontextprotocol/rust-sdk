@@ -1227,7 +1227,13 @@ pub enum Reference {
 impl Reference {
     /// Create a prompt reference
     pub fn for_prompt(name: impl Into<String>) -> Self {
-        Self::Prompt(PromptReference { name: name.into() })
+        // Not accepting `title` currently as it'll break the API
+        // Until further decision, keep it `None`, modify later
+        // if required, add `title` to the API
+        Self::Prompt(PromptReference {
+            name: name.into(),
+            title: None,
+        })
     }
 
     /// Create a resource reference
