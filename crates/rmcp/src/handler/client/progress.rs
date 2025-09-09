@@ -44,7 +44,7 @@ impl ProgressDispatcher {
         ProgressSubscriber {
             progress_token,
             receiver,
-            dispacher: self.dispatcher.clone(),
+            dispatcher: self.dispatcher.clone(),
         }
     }
 
@@ -53,17 +53,17 @@ impl ProgressDispatcher {
         self.dispatcher.write().await.remove(token);
     }
 
-    /// Clear all dispachter.
+    /// Clear all dispatcher.
     pub async fn clear(&self) {
-        let mut dispacher = self.dispatcher.write().await;
-        dispacher.clear();
+        let mut dispatcher = self.dispatcher.write().await;
+        dispatcher.clear();
     }
 }
 
 pub struct ProgressSubscriber {
     pub(crate) progress_token: ProgressToken,
     pub(crate) receiver: ReceiverStream<ProgressNotificationParam>,
-    pub(crate) dispacher: Dispatcher,
+    pub(crate) dispatcher: Dispatcher,
 }
 
 impl ProgressSubscriber {
@@ -91,10 +91,10 @@ impl Drop for ProgressSubscriber {
     fn drop(&mut self) {
         let token = self.progress_token.clone();
         self.receiver.close();
-        let dispatcher = self.dispacher.clone();
+        let dispatcher = self.dispatcher.clone();
         tokio::spawn(async move {
-            let mut dispacher = dispatcher.write_owned().await;
-            dispacher.remove(&token);
+            let mut dispatcher = dispatcher.write_owned().await;
+            dispatcher.remove(&token);
         });
     }
 }
