@@ -147,7 +147,7 @@ pub struct AuthorizationManager {
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
     credentials: RwLock<Option<OAuthTokenResponse>>,
-    pkce_verifier: RwLock<Option<PkceCodeVerifier>>,
+    state: RwLock<Option<AuthorizationState>>,
     expires_at: RwLock<Option<Instant>>,
     base_url: Url,
 }
@@ -172,6 +172,12 @@ pub struct ClientRegistrationResponse {
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug)]
+struct AuthorizationState {
+    pkce_verifier: PkceCodeVerifier,
+    csrf_token: CsrfToken,
+}
+
 impl AuthorizationManager {
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
@@ -186,7 +192,7 @@ impl AuthorizationManager {
             metadata: None,
             oauth_client: None,
             credentials: RwLock::new(None),
-            pkce_verifier: RwLock::new(None),
+            state: RwLock::new(None),
             expires_at: RwLock::new(None),
             base_url,
         };
@@ -405,11 +411,14 @@ impl AuthorizationManager {
             auth_request = auth_request.add_scope(Scope::new(scope.to_string()));
         }
 
-        let (auth_url, _csrf_token) = auth_request.url();
+        let (auth_url, csrf_token) = auth_request.url();
 
         // store pkce verifier for later use
-        *self.pkce_verifier.write().await = Some(pkce_verifier);
-        debug!("set pkce verifier: {:?}", self.pkce_verifier.read().await);
+        *self.state.write().await = Some(AuthorizationState {
+            pkce_verifier,
+            csrf_token,
+        });
+        debug!("set authorization state: {:?}", self.state.read().await);
 
         Ok(auth_url.to_string())
     }
@@ -418,6 +427,7 @@ impl AuthorizationManager {
     pub async fn exchange_code_for_token(
         &self,
         code: &str,
+        csrf_token: &str,
     ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>, AuthError> {
         debug!("start exchange code for token: {:?}", code);
         let oauth_client = self
@@ -425,12 +435,17 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
-        let pkce_verifier = self
-            .pkce_verifier
-            .write()
-            .await
-            .take()
-            .ok_or_else(|| AuthError::InternalError("PKCE verifier not found".to_string()))?;
+        let AuthorizationState {
+            pkce_verifier,
+            csrf_token: expected_csrf_token,
+        } =
+            self.state.write().await.take().ok_or_else(|| {
+                AuthError::InternalError("Authorization state not found".to_string())
+            })?;
+
+        if csrf_token != expected_csrf_token.secret() {
+            return Err(AuthError::InternalError("CSRF token mismatch".to_string()));
+        }
 
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
@@ -601,8 +616,11 @@ impl AuthorizationSession {
     pub async fn handle_callback(
         &self,
         code: &str,
+        csrf_token: &str,
     ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>, AuthError> {
-        self.auth_manager.exchange_code_for_token(code).await
+        self.auth_manager
+            .exchange_code_for_token(code, csrf_token)
+            .await
     }
 }
 
@@ -787,10 +805,10 @@ impl OAuthState {
     }
 
     /// handle authorization callback
-    pub async fn handle_callback(&mut self, code: &str) -> Result<(), AuthError> {
+    pub async fn handle_callback(&mut self, code: &str, csrf_token: &str) -> Result<(), AuthError> {
         match self {
             OAuthState::Session(session) => {
-                session.handle_callback(code).await?;
+                session.handle_callback(code, csrf_token).await?;
                 self.complete_authorization().await
             }
             OAuthState::Unauthorized(_) => {
