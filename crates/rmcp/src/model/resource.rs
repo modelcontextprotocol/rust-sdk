@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Annotated, Meta};
+use super::{Annotated, Icon, Meta};
 
 /// Represents a resource in the extension with metadata
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -26,6 +26,9 @@ pub struct RawResource {
     /// This can be used by Hosts to display file sizes and estimate context window us
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u32>,
+    /// Optional list of icons for the resource
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<Icon>>,
 }
 
 pub type Resource = Annotated<RawResource>;
@@ -91,6 +94,7 @@ impl RawResource {
             description: None,
             mime_type: None,
             size: None,
+            icons: None,
         }
     }
 }
@@ -110,6 +114,7 @@ mod tests {
             description: Some("Test resource".to_string()),
             mime_type: Some("text/plain".to_string()),
             size: Some(100),
+            icons: None,
         };
 
         let json = serde_json::to_string(&resource).unwrap();

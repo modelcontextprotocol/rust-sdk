@@ -693,13 +693,41 @@ impl Default for ClientInfo {
     }
 }
 
+/// A URL pointing to an icon resource or a base64-encoded data URI.
+///
+/// Clients that support rendering icons MUST support at least the following MIME types:
+/// - image/png - PNG images (safe, universal compatibility)
+/// - image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)
+///
+/// Clients that support rendering icons SHOULD also support:
+/// - image/svg+xml - SVG images (scalable but requires security precautions)
+/// - image/webp - WebP images (modern, efficient format)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Icon {
+    /// A standard URI pointing to an icon resource
+    pub src: String,
+    /// Optional override if the server's MIME type is missing or generic
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Size specification (e.g., "48x48", "any" for SVG, or "48x48 96x96")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Implementation {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<Icon>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website_url: Option<String>,
 }
 
 impl Default for Implementation {
@@ -714,6 +742,8 @@ impl Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
             title: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            icons: None,
+            website_url: None,
         }
     }
 }
@@ -1926,6 +1956,7 @@ mod tests {
                 assert_eq!(capabilities.tools.unwrap().list_changed, Some(true));
                 assert_eq!(server_info.name, "ExampleServer");
                 assert_eq!(server_info.version, "1.0.0");
+                assert_eq!(server_info.icons, None);
                 assert_eq!(instructions, None);
             }
             other => panic!("Expected InitializeResult, got {other:?}"),
@@ -2020,5 +2051,109 @@ mod tests {
         let v1 = ProtocolVersion::V_2024_11_05;
         let v2 = ProtocolVersion::V_2025_03_26;
         assert!(v1 < v2);
+    }
+
+    #[test]
+    fn test_icon_serialization() {
+        let icon = Icon {
+            src: "https://example.com/icon.png".to_string(),
+            mime_type: Some("image/png".to_string()),
+            sizes: Some("48x48".to_string()),
+        };
+
+        let json = serde_json::to_value(&icon).unwrap();
+        assert_eq!(json["src"], "https://example.com/icon.png");
+        assert_eq!(json["mimeType"], "image/png");
+        assert_eq!(json["sizes"], "48x48");
+
+        // Test deserialization
+        let deserialized: Icon = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, icon);
+    }
+
+    #[test]
+    fn test_icon_minimal() {
+        let icon = Icon {
+            src: "data:image/svg+xml;base64,PHN2Zy8+".to_string(),
+            mime_type: None,
+            sizes: None,
+        };
+
+        let json = serde_json::to_value(&icon).unwrap();
+        assert_eq!(json["src"], "data:image/svg+xml;base64,PHN2Zy8+");
+        assert!(json.get("mimeType").is_none());
+        assert!(json.get("sizes").is_none());
+    }
+
+    #[test]
+    fn test_implementation_with_icons() {
+        let implementation = Implementation {
+            name: "test-server".to_string(),
+            title: Some("Test Server".to_string()),
+            version: "1.0.0".to_string(),
+            icons: Some(vec![
+                Icon {
+                    src: "https://example.com/icon.png".to_string(),
+                    mime_type: Some("image/png".to_string()),
+                    sizes: Some("48x48".to_string()),
+                },
+                Icon {
+                    src: "https://example.com/icon.svg".to_string(),
+                    mime_type: Some("image/svg+xml".to_string()),
+                    sizes: Some("any".to_string()),
+                },
+            ]),
+            website_url: Some("https://example.com".to_string()),
+        };
+
+        let json = serde_json::to_value(&implementation).unwrap();
+        assert_eq!(json["name"], "test-server");
+        assert_eq!(json["websiteUrl"], "https://example.com");
+        assert!(json["icons"].is_array());
+        assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
+        assert_eq!(json["icons"][1]["mimeType"], "image/svg+xml");
+    }
+
+    #[test]
+    fn test_backward_compatibility() {
+        // Test that old JSON without icons still deserializes correctly
+        let old_json = json!({
+            "name": "legacy-server",
+            "version": "0.9.0"
+        });
+
+        let implementation: Implementation = serde_json::from_value(old_json).unwrap();
+        assert_eq!(implementation.name, "legacy-server");
+        assert_eq!(implementation.version, "0.9.0");
+        assert_eq!(implementation.icons, None);
+        assert_eq!(implementation.website_url, None);
+    }
+
+    #[test]
+    fn test_initialize_with_icons() {
+        let init_result = InitializeResult {
+            protocol_version: ProtocolVersion::default(),
+            capabilities: ServerCapabilities::default(),
+            server_info: Implementation {
+                name: "icon-server".to_string(),
+                title: None,
+                version: "2.0.0".to_string(),
+                icons: Some(vec![Icon {
+                    src: "https://example.com/server.png".to_string(),
+                    mime_type: Some("image/png".to_string()),
+                    sizes: None,
+                }]),
+                website_url: Some("https://docs.example.com".to_string()),
+            },
+            instructions: None,
+        };
+
+        let json = serde_json::to_value(&init_result).unwrap();
+        assert!(json["serverInfo"]["icons"].is_array());
+        assert_eq!(
+            json["serverInfo"]["icons"][0]["src"],
+            "https://example.com/server.png"
+        );
+        assert_eq!(json["serverInfo"]["websiteUrl"], "https://docs.example.com");
     }
 }

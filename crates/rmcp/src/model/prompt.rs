@@ -2,7 +2,7 @@ use base64::engine::{Engine, general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AnnotateAble, Annotations, RawEmbeddedResource, RawImageContent,
+    AnnotateAble, Annotations, Icon, RawEmbeddedResource, RawImageContent,
     content::{EmbeddedResource, ImageContent},
     resource::ResourceContents,
 };
@@ -22,6 +22,9 @@ pub struct Prompt {
     /// Optional arguments that can be passed to customize the prompt
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<PromptArgument>>,
+    /// Optional list of icons for the prompt
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<Icon>>,
 }
 
 impl Prompt {
@@ -40,6 +43,7 @@ impl Prompt {
             title: None,
             description: description.map(Into::into),
             arguments,
+            icons: None,
         }
     }
 }

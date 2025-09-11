@@ -75,6 +75,8 @@ pub struct ToolAttribute {
     pub output_schema: Option<Expr>,
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotationsAttribute>,
+    /// Optional icons for the tool
+    pub icons: Option<Expr>,
 }
 
 pub struct ResolvedToolAttribute {
@@ -84,6 +86,7 @@ pub struct ResolvedToolAttribute {
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
     pub annotations: Expr,
+    pub icons: Option<Expr>,
 }
 
 impl ResolvedToolAttribute {
@@ -95,6 +98,7 @@ impl ResolvedToolAttribute {
             input_schema,
             output_schema,
             annotations,
+            icons,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
@@ -111,6 +115,11 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
+        let icons = if let Some(icons) = icons {
+            quote! { Some(#icons) }
+        } else {
+            quote! { None }
+        };
         let tokens = quote! {
             pub fn #fn_ident() -> rmcp::model::Tool {
                 rmcp::model::Tool {
@@ -120,6 +129,7 @@ impl ResolvedToolAttribute {
                     input_schema: #input_schema,
                     output_schema: #output_schema,
                     annotations: #annotations,
+                    icons: #icons,
                 }
             }
         };
@@ -240,6 +250,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         output_schema: output_schema_expr,
         annotations: annotations_expr,
         title: attribute.title,
+        icons: attribute.icons,
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
     // modify the the input function

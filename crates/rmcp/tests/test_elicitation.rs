@@ -893,6 +893,8 @@ async fn test_initialize_request_with_elicitation() {
             name: "test-client".to_string(),
             version: "1.0.0".to_string(),
             title: None,
+            website_url: None,
+            icons: None,
         },
     };
 
@@ -935,6 +937,8 @@ async fn test_capability_checking_logic() {
             name: "test-client".to_string(),
             version: "1.0.0".to_string(),
             title: None,
+            website_url: None,
+            icons: None,
         },
     };
 
@@ -953,9 +957,10 @@ async fn test_capability_checking_logic() {
             name: "test-client".to_string(),
             version: "1.0.0".to_string(),
             title: None,
+            website_url: None,
+            icons: None,
         },
     };
-
     let supports_elicitation = client_without_capability.capabilities.elicitation.is_some();
     assert!(!supports_elicitation);
 }
