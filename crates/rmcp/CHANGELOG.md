@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.3...rmcp-v0.6.4) - 2025-09-11
+
+### Added
+
+- *(SEP-973)* add support for icons and websiteUrl across relevant types ([#432](https://github.com/modelcontextprotocol/rust-sdk/pull/432))
+- implement context-aware completion (MCP 2025-06-18) ([#396](https://github.com/modelcontextprotocol/rust-sdk/pull/396))
+- add `title` field for data types ([#410](https://github.com/modelcontextprotocol/rust-sdk/pull/410))
+
+### Fixed
+
+- crates/rmcp/src/handler/client/progress.rs dispacher-> dispatcher ([#429](https://github.com/modelcontextprotocol/rust-sdk/pull/429))
+- build issue due to missing struct field ([#427](https://github.com/modelcontextprotocol/rust-sdk/pull/427))
+- generate simple {} schema for tools with no parameters ([#425](https://github.com/modelcontextprotocol/rust-sdk/pull/425))
+
+### Other
+
+- Skip notification in initialization handshake ([#421](https://github.com/modelcontextprotocol/rust-sdk/pull/421))
+- add nvim-mcp project built by rmcp ([#422](https://github.com/modelcontextprotocol/rust-sdk/pull/422))
+
 ## [0.6.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.2...rmcp-v0.6.3) - 2025-09-04
 
 ### Fixed
