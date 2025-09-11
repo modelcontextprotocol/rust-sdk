@@ -31,25 +31,24 @@ const CALLBACK_HTML: &str = include_str!("callback.html");
 
 #[derive(Clone)]
 struct AppState {
-    code_receiver: Arc<Mutex<Option<oneshot::Sender<String>>>>,
+    code_receiver: Arc<Mutex<Option<oneshot::Sender<CallbackParams>>>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CallbackParams {
     code: String,
-    #[allow(dead_code)]
-    state: Option<String>,
+    state: String,
 }
 
 async fn callback_handler(
     Query(params): Query<CallbackParams>,
     State(state): State<AppState>,
 ) -> Html<String> {
-    tracing::info!("Received callback with code: {}", params.code);
+    tracing::info!("Received callback: {params:?}");
 
     // Send the code to the main thread
     if let Some(sender) = state.code_receiver.lock().await.take() {
-        let _ = sender.send(params.code);
+        let _ = sender.send(params);
     }
     // Return success page
     Html(CALLBACK_HTML.to_string())
@@ -67,7 +66,7 @@ async fn main() -> Result<()> {
         .init();
     // it is a http server for handling callback
     // Create channel for receiving authorization code
-    let (code_sender, code_receiver) = oneshot::channel::<String>();
+    let (code_sender, code_receiver) = oneshot::channel::<CallbackParams>();
 
     // Create app state
     let app_state = AppState {
@@ -121,14 +120,17 @@ async fn main() -> Result<()> {
 
     // Wait for authorization code
     tracing::info!("Waiting for authorization code...");
-    let auth_code = code_receiver
+    let CallbackParams {
+        code: auth_code,
+        state: csrf_token,
+    } = code_receiver
         .await
         .context("Failed to get authorization code")?;
     tracing::info!("Received authorization code: {}", auth_code);
     // Exchange code for access token
     tracing::info!("Exchanging authorization code for access token...");
     oauth_state
-        .handle_callback(&auth_code)
+        .handle_callback(&auth_code, &csrf_token)
         .await
         .context("Failed to handle callback")?;
     tracing::info!("Successfully obtained access token");
