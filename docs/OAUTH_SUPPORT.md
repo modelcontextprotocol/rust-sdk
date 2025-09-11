@@ -44,8 +44,9 @@ rmcp = { version = "0.1", features = ["auth", "transport-sse-client"] }
     println!("Please open the following URL in your browser for authorization:\n{}", auth_url);
     
     // Handle callback - In real applications, this is typically done in a callback server
-    let auth_code = "Authorization code obtained from browser after user authorization";
-    let credentials = oauth_state.handle_callback(auth_code).await?;
+    let auth_code = "Authorization code (`code` param) obtained from browser after user authorization";
+    let csrf_token = "CSRF token (`state` param) obtained from browser after user authorization";
+    let credentials = oauth_state.handle_callback(auth_code, csrf_token).await?;
     
     println!("Authorization successful, access token: {}", credentials.access_token);
 
