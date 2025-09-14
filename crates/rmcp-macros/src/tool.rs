@@ -1,7 +1,7 @@
 use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{Expr, Ident, ImplItemFn, ReturnType};
+use syn::{Expr, Ident, ImplItemFn, ReturnType, parse_quote};
 
 use crate::common::{extract_doc_line, none_expr};
 
@@ -120,7 +120,10 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
+        let doc_comment = format!("Generated tool metadata function for {name}");
+        let doc_attr: syn::Attribute = parse_quote!(#[doc = #doc_comment]);
         let tokens = quote! {
+            #doc_attr
             pub fn #fn_ident() -> rmcp::model::Tool {
                 rmcp::model::Tool {
                     name: #name.into(),

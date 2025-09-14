@@ -1,4 +1,8 @@
+//! Test tool macros, including documentation for generated fns.
+
 //cargo test --test test_tool_macros --features "client server"
+// Enforce that all generated code has sufficient docs to pass missing_docs lint
+#![deny(missing_docs)]
 #![allow(dead_code)]
 use std::sync::Arc;
 
@@ -11,15 +15,19 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Parameters for weather tool.
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetWeatherRequest {
+    /// City of interest.
     pub city: String,
+    /// Date of interest.
     pub date: String,
 }
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {}
 
+/// Trivial stateless server.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Server {
@@ -27,6 +35,7 @@ pub struct Server {
 }
 
 impl Server {
+    /// Create weather server.
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -53,8 +62,9 @@ impl Server {
     async fn empty_param(&self) {}
 }
 
-// define generic service trait
+/// Generic service trait.
 pub trait DataService: Send + Sync + 'static {
+    /// Get data from service.
     fn get_data(&self) -> String;
 }
 
@@ -67,7 +77,7 @@ impl DataService for MockDataService {
     }
 }
 
-// define generic server
+/// Generic server.
 #[derive(Debug, Clone)]
 pub struct GenericServer<DS: DataService> {
     data_service: Arc<DS>,
@@ -76,6 +86,7 @@ pub struct GenericServer<DS: DataService> {
 
 #[tool_router]
 impl<DS: DataService> GenericServer<DS> {
+    /// Create data server instance.
     pub fn new(data_service: DS) -> Self {
         Self {
             data_service: Arc::new(data_service),
@@ -142,22 +153,26 @@ async fn test_tool_macros_with_optional_param() {
 
 impl GetWeatherRequest {}
 
-// Struct defined for testing optional field schema generation
+/// Struct defined for testing optional field schema generation.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct OptionalFieldTestSchema {
+    /// Field description.
     #[schemars(description = "An optional description field")]
     pub description: Option<String>,
 }
 
-// Struct defined for testing optional i64 field schema generation and null handling
+/// Struct defined for testing optional i64 field schema generation and null handling.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct OptionalI64TestSchema {
+    /// Optional count field.
     #[schemars(description = "An optional i64 field")]
     pub count: Option<i64>,
-    pub mandatory_field: String, // Added to ensure non-empty object schema
+
+    /// Added to ensure non-empty object schema.
+    pub mandatory_field: String,
 }
 
-// Dummy struct to host the test tool method
+/// Dummy struct to host the test tool method.
 #[derive(Debug, Clone)]
 pub struct OptionalSchemaTester {
     tool_router: ToolRouter<Self>,
@@ -170,6 +185,7 @@ impl Default for OptionalSchemaTester {
 }
 
 impl OptionalSchemaTester {
+    /// Create instance of optional schema tester service.
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
