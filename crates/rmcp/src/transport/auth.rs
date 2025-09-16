@@ -204,12 +204,10 @@ impl AuthorizationManager {
         // according to the specification, the metadata should be located at "/.well-known/oauth-authorization-server"
         let mut discovery_url = self.base_url.clone();
         let path = discovery_url.path();
-        let path_suffix = if path == "/" {
-            ""
-        } else {
-            path
-        };
-        discovery_url.set_path(&format!("/.well-known/oauth-authorization-server{path_suffix}"));
+        let path_suffix = if path == "/" { "" } else { path };
+        discovery_url.set_path(&format!(
+            "/.well-known/oauth-authorization-server{path_suffix}"
+        ));
         debug!("discovery url: {:?}", discovery_url);
         let response = self
             .http_client
