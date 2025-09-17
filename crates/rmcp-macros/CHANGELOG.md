@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.4...rmcp-macros-v0.6.5) - 2025-09-17
+
+### Fixed
+
+- *(clippy)* add doc comment for generated tool attr fn ([#439](https://github.com/modelcontextprotocol/rust-sdk/pull/439))
+
 ## [0.6.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.3...rmcp-macros-v0.6.4) - 2025-09-11
 
 ### Added
