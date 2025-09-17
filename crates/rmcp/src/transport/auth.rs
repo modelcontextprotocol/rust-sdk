@@ -374,7 +374,14 @@ impl AuthorizationManager {
 
         let config = OAuthClientConfig {
             client_id: reg_response.client_id,
-            client_secret: reg_response.client_secret,
+            // Some IdP returns a response where the field 'client_secret' is present but with empty string value.
+            // In that case, the interpretation is that the client is a public client and does not have a secret during the
+            // registration phase here, e.g. dynamic client registrations.
+            //
+            // Even though whether or not the empty string is valid is outside of the scope of Oauth2 spec,
+            // we should treat it as no secret since otherwise we end up authenticating with a valid client_id with an empty client_secret
+            // as a password, which is not a goal of the client secret.
+            client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
             scopes: vec![],
         };
