@@ -98,15 +98,14 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     };
 
     let name = attribute.name.unwrap_or_else(|| fn_ident.to_string());
-    let description = attribute
-        .description
-        .map(|s| {
-            Expr::Lit(syn::ExprLit {
-                attrs: Vec::new(),
-                lit: syn::Lit::Str(syn::LitStr::new(&s, Span::call_site())),
-            })
-        })
-        .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line));
+    let description = if let Some(s) = attribute.description {
+        Some(Expr::Lit(syn::ExprLit {
+            attrs: Vec::new(),
+            lit: syn::Lit::Str(syn::LitStr::new(&s, Span::call_site())),
+        }))
+    } else {
+        fn_item.attrs.iter().try_fold(None, extract_doc_line)?
+    };
     let arguments = arguments_expr;
 
     let resolved_prompt_attr = ResolvedPromptAttribute {

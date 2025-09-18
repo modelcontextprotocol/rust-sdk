@@ -9,13 +9,16 @@ pub fn none_expr() -> syn::Result<Expr> {
 }
 
 /// Extract documentation from doc attributes
-pub fn extract_doc_line(existing_docs: Option<Expr>, attr: &Attribute) -> Option<Expr> {
+pub fn extract_doc_line(
+    existing_docs: Option<Expr>,
+    attr: &Attribute,
+) -> syn::Result<Option<Expr>> {
     if !attr.path().is_ident("doc") {
-        return None;
+        return Ok(None);
     }
 
     let syn::Meta::NameValue(name_value) = &attr.meta else {
-        return None;
+        return Ok(None);
     };
 
     let value = &name_value.value;
@@ -28,23 +31,23 @@ pub fn extract_doc_line(existing_docs: Option<Expr>, attr: &Attribute) -> Option
         }) => {
             let content = lit_str.value().trim().to_string();
             if content.is_empty() {
-                return existing_docs;
+                return Ok(existing_docs);
             }
             Some(Expr::Lit(syn::ExprLit {
                 attrs: Vec::new(),
                 lit: syn::Lit::Str(syn::LitStr::new(&content, lit_str.span())),
             }))
         }
-        _ => return None,
+        _ => return Ok(None),
     };
 
     match (existing_docs, this_expr) {
         (Some(existing), Some(this)) => {
-            syn::parse2::<Expr>(quote! { concat!(#existing, "\n", #this) }).ok()
+            syn::parse2::<Expr>(quote! { concat!(#existing, "\n", #this) }).map(Some)
         }
-        (Some(existing), None) => Some(existing),
-        (None, Some(this)) => Some(this),
-        _ => None,
+        (Some(existing), None) => Ok(Some(existing)),
+        (None, Some(this)) => Ok(Some(this)),
+        _ => Ok(None),
     }
 }
 

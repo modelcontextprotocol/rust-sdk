@@ -244,16 +244,14 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         }
     });
 
-    let description_expr = attribute
-        .description
-        .map(|s| {
-            let lit = LitStr::new(&s, Span::call_site());
-            Expr::Lit(syn::ExprLit {
-                attrs: Vec::new(),
-                lit: syn::Lit::Str(lit),
-            })
-        })
-        .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line));
+    let description_expr = if let Some(s) = attribute.description {
+        Some(Expr::Lit(syn::ExprLit {
+            attrs: Vec::new(),
+            lit: syn::Lit::Str(LitStr::new(&s, Span::call_site())),
+        }))
+    } else {
+        fn_item.attrs.iter().try_fold(None, extract_doc_line)?
+    };
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
         description: description_expr,
