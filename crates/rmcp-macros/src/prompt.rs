@@ -1,5 +1,5 @@
 use darling::{FromMeta, ast::NestedMeta};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::{Expr, Ident, ImplItemFn, ReturnType};
 
@@ -23,7 +23,7 @@ pub struct PromptAttribute {
 pub struct ResolvedPromptAttribute {
     pub name: String,
     pub title: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Expr>,
     pub arguments: Expr,
     pub icons: Option<Expr>,
 }
@@ -100,6 +100,12 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     let name = attribute.name.unwrap_or_else(|| fn_ident.to_string());
     let description = attribute
         .description
+        .map(|s| {
+            Expr::Lit(syn::ExprLit {
+                attrs: Vec::new(),
+                lit: syn::Lit::Str(syn::LitStr::new(&s, Span::call_site())),
+            })
+        })
         .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line));
     let arguments = arguments_expr;
 
@@ -197,6 +203,24 @@ mod test {
         let result_str = result.to_string();
         assert!(result_str.contains("This is a test prompt description"));
         assert!(result_str.contains("with multiple lines"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_doc_include_description() -> syn::Result<()> {
+        let attr = quote! {}; // No explicit description
+        let input = quote! {
+            #[doc = include_str!("some/test/data/doc.txt")]
+            fn test_prompt_included(&self) -> Result<String> {
+                Ok("Test".to_string())
+            }
+        };
+        let result = prompt(attr, input)?;
+
+        // The generated tokens should preserve the include_str! invocation
+        let result_str = result.to_string();
+        assert!(result_str.contains("include_str"));
 
         Ok(())
     }

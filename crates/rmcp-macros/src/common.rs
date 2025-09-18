@@ -9,7 +9,7 @@ pub fn none_expr() -> syn::Result<Expr> {
 }
 
 /// Extract documentation from doc attributes
-pub fn extract_doc_line(existing_docs: Option<String>, attr: &Attribute) -> Option<String> {
+pub fn extract_doc_line(existing_docs: Option<Expr>, attr: &Attribute) -> Option<Expr> {
     if !attr.path().is_ident("doc") {
         return None;
     }
@@ -18,23 +18,32 @@ pub fn extract_doc_line(existing_docs: Option<String>, attr: &Attribute) -> Opti
         return None;
     };
 
-    let syn::Expr::Lit(expr_lit) = &name_value.value else {
-        return None;
-    };
-
-    let syn::Lit::Str(lit_str) = &expr_lit.lit else {
-        return None;
-    };
-
-    let content = lit_str.value().trim().to_string();
-    match (existing_docs, content) {
-        (Some(mut existing_docs), content) if !content.is_empty() => {
-            existing_docs.push('\n');
-            existing_docs.push_str(&content);
-            Some(existing_docs)
+    let value = &name_value.value;
+    let this_expr: Option<Expr> = match value {
+        // Preserve macros such as `include_str!(...)`
+        syn::Expr::Macro(_) => Some(value.clone()),
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit_str),
+            ..
+        }) => {
+            let content = lit_str.value().trim().to_string();
+            if content.is_empty() {
+                return existing_docs;
+            }
+            Some(Expr::Lit(syn::ExprLit {
+                attrs: Vec::new(),
+                lit: syn::Lit::Str(syn::LitStr::new(&content, lit_str.span())),
+            }))
         }
-        (Some(existing_docs), _) => Some(existing_docs),
-        (None, content) if !content.is_empty() => Some(content),
+        _ => return None,
+    };
+
+    match (existing_docs, this_expr) {
+        (Some(existing), Some(this)) => {
+            syn::parse2::<Expr>(quote! { concat!(#existing, "\n", #this) }).ok()
+        }
+        (Some(existing), None) => Some(existing),
+        (None, Some(this)) => Some(this),
         _ => None,
     }
 }
