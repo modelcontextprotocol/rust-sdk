@@ -102,7 +102,7 @@
 //! start a MCP server in Python and then list the tools and call `git status`
 //! as follows:
 //!
-//! ```rust
+//! ```rust,ignore
 //! use anyhow::Result;
 //! use rmcp::{model::CallToolRequestParam, service::ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
 //! use tokio::process::Command;

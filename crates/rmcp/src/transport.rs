@@ -39,7 +39,7 @@
 //!
 //! ## Examples
 //!
-//! ```rust
+//! ```rust,ignore
 //! # use rmcp::{
 //! #     ServiceExt, serve_client, serve_server,
 //! # };

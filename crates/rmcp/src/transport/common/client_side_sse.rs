@@ -98,10 +98,29 @@ impl<E: std::error::Error + Send> SseStreamReconnect for NeverReconnect<E> {
     }
 }
 
+/// Abstraction for SSE reconnection logic. Implementors can hook into
+/// [`handle_control_event`](Self::handle_control_event) to consume control
+/// frames (e.g. `event: endpoint`) that arrive when a server restarts an SSE
+/// stream. The default implementation is a no-op, keeping existing behaviour
+/// intact.
 pub(crate) trait SseStreamReconnect {
     type Error: std::error::Error;
     type Future: Future<Output = Result<BoxedSseResponse, Self::Error>> + Send;
     fn retry_connection(&mut self, last_event_id: Option<&str>) -> Self::Future;
+    fn handle_control_event(&mut self, _event: &Sse) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn handle_stream_error(
+        &mut self,
+        error: &(dyn std::error::Error + 'static),
+        last_event_id: Option<&str>,
+    ) {
+        if let Some(id) = last_event_id {
+            tracing::warn!(%id, "sse stream error: {error}");
+        } else {
+            tracing::warn!("sse stream error: {error}");
+        }
+    }
 }
 
 pin_project_lite::pin_project! {
@@ -189,14 +208,31 @@ where
                             *this.server_retry_interval =
                                 Some(Duration::from_millis(new_server_retry));
                         }
-                        if let Some(event_id) = sse.id {
-                            *this.last_event_id = Some(event_id);
+                        if let Some(ref event_id) = sse.id {
+                            *this.last_event_id = Some(event_id.clone());
+                        }
+                        // Only treat blank/`message` events as JSON-RPC payloads.
+                        // Other control frames (endpoint, ping, etc.) are passed to
+                        // the reconnection handler.
+                        let is_message_event =
+                            matches!(sse.event.as_deref(), None | Some("") | Some("message"));
+                        if !is_message_event {
+                            match this.connector.handle_control_event(&sse) {
+                                Ok(()) => return self.poll_next(cx),
+                                Err(e) => {
+                                    this.state.set(SseAutoReconnectStreamState::Terminated);
+                                    return Poll::Ready(Some(Err(e)));
+                                }
+                            }
                         }
                         if let Some(data) = sse.data {
                             match serde_json::from_str::<ServerJsonRpcMessage>(&data) {
                                 Err(e) => {
-                                    // not sure should this be a hard error
-                                    tracing::warn!("failed to deserialize server message: {e}");
+                                    // Downgrade to debug to avoid noisy logs when servers emit
+                                    // non-JSON payloads as message frames. Include last_event_id
+                                    // to aid troubleshooting while keeping default behaviour.
+                                    let last_id = this.last_event_id.as_deref().unwrap_or("");
+                                    tracing::debug!(last_event_id=%last_id, "failed to deserialize server message: {e}");
                                     return self.poll_next(cx);
                                 }
                                 Ok(message) => {
@@ -208,7 +244,8 @@ where
                         }
                     }
                     Some(Err(e)) => {
-                        tracing::warn!("sse stream error: {e}");
+                        this.connector
+                            .handle_stream_error(&e, this.last_event_id.as_deref());
                         let retrying = this
                             .connector
                             .retry_connection(this.last_event_id.as_deref());
