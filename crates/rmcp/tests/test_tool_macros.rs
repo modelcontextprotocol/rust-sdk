@@ -121,8 +121,14 @@ async fn test_tool_macros() {
 async fn test_tool_macros_with_empty_param() {
     let _attr = Server::empty_param_tool_attr();
     println!("{_attr:?}");
-    assert!(_attr.input_schema.get("type").is_none());
-    assert!(_attr.input_schema.get("properties").is_none());
+    assert_eq!(
+        _attr.input_schema.get("type"),
+        Some(&serde_json::Value::String("object".to_string()))
+    );
+    assert_eq!(
+        _attr.input_schema.get("properties"),
+        Some(&serde_json::Value::Object(serde_json::Map::new()))
+    );
 }
 
 #[tokio::test]
