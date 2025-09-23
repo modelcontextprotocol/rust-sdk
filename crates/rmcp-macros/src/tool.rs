@@ -1,7 +1,7 @@
 use darling::{FromMeta, ast::NestedMeta};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{Expr, Ident, ImplItemFn, ReturnType, parse_quote};
+use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
 
 use crate::common::{extract_doc_line, none_expr};
 
@@ -82,7 +82,7 @@ pub struct ToolAttribute {
 pub struct ResolvedToolAttribute {
     pub name: String,
     pub title: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Expr>,
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
     pub annotations: Expr,
@@ -244,11 +244,17 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         }
     });
 
+    let description_expr = if let Some(s) = attribute.description {
+        Some(Expr::Lit(syn::ExprLit {
+            attrs: Vec::new(),
+            lit: syn::Lit::Str(LitStr::new(&s, Span::call_site())),
+        }))
+    } else {
+        fn_item.attrs.iter().try_fold(None, extract_doc_line)?
+    };
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
-        description: attribute
-            .description
-            .or_else(|| fn_item.attrs.iter().fold(None, extract_doc_line)),
+        description: description_expr,
         input_schema: input_schema_expr,
         output_schema: output_schema_expr,
         annotations: annotations_expr,
@@ -350,6 +356,24 @@ mod test {
         // The output should contain the explicit description
         let result_str = result.to_string();
         assert!(result_str.contains("Explicit description has priority"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_doc_include_description() -> syn::Result<()> {
+        let attr = quote! {}; // No explicit description
+        let input = quote! {
+            #[doc = include_str!("some/test/data/doc.txt")]
+            fn test_function(&self) -> Result<(), Error> {
+                Ok(())
+            }
+        };
+        let result = tool(attr, input)?;
+
+        // The macro should preserve include_str! in the generated tokens so we at least
+        // see the include_str invocation in the generated function source.
+        let result_str = result.to_string();
+        assert!(result_str.contains("include_str"));
         Ok(())
     }
 }
