@@ -304,7 +304,7 @@ impl From<SessionError> for std::io::Error {
     fn from(value: SessionError) -> Self {
         match value {
             SessionError::Io(io) => io,
-            _ => std::io::Error::new(std::io::ErrorKind::Other, format!("Session error: {value}")),
+            _ => std::io::Error::other(format!("Session error: {value}")),
         }
     }
 }
@@ -687,6 +687,7 @@ impl LocalSessionHandle {
 
 pub type SessionTransport = WorkerTransport<LocalSessionWorker>;
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum LocalSessionWorkerError {
     #[error("transport terminated")]

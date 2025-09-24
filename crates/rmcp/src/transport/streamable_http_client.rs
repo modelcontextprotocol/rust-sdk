@@ -63,6 +63,7 @@ pub enum StreamableHttpProtocolError {
     MissingSessionIdInResponse,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum StreamableHttpPostResponse {
     Accepted,
     Json(ServerJsonRpcMessage, Option<String>),
@@ -557,7 +558,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///
 /// impl StreamableHttpClient for MyHttpClient {
 ///     type Error = MyError;
-///     
+///
 ///     async fn post_message(
 ///         &self,
 ///         _uri: Arc<str>,
@@ -567,7 +568,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
-///     
+///
 ///     async fn delete_session(
 ///         &self,
 ///         _uri: Arc<str>,
@@ -576,7 +577,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
-///     
+///
 ///     async fn get_stream(
 ///         &self,
 ///         _uri: Arc<str>,
@@ -639,7 +640,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///
     /// impl StreamableHttpClient for MyHttpClient {
     ///     type Error = MyError;
-    ///     
+    ///
     ///     async fn post_message(
     ///         &self,
     ///         _uri: Arc<str>,
@@ -649,7 +650,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
-    ///     
+    ///
     ///     async fn delete_session(
     ///         &self,
     ///         _uri: Arc<str>,
@@ -658,7 +659,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
-    ///     
+    ///
     ///     async fn get_stream(
     ///         &self,
     ///         _uri: Arc<str>,

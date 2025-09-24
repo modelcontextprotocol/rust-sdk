@@ -1458,6 +1458,7 @@ async fn test_elicitation_examples_compile() {
     use serde::{Deserialize, Serialize};
 
     // Example from trait documentation
+    #[allow(dead_code)]
     #[derive(Serialize, Deserialize, JsonSchema)]
     struct UserProfile {
         name: String,
