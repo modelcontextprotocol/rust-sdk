@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.4...rmcp-macros-v0.7.0) - 2025-09-24
+
+### Fixed
+
+- *(macros)* support #[doc = include_str!(...)] for macros ([#444](https://github.com/modelcontextprotocol/rust-sdk/pull/444))
+- *(clippy)* add doc comment for generated tool attr fn ([#439](https://github.com/modelcontextprotocol/rust-sdk/pull/439))
+
+### Other
+
+- *(root)* Add Terminator to Built with rmcp section ([#437](https://github.com/modelcontextprotocol/rust-sdk/pull/437))
+
 ## [0.6.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.3...rmcp-macros-v0.6.4) - 2025-09-11
 
 ### Added
