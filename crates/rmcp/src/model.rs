@@ -672,6 +672,7 @@ pub struct InitializeResult {
 pub type ServerInfo = InitializeResult;
 pub type ClientInfo = InitializeRequestParam;
 
+#[allow(clippy::derivable_impls)]
 impl Default for ServerInfo {
     fn default() -> Self {
         ServerInfo {
@@ -683,6 +684,7 @@ impl Default for ServerInfo {
     }
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for ClientInfo {
     fn default() -> Self {
         ClientInfo {

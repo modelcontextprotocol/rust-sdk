@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.4...rmcp-v0.7.0) - 2025-09-24
+
+### Fixed
+
+- return auth errors ([#451](https://github.com/modelcontextprotocol/rust-sdk/pull/451))
+- *(oauth)* do not treat empty secret as valid for public clients ([#443](https://github.com/modelcontextprotocol/rust-sdk/pull/443))
+- *(clippy)* add doc comment for generated tool attr fn ([#439](https://github.com/modelcontextprotocol/rust-sdk/pull/439))
+- *(oauth)* require CSRF token as part of the OAuth authorization flow. ([#435](https://github.com/modelcontextprotocol/rust-sdk/pull/435))
+
+### Other
+
+- *(root)* Add Terminator to Built with rmcp section ([#437](https://github.com/modelcontextprotocol/rust-sdk/pull/437))
+- Non-empty paths in OAuth2 Authorization Server Metadata URLs ([#441](https://github.com/modelcontextprotocol/rust-sdk/pull/441))
+
 ## [0.6.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.3...rmcp-v0.6.4) - 2025-09-11
 
 ### Added

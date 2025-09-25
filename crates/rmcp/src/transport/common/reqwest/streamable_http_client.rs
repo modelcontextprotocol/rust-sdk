@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use futures::{StreamExt, stream::BoxStream};
+use http::header::WWW_AUTHENTICATE;
 use reqwest::header::ACCEPT;
 use sse_stream::{Sse, SseStream};
 
@@ -101,7 +102,23 @@ impl StreamableHttpClient for reqwest::Client {
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());
         }
-        let response = request.json(&message).send().await?.error_for_status()?;
+        let response = request.json(&message).send().await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
+                let header = header
+                    .to_str()
+                    .map_err(|_| {
+                        StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                            "invalid www-authenticate header value",
+                        ))
+                    })?
+                    .to_string();
+                return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
+                    www_authenticate_header: header,
+                }));
+            }
+        }
+        let response = response.error_for_status()?;
         if response.status() == reqwest::StatusCode::ACCEPTED {
             return Ok(StreamableHttpPostResponse::Accepted);
         }

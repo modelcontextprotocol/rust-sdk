@@ -18,6 +18,11 @@ use crate::{
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 
+#[derive(Debug)]
+pub struct AuthRequiredError {
+    pub www_authenticate_header: String,
+}
+
 #[derive(Error, Debug)]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("SSE error: {0}")]
@@ -48,6 +53,8 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
+    #[error("Auth required")]
+    AuthRequired(AuthRequiredError),
 }
 
 #[derive(Debug, Clone, Error)]
@@ -56,6 +63,7 @@ pub enum StreamableHttpProtocolError {
     MissingSessionIdInResponse,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum StreamableHttpPostResponse {
     Accepted,
     Json(ServerJsonRpcMessage, Option<String>),
@@ -274,8 +282,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             responder,
             message: initialize_request,
         } = context.recv_from_handler().await?;
-        let _ = responder.send(Ok(()));
-        let (message, session_id) = self
+        let (message, session_id) = match self
             .client
             .post_message(
                 config.uri.clone(),
@@ -284,12 +291,22 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 self.config.auth_header,
             )
             .await
-            .map_err(WorkerQuitReason::fatal_context("send initialize request"))?
-            .expect_initialized::<C::Error>()
-            .await
-            .map_err(WorkerQuitReason::fatal_context(
-                "process initialize response",
-            ))?;
+        {
+            Ok(res) => {
+                let _ = responder.send(Ok(()));
+                res.expect_initialized::<C::Error>().await.map_err(
+                    WorkerQuitReason::fatal_context("process initialize response"),
+                )?
+            }
+            Err(err) => {
+                let msg = format!("{:?}", err);
+                let _ = responder.send(Err(err));
+                return Err(WorkerQuitReason::fatal(
+                    StreamableHttpError::TransportChannelClosed,
+                    msg,
+                ));
+            }
+        };
         let session_id: Option<Arc<str>> = if let Some(session_id) = session_id {
             Some(session_id.into())
         } else {
@@ -541,7 +558,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///
 /// impl StreamableHttpClient for MyHttpClient {
 ///     type Error = MyError;
-///     
+///
 ///     async fn post_message(
 ///         &self,
 ///         _uri: Arc<str>,
@@ -551,7 +568,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
-///     
+///
 ///     async fn delete_session(
 ///         &self,
 ///         _uri: Arc<str>,
@@ -560,7 +577,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
-///     
+///
 ///     async fn get_stream(
 ///         &self,
 ///         _uri: Arc<str>,
@@ -623,7 +640,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///
     /// impl StreamableHttpClient for MyHttpClient {
     ///     type Error = MyError;
-    ///     
+    ///
     ///     async fn post_message(
     ///         &self,
     ///         _uri: Arc<str>,
@@ -633,7 +650,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
-    ///     
+    ///
     ///     async fn delete_session(
     ///         &self,
     ///         _uri: Arc<str>,
@@ -642,7 +659,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
-    ///     
+    ///
     ///     async fn get_stream(
     ///         &self,
     ///         _uri: Arc<str>,

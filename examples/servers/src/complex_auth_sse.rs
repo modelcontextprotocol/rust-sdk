@@ -207,14 +207,6 @@ struct TokenRequest {
     refresh_token: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct UserInfo {
-    sub: String,
-    name: String,
-    email: String,
-    username: String,
-}
-
 fn generate_random_string(length: usize) -> String {
     rand::rng()
         .sample_iter(&Alphanumeric)

@@ -7,6 +7,7 @@ use rmcp::{
 use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[allow(clippy::result_large_err)]
 #[tokio::main]
 async fn main() -> Result<(), RmcpError> {
     // Initialize logging
