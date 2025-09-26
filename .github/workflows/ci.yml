@@ -216,15 +216,14 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
-
+        
       - uses: Swatinem/rust-cache@v2
 
       - name: Generate documentation
         run: |
           cargo +nightly doc --no-deps -p rmcp -p rmcp-macros --all-features
         env:
-          RUSTDOCFLAGS: --cfg docsrs -Dwarnings
-          RUSTFLAGS: --cfg docsrs 
+          RUSTDOCFLAGS: --cfg docsrs -Dwarnings 
 
   release:
     name: Release crates
