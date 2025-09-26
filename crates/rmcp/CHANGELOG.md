@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.7.0...rmcp-v0.7.1) - 2025-09-26
+
+### Fixed
+
+- generate default schema for tools with no params ([#446](https://github.com/modelcontextprotocol/rust-sdk/pull/446))
+
+### Other
+
+- bump to rust 1.90.0 ([#453](https://github.com/modelcontextprotocol/rust-sdk/pull/453))
+
 ## [0.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.4...rmcp-v0.7.0) - 2025-09-24
 
 ### Fixed
