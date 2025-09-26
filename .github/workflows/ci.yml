@@ -217,8 +217,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
 
-      - uses: Swatinem/rust-cache@v2
-
       - name: Generate documentation
         run: |
           cargo +nightly doc --no-deps -p rmcp -p rmcp-macros --all-features
