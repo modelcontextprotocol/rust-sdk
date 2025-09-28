@@ -179,6 +179,33 @@ struct AuthorizationState {
 }
 
 impl AuthorizationManager {
+    fn well_known_paths(base_path: &str, resource: &str) -> Vec<String> {
+        let trimmed = base_path.trim_start_matches('/').trim_end_matches('/');
+        let mut candidates = Vec::new();
+
+        let mut push_candidate = |candidate: String| {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        };
+
+        let canonical = format!("/.well-known/{resource}");
+
+        if trimmed.is_empty() {
+            push_candidate(canonical);
+            return candidates;
+        }
+
+        // This follows the RFC 8414 recommendation for well-known URI discovery
+        push_candidate(format!("{canonical}/{trimmed}"));
+        // This is a common pattern used by some identity providers
+        push_candidate(format!("/{trimmed}/.well-known/{resource}"));
+        // The canonical path should always be the last fallback
+        push_candidate(canonical);
+
+        candidates
+    }
+
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
         let base_url = base_url.into_url()?;
@@ -207,53 +234,68 @@ impl AuthorizationManager {
 
     /// discover oauth2 metadata
     pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
-        // according to the specification, the metadata should be located at "/.well-known/oauth-authorization-server"
-        let mut discovery_url = self.base_url.clone();
-        let path = discovery_url.path();
-        let path_suffix = if path == "/" { "" } else { path };
-        discovery_url.set_path(&format!(
-            "/.well-known/oauth-authorization-server{path_suffix}"
-        ));
-        debug!("discovery url: {:?}", discovery_url);
-        let response = self
-            .http_client
-            .get(discovery_url)
-            .header("MCP-Protocol-Version", "2024-11-05")
-            .send()
-            .await?;
+        for candidate_path in
+            Self::well_known_paths(self.base_url.path(), "oauth-authorization-server")
+        {
+            let mut discovery_url = self.base_url.clone();
+            discovery_url.set_path(&candidate_path);
+            debug!("discovery url: {:?}", discovery_url);
 
-        if response.status() == StatusCode::OK {
+            let response = match self
+                .http_client
+                .get(discovery_url)
+                .header("MCP-Protocol-Version", "2024-11-05")
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    debug!("discovery request failed: {}", e);
+                    continue; // try next candidate if request fails
+                }
+            };
+
+            if response.status() != StatusCode::OK {
+                debug!("discovery returned non-200: {}", response.status());
+                continue; // try next candidate if response is not OK
+            }
+
+            // parse metadata
             let metadata = response
                 .json::<AuthorizationMetadata>()
                 .await
                 .map_err(|e| {
+                    // Fail the discovery if we get a 200 but cannot parse the response
+                    // This indicates a misconfiguration on the server side
                     AuthError::MetadataError(format!("Failed to parse metadata: {}", e))
                 })?;
             debug!("metadata: {:?}", metadata);
-            Ok(metadata)
-        } else {
-            // fallback to default endpoints
-            let mut auth_base = self.base_url.clone();
-            // discard the path part, only keep scheme, host, port
-            auth_base.set_path("");
-
-            // Helper function to create endpoint URL
-            let create_endpoint = |path: &str| -> String {
-                let mut url = auth_base.clone();
-                url.set_path(path);
-                url.to_string()
-            };
-
-            Ok(AuthorizationMetadata {
-                authorization_endpoint: create_endpoint("authorize"),
-                token_endpoint: create_endpoint("token"),
-                registration_endpoint: create_endpoint("register"),
-                issuer: None,
-                jwks_uri: None,
-                scopes_supported: None,
-                additional_fields: HashMap::new(),
-            })
+            return Ok(metadata);
         }
+
+        debug!("No valid .well-known endpoint found, falling back to default endpoints");
+
+        // fallback to default endpoints
+        let mut auth_base = self.base_url.clone();
+        // discard the path part, only keep scheme, host, port
+        auth_base.set_path("");
+
+        // Helper function to create endpoint URL
+        let create_endpoint = |path: &str| -> String {
+            let mut url = auth_base.clone();
+            url.set_path(path);
+            url.to_string()
+        };
+
+        Ok(AuthorizationMetadata {
+            authorization_endpoint: create_endpoint("authorize"),
+            token_endpoint: create_endpoint("token"),
+            registration_endpoint: create_endpoint("register"),
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            additional_fields: HashMap::new(),
+        })
     }
 
     /// get client id and credentials
@@ -874,5 +916,46 @@ impl OAuthState {
             OAuthState::Authorized(manager) => Some(manager),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthorizationManager;
+
+    #[test]
+    fn well_known_paths_root() {
+        let paths = AuthorizationManager::well_known_paths("/", "oauth-authorization-server");
+        assert_eq!(
+            paths,
+            vec!["/.well-known/oauth-authorization-server".to_string()]
+        );
+    }
+
+    #[test]
+    fn well_known_paths_with_suffix() {
+        let paths = AuthorizationManager::well_known_paths("/mcp", "oauth-authorization-server");
+        assert_eq!(
+            paths,
+            vec![
+                "/.well-known/oauth-authorization-server/mcp".to_string(),
+                "/mcp/.well-known/oauth-authorization-server".to_string(),
+                "/.well-known/oauth-authorization-server".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn well_known_paths_trailing_slash() {
+        let paths =
+            AuthorizationManager::well_known_paths("/v1/mcp/", "oauth-authorization-server");
+        assert_eq!(
+            paths,
+            vec![
+                "/.well-known/oauth-authorization-server/v1/mcp".to_string(),
+                "/v1/mcp/.well-known/oauth-authorization-server".to_string(),
+                "/.well-known/oauth-authorization-server".to_string(),
+            ]
+        );
     }
 }
