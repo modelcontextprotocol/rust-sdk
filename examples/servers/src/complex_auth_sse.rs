@@ -525,7 +525,7 @@ async fn oauth_authorization_server() -> impl IntoResponse {
         authorization_endpoint: format!("http://{}/oauth/authorize", BIND_ADDRESS),
         token_endpoint: format!("http://{}/oauth/token", BIND_ADDRESS),
         scopes_supported: Some(vec!["profile".to_string(), "email".to_string()]),
-        registration_endpoint: format!("http://{}/oauth/register", BIND_ADDRESS),
+        registration_endpoint: Some(format!("http://{}/oauth/register", BIND_ADDRESS)),
         issuer: Some(BIND_ADDRESS.to_string()),
         jwks_uri: Some(format!("http://{}/oauth/jwks", BIND_ADDRESS)),
         additional_fields,
