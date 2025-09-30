@@ -14,7 +14,7 @@ use reqwest::{Client as HttpClient, IntoUrl, StatusCode, Url, header::AUTHORIZAT
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
@@ -102,7 +102,7 @@ pub enum AuthError {
 pub struct AuthorizationMetadata {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
-    pub registration_endpoint: String,
+    pub registration_endpoint: Option<String>,
     pub issuer: Option<String>,
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
@@ -273,7 +273,7 @@ impl AuthorizationManager {
             return Ok(metadata);
         }
 
-        debug!("No valid .well-known endpoint found, falling back to default endpoints");
+        warn!("No valid .well-known endpoint found, falling back to default endpoints");
 
         // fallback to default endpoints
         let mut auth_base = self.base_url.clone();
@@ -290,7 +290,7 @@ impl AuthorizationManager {
         Ok(AuthorizationMetadata {
             authorization_endpoint: create_endpoint("authorize"),
             token_endpoint: create_endpoint("token"),
-            registration_endpoint: create_endpoint("register"),
+            registration_endpoint: None,
             issuer: None,
             jwks_uri: None,
             scopes_supported: None,
@@ -323,12 +323,10 @@ impl AuthorizationManager {
         let token_url = TokenUrl::new(metadata.token_endpoint.clone())
             .map_err(|e| AuthError::OAuthError(format!("Invalid token URL: {}", e)))?;
 
-        // debug!("token url: {:?}", token_url);
         let client_id = ClientId::new(config.client_id);
         let redirect_url = RedirectUrl::new(config.redirect_uri.clone())
             .map_err(|e| AuthError::OAuthError(format!("Invalid re URL: {}", e)))?;
 
-        debug!("client_id: {:?}", client_id);
         let mut client_builder = BasicClient::new(client_id.clone())
             .set_auth_uri(auth_url)
             .set_token_uri(token_url)
@@ -349,14 +347,16 @@ impl AuthorizationManager {
         redirect_uri: &str,
     ) -> Result<OAuthClientConfig, AuthError> {
         if self.metadata.is_none() {
-            error!("No authorization support detected");
             return Err(AuthError::NoAuthorizationSupport);
         }
 
         let metadata = self.metadata.as_ref().unwrap();
-        let registration_url = metadata.registration_endpoint.clone();
+        let Some(registration_url) = metadata.registration_endpoint.as_ref() else {
+            return Err(AuthError::RegistrationFailed(
+                "Dynamic client registration not supported".to_string(),
+            ));
+        };
 
-        debug!("registration url: {:?}", registration_url);
         // prepare registration request
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
@@ -369,8 +369,6 @@ impl AuthorizationManager {
             response_types: vec!["code".to_string()],
         };
 
-        debug!("registration request: {:?}", registration_request);
-
         let response = match self
             .http_client
             .post(registration_url)
@@ -380,7 +378,6 @@ impl AuthorizationManager {
         {
             Ok(response) => response,
             Err(e) => {
-                error!("Registration request failed: {}", e);
                 return Err(AuthError::RegistrationFailed(format!(
                     "HTTP request error: {}",
                     e
@@ -395,7 +392,6 @@ impl AuthorizationManager {
                 Err(_) => "cannot get error details".to_string(),
             };
 
-            error!("Registration failed: HTTP {} - {}", status, error_text);
             return Err(AuthError::RegistrationFailed(format!(
                 "HTTP {}: {}",
                 status, error_text
@@ -406,7 +402,6 @@ impl AuthorizationManager {
         let reg_response = match response.json::<ClientRegistrationResponse>().await {
             Ok(response) => response,
             Err(e) => {
-                error!("Failed to parse registration response: {}", e);
                 return Err(AuthError::RegistrationFailed(format!(
                     "analyze response error: {}",
                     e
@@ -471,7 +466,6 @@ impl AuthorizationManager {
             pkce_verifier,
             csrf_token,
         });
-        debug!("set authorization state: {:?}", self.state.read().await);
 
         Ok(auth_url.to_string())
     }
@@ -625,9 +619,9 @@ impl AuthorizationSession {
         redirect_uri: &str,
         client_name: Option<&str>,
     ) -> Result<Self, AuthError> {
-        // set redirect uri
+        // Default client config
         let config = OAuthClientConfig {
-            client_id: "mcp-client".to_string(), // temporary id, will be updated by dynamic registration
+            client_id: "mcp-client".to_string(),
             client_secret: None,
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             redirect_uri: redirect_uri.to_string(),
@@ -640,7 +634,10 @@ impl AuthorizationSession {
         {
             Ok(config) => config,
             Err(e) => {
-                eprintln!("Dynamic registration failed: {}", e);
+                warn!(
+                    "Dynamic registration failed: {}, fallback to default config",
+                    e
+                );
                 // fallback to default config
                 config
             }
