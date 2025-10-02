@@ -39,23 +39,14 @@ async fn test_elicitation_serialization() {
 /// Test CreateElicitationRequestParam structure serialization/deserialization
 #[tokio::test]
 async fn test_elicitation_request_param_serialization() {
-    let schema_object = json!({
-        "type": "object",
-        "properties": {
-            "email": {
-                "type": "string",
-                "format": "email"
-            }
-        },
-        "required": ["email"]
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+    let schema = ElicitationSchema::builder()
+        .required_property("email", PrimitiveSchema::String(StringSchema::email()))
+        .build()
+        .unwrap();
 
     let request_param = CreateElicitationRequestParam {
         message: "Please provide your email address".to_string(),
-        requested_schema: schema_object,
+        requested_schema: schema,
     };
 
     // Test serialization
@@ -123,16 +114,13 @@ async fn test_elicitation_result_serialization() {
 /// Test that elicitation requests can be created and handled through the JSON-RPC protocol
 #[tokio::test]
 async fn test_elicitation_json_rpc_protocol() {
-    let schema = json!({
-        "type": "object",
-        "properties": {
-            "confirmation": {"type": "boolean"}
-        },
-        "required": ["confirmation"]
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+    let schema = ElicitationSchema::builder()
+        .required_property(
+            "confirmation",
+            PrimitiveSchema::Boolean(BooleanSchema::new()),
+        )
+        .build()
+        .unwrap();
 
     // Create a complete JSON-RPC request for elicitation
     let request = JsonRpcRequest {
@@ -223,19 +211,22 @@ async fn test_elicitation_spec_compliance() {
 /// Test error handling and edge cases for elicitation
 #[tokio::test]
 async fn test_elicitation_error_handling() {
-    // Test invalid JSON schema handling
-    let invalid_schema_request = CreateElicitationRequestParam {
+    // Test minimal schema handling (empty properties is technically valid)
+    let minimal_schema_request = CreateElicitationRequestParam {
         message: "Test message".to_string(),
-        requested_schema: serde_json::Map::new(), // Empty schema is technically valid
+        requested_schema: ElicitationSchema::builder().build().unwrap(),
     };
 
     // Should serialize without error
-    let _json = serde_json::to_value(&invalid_schema_request).unwrap();
+    let _json = serde_json::to_value(&minimal_schema_request).unwrap();
 
     // Test empty message
     let empty_message_request = CreateElicitationRequestParam {
         message: "".to_string(),
-        requested_schema: json!({"type": "string"}).as_object().unwrap().clone(),
+        requested_schema: ElicitationSchema::builder()
+            .property("value", PrimitiveSchema::String(StringSchema::new()))
+            .build()
+            .unwrap(),
     };
 
     // Should serialize without error (validation is up to the implementation)
@@ -250,15 +241,10 @@ async fn test_elicitation_error_handling() {
 /// Benchmark-style test for elicitation performance
 #[tokio::test]
 async fn test_elicitation_performance() {
-    let schema = json!({
-        "type": "object",
-        "properties": {
-            "data": {"type": "string"}
-        }
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+    let schema = ElicitationSchema::builder()
+        .property("data", PrimitiveSchema::String(StringSchema::new()))
+        .build()
+        .unwrap();
 
     let request = CreateElicitationRequestParam {
         message: "Performance test message".to_string(),
@@ -383,51 +369,52 @@ async fn test_elicitation_convenience_methods() {
             .contains("Option A")
     );
 
-    // Test that CreateElicitationRequestParam can be created with these schemas
+    // Test that CreateElicitationRequestParam can be created with type-safe schemas
     let confirmation_request = CreateElicitationRequestParam {
         message: "Test confirmation".to_string(),
-        requested_schema: confirmation_schema.as_object().unwrap().clone(),
+        requested_schema: ElicitationSchema::builder()
+            .property(
+                "confirmed",
+                PrimitiveSchema::Boolean(
+                    BooleanSchema::new()
+                        .description("User confirmation (true for yes, false for no)"),
+                ),
+            )
+            .build()
+            .unwrap(),
     };
 
     // Test serialization of convenience method request
     let json = serde_json::to_value(&confirmation_request).unwrap();
     assert_eq!(json["message"], "Test confirmation");
-    assert_eq!(json["requestedSchema"]["type"], "boolean");
+    assert_eq!(json["requestedSchema"]["type"], "object");
+    assert_eq!(
+        json["requestedSchema"]["properties"]["confirmed"]["type"],
+        "boolean"
+    );
 }
 
-/// Test structured input with complex schemas
-/// Ensures that complex JSON schemas work correctly with elicitation
+/// Test structured input with multiple primitive properties
+/// Ensures that schemas with multiple primitive properties work correctly with elicitation
 #[tokio::test]
 async fn test_elicitation_structured_schemas() {
-    // Test complex nested object schema
-    let complex_schema = json!({
-        "type": "object",
-        "properties": {
-            "user": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "email": {"type": "string", "format": "email"},
-                    "preferences": {
-                        "type": "object",
-                        "properties": {
-                            "theme": {"type": "string", "enum": ["light", "dark"]},
-                            "notifications": {"type": "boolean"}
-                        }
-                    }
-                }
-            },
-            "metadata": {
-                "type": "array",
-                "items": {"type": "string"}
-            }
-        },
-        "required": ["user"]
-    });
+    // Test schema with multiple primitive properties
+    let schema = ElicitationSchema::builder()
+        .required_string_with("name", |s| s.length(1, 100))
+        .required_email("email")
+        .required_integer("age", 0, 150)
+        .optional_bool("newsletter", false)
+        .required_string_enum(
+            "country",
+            vec!["US".to_string(), "UK".to_string(), "CA".to_string()],
+        )
+        .description("User registration information")
+        .build()
+        .unwrap();
 
     let request = CreateElicitationRequestParam {
         message: "Please provide your user information".to_string(),
-        requested_schema: complex_schema.as_object().unwrap().clone(),
+        requested_schema: schema,
     };
 
     // Test that complex schemas serialize/deserialize correctly
@@ -435,36 +422,41 @@ async fn test_elicitation_structured_schemas() {
     let deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
 
     assert_eq!(deserialized.message, "Please provide your user information");
-    assert_eq!(
-        deserialized.requested_schema["properties"]["user"]["properties"]["name"]["type"],
-        "string"
+    assert_eq!(deserialized.requested_schema.properties.len(), 5);
+    assert!(
+        deserialized
+            .requested_schema
+            .properties
+            .contains_key("name")
     );
-
-    // Test array schema
-    let array_schema = json!({
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "id": {"type": "integer"},
-                "name": {"type": "string"}
-            },
-            "required": ["id", "name"]
-        },
-        "minItems": 1,
-        "maxItems": 10
-    });
-
-    let array_request = CreateElicitationRequestParam {
-        message: "Please provide a list of items".to_string(),
-        requested_schema: array_schema.as_object().unwrap().clone(),
-    };
-
-    // Verify array schema
-    let json = serde_json::to_value(&array_request).unwrap();
-    assert_eq!(json["requestedSchema"]["type"], "array");
-    assert_eq!(json["requestedSchema"]["minItems"], 1);
-    assert_eq!(json["requestedSchema"]["maxItems"], 10);
+    assert!(
+        deserialized
+            .requested_schema
+            .properties
+            .contains_key("email")
+    );
+    assert!(deserialized.requested_schema.properties.contains_key("age"));
+    assert!(
+        deserialized
+            .requested_schema
+            .properties
+            .contains_key("newsletter")
+    );
+    assert!(
+        deserialized
+            .requested_schema
+            .properties
+            .contains_key("country")
+    );
+    assert_eq!(
+        deserialized.requested_schema.required,
+        Some(vec![
+            "name".to_string(),
+            "email".to_string(),
+            "age".to_string(),
+            "country".to_string()
+        ])
+    );
 }
 
 // Typed elicitation tests using the API with schemars
@@ -649,13 +641,13 @@ async fn test_elicitation_direction_server_to_client() {
     use serde_json::json;
 
     // Test that server can create elicitation requests
-    let schema = json!({
-        "type": "string",
-        "description": "Enter your name"
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+    let schema = ElicitationSchema::builder()
+        .property(
+            "name",
+            PrimitiveSchema::String(StringSchema::new().description("Enter your name")),
+        )
+        .build()
+        .unwrap();
 
     let elicitation_request = CreateElicitationRequestParam {
         message: "Please enter your name".to_string(),
@@ -665,7 +657,7 @@ async fn test_elicitation_direction_server_to_client() {
     // Verify request can be serialized
     let serialized = serde_json::to_value(&elicitation_request).unwrap();
     assert_eq!(serialized["message"], "Please enter your name");
-    assert_eq!(serialized["requestedSchema"]["type"], "string");
+    assert_eq!(serialized["requestedSchema"]["type"], "object");
 
     // Test that elicitation requests are part of ServerRequest
     let _server_request = ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
@@ -697,13 +689,13 @@ async fn test_elicitation_json_rpc_direction() {
     use rmcp::model::*;
     use serde_json::json;
 
-    let schema = json!({
-        "type": "boolean",
-        "description": "Do you want to continue?"
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+    let schema = ElicitationSchema::builder()
+        .property(
+            "continue",
+            PrimitiveSchema::Boolean(BooleanSchema::new().description("Do you want to continue?")),
+        )
+        .build()
+        .unwrap();
 
     // 1. Server creates elicitation request
     let server_request = ServerJsonRpcMessage::request(
@@ -1143,17 +1135,11 @@ async fn test_create_elicitation_with_timeout_basic() {
     use std::time::Duration;
 
     // This test verifies that the method accepts timeout parameter
-    let schema = json!({
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "email": {"type": "string"}
-        },
-        "required": ["name", "email"]
-    })
-    .as_object()
-    .unwrap()
-    .clone();
+    let schema = ElicitationSchema::builder()
+        .required_property("name", PrimitiveSchema::String(StringSchema::new()))
+        .required_property("email", PrimitiveSchema::String(StringSchema::new()))
+        .build()
+        .unwrap();
 
     let _params = CreateElicitationRequestParam {
         message: "Enter your details".to_string(),
@@ -1472,4 +1458,147 @@ async fn test_elicitation_examples_compile() {
         fn _assert_safe<T: rmcp::service::ElicitationSafe>() {}
         _assert_safe::<UserProfile>();
     }
+}
+
+// =============================================================================
+// BUILD-TIME VALIDATION TESTS
+// =============================================================================
+
+/// Test that build() validates required fields exist in properties
+#[tokio::test]
+async fn test_build_validation_required_field_not_in_properties() {
+    // Try to mark a field as required that doesn't exist in properties
+    let result = ElicitationSchema::builder()
+        .property("email", PrimitiveSchema::String(StringSchema::email()))
+        .mark_required("nonexistent_field")
+        .build();
+
+    // Should return an error
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        "Required field does not exist in properties"
+    );
+}
+
+/// Test that build() succeeds when all required fields exist
+#[tokio::test]
+async fn test_build_validation_required_field_exists() {
+    let result = ElicitationSchema::builder()
+        .property("email", PrimitiveSchema::String(StringSchema::email()))
+        .property("name", PrimitiveSchema::String(StringSchema::new()))
+        .mark_required("email")
+        .mark_required("name")
+        .build();
+
+    // Should succeed
+    assert!(result.is_ok());
+    let schema = result.unwrap();
+    assert_eq!(schema.properties.len(), 2);
+    assert_eq!(
+        schema.required,
+        Some(vec!["email".to_string(), "name".to_string()])
+    );
+}
+
+/// Test that build_unchecked() panics on validation errors
+#[tokio::test]
+#[should_panic(expected = "Invalid elicitation schema")]
+async fn test_build_unchecked_panics_on_invalid() {
+    // build_unchecked validates but panics instead of returning Result
+    let _schema = ElicitationSchema::builder()
+        .property("email", PrimitiveSchema::String(StringSchema::email()))
+        .mark_required("nonexistent_field")
+        .build_unchecked();
+}
+
+/// Test convenience methods handle validation correctly
+#[tokio::test]
+async fn test_convenience_methods_validation() {
+    // required_string_property should add both property and mark as required
+    let result = ElicitationSchema::builder()
+        .required_string_property("name", |s| s)
+        .required_email("email")
+        .build();
+
+    assert!(result.is_ok());
+    let schema = result.unwrap();
+    assert_eq!(schema.properties.len(), 2);
+    assert!(
+        schema
+            .required
+            .as_ref()
+            .unwrap()
+            .contains(&"name".to_string())
+    );
+    assert!(
+        schema
+            .required
+            .as_ref()
+            .unwrap()
+            .contains(&"email".to_string())
+    );
+}
+
+/// Test typed property methods work correctly
+#[tokio::test]
+async fn test_typed_property_methods() {
+    let result = ElicitationSchema::builder()
+        .string_property("name", |s| s.length(1, 100))
+        .number_property("price", |n| n.range(0.0, 1000.0))
+        .integer_property("quantity", |i| i.range(1, 100))
+        .bool_property("in_stock", |b| b.with_default(true))
+        .build();
+
+    assert!(result.is_ok());
+    let schema = result.unwrap();
+    assert_eq!(schema.properties.len(), 4);
+
+    // Verify types are correct
+    if let Some(PrimitiveSchema::String(_)) = schema.properties.get("name") {
+        // Expected
+    } else {
+        panic!("name should be StringSchema");
+    }
+
+    if let Some(PrimitiveSchema::Number(_)) = schema.properties.get("price") {
+        // Expected
+    } else {
+        panic!("price should be NumberSchema");
+    }
+
+    if let Some(PrimitiveSchema::Integer(_)) = schema.properties.get("quantity") {
+        // Expected
+    } else {
+        panic!("quantity should be IntegerSchema");
+    }
+
+    if let Some(PrimitiveSchema::Boolean(_)) = schema.properties.get("in_stock") {
+        // Expected
+    } else {
+        panic!("in_stock should be BooleanSchema");
+    }
+}
+
+/// Test required typed property methods
+#[tokio::test]
+async fn test_required_typed_property_methods() {
+    let result = ElicitationSchema::builder()
+        .required_string_property("name", |s| s)
+        .required_number_property("price", |n| n)
+        .required_integer_property("age", |i| i)
+        .required_bool_property("active", |b| b)
+        .build();
+
+    assert!(result.is_ok());
+    let schema = result.unwrap();
+    assert_eq!(schema.properties.len(), 4);
+    assert_eq!(schema.required.as_ref().unwrap().len(), 4);
+
+    // All should be marked as required
+    let required = schema.required.as_ref().unwrap();
+    assert!(required.contains(&"name".to_string()));
+    assert!(required.contains(&"price".to_string()));
+    assert!(required.contains(&"age".to_string()));
+    assert!(required.contains(&"active".to_string()));
 }
