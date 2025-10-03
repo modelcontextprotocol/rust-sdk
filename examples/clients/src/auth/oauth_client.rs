@@ -100,7 +100,11 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to initialize oauth state machine")?;
     oauth_state
-        .start_authorization(&["mcp", "profile", "email"], MCP_REDIRECT_URI)
+        .start_authorization(
+            &["mcp", "profile", "email"],
+            MCP_REDIRECT_URI,
+            Some("Test MCP Client"),
+        )
         .await
         .context("Failed to start authorization")?;
 

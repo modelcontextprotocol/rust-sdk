@@ -623,6 +623,7 @@ impl AuthorizationSession {
         mut auth_manager: AuthorizationManager,
         scopes: &[&str],
         redirect_uri: &str,
+        client_name: Option<&str>,
     ) -> Result<Self, AuthError> {
         // set redirect uri
         let config = OAuthClientConfig {
@@ -634,7 +635,7 @@ impl AuthorizationSession {
 
         // try to dynamic register client
         let config = match auth_manager
-            .register_client("MCP Client", redirect_uri)
+            .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
             .await
         {
             Ok(config) => config,
@@ -793,6 +794,7 @@ impl OAuthState {
         &mut self,
         scopes: &[&str],
         redirect_uri: &str,
+        client_name: Option<&str>,
     ) -> Result<(), AuthError> {
         if let OAuthState::Unauthorized(mut manager) = std::mem::replace(
             self,
@@ -802,7 +804,8 @@ impl OAuthState {
             let metadata = manager.discover_metadata().await?;
             manager.metadata = Some(metadata);
             debug!("start session");
-            let session = AuthorizationSession::new(manager, scopes, redirect_uri).await?;
+            let session =
+                AuthorizationSession::new(manager, scopes, redirect_uri, client_name).await?;
             *self = OAuthState::Session(session);
             Ok(())
         } else {
