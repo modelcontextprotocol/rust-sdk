@@ -2,6 +2,7 @@ use std::{borrow::Cow, sync::Arc};
 mod annotated;
 mod capabilities;
 mod content;
+mod elicitation_schema;
 mod extension;
 mod meta;
 mod prompt;
@@ -11,6 +12,7 @@ mod tool;
 pub use annotated::*;
 pub use capabilities::*;
 pub use content::*;
+pub use elicitation_schema::*;
 pub use extension::*;
 pub use meta::*;
 pub use prompt::*;
@@ -1377,7 +1379,21 @@ pub enum ElicitationAction {
 ///
 /// This structure contains everything needed to request interactive input from a user:
 /// - A human-readable message explaining what information is needed
-/// - A JSON schema defining the expected structure of the response
+/// - A type-safe schema defining the expected structure of the response
+///
+/// # Example
+///
+/// ```rust
+/// use rmcp::model::*;
+///
+/// let params = CreateElicitationRequestParam {
+///     message: "Please provide your email".to_string(),
+///     requested_schema: ElicitationSchema::builder()
+///         .required_email("email")
+///         .build()
+///         .unwrap(),
+/// };
+/// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -1387,10 +1403,10 @@ pub struct CreateElicitationRequestParam {
     /// what information they need to provide.
     pub message: String,
 
-    /// JSON Schema defining the expected structure and validation rules for the user's response.
-    /// This allows clients to validate input and provide appropriate UI controls.
-    /// Must be a valid JSON Schema Draft 2020-12 object.
-    pub requested_schema: JsonObject,
+    /// Type-safe schema defining the expected structure and validation rules for the user's response.
+    /// This enforces the MCP 2025-06-18 specification that elicitation schemas must be objects
+    /// with primitive-typed properties.
+    pub requested_schema: ElicitationSchema,
 }
 
 /// The result returned by a client in response to an elicitation request.

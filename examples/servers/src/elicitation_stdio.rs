@@ -29,6 +29,12 @@ pub struct UserInfo {
 // Mark as safe for elicitation
 elicit_safe!(UserInfo);
 
+/// Simple greeting message
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GreetingMessage {
+    pub text: String,
+}
+
 /// Simple tool request
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GreetRequest {
