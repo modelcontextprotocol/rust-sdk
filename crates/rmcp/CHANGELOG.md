@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.7.0...rmcp-v0.8.0) - 2025-10-04
+
+### Added
+
+- allow clients to override client_name ([#469](https://github.com/modelcontextprotocol/rust-sdk/pull/469))
+
+### Fixed
+
+- *(oauth)* support suffixed and preffixed well-knonw paths ([#459](https://github.com/modelcontextprotocol/rust-sdk/pull/459))
+- generate default schema for tools with no params ([#446](https://github.com/modelcontextprotocol/rust-sdk/pull/446))
+
+### Other
+
+- bump to rust 1.90.0 ([#453](https://github.com/modelcontextprotocol/rust-sdk/pull/453))
+
 ## [0.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.4...rmcp-v0.7.0) - 2025-09-24
 
 ### Fixed
