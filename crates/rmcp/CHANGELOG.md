@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- crates/rmcp/src/handler/client/progress.rs dispacher-> dispatcher ([#429](https://github.com/modelcontextprotocol/rust-sdk/pull/429))
+- crates/rmcp/src/handler/client/progress.rs XXXXXX -> dispatcher ([#429](https://github.com/modelcontextprotocol/rust-sdk/pull/429))
 - build issue due to missing struct field ([#427](https://github.com/modelcontextprotocol/rust-sdk/pull/427))
 - generate simple {} schema for tools with no parameters ([#425](https://github.com/modelcontextprotocol/rust-sdk/pull/425))
 
