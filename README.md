@@ -20,7 +20,7 @@ This repository contains the following crates:
 ### Import the crate
 
 ```toml
-rmcp = { version = "0.2.0", features = ["server"] }
+rmcp = { version = "0.8.0", features = ["server"] }
 ## or dev channel
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
