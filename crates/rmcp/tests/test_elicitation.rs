@@ -404,7 +404,7 @@ async fn test_elicitation_structured_schemas() {
         .required_email("email")
         .required_integer("age", 0, 150)
         .optional_bool("newsletter", false)
-        .required_string_enum(
+        .required_enum(
             "country",
             vec!["US".to_string(), "UK".to_string(), "CA".to_string()],
         )

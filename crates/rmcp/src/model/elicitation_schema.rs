@@ -31,6 +31,7 @@ const_string!(StringTypeConst = "string");
 const_string!(NumberTypeConst = "number");
 const_string!(IntegerTypeConst = "integer");
 const_string!(BooleanTypeConst = "boolean");
+const_string!(EnumTypeConst = "string");
 
 // =============================================================================
 // PRIMITIVE SCHEMA DEFINITIONS
@@ -39,7 +40,7 @@ const_string!(BooleanTypeConst = "boolean");
 /// Primitive schema definition for elicitation properties.
 ///
 /// According to MCP 2025-06-18 specification, elicitation schemas must have
-/// properties of primitive types only (string, number, integer, boolean).
+/// properties of primitive types only (string, number, integer, boolean, enum).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
@@ -52,6 +53,8 @@ pub enum PrimitiveSchema {
     Integer(IntegerSchema),
     /// Boolean property
     Boolean(BooleanSchema),
+    /// Enum property (explicit enum schema)
+    Enum(EnumSchema),
 }
 
 // =============================================================================
@@ -60,8 +63,9 @@ pub enum PrimitiveSchema {
 
 /// Schema definition for string properties.
 ///
-/// Supports validation constraints like length, pattern matching, format, and enum values.
-/// All fields are private to ensure validation - use builder methods to construct.
+/// Compliant with MCP 2025-06-18 specification for elicitation schemas.
+/// Supports only the fields allowed by the MCP spec:
+/// - format limited to: "email", "uri", "date", "date-time"
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -70,13 +74,13 @@ pub struct StringSchema {
     #[serde(rename = "type")]
     type_: StringTypeConst,
 
-    /// Allowed string values (when used as enum)
-    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
-    enum_values: Option<Vec<String>>,
-
-    /// Optional human-readable names for each enum value
+    /// Optional title for the schema
     #[serde(skip_serializing_if = "Option::is_none")]
-    enum_names: Option<Vec<String>>,
+    title: Option<Cow<'static, str>>,
+
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<Cow<'static, str>>,
 
     /// Minimum string length
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,35 +90,20 @@ pub struct StringSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_length: Option<u32>,
 
-    /// Regular expression pattern
+    /// String format - limited to: "email", "uri", "date", "date-time"
     #[serde(skip_serializing_if = "Option::is_none")]
-    pattern: Option<String>,
-
-    /// String format (e.g., "email", "uri", "date-time")
-    #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<String>,
-
-    /// Human-readable description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-
-    /// Default value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default: Option<String>,
+    format: Option<Cow<'static, str>>,
 }
 
 impl Default for StringSchema {
     fn default() -> Self {
         Self {
             type_: StringTypeConst,
-            enum_values: None,
-            enum_names: None,
+            title: None,
+            description: None,
             min_length: None,
             max_length: None,
-            pattern: None,
             format: None,
-            description: None,
-            default: None,
         }
     }
 }
@@ -128,7 +117,7 @@ impl StringSchema {
     /// Create an email string schema
     pub fn email() -> Self {
         Self {
-            format: Some("email".to_string()),
+            format: Some(Cow::Borrowed("email")),
             ..Default::default()
         }
     }
@@ -136,17 +125,37 @@ impl StringSchema {
     /// Create a URI string schema
     pub fn uri() -> Self {
         Self {
-            format: Some("uri".to_string()),
+            format: Some(Cow::Borrowed("uri")),
             ..Default::default()
         }
     }
 
-    /// Create an enum string schema
-    pub fn enum_values(values: Vec<String>) -> Self {
+    /// Create a date string schema
+    pub fn date() -> Self {
         Self {
-            enum_values: Some(values),
+            format: Some(Cow::Borrowed("date")),
             ..Default::default()
         }
+    }
+
+    /// Create a date-time string schema
+    pub fn date_time() -> Self {
+        Self {
+            format: Some(Cow::Borrowed("date-time")),
+            ..Default::default()
+        }
+    }
+
+    /// Set title
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set description
+    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 
     /// Set minimum and maximum length
@@ -179,33 +188,9 @@ impl StringSchema {
         self
     }
 
-    /// Set pattern
-    pub fn pattern(mut self, pattern: impl Into<String>) -> Self {
-        self.pattern = Some(pattern.into());
-        self
-    }
-
-    /// Set format
-    pub fn format(mut self, format: impl Into<String>) -> Self {
+    /// Set format (limited to: "email", "uri", "date", "date-time")
+    pub fn format(mut self, format: impl Into<Cow<'static, str>>) -> Self {
         self.format = Some(format.into());
-        self
-    }
-
-    /// Set enum names
-    pub fn enum_names(mut self, names: Vec<String>) -> Self {
-        self.enum_names = Some(names);
-        self
-    }
-
-    /// Set description
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Set default value
-    pub fn with_default(mut self, default: impl Into<String>) -> Self {
-        self.default = Some(default.into());
         self
     }
 }
@@ -216,7 +201,8 @@ impl StringSchema {
 
 /// Schema definition for number properties (floating-point).
 ///
-/// Supports range validation, multiples, and enum values.
+/// Compliant with MCP 2025-06-18 specification for elicitation schemas.
+/// Supports only the fields allowed by the MCP spec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -225,13 +211,13 @@ pub struct NumberSchema {
     #[serde(rename = "type")]
     type_: NumberTypeConst,
 
-    /// Allowed number values (when used as enum)
-    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
-    pub enum_values: Option<Vec<f64>>,
-
-    /// Optional human-readable names for each enum value
+    /// Optional title for the schema
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enum_names: Option<Vec<String>>,
+    pub title: Option<Cow<'static, str>>,
+
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
 
     /// Minimum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,41 +226,16 @@ pub struct NumberSchema {
     /// Maximum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum: Option<f64>,
-
-    /// Minimum value (exclusive)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclusive_minimum: Option<f64>,
-
-    /// Maximum value (exclusive)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclusive_maximum: Option<f64>,
-
-    /// Value must be a multiple of this number
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub multiple_of: Option<f64>,
-
-    /// Human-readable description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
-    /// Default value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<f64>,
 }
 
 impl Default for NumberSchema {
     fn default() -> Self {
         Self {
             type_: NumberTypeConst,
-            enum_values: None,
-            enum_names: None,
+            title: None,
+            description: None,
             minimum: None,
             maximum: None,
-            exclusive_minimum: None,
-            exclusive_maximum: None,
-            multiple_of: None,
-            description: None,
-            default: None,
         }
     }
 }
@@ -283,14 +244,6 @@ impl NumberSchema {
     /// Create a new number schema
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Create an enum number schema
-    pub fn enum_values(values: Vec<f64>) -> Self {
-        Self {
-            enum_values: Some(values),
-            ..Default::default()
-        }
     }
 
     /// Set minimum and maximum (inclusive)
@@ -323,39 +276,15 @@ impl NumberSchema {
         self
     }
 
-    /// Set exclusive minimum
-    pub fn exclusive_minimum(mut self, min: f64) -> Self {
-        self.exclusive_minimum = Some(min);
-        self
-    }
-
-    /// Set exclusive maximum
-    pub fn exclusive_maximum(mut self, max: f64) -> Self {
-        self.exclusive_maximum = Some(max);
-        self
-    }
-
-    /// Set multiple of constraint
-    pub fn multiple_of(mut self, multiple: f64) -> Self {
-        self.multiple_of = Some(multiple);
-        self
-    }
-
-    /// Set enum names
-    pub fn enum_names(mut self, names: Vec<String>) -> Self {
-        self.enum_names = Some(names);
+    /// Set title
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
         self
     }
 
     /// Set description
-    pub fn description(mut self, description: impl Into<String>) -> Self {
+    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    /// Set default value
-    pub fn with_default(mut self, default: f64) -> Self {
-        self.default = Some(default);
         self
     }
 }
@@ -366,7 +295,8 @@ impl NumberSchema {
 
 /// Schema definition for integer properties.
 ///
-/// Supports range validation, multiples, and enum values.
+/// Compliant with MCP 2025-06-18 specification for elicitation schemas.
+/// Supports only the fields allowed by the MCP spec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -375,13 +305,13 @@ pub struct IntegerSchema {
     #[serde(rename = "type")]
     type_: IntegerTypeConst,
 
-    /// Allowed integer values (when used as enum)
-    #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
-    pub enum_values: Option<Vec<i64>>,
-
-    /// Optional human-readable names for each enum value
+    /// Optional title for the schema
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enum_names: Option<Vec<String>>,
+    pub title: Option<Cow<'static, str>>,
+
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
 
     /// Minimum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,41 +320,16 @@ pub struct IntegerSchema {
     /// Maximum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum: Option<i64>,
-
-    /// Minimum value (exclusive)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclusive_minimum: Option<i64>,
-
-    /// Maximum value (exclusive)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclusive_maximum: Option<i64>,
-
-    /// Value must be a multiple of this number
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub multiple_of: Option<i64>,
-
-    /// Human-readable description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
-    /// Default value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<i64>,
 }
 
 impl Default for IntegerSchema {
     fn default() -> Self {
         Self {
             type_: IntegerTypeConst,
-            enum_values: None,
-            enum_names: None,
+            title: None,
+            description: None,
             minimum: None,
             maximum: None,
-            exclusive_minimum: None,
-            exclusive_maximum: None,
-            multiple_of: None,
-            description: None,
-            default: None,
         }
     }
 }
@@ -433,14 +338,6 @@ impl IntegerSchema {
     /// Create a new integer schema
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Create an enum integer schema
-    pub fn enum_values(values: Vec<i64>) -> Self {
-        Self {
-            enum_values: Some(values),
-            ..Default::default()
-        }
     }
 
     /// Set minimum and maximum (inclusive)
@@ -473,39 +370,15 @@ impl IntegerSchema {
         self
     }
 
-    /// Set exclusive minimum
-    pub fn exclusive_minimum(mut self, min: i64) -> Self {
-        self.exclusive_minimum = Some(min);
-        self
-    }
-
-    /// Set exclusive maximum
-    pub fn exclusive_maximum(mut self, max: i64) -> Self {
-        self.exclusive_maximum = Some(max);
-        self
-    }
-
-    /// Set multiple of constraint
-    pub fn multiple_of(mut self, multiple: i64) -> Self {
-        self.multiple_of = Some(multiple);
-        self
-    }
-
-    /// Set enum names
-    pub fn enum_names(mut self, names: Vec<String>) -> Self {
-        self.enum_names = Some(names);
+    /// Set title
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
         self
     }
 
     /// Set description
-    pub fn description(mut self, description: impl Into<String>) -> Self {
+    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    /// Set default value
-    pub fn with_default(mut self, default: i64) -> Self {
-        self.default = Some(default);
         self
     }
 }
@@ -523,9 +396,13 @@ pub struct BooleanSchema {
     #[serde(rename = "type")]
     type_: BooleanTypeConst,
 
+    /// Optional title for the schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Cow<'static, str>>,
+
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: Option<Cow<'static, str>>,
 
     /// Default value
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -536,6 +413,7 @@ impl Default for BooleanSchema {
     fn default() -> Self {
         Self {
             type_: BooleanTypeConst,
+            title: None,
             description: None,
             default: None,
         }
@@ -548,8 +426,14 @@ impl BooleanSchema {
         Self::default()
     }
 
+    /// Set title
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
     /// Set description
-    pub fn description(mut self, description: impl Into<String>) -> Self {
+    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
         self
     }
@@ -557,6 +441,70 @@ impl BooleanSchema {
     /// Set default value
     pub fn with_default(mut self, default: bool) -> Self {
         self.default = Some(default);
+        self
+    }
+}
+
+// =============================================================================
+// ENUM SCHEMA
+// =============================================================================
+
+/// Schema definition for enum properties.
+///
+/// Compliant with MCP 2025-06-18 specification for elicitation schemas.
+/// Enums must have string type and can optionally include human-readable names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct EnumSchema {
+    /// Type discriminator (always "string" for enums)
+    #[serde(rename = "type")]
+    type_: StringTypeConst,
+
+    /// Allowed enum values (string values only per MCP spec)
+    #[serde(rename = "enum")]
+    enum_values: Vec<String>,
+
+    /// Optional human-readable names for each enum value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enum_names: Option<Vec<String>>,
+
+    /// Optional title for the schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<Cow<'static, str>>,
+
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<Cow<'static, str>>,
+}
+
+impl EnumSchema {
+    /// Create a new enum schema with string values
+    pub fn new(values: Vec<String>) -> Self {
+        Self {
+            type_: StringTypeConst,
+            enum_values: values,
+            enum_names: None,
+            title: None,
+            description: None,
+        }
+    }
+
+    /// Set enum names (human-readable names for each enum value)
+    pub fn enum_names(mut self, names: Vec<String>) -> Self {
+        self.enum_names = Some(names);
+        self
+    }
+
+    /// Set title
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set description
+    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
+        self.description = Some(description.into());
         self
     }
 }
@@ -589,6 +537,10 @@ pub struct ElicitationSchema {
     #[serde(rename = "type")]
     type_: ObjectTypeConst,
 
+    /// Optional title for the schema
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Cow<'static, str>>,
+
     /// Property definitions (must be primitive types)
     pub properties: BTreeMap<String, PrimitiveSchema>,
 
@@ -598,7 +550,7 @@ pub struct ElicitationSchema {
 
     /// Optional description of what this schema represents
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: Option<Cow<'static, str>>,
 }
 
 impl ElicitationSchema {
@@ -606,6 +558,7 @@ impl ElicitationSchema {
     pub fn new(properties: BTreeMap<String, PrimitiveSchema>) -> Self {
         Self {
             type_: ObjectTypeConst,
+            title: None,
             properties,
             required: None,
             description: None,
@@ -618,8 +571,14 @@ impl ElicitationSchema {
         self
     }
 
+    /// Set the title
+    pub fn with_title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
     /// Set the description
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+    pub fn with_description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
         self
     }
@@ -652,7 +611,8 @@ impl ElicitationSchema {
 pub struct ElicitationSchemaBuilder {
     properties: BTreeMap<String, PrimitiveSchema>,
     required: Vec<String>,
-    description: Option<String>,
+    title: Option<Cow<'static, str>>,
+    description: Option<Cow<'static, str>>,
 }
 
 impl ElicitationSchemaBuilder {
@@ -928,20 +888,14 @@ impl ElicitationSchemaBuilder {
 
     // Enum convenience methods
 
-    /// Add a required string enum property
-    pub fn required_string_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
-        self.required_property(
-            name,
-            PrimitiveSchema::String(StringSchema::enum_values(values)),
-        )
+    /// Add a required enum property
+    pub fn required_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
+        self.required_property(name, PrimitiveSchema::Enum(EnumSchema::new(values)))
     }
 
-    /// Add an optional string enum property
-    pub fn optional_string_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
-        self.property(
-            name,
-            PrimitiveSchema::String(StringSchema::enum_values(values)),
-        )
+    /// Add an optional enum property
+    pub fn optional_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
+        self.property(name, PrimitiveSchema::Enum(EnumSchema::new(values)))
     }
 
     /// Mark an existing property as required
@@ -950,8 +904,14 @@ impl ElicitationSchemaBuilder {
         self
     }
 
+    /// Set the schema title
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
     /// Set the schema description
-    pub fn description(mut self, description: impl Into<String>) -> Self {
+    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
         self
     }
@@ -975,6 +935,7 @@ impl ElicitationSchemaBuilder {
 
         Ok(ElicitationSchema {
             type_: ObjectTypeConst,
+            title: self.title,
             properties: self.properties,
             required: if self.required.is_empty() {
                 None
@@ -1043,12 +1004,13 @@ mod tests {
     }
 
     #[test]
-    fn test_string_enum_schema_serialization() {
-        let schema = StringSchema::enum_values(vec!["US".to_string(), "UK".to_string()])
+    fn test_enum_schema_serialization() {
+        let schema = EnumSchema::new(vec!["US".to_string(), "UK".to_string()])
             .enum_names(vec![
                 "United States".to_string(),
                 "United Kingdom".to_string(),
-            ]);
+            ])
+            .description("Country code");
         let json = serde_json::to_value(&schema).unwrap();
 
         assert_eq!(json["type"], "string");
@@ -1057,6 +1019,7 @@ mod tests {
             json["enumNames"],
             json!(["United States", "United Kingdom"])
         );
+        assert_eq!(json["description"], "Country code");
     }
 
     #[test]
@@ -1079,7 +1042,7 @@ mod tests {
             .required_string_with("name", |s| s.length(1, 100))
             .required_integer("age", 0, 150)
             .optional_bool("newsletter", false)
-            .required_string_enum(
+            .required_enum(
                 "country",
                 vec!["US".to_string(), "UK".to_string(), "CA".to_string()],
             )
@@ -1096,7 +1059,7 @@ mod tests {
                 "country".to_string()
             ])
         );
-        assert_eq!(schema.description, Some("User registration".to_string()));
+        assert_eq!(schema.description.as_deref(), Some("User registration"));
     }
 
     #[test]

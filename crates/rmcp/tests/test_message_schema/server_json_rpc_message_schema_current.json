@@ -325,6 +325,13 @@
             "null"
           ]
         },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "type": {
           "description": "Type discriminator",
           "allOf": [
@@ -631,6 +638,13 @@
             "type": "string"
           }
         },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "type": {
           "description": "Always \"object\" for elicitation schemas",
           "allOf": [
@@ -648,6 +662,55 @@
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object"
+    },
+    "EnumSchema": {
+      "description": "Schema definition for enum properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nEnums must have string type and can optionally include human-readable names.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Human-readable description",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "description": "Allowed enum values (string values only per MCP spec)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enumNames": {
+          "description": "Optional human-readable names for each enum value",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "description": "Optional title for the schema",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Type discriminator (always \"string\" for enums)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StringTypeConst"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "enum"
+      ]
     },
     "ErrorCode": {
       "description": "Standard JSON-RPC error codes used throughout the MCP protocol.\n\nThese codes follow the JSON-RPC 2.0 specification and provide\nstandardized error reporting across all MCP implementations.",
@@ -808,60 +871,15 @@
       ]
     },
     "IntegerSchema": {
-      "description": "Schema definition for integer properties.\n\nSupports range validation, multiples, and enum values.",
+      "description": "Schema definition for integer properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec.",
       "type": "object",
       "properties": {
-        "default": {
-          "description": "Default value",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int64"
-        },
         "description": {
           "description": "Human-readable description",
           "type": [
             "string",
             "null"
           ]
-        },
-        "enum": {
-          "description": "Allowed integer values (when used as enum)",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "int64"
-          }
-        },
-        "enumNames": {
-          "description": "Optional human-readable names for each enum value",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "exclusiveMaximum": {
-          "description": "Maximum value (exclusive)",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int64"
-        },
-        "exclusiveMinimum": {
-          "description": "Minimum value (exclusive)",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int64"
         },
         "maximum": {
           "description": "Maximum value (inclusive)",
@@ -879,13 +897,12 @@
           ],
           "format": "int64"
         },
-        "multipleOf": {
-          "description": "Value must be a multiple of this number",
+        "title": {
+          "description": "Optional title for the schema",
           "type": [
-            "integer",
+            "string",
             "null"
-          ],
-          "format": "int64"
+          ]
         },
         "type": {
           "description": "Type discriminator",
@@ -1300,60 +1317,15 @@
       ]
     },
     "NumberSchema": {
-      "description": "Schema definition for number properties (floating-point).\n\nSupports range validation, multiples, and enum values.",
+      "description": "Schema definition for number properties (floating-point).\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec.",
       "type": "object",
       "properties": {
-        "default": {
-          "description": "Default value",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
         "description": {
           "description": "Human-readable description",
           "type": [
             "string",
             "null"
           ]
-        },
-        "enum": {
-          "description": "Allowed number values (when used as enum)",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "number",
-            "format": "double"
-          }
-        },
-        "enumNames": {
-          "description": "Optional human-readable names for each enum value",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "exclusiveMaximum": {
-          "description": "Maximum value (exclusive)",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "exclusiveMinimum": {
-          "description": "Minimum value (exclusive)",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
         },
         "maximum": {
           "description": "Maximum value (inclusive)",
@@ -1371,13 +1343,12 @@
           ],
           "format": "double"
         },
-        "multipleOf": {
-          "description": "Value must be a multiple of this number",
+        "title": {
+          "description": "Optional title for the schema",
           "type": [
-            "number",
+            "string",
             "null"
-          ],
-          "format": "double"
+          ]
         },
         "type": {
           "description": "Type discriminator",
@@ -1408,7 +1379,7 @@
       "const": "ping"
     },
     "PrimitiveSchema": {
-      "description": "Primitive schema definition for elicitation properties.\n\nAccording to MCP 2025-06-18 specification, elicitation schemas must have\nproperties of primitive types only (string, number, integer, boolean).",
+      "description": "Primitive schema definition for elicitation properties.\n\nAccording to MCP 2025-06-18 specification, elicitation schemas must have\nproperties of primitive types only (string, number, integer, boolean, enum).",
       "anyOf": [
         {
           "description": "String property (with optional enum constraint)",
@@ -1439,6 +1410,14 @@
           "allOf": [
             {
               "$ref": "#/definitions/BooleanSchema"
+            }
+          ]
+        },
+        {
+          "description": "Enum property (explicit enum schema)",
+          "allOf": [
+            {
+              "$ref": "#/definitions/EnumSchema"
             }
           ]
         }
@@ -2220,16 +2199,9 @@
       ]
     },
     "StringSchema": {
-      "description": "Schema definition for string properties.\n\nSupports validation constraints like length, pattern matching, format, and enum values.\nAll fields are private to ensure validation - use builder methods to construct.",
+      "description": "Schema definition for string properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec:\n- format limited to: \"email\", \"uri\", \"date\", \"date-time\"",
       "type": "object",
       "properties": {
-        "default": {
-          "description": "Default value",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "description": {
           "description": "Human-readable description",
           "type": [
@@ -2237,28 +2209,8 @@
             "null"
           ]
         },
-        "enum": {
-          "description": "Allowed string values (when used as enum)",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "enumNames": {
-          "description": "Optional human-readable names for each enum value",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
         "format": {
-          "description": "String format (e.g., \"email\", \"uri\", \"date-time\")",
+          "description": "String format - limited to: \"email\", \"uri\", \"date\", \"date-time\"",
           "type": [
             "string",
             "null"
@@ -2282,8 +2234,8 @@
           "format": "uint32",
           "minimum": 0
         },
-        "pattern": {
-          "description": "Regular expression pattern",
+        "title": {
+          "description": "Optional title for the schema",
           "type": [
             "string",
             "null"
