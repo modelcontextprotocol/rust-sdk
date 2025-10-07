@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.0...rmcp-v0.8.1) - 2025-10-07
+
+### Fixed
+
+- *(oauth)* pass bearer token to all streamable http requests ([#476](https://github.com/modelcontextprotocol/rust-sdk/pull/476))
+- fix spellcheck on intentional typo in CHANGELOG ([#470](https://github.com/modelcontextprotocol/rust-sdk/pull/470))
+
 ## [0.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.7.0...rmcp-v0.8.0) - 2025-10-04
 
 ### Added
