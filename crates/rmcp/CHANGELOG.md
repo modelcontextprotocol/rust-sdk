@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(oauth)* support suffixed and preffixed well-knonw paths ([#459](https://github.com/modelcontextprotocol/rust-sdk/pull/459))
+- *(oauth)* support suffixed and prefixed well-known paths ([#459](https://github.com/modelcontextprotocol/rust-sdk/pull/459))
 - generate default schema for tools with no params ([#446](https://github.com/modelcontextprotocol/rust-sdk/pull/446))
 
 ### Other
