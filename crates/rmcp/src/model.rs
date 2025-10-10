@@ -713,9 +713,9 @@ pub struct Icon {
     /// Optional override if the server's MIME type is missing or generic
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
-    /// Size specification (e.g., "48x48", "any" for SVG, or "48x48 96x96")
+    /// Size specification, each string should be in WxH format (e.g., `\"48x48\"`, `\"96x96\"`) or `\"any\"` for scalable formats like SVG
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sizes: Option<String>,
+    pub sizes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -2060,13 +2060,13 @@ mod tests {
         let icon = Icon {
             src: "https://example.com/icon.png".to_string(),
             mime_type: Some("image/png".to_string()),
-            sizes: Some("48x48".to_string()),
+            sizes: Some(vec!["48x48".to_string()]),
         };
 
         let json = serde_json::to_value(&icon).unwrap();
         assert_eq!(json["src"], "https://example.com/icon.png");
         assert_eq!(json["mimeType"], "image/png");
-        assert_eq!(json["sizes"], "48x48");
+        assert_eq!(json["sizes"][0], "48x48");
 
         // Test deserialization
         let deserialized: Icon = serde_json::from_value(json).unwrap();
@@ -2097,12 +2097,12 @@ mod tests {
                 Icon {
                     src: "https://example.com/icon.png".to_string(),
                     mime_type: Some("image/png".to_string()),
-                    sizes: Some("48x48".to_string()),
+                    sizes: Some(vec!["48x48".to_string()]),
                 },
                 Icon {
                     src: "https://example.com/icon.svg".to_string(),
                     mime_type: Some("image/svg+xml".to_string()),
-                    sizes: Some("any".to_string()),
+                    sizes: Some(vec!["any".to_string()]),
                 },
             ]),
             website_url: Some("https://example.com".to_string()),
@@ -2113,7 +2113,9 @@ mod tests {
         assert_eq!(json["websiteUrl"], "https://example.com");
         assert!(json["icons"].is_array());
         assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
+        assert_eq!(json["icons"][0]["sizes"][0], "48x48");
         assert_eq!(json["icons"][1]["mimeType"], "image/svg+xml");
+        assert_eq!(json["icons"][1]["sizes"][0], "any");
     }
 
     #[test]
@@ -2143,7 +2145,7 @@ mod tests {
                 icons: Some(vec![Icon {
                     src: "https://example.com/server.png".to_string(),
                     mime_type: Some("image/png".to_string()),
-                    sizes: None,
+                    sizes: Some(vec!["48x48".to_string()]),
                 }]),
                 website_url: Some("https://docs.example.com".to_string()),
             },
@@ -2156,6 +2158,7 @@ mod tests {
             json["serverInfo"]["icons"][0]["src"],
             "https://example.com/server.png"
         );
+        assert_eq!(json["serverInfo"]["icons"][0]["sizes"][0], "48x48");
         assert_eq!(json["serverInfo"]["websiteUrl"], "https://docs.example.com");
     }
 }
