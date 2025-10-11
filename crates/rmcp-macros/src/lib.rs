@@ -75,7 +75,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ```rust,ignore
 /// mod a {
-///     #[tool_router(router = tool_router_a, vis = pub)]
+///     #[tool_router(router = tool_router_a, vis = "pub")]
 ///     impl MyToolHandler {
 ///         #[tool]
 ///         fn my_tool_a() {
@@ -85,7 +85,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 ///
 /// mod b {
-///     #[tool_router(router = tool_router_b, vis = pub)]
+///     #[tool_router(router = tool_router_b, vis = "pub")]
 ///     impl MyToolHandler {
 ///         #[tool]
 ///         fn my_tool_b() {
