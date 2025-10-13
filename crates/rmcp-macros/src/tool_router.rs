@@ -76,6 +76,7 @@ mod test {
     fn test_router_attr() -> Result<(), Box<dyn std::error::Error>> {
         let attr = quote! {
             router = test_router,
+            vis = "pub(crate)"
         };
         let attr_args = NestedMeta::parse_meta_list(attr)?;
         let ToolRouterAttribute { router, vis } = ToolRouterAttribute::from_list(&attr_args)?;
