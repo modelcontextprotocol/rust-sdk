@@ -2198,6 +2198,31 @@
         }
       ]
     },
+    "StringFormat": {
+      "description": "String format types allowed by the MCP specification.",
+      "oneOf": [
+        {
+          "description": "Email address format",
+          "type": "string",
+          "const": "email"
+        },
+        {
+          "description": "URI format",
+          "type": "string",
+          "const": "uri"
+        },
+        {
+          "description": "Date format (YYYY-MM-DD)",
+          "type": "string",
+          "const": "date"
+        },
+        {
+          "description": "Date-time format (ISO 8601)",
+          "type": "string",
+          "const": "date-time"
+        }
+      ]
+    },
     "StringSchema": {
       "description": "Schema definition for string properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec:\n- format limited to: \"email\", \"uri\", \"date\", \"date-time\"",
       "type": "object",
@@ -2211,9 +2236,13 @@
         },
         "format": {
           "description": "String format - limited to: \"email\", \"uri\", \"date\", \"date-time\"",
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StringFormat"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "maxLength": {

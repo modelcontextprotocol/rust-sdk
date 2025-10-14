@@ -61,6 +61,21 @@ pub enum PrimitiveSchema {
 // STRING SCHEMA
 // =============================================================================
 
+/// String format types allowed by the MCP specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum StringFormat {
+    /// Email address format
+    Email,
+    /// URI format
+    Uri,
+    /// Date format (YYYY-MM-DD)
+    Date,
+    /// Date-time format (ISO 8601)
+    DateTime,
+}
+
 /// Schema definition for string properties.
 ///
 /// Compliant with MCP 2025-06-18 specification for elicitation schemas.
@@ -92,7 +107,7 @@ pub struct StringSchema {
 
     /// String format - limited to: "email", "uri", "date", "date-time"
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub format: Option<Cow<'static, str>>,
+    pub format: Option<StringFormat>,
 }
 
 impl Default for StringSchema {
@@ -117,7 +132,7 @@ impl StringSchema {
     /// Create an email string schema
     pub fn email() -> Self {
         Self {
-            format: Some(Cow::Borrowed("email")),
+            format: Some(StringFormat::Email),
             ..Default::default()
         }
     }
@@ -125,7 +140,7 @@ impl StringSchema {
     /// Create a URI string schema
     pub fn uri() -> Self {
         Self {
-            format: Some(Cow::Borrowed("uri")),
+            format: Some(StringFormat::Uri),
             ..Default::default()
         }
     }
@@ -133,7 +148,7 @@ impl StringSchema {
     /// Create a date string schema
     pub fn date() -> Self {
         Self {
-            format: Some(Cow::Borrowed("date")),
+            format: Some(StringFormat::Date),
             ..Default::default()
         }
     }
@@ -141,7 +156,7 @@ impl StringSchema {
     /// Create a date-time string schema
     pub fn date_time() -> Self {
         Self {
-            format: Some(Cow::Borrowed("date-time")),
+            format: Some(StringFormat::DateTime),
             ..Default::default()
         }
     }
@@ -189,8 +204,8 @@ impl StringSchema {
     }
 
     /// Set format (limited to: "email", "uri", "date", "date-time")
-    pub fn format(mut self, format: impl Into<Cow<'static, str>>) -> Self {
-        self.format = Some(format.into());
+    pub fn format(mut self, format: StringFormat) -> Self {
+        self.format = Some(format);
         self
     }
 }
