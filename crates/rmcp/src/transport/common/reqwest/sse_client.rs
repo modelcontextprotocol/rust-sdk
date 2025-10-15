@@ -33,7 +33,6 @@ impl SseClient for reqwest::Client {
         request_builder
             .send()
             .await
-            .and_then(|resp| resp.error_for_status())
             .map_err(SseTransportError::from)
             .map(drop)
     }

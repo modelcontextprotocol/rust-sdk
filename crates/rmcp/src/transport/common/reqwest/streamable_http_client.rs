@@ -118,7 +118,6 @@ impl StreamableHttpClient for reqwest::Client {
                 }));
             }
         }
-        let response = response.error_for_status()?;
         if response.status() == reqwest::StatusCode::ACCEPTED {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
