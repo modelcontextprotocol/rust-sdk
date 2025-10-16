@@ -98,7 +98,7 @@ pub enum AuthError {
 }
 
 /// oauth2 metadata
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AuthorizationMetadata {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
@@ -106,6 +106,7 @@ pub struct AuthorizationMetadata {
     pub issuer: Option<String>,
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
+    pub response_types_supported: Option<Vec<String>>,
     // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
@@ -290,11 +291,7 @@ impl AuthorizationManager {
         Ok(AuthorizationMetadata {
             authorization_endpoint: create_endpoint("authorize"),
             token_endpoint: create_endpoint("token"),
-            registration_endpoint: None,
-            issuer: None,
-            jwks_uri: None,
-            scopes_supported: None,
-            additional_fields: HashMap::new(),
+            ..Default::default()
         })
     }
 
@@ -339,7 +336,17 @@ impl AuthorizationManager {
         self.oauth_client = Some(client_builder);
         Ok(())
     }
-
+    /// validate if the server support the response type
+    fn validate_response_supported(&self, response_type: &str) -> Result<(), AuthError> {
+        if let Some(metadata) = self.metadata.as_ref() {
+            if let Some(response_types_supported) = metadata.response_types_supported.as_ref() {
+                if !response_types_supported.contains(&response_type.to_string()) {
+                    return Err(AuthError::InvalidScope(response_type.to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
     /// dynamic register oauth2 client
     pub async fn register_client(
         &mut self,
@@ -356,6 +363,10 @@ impl AuthorizationManager {
                 "Dynamic client registration not supported".to_string(),
             ));
         };
+
+        // RFC 8414 RECOMMENDS response_types_supported in the metadata. This field is optional,
+        // but if present and does not include the flow we use ("code"), bail out early with a clear error.
+        self.validate_response_supported("code")?;
 
         // prepare registration request
         let registration_request = ClientRegistrationRequest {
@@ -445,6 +456,9 @@ impl AuthorizationManager {
             .oauth_client
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
+
+        // ensure the server supports the response type we intend to use when metadata is available
+        self.validate_response_supported("code")?;
 
         // generate pkce challenge
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
