@@ -572,7 +572,7 @@ async fn oauth_register(
     let response = ClientRegistrationResponse {
         client_id,
         client_secret: Some(client_secret),
-        client_name: req.client_name,
+        client_name: Some(req.client_name),
         redirect_uris: req.redirect_uris,
         additional_fields: HashMap::new(),
     };
