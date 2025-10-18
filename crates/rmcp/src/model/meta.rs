@@ -186,3 +186,162 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_meta_new() {
+        let meta = Meta::new();
+        assert!(meta.0.is_empty());
+    }
+
+    #[test]
+    fn test_meta_default() {
+        let meta = Meta::default();
+        assert!(meta.0.is_empty());
+    }
+
+    #[test]
+    fn test_meta_static_empty() {
+        let meta = Meta::static_empty();
+        assert!(meta.0.is_empty());
+    }
+
+    #[test]
+    fn test_meta_set_and_get_progress_token_string() {
+        let mut meta = Meta::new();
+        let token = ProgressToken(NumberOrString::String("token123".into()));
+        meta.set_progress_token(token.clone());
+        assert_eq!(meta.get_progress_token(), Some(token));
+    }
+
+    #[test]
+    fn test_meta_set_and_get_progress_token_number() {
+        let mut meta = Meta::new();
+        let token = ProgressToken(NumberOrString::Number(42));
+        meta.set_progress_token(token.clone());
+        assert_eq!(meta.get_progress_token(), Some(token));
+    }
+
+    #[test]
+    fn test_meta_get_progress_token_none() {
+        let meta = Meta::new();
+        assert_eq!(meta.get_progress_token(), None);
+    }
+
+    #[test]
+    fn test_meta_extend() {
+        let mut meta1 = Meta::new();
+        meta1
+            .0
+            .insert("key1".to_string(), Value::String("value1".to_string()));
+
+        let mut meta2 = Meta::new();
+        meta2
+            .0
+            .insert("key2".to_string(), Value::String("value2".to_string()));
+
+        meta1.extend(meta2);
+        assert_eq!(meta1.0.len(), 2);
+        assert_eq!(
+            meta1.0.get("key1"),
+            Some(&Value::String("value1".to_string()))
+        );
+        assert_eq!(
+            meta1.0.get("key2"),
+            Some(&Value::String("value2".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_meta_deref() {
+        let mut meta = Meta::new();
+        meta.0
+            .insert("key".to_string(), Value::String("value".to_string()));
+        assert_eq!(meta.get("key"), Some(&Value::String("value".to_string())));
+    }
+
+    #[test]
+    fn test_meta_deref_mut() {
+        let mut meta = Meta::new();
+        meta.insert("key".to_string(), Value::String("value".to_string()));
+        assert_eq!(meta.0.get("key"), Some(&Value::String("value".to_string())));
+    }
+
+    #[test]
+    fn test_meta_clone() {
+        let mut meta = Meta::new();
+        meta.0
+            .insert("key".to_string(), Value::String("value".to_string()));
+        let cloned = meta.clone();
+        assert_eq!(cloned.0, meta.0);
+    }
+
+    #[test]
+    fn test_meta_partial_eq() {
+        let mut meta1 = Meta::new();
+        meta1
+            .0
+            .insert("key".to_string(), Value::String("value".to_string()));
+        let mut meta2 = Meta::new();
+        meta2
+            .0
+            .insert("key".to_string(), Value::String("value".to_string()));
+        assert_eq!(meta1, meta2);
+    }
+
+    #[test]
+    fn test_progress_token_string_variant() {
+        let token = ProgressToken(NumberOrString::String("test".into()));
+        let mut meta = Meta::new();
+        meta.set_progress_token(token.clone());
+        assert_eq!(meta.get_progress_token(), Some(token));
+    }
+
+    #[test]
+    fn test_progress_token_number_variant() {
+        let token = ProgressToken(NumberOrString::Number(100));
+        let mut meta = Meta::new();
+        meta.set_progress_token(token.clone());
+        assert_eq!(meta.get_progress_token(), Some(token));
+    }
+
+    #[test]
+    fn test_meta_extend_overwrites() {
+        let mut meta1 = Meta::new();
+        meta1
+            .0
+            .insert("key".to_string(), Value::String("value1".to_string()));
+
+        let mut meta2 = Meta::new();
+        meta2
+            .0
+            .insert("key".to_string(), Value::String("value2".to_string()));
+
+        meta1.extend(meta2);
+        assert_eq!(
+            meta1.0.get("key"),
+            Some(&Value::String("value2".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_meta_with_multiple_fields() {
+        let mut meta = Meta::new();
+        meta.0
+            .insert("field1".to_string(), Value::String("value1".to_string()));
+        meta.0
+            .insert("field2".to_string(), Value::Number(42.into()));
+        meta.0.insert("field3".to_string(), Value::Bool(true));
+
+        assert_eq!(meta.0.len(), 3);
+        assert_eq!(
+            meta.0.get("field1"),
+            Some(&Value::String("value1".to_string()))
+        );
+        assert_eq!(meta.0.get("field2"), Some(&Value::Number(42.into())));
+        assert_eq!(meta.0.get("field3"), Some(&Value::Bool(true)));
+    }
+}

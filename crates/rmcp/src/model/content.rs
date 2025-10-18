@@ -290,4 +290,326 @@ mod tests {
             panic!("Expected ResourceLink variant");
         }
     }
+
+    #[test]
+    fn test_raw_content_text() {
+        let content = RawContent::text("Hello");
+        match content {
+            RawContent::Text(text) => assert_eq!(text.text, "Hello"),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_raw_content_image() {
+        let content = RawContent::image("base64data", "image/png");
+        match content {
+            RawContent::Image(image) => {
+                assert_eq!(image.data, "base64data");
+                assert_eq!(image.mime_type, "image/png");
+            }
+            _ => panic!("Expected Image variant"),
+        }
+    }
+
+    #[test]
+    fn test_raw_content_json() {
+        let data = json!({"key": "value"});
+        let content = RawContent::json(data).unwrap();
+        match content {
+            RawContent::Text(text) => assert!(text.text.contains("key")),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_raw_content_as_text() {
+        let content = RawContent::text("test");
+        assert!(content.as_text().is_some());
+        assert!(content.as_image().is_none());
+        assert!(content.as_resource().is_none());
+    }
+
+    #[test]
+    fn test_raw_content_as_image() {
+        let content = RawContent::image("data", "image/png");
+        assert!(content.as_image().is_some());
+        assert!(content.as_text().is_none());
+        assert!(content.as_resource().is_none());
+    }
+
+    #[test]
+    fn test_raw_content_as_resource_link() {
+        use super::super::resource::RawResource;
+        let resource = RawResource::new("file:///test.txt", "test.txt");
+        let content = RawContent::resource_link(resource);
+        assert!(content.as_resource_link().is_some());
+        assert!(content.as_text().is_none());
+    }
+
+    #[test]
+    fn test_raw_content_embedded_text() {
+        let content = RawContent::embedded_text("file:///test.txt", "content");
+        match content {
+            RawContent::Resource(embedded) => match embedded.resource {
+                ResourceContents::TextResourceContents { text, .. } => {
+                    assert_eq!(text, "content");
+                }
+                _ => panic!("Expected TextResourceContents"),
+            },
+            _ => panic!("Expected Resource variant"),
+        }
+    }
+
+    #[test]
+    fn test_content_text() {
+        let content = Content::text("Hello");
+        assert!(content.as_text().is_some());
+    }
+
+    #[test]
+    fn test_content_image() {
+        let content = Content::image("data", "image/png");
+        assert!(content.as_image().is_some());
+    }
+
+    #[test]
+    fn test_content_json() {
+        let data = json!({"test": "value"});
+        let content = Content::json(data).unwrap();
+        assert!(content.as_text().is_some());
+    }
+
+    #[test]
+    fn test_embedded_resource_get_text() {
+        let resource = RawEmbeddedResource {
+            meta: None,
+            resource: ResourceContents::TextResourceContents {
+                uri: "file:///test.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                text: "content".to_string(),
+                meta: None,
+            },
+        };
+        let embedded: EmbeddedResource = resource.no_annotation();
+        assert_eq!(embedded.get_text(), "content");
+    }
+
+    #[test]
+    fn test_embedded_resource_get_text_blob() {
+        let resource = RawEmbeddedResource {
+            meta: None,
+            resource: ResourceContents::BlobResourceContents {
+                uri: "file:///test.bin".to_string(),
+                mime_type: Some("application/octet-stream".to_string()),
+                blob: "blobdata".to_string(),
+                meta: None,
+            },
+        };
+        let embedded: EmbeddedResource = resource.no_annotation();
+        assert_eq!(embedded.get_text(), String::new());
+    }
+
+    #[test]
+    fn test_into_contents_content() {
+        let content = Content::text("test");
+        let contents = content.into_contents();
+        assert_eq!(contents.len(), 1);
+    }
+
+    #[test]
+    fn test_into_contents_string() {
+        let contents = "test".to_string().into_contents();
+        assert_eq!(contents.len(), 1);
+        assert!(contents[0].as_text().is_some());
+    }
+
+    #[test]
+    fn test_into_contents_unit() {
+        let contents = ().into_contents();
+        assert_eq!(contents.len(), 0);
+    }
+
+    #[test]
+    fn test_raw_text_content_with_meta() {
+        let meta = Some(super::super::Meta::default());
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta,
+        };
+        assert!(content.meta.is_some());
+    }
+
+    #[test]
+    fn test_raw_image_content_with_meta() {
+        let meta = Some(super::super::Meta::default());
+        let content = RawImageContent {
+            data: "data".to_string(),
+            mime_type: "image/png".to_string(),
+            meta,
+        };
+        assert!(content.meta.is_some());
+    }
+
+    #[test]
+    fn test_raw_content_resource() {
+        let resource_contents = ResourceContents::text("test content", "file:///test.txt");
+        let content = RawContent::resource(resource_contents.clone());
+        match content {
+            RawContent::Resource(embedded) => {
+                assert_eq!(embedded.resource, resource_contents);
+            }
+            _ => panic!("Expected Resource variant"),
+        }
+    }
+
+    #[test]
+    fn test_content_resource() {
+        let resource_contents = ResourceContents::text("test", "file:///test.txt");
+        let content = Content::resource(resource_contents);
+        assert!(content.as_resource().is_some());
+    }
+
+    #[test]
+    fn test_content_embedded_text() {
+        let content = Content::embedded_text("file:///test.txt", "test content");
+        match content.raw {
+            RawContent::Resource(embedded) => match embedded.resource {
+                ResourceContents::TextResourceContents { text, .. } => {
+                    assert_eq!(text, "test content");
+                }
+                _ => panic!("Expected TextResourceContents"),
+            },
+            _ => panic!("Expected Resource variant"),
+        }
+    }
+
+    #[test]
+    fn test_content_resource_link() {
+        use super::super::resource::RawResource;
+        let resource = RawResource::new("file:///test.txt", "test.txt");
+        let content = Content::resource_link(resource);
+        assert!(content.as_resource_link().is_some());
+    }
+
+    #[test]
+    fn test_raw_audio_content_creation() {
+        let audio = RawAudioContent {
+            data: "audiodata".to_string(),
+            mime_type: "audio/mp3".to_string(),
+        };
+        assert_eq!(audio.data, "audiodata");
+        assert_eq!(audio.mime_type, "audio/mp3");
+    }
+
+    #[test]
+    fn test_raw_content_audio_variant() {
+        let audio = RawAudioContent {
+            data: "audiodata".to_string(),
+            mime_type: "audio/wav".to_string(),
+        };
+        let content = RawContent::Audio(audio.clone());
+        match content {
+            RawContent::Audio(a) => assert_eq!(a.data, "audiodata"),
+            _ => panic!("Expected Audio variant"),
+        }
+    }
+
+    #[test]
+    fn test_raw_content_as_methods_return_none_for_wrong_type() {
+        let text_content = RawContent::text("test");
+        assert!(text_content.as_image().is_none());
+        assert!(text_content.as_resource().is_none());
+        assert!(text_content.as_resource_link().is_none());
+
+        let image_content = RawContent::image("data", "image/png");
+        assert!(image_content.as_text().is_none());
+        assert!(image_content.as_resource().is_none());
+    }
+
+    #[test]
+    fn test_embedded_resource_get_text_returns_empty_for_non_text() {
+        let resource = RawEmbeddedResource {
+            meta: None,
+            resource: ResourceContents::BlobResourceContents {
+                uri: "file:///test.bin".to_string(),
+                mime_type: None,
+                blob: "data".to_string(),
+                meta: None,
+            },
+        };
+        let embedded: EmbeddedResource = resource.no_annotation();
+        assert_eq!(embedded.get_text(), "");
+    }
+
+    #[test]
+    fn test_raw_content_image_with_different_mime_types() {
+        let jpeg = RawContent::image("data", "image/jpeg");
+        let png = RawContent::image("data", "image/png");
+        let webp = RawContent::image("data", "image/webp");
+
+        match jpeg {
+            RawContent::Image(img) => assert_eq!(img.mime_type, "image/jpeg"),
+            _ => panic!("Expected Image variant"),
+        }
+        match png {
+            RawContent::Image(img) => assert_eq!(img.mime_type, "image/png"),
+            _ => panic!("Expected Image variant"),
+        }
+        match webp {
+            RawContent::Image(img) => assert_eq!(img.mime_type, "image/webp"),
+            _ => panic!("Expected Image variant"),
+        }
+    }
+
+    #[test]
+    fn test_json_content_json_array() {
+        let data = json!([1, 2, 3]);
+        let result = RawContent::json(data);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            RawContent::Text(text) => assert!(text.text.contains("1")),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_raw_content_text_with_meta_preserved() {
+        let mut meta = super::super::Meta::default();
+        meta.insert("key".to_string(), json!("value"));
+
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: Some(meta.clone()),
+        };
+        assert_eq!(
+            content.meta.as_ref().unwrap().get("key"),
+            Some(&json!("value"))
+        );
+    }
+
+    #[test]
+    fn test_raw_content_audio_variant_not_confused_with_image() {
+        let audio = RawContent::Audio(RawAudioContent {
+            data: "audiodata".to_string(),
+            mime_type: "audio/mp3".to_string(),
+        });
+
+        assert!(matches!(audio, RawContent::Audio(_)));
+        assert!(!matches!(audio, RawContent::Image(_)));
+        assert!(audio.as_image().is_none());
+    }
+
+    #[test]
+    fn test_raw_content_json_nested_object() {
+        let data = json!({"outer": {"inner": "value"}});
+        let content = RawContent::json(data).unwrap();
+        match content {
+            RawContent::Text(text) => {
+                assert!(text.text.contains("outer"));
+                assert!(text.text.contains("inner"));
+            }
+            _ => panic!("Expected Text variant"),
+        }
+    }
 }

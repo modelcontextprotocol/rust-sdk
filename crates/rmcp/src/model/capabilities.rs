@@ -343,4 +343,137 @@ mod test {
             })
         );
     }
+
+    #[test]
+    fn test_prompts_capability_default() {
+        let cap = PromptsCapability::default();
+        assert_eq!(cap.list_changed, None);
+    }
+
+    #[test]
+    fn test_resources_capability_default() {
+        let cap = ResourcesCapability::default();
+        assert_eq!(cap.subscribe, None);
+        assert_eq!(cap.list_changed, None);
+    }
+
+    #[test]
+    fn test_tools_capability_default() {
+        let cap = ToolsCapability::default();
+        assert_eq!(cap.list_changed, None);
+    }
+
+    #[test]
+    fn test_roots_capabilities_default() {
+        let cap = RootsCapabilities::default();
+        assert_eq!(cap.list_changed, None);
+    }
+
+    #[test]
+    fn test_elicitation_capability_default() {
+        let cap = ElicitationCapability::default();
+        assert_eq!(cap.schema_validation, None);
+    }
+
+    #[test]
+    fn test_server_capabilities_builder_build() {
+        let builder = ServerCapabilities::builder()
+            .enable_logging()
+            .enable_prompts();
+        let caps: ServerCapabilities = builder.build();
+        assert!(caps.logging.is_some());
+        assert!(caps.prompts.is_some());
+    }
+
+    #[test]
+    fn test_server_capabilities_prompts_list_changed() {
+        let caps = ServerCapabilities::builder()
+            .enable_prompts()
+            .enable_prompts_list_changed()
+            .build();
+        assert_eq!(caps.prompts.as_ref().unwrap().list_changed, Some(true));
+    }
+
+    #[test]
+    fn test_server_capabilities_resources_list_changed() {
+        let caps = ServerCapabilities::builder()
+            .enable_resources()
+            .enable_resources_list_changed()
+            .build();
+        assert_eq!(caps.resources.as_ref().unwrap().list_changed, Some(true));
+    }
+
+    #[test]
+    fn test_server_capabilities_resources_subscribe() {
+        let caps = ServerCapabilities::builder()
+            .enable_resources()
+            .enable_resources_subscribe()
+            .build();
+        assert_eq!(caps.resources.as_ref().unwrap().subscribe, Some(true));
+    }
+
+    #[test]
+    fn test_server_capabilities_completions() {
+        let caps = ServerCapabilities::builder().enable_completions().build();
+        assert!(caps.completions.is_some());
+    }
+
+    #[test]
+    fn test_client_capabilities_default() {
+        let caps = ClientCapabilities::default();
+        assert_eq!(caps.experimental, None);
+        assert_eq!(caps.roots, None);
+        assert_eq!(caps.sampling, None);
+    }
+
+    #[test]
+    fn test_client_capabilities_builder_from() {
+        let builder = ClientCapabilities::builder().enable_experimental();
+        let caps: ClientCapabilities = builder.into();
+        assert!(caps.experimental.is_some());
+    }
+
+    #[test]
+    fn test_server_capabilities_enable_with() {
+        let mut exp_caps = ExperimentalCapabilities::default();
+        exp_caps.insert("feature1".to_string(), JsonObject::default());
+
+        let caps = ServerCapabilities::builder()
+            .enable_experimental_with(exp_caps.clone())
+            .build();
+        assert_eq!(caps.experimental, Some(exp_caps));
+    }
+
+    #[test]
+    fn test_client_capabilities_elicitation() {
+        let caps = ClientCapabilities::builder().enable_elicitation().build();
+        assert!(caps.elicitation.is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "elicitation")]
+    fn test_client_capabilities_elicitation_schema_validation() {
+        let caps = ClientCapabilities::builder()
+            .enable_elicitation()
+            .enable_elicitation_schema_validation()
+            .build();
+        assert_eq!(
+            caps.elicitation.as_ref().unwrap().schema_validation,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_server_capabilities_clone() {
+        let caps1 = ServerCapabilities::builder().enable_logging().build();
+        let caps2 = caps1.clone();
+        assert_eq!(caps1, caps2);
+    }
+
+    #[test]
+    fn test_client_capabilities_clone() {
+        let caps1 = ClientCapabilities::builder().enable_roots().build();
+        let caps2 = caps1.clone();
+        assert_eq!(caps1, caps2);
+    }
 }

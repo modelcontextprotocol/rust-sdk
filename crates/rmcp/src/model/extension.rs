@@ -310,28 +310,175 @@ impl Clone for Box<dyn AnyClone + Send + Sync> {
     }
 }
 
-#[test]
-fn test_extensions() {
-    #[derive(Clone, Debug, PartialEq)]
-    struct MyType(i32);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let mut extensions = Extensions::new();
+    #[test]
+    fn test_extensions() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct MyType(i32);
 
-    extensions.insert(5i32);
-    extensions.insert(MyType(10));
+        let mut extensions = Extensions::new();
 
-    assert_eq!(extensions.get(), Some(&5i32));
-    assert_eq!(extensions.get_mut(), Some(&mut 5i32));
+        extensions.insert(5i32);
+        extensions.insert(MyType(10));
 
-    let ext2 = extensions.clone();
+        assert_eq!(extensions.get(), Some(&5i32));
+        assert_eq!(extensions.get_mut(), Some(&mut 5i32));
 
-    assert_eq!(extensions.remove::<i32>(), Some(5i32));
-    assert!(extensions.get::<i32>().is_none());
+        let ext2 = extensions.clone();
 
-    // clone still has it
-    assert_eq!(ext2.get(), Some(&5i32));
-    assert_eq!(ext2.get(), Some(&MyType(10)));
+        assert_eq!(extensions.remove::<i32>(), Some(5i32));
+        assert!(extensions.get::<i32>().is_none());
 
-    assert_eq!(extensions.get::<bool>(), None);
-    assert_eq!(extensions.get(), Some(&MyType(10)));
+        // clone still has it
+        assert_eq!(ext2.get(), Some(&5i32));
+        assert_eq!(ext2.get(), Some(&MyType(10)));
+
+        assert_eq!(extensions.get::<bool>(), None);
+        assert_eq!(extensions.get(), Some(&MyType(10)));
+    }
+
+    #[test]
+    fn test_extensions_new() {
+        let ext = Extensions::new();
+        assert!(ext.is_empty());
+        assert_eq!(ext.len(), 0);
+    }
+
+    #[test]
+    fn test_extensions_insert_replace() {
+        let mut ext = Extensions::new();
+        assert_eq!(ext.insert(5i32), None);
+        assert_eq!(ext.insert(10i32), Some(5i32));
+    }
+
+    #[test]
+    fn test_extensions_get_or_insert() {
+        let mut ext = Extensions::new();
+        *ext.get_or_insert(1i32) += 2;
+        assert_eq!(ext.get::<i32>(), Some(&3i32));
+    }
+
+    #[test]
+    fn test_extensions_get_or_insert_with() {
+        let mut ext = Extensions::new();
+        *ext.get_or_insert_with(|| 5i32) += 3;
+        assert_eq!(ext.get::<i32>(), Some(&8i32));
+    }
+
+    #[test]
+    fn test_extensions_get_or_insert_default() {
+        let mut ext = Extensions::new();
+        *ext.get_or_insert_default::<i32>() += 10;
+        assert_eq!(ext.get::<i32>(), Some(&10i32));
+    }
+
+    #[test]
+    fn test_extensions_clear() {
+        let mut ext = Extensions::new();
+        ext.insert(5i32);
+        ext.insert("test");
+        assert!(!ext.is_empty());
+        ext.clear();
+        assert!(ext.is_empty());
+    }
+
+    #[test]
+    fn test_extensions_len() {
+        let mut ext = Extensions::new();
+        assert_eq!(ext.len(), 0);
+        ext.insert(5i32);
+        assert_eq!(ext.len(), 1);
+        ext.insert("test");
+        assert_eq!(ext.len(), 2);
+    }
+
+    #[test]
+    fn test_extensions_is_empty() {
+        let mut ext = Extensions::new();
+        assert!(ext.is_empty());
+        ext.insert(5i32);
+        assert!(!ext.is_empty());
+    }
+
+    #[test]
+    fn test_extensions_extend() {
+        let mut ext_a = Extensions::new();
+        ext_a.insert(8u8);
+        ext_a.insert(16u16);
+
+        let mut ext_b = Extensions::new();
+        ext_b.insert(4u8);
+        ext_b.insert("hello");
+
+        ext_a.extend(ext_b);
+        assert_eq!(ext_a.len(), 3);
+        assert_eq!(ext_a.get::<u8>(), Some(&4u8));
+        assert_eq!(ext_a.get::<u16>(), Some(&16u16));
+    }
+
+    #[test]
+    fn test_extensions_extend_empty() {
+        let mut ext_a = Extensions::new();
+        ext_a.insert(5i32);
+        let ext_b = Extensions::new();
+        ext_a.extend(ext_b);
+        assert_eq!(ext_a.len(), 1);
+        assert_eq!(ext_a.get::<i32>(), Some(&5i32));
+    }
+
+    #[test]
+    fn test_extensions_get_mut() {
+        let mut ext = Extensions::new();
+        ext.insert(String::from("Hello"));
+        ext.get_mut::<String>().unwrap().push_str(" World");
+        assert_eq!(ext.get::<String>().unwrap(), "Hello World");
+    }
+
+    #[test]
+    fn test_extensions_remove() {
+        let mut ext = Extensions::new();
+        ext.insert(5i32);
+        assert_eq!(ext.remove::<i32>(), Some(5i32));
+        assert!(ext.get::<i32>().is_none());
+    }
+
+    #[test]
+    fn test_extensions_remove_nonexistent() {
+        let mut ext = Extensions::new();
+        assert_eq!(ext.remove::<i32>(), None);
+    }
+
+    #[test]
+    fn test_extensions_multiple_types() {
+        let mut ext = Extensions::new();
+        ext.insert(5i32);
+        ext.insert("test");
+        ext.insert(1.23f64);
+        assert_eq!(ext.get::<i32>(), Some(&5i32));
+        assert_eq!(ext.get::<&str>(), Some(&"test"));
+        assert_eq!(ext.get::<f64>(), Some(&1.23f64));
+    }
+
+    #[test]
+    fn test_extensions_debug() {
+        let ext = Extensions::new();
+        let debug_str = format!("{:?}", ext);
+        assert!(debug_str.contains("Extensions"));
+    }
+
+    #[test]
+    fn test_extensions_default() {
+        let ext = Extensions::default();
+        assert!(ext.is_empty());
+    }
+
+    #[test]
+    fn test_id_hasher() {
+        let mut hasher = IdHasher::default();
+        hasher.write_u64(12345);
+        assert_eq!(hasher.finish(), 12345);
+    }
 }
