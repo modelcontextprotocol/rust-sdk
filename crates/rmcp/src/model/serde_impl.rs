@@ -253,7 +253,8 @@ where
 mod test {
     use serde_json::json;
 
-    use crate::model::ListToolsRequest;
+    use super::*;
+    use crate::model::{Extensions, ListToolsRequest, Meta};
 
     #[test]
     fn test_deserialize_lost_tools_request() {
@@ -263,5 +264,143 @@ mod test {
             }
         ))
         .unwrap();
+    }
+
+    #[test]
+    fn test_request_serialize_without_meta() {
+        let req = Request {
+            method: "test_method".to_string(),
+            params: json!({"key": "value"}),
+            extensions: Extensions::new(),
+        };
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["method"], "test_method");
+        assert_eq!(serialized["params"]["key"], "value");
+        assert!(serialized["params"]["_meta"].is_null());
+    }
+
+    #[test]
+    fn test_request_serialize_with_meta() {
+        let mut extensions = Extensions::new();
+        let mut meta = Meta::new();
+        meta.insert("custom".to_string(), json!("data"));
+        extensions.insert(meta);
+
+        let req = Request {
+            method: "test_method".to_string(),
+            params: json!({"key": "value"}),
+            extensions,
+        };
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["params"]["_meta"]["custom"], "data");
+    }
+
+    #[test]
+    fn test_request_deserialize() {
+        let json_val = json!({
+            "method": "test_method",
+            "params": {"key": "value"}
+        });
+        let req: Request<String, serde_json::Value> = serde_json::from_value(json_val).unwrap();
+        assert_eq!(req.method, "test_method");
+        assert_eq!(req.params["key"], "value");
+    }
+
+    #[test]
+    fn test_request_optional_param_serialize() {
+        let req = RequestOptionalParam {
+            method: "test_method".to_string(),
+            params: Some(json!({"key": "value"})),
+            extensions: Extensions::new(),
+        };
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["method"], "test_method");
+        assert!(serialized["params"].is_object());
+    }
+
+    #[test]
+    fn test_request_optional_param_deserialize_with_params() {
+        let json_val = json!({
+            "method": "test_method",
+            "params": {"key": "value"}
+        });
+        let req: RequestOptionalParam<String, serde_json::Value> =
+            serde_json::from_value(json_val).unwrap();
+        assert_eq!(req.method, "test_method");
+        assert!(req.params.is_some());
+    }
+
+    #[test]
+    fn test_request_optional_param_deserialize_without_params() {
+        let json_val = json!({
+            "method": "test_method"
+        });
+        let req: RequestOptionalParam<String, serde_json::Value> =
+            serde_json::from_value(json_val).unwrap();
+        assert_eq!(req.method, "test_method");
+        assert!(req.params.is_none());
+    }
+
+    #[test]
+    fn test_request_no_param_serialize() {
+        let req = RequestNoParam {
+            method: "test_method".to_string(),
+            extensions: Extensions::new(),
+        };
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["method"], "test_method");
+        assert!(serialized.get("params").is_none());
+    }
+
+    #[test]
+    fn test_request_no_param_deserialize() {
+        let json_val = json!({
+            "method": "test_method"
+        });
+        let req: RequestNoParam<String> = serde_json::from_value(json_val).unwrap();
+        assert_eq!(req.method, "test_method");
+    }
+
+    #[test]
+    fn test_notification_serialize() {
+        let notif = Notification {
+            method: "test_notification".to_string(),
+            params: json!({"data": "test"}),
+            extensions: Extensions::new(),
+        };
+        let serialized = serde_json::to_value(&notif).unwrap();
+        assert_eq!(serialized["method"], "test_notification");
+        assert_eq!(serialized["params"]["data"], "test");
+    }
+
+    #[test]
+    fn test_notification_deserialize() {
+        let json_val = json!({
+            "method": "test_notification",
+            "params": {"data": "test"}
+        });
+        let notif: Notification<String, serde_json::Value> =
+            serde_json::from_value(json_val).unwrap();
+        assert_eq!(notif.method, "test_notification");
+        assert_eq!(notif.params["data"], "test");
+    }
+
+    #[test]
+    fn test_notification_no_param_serialize() {
+        let notif = NotificationNoParam {
+            method: "test_notification".to_string(),
+            extensions: Extensions::new(),
+        };
+        let serialized = serde_json::to_value(&notif).unwrap();
+        assert_eq!(serialized["method"], "test_notification");
+    }
+
+    #[test]
+    fn test_notification_no_param_deserialize() {
+        let json_val = json!({
+            "method": "test_notification"
+        });
+        let notif: NotificationNoParam<String> = serde_json::from_value(json_val).unwrap();
+        assert_eq!(notif.method, "test_notification");
     }
 }
