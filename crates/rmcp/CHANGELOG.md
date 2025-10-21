@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.1...rmcp-v0.8.2) - 2025-10-21
+
+### Added
+
+- add type-safe elicitation schema support ([#465](https://github.com/modelcontextprotocol/rust-sdk/pull/465)) ([#466](https://github.com/modelcontextprotocol/rust-sdk/pull/466))
+- *(SEP-973)* following change Icon.sizes from string to string array ([#479](https://github.com/modelcontextprotocol/rust-sdk/pull/479))
+
+### Fixed
+
+- *(oauth)* three oauth discovery and registration issues ([#489](https://github.com/modelcontextprotocol/rust-sdk/pull/489))
+- *(oauth)* dynamic client registration should be optional ([#463](https://github.com/modelcontextprotocol/rust-sdk/pull/463))
+- *(sse-client)* consume control frames; refresh message endpoint ([#448](https://github.com/modelcontextprotocol/rust-sdk/pull/448))
+
+### Other
+
+- Streamable HTTP: drain SSE frames until the initialize response, ignoring early notifications to prevent handshake timeouts ([#467](https://github.com/modelcontextprotocol/rust-sdk/pull/467))
+- bump crate version in README.md ([#471](https://github.com/modelcontextprotocol/rust-sdk/pull/471))
+
 ## [0.8.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.0...rmcp-v0.8.1) - 2025-10-07
 
 ### Fixed
