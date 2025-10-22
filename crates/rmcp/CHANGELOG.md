@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.2...rmcp-v0.8.3) - 2025-10-22
+
+### Fixed
+
+- accept 204 in addition to 202 on initialize ([#497](https://github.com/modelcontextprotocol/rust-sdk/pull/497))
+
 ## [0.8.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.1...rmcp-v0.8.2) - 2025-10-21
 
 ### Added
