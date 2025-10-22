@@ -118,8 +118,12 @@ impl StreamableHttpClient for reqwest::Client {
                 }));
             }
         }
+        let status = response.status();
         let response = response.error_for_status()?;
-        if response.status() == reqwest::StatusCode::ACCEPTED {
+        if matches!(
+            status,
+            reqwest::StatusCode::ACCEPTED | reqwest::StatusCode::NO_CONTENT
+        ) {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
