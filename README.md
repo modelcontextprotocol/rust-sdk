@@ -3,12 +3,9 @@
 </div>
 
 # RMCP
-
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
-
 <!-- ![Release status](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg) -->
 <!-- [![docs.rs](todo)](todo) -->
-
 ![Coverage](docs/coverage.svg)
 
 An official Rust Model Context Protocol SDK implementation with tokio async runtime.
@@ -27,16 +24,14 @@ rmcp = { version = "0.8.0", features = ["server"] }
 ## or dev channel
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
-
 ### Third Dependencies
-
 Basic dependencies:
-
 - [tokio required](https://github.com/tokio-rs/tokio)
 - [serde required](https://github.com/serde-rs/serde)
 
-### Build a Client
 
+
+### Build a Client
 <details>
 <summary>Start a client</summary>
 
@@ -52,7 +47,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
 </details>
 
 ### Build a Server
@@ -75,7 +69,6 @@ You can easily build a service by using [`ServerHandler`](crates/rmcp/src/handle
 ```rust, ignore
 let service = common::counter::Counter::new();
 ```
-
 </details>
 
 <details>
@@ -85,7 +78,6 @@ let service = common::counter::Counter::new();
 // this call will finish the initialization process
 let server = service.serve(transport).await?;
 ```
-
 </details>
 
 <details>
@@ -100,7 +92,6 @@ let roots = server.list_roots().await?;
 // or send notification
 server.notify_cancelled(...).await?;
 ```
-
 </details>
 
 <details>
@@ -111,8 +102,8 @@ let quit_reason = server.waiting().await?;
 // or cancel it
 let quit_reason = server.cancel().await?;
 ```
-
 </details>
+
 
 ## Examples
 
@@ -142,6 +133,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [nvim-mcp](https://github.com/linw1995/nvim-mcp) - A MCP server to interact with Neovim
 - [terminator](https://github.com/mediar-ai/terminator) - AI-powered desktop automation MCP server with cross-platform support and >95% success rate
 - [stakpak-agent](https://github.com/stakpak/agent) - Security-hardened terminal agent for DevOps with MCP over mTLS, streaming, secret tokenization, and async task management
+
 
 ## Development
 
