@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = config::Config::retrieve("config.toml").await?;
-    let openai_client = {
+    let deepseek_client = {
         if let Some(key) = config.deepseek_key {
             deepseek::Client::new(&key)
         } else {
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
         f.name.clone()
     });
     let index = store.index(embedding_model);
-    let dpsk = openai_client
+    let dpsk = deepseek_client
         .agent(deepseek::DEEPSEEK_CHAT)
         .dynamic_tools(4, index, tool_set)
         .build();
