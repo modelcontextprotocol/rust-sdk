@@ -251,29 +251,9 @@ impl AuthorizationManager {
             return Ok(metadata);
         }
 
-        warn!("No valid authorization metadata found, falling back to default endpoints");
-
-        // fallback to default endpoints
-        let mut auth_base = self.base_url.clone();
-        // discard the path part, only keep scheme, host, port
-        auth_base.set_path("");
-
-        // Helper function to create endpoint URL
-        let create_endpoint = |path: &str| -> String {
-            let mut url = auth_base.clone();
-            url.set_path(path);
-            url.to_string()
-        };
-
-        Ok(AuthorizationMetadata {
-            authorization_endpoint: create_endpoint("authorize"),
-            token_endpoint: create_endpoint("token"),
-            registration_endpoint: None,
-            issuer: None,
-            jwks_uri: None,
-            scopes_supported: None,
-            additional_fields: HashMap::new(),
-        })
+        // No valid authorization metadata found - return error instead of guessing
+        // OAuth endpoints must be discovered from the server, not constructed by the client
+        Err(AuthError::NoAuthorizationSupport)
     }
 
     /// get client id and credentials
