@@ -677,7 +677,16 @@ impl Peer<RoleServer> {
         }
 
         // Generate schema automatically from type
-        let schema = crate::handler::server::tool::schema_for_type::<T>();
+        let schema = crate::model::ElicitationSchema::from_type::<T>().map_err(|e| {
+            ElicitationError::Service(ServiceError::McpError(crate::ErrorData::invalid_params(
+                format!(
+                    "Invalid schema for type {}: {}",
+                    std::any::type_name::<T>(),
+                    e
+                ),
+                None,
+            )))
+        })?;
 
         let response = self
             .create_elicitation_with_timeout(
