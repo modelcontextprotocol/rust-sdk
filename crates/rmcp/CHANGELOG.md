@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.3...rmcp-v0.8.4) - 2025-11-04
+
+### Fixed
+
+- *(oauth)* fix oauth credential refresh ([#509](https://github.com/modelcontextprotocol/rust-sdk/pull/509))
+- do not manually construct fallback authorization metadata ([#507](https://github.com/modelcontextprotocol/rust-sdk/pull/507))
+- *(doc)* add stakpak-agent to Built with rmcp section ([#500](https://github.com/modelcontextprotocol/rust-sdk/pull/500))
+
 ## [0.8.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.2...rmcp-v0.8.3) - 2025-10-22
 
 ### Fixed
