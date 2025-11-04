@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.8.3...rmcp-macros-v0.8.4) - 2025-11-04
+
+### Fixed
+
+- *(doc)* add stakpak-agent to Built with rmcp section ([#500](https://github.com/modelcontextprotocol/rust-sdk/pull/500))
+
 ## [0.8.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.8.1...rmcp-macros-v0.8.2) - 2025-10-21
 
 ### Other
