@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
@@ -157,7 +153,6 @@ pub struct AuthorizationManager {
     oauth_client: Option<OAuthClient>,
     credentials: RwLock<Option<OAuthTokenResponse>>,
     state: RwLock<Option<AuthorizationState>>,
-    expires_at: RwLock<Option<Instant>>,
     base_url: Url,
 }
 
@@ -229,7 +224,6 @@ impl AuthorizationManager {
             oauth_client: None,
             credentials: RwLock::new(None),
             state: RwLock::new(None),
-            expires_at: RwLock::new(None),
             base_url,
         };
 
@@ -484,12 +478,6 @@ impl AuthorizationManager {
             }
         };
 
-        // get expires_in from token response
-        let expires_in = token_result.expires_in();
-        if let Some(expires_in) = expires_in {
-            let expires_at = Instant::now() + expires_in;
-            *self.expires_at.write().await = Some(expires_at);
-        }
         debug!("exchange token result: {:?}", token_result);
         // store credentials
         *self.credentials.write().await = Some(token_result.clone());
@@ -503,13 +491,15 @@ impl AuthorizationManager {
 
         if let Some(creds) = credentials.as_ref() {
             // check if the token is expire
-            if let Some(expires_at) = *self.expires_at.read().await {
-                if expires_at < Instant::now() {
-                    // token expired, try to refresh , release the lock
-                    drop(credentials);
-                    let new_creds = self.refresh_token().await?;
-                    return Ok(new_creds.access_token().secret().to_string());
-                }
+            let expires_in = creds.expires_in().unwrap_or(Duration::from_secs(0));
+            if expires_in <= Duration::from_secs(0) {
+                tracing::info!("Access token expired, refreshing.");
+                // token expired, try to refresh , release the lock
+                drop(credentials);
+
+                let new_creds = self.refresh_token().await?;
+                tracing::info!("Refreshed access token.");
+                return Ok(new_creds.access_token().secret().to_string());
             }
 
             Ok(creds.access_token().secret().to_string())
@@ -548,12 +538,6 @@ impl AuthorizationManager {
         // store new credentials
         *self.credentials.write().await = Some(token_result.clone());
 
-        // get expires_in from token response
-        let expires_in = token_result.expires_in();
-        if let Some(expires_in) = expires_in {
-            let expires_at = Instant::now() + expires_in;
-            *self.expires_at.write().await = Some(expires_at);
-        }
         Ok(token_result)
     }
 
