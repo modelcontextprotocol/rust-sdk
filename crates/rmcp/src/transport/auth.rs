@@ -615,7 +615,7 @@ impl AuthorizationManager {
     async fn discover_oauth_server_via_resource_metadata(
         &self,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        let Some(resource_metadata_url) = self.fetch_resource_metadata_url().await? else {
+        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await? else {
             return Ok(None);
         };
 
@@ -667,12 +667,38 @@ impl AuthorizationManager {
         Ok(None)
     }
 
+    async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
+        if let Ok(Some(resource_metadata_url)) =
+            self.fetch_resource_metadata_url(&self.base_url).await
+        {
+            return Ok(Some(resource_metadata_url));
+        }
+
+        // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
+        // https://www.rfc-editor.org/rfc/rfc9728.html#name-obtaining-protected-resourc
+        for candidate_path in
+            Self::well_known_paths(self.base_url.path(), "oauth-protected-resource")
+        {
+            let mut discovery_url = self.base_url.clone();
+            discovery_url.set_query(None);
+            discovery_url.set_fragment(None);
+            discovery_url.set_path(&candidate_path);
+            if let Ok(Some(resource_metadata_url)) =
+                self.fetch_resource_metadata_url(&discovery_url).await
+            {
+                return Ok(Some(resource_metadata_url));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Extract the resource metadata url from the WWW-Authenticate header value.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
-    async fn fetch_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
+    async fn fetch_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
         let response = match self
             .http_client
-            .get(self.base_url.clone())
+            .get(url.clone())
             .header("MCP-Protocol-Version", "2024-11-05")
             .send()
             .await
@@ -684,7 +710,9 @@ impl AuthorizationManager {
             }
         };
 
-        if response.status() != StatusCode::UNAUTHORIZED {
+        if response.status() == StatusCode::OK {
+            return Ok(Some(url.clone()));
+        } else if response.status() != StatusCode::UNAUTHORIZED {
             debug!(
                 "resource metadata probe returned unexpected status: {}",
                 response.status()
