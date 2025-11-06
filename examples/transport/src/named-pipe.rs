@@ -12,11 +12,11 @@ async fn main() -> anyhow::Result<()> {
         let mut server = ServerOptions::new()
             .first_pipe_instance(true)
             .create(name)?;
-        while let Ok(_) = server.connect().await {
+        while server.connect().await.is_ok() {
             let stream = server;
             server = ServerOptions::new().create(name)?;
             tokio::spawn(async move {
-                match serve_server(Calculator, stream).await {
+                match serve_server(Calculator::new(), stream).await {
                     Ok(server) => {
                         println!("Server initialized successfully");
                         if let Err(e) = server.waiting().await {
