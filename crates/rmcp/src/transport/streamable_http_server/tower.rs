@@ -34,6 +34,10 @@ pub struct StreamableHttpServerConfig {
     pub sse_keep_alive: Option<Duration>,
     /// If true, the server will create a session for each request and keep it alive.
     pub stateful_mode: bool,
+    /// Cancellation token for the Streamable HTTP server.
+    ///
+    /// When this token is cancelled, all active sessions are terminated and
+    /// the server stops accepting new requests.
     pub cancellation_token: CancellationToken,
 }
 

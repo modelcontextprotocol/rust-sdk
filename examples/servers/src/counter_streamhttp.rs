@@ -1,6 +1,5 @@
-use rmcp::transport::{
-    StreamableHttpServerConfig,
-    streamable_http_server::{StreamableHttpService, session::local::LocalSessionManager},
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use tracing_subscriber::{
     layer::SubscriberExt,
