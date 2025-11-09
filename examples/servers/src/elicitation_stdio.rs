@@ -183,11 +183,9 @@ impl ElicitationServer {
                     )]))
                 }
             }
-            ElicitationAction::Decline | ElicitationAction::Cancel => {
-                Ok(CallToolResult::success(vec![Content::text(
-                    "Email reply cancelled".to_string(),
-                )]))
-            }
+            ElicitationAction::Decline | ElicitationAction::Cancel => Ok(CallToolResult::success(
+                vec![Content::text("Email reply cancelled".to_string())],
+            )),
         }
     }
 }
