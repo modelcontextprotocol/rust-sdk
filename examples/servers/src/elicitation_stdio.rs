@@ -1,6 +1,6 @@
 //! Simple MCP Server with Elicitation
 //!
-//! Demonstrates user name collection via elicitation
+//! Demonstrates user name collection via elicitation and default values
 
 use std::sync::Arc;
 
@@ -105,6 +105,90 @@ impl ElicitationServer {
         Ok(CallToolResult::success(vec![Content::text(
             "User name reset. Next greeting will ask for name again.".to_string(),
         )]))
+    }
+
+    #[tool(description = "Reply to email with default values demonstration")]
+    async fn reply_email(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        // Build schema with default values for email reply
+        let schema = ElicitationSchema::builder()
+            .string_property("recipient", |s| {
+                s.format(StringFormat::Email)
+                    .with_default("sender@example.com")
+                    .description("Email recipient")
+            })
+            .string_property("cc", |s| {
+                s.format(StringFormat::Email)
+                    .with_default("team@example.com")
+                    .description("CC recipients")
+            })
+            .property(
+                "priority",
+                PrimitiveSchema::Enum(
+                    EnumSchema::new(vec![
+                        "low".to_string(),
+                        "normal".to_string(),
+                        "high".to_string(),
+                    ])
+                    .with_default("normal".to_string())
+                    .description("Email priority"),
+                ),
+            )
+            .number_property("confidence", |n| {
+                n.range(0.0, 1.0)
+                    .with_default(0.8)
+                    .description("Reply confidence score")
+            })
+            .required_string("subject")
+            .required_string("body")
+            .description("Email reply configuration with defaults")
+            .build()
+            .map_err(|e| McpError::internal_error(format!("Schema build error: {}", e), None))?;
+
+        // Request email details with pre-filled defaults
+        let response = context
+            .peer
+            .create_elicitation(CreateElicitationRequestParam {
+                message: "Configure email reply".to_string(),
+                requested_schema: schema,
+            })
+            .await
+            .map_err(|e| McpError::internal_error(format!("Elicitation error: {}", e), None))?;
+
+        match response.action {
+            ElicitationAction::Accept => {
+                if let Some(reply_data) = response.content {
+                    let recipient = reply_data
+                        .get("recipient")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let subject = reply_data
+                        .get("subject")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("No subject");
+                    let priority = reply_data
+                        .get("priority")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("normal");
+
+                    Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Email reply configured:\nTo: {}\nSubject: {}\nPriority: {}\n\nDefaults were used for pre-filling the form!",
+                        recipient, subject, priority
+                    ))]))
+                } else {
+                    Ok(CallToolResult::success(vec![Content::text(
+                        "Email accepted but no content provided".to_string(),
+                    )]))
+                }
+            }
+            ElicitationAction::Decline | ElicitationAction::Cancel => {
+                Ok(CallToolResult::success(vec![Content::text(
+                    "Email reply cancelled".to_string(),
+                )]))
+            }
+        }
     }
 }
 

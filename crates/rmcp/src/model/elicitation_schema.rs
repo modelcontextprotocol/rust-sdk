@@ -108,6 +108,10 @@ pub struct StringSchema {
     /// String format - limited to: "email", "uri", "date", "date-time"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<StringFormat>,
+
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Cow<'static, str>>,
 }
 
 impl Default for StringSchema {
@@ -119,6 +123,7 @@ impl Default for StringSchema {
             min_length: None,
             max_length: None,
             format: None,
+            default: None,
         }
     }
 }
@@ -208,6 +213,12 @@ impl StringSchema {
         self.format = Some(format);
         self
     }
+
+    /// Set default value
+    pub fn with_default(mut self, default: impl Into<Cow<'static, str>>) -> Self {
+        self.default = Some(default.into());
+        self
+    }
 }
 
 // =============================================================================
@@ -241,6 +252,10 @@ pub struct NumberSchema {
     /// Maximum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum: Option<f64>,
+
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<f64>,
 }
 
 impl Default for NumberSchema {
@@ -251,6 +266,7 @@ impl Default for NumberSchema {
             description: None,
             minimum: None,
             maximum: None,
+            default: None,
         }
     }
 }
@@ -300,6 +316,12 @@ impl NumberSchema {
     /// Set description
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set default value
+    pub fn with_default(mut self, default: f64) -> Self {
+        self.default = Some(default);
         self
     }
 }
@@ -491,6 +513,10 @@ pub struct EnumSchema {
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<Cow<'static, str>>,
+
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 impl EnumSchema {
@@ -502,6 +528,7 @@ impl EnumSchema {
             enum_names: None,
             title: None,
             description: None,
+            default: None,
         }
     }
 
@@ -520,6 +547,12 @@ impl EnumSchema {
     /// Set description
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set default value
+    pub fn with_default(mut self, default: String) -> Self {
+        self.default = Some(default);
         self
     }
 }
@@ -1176,5 +1209,115 @@ mod tests {
         let result = IntegerSchema::new().with_range(10, 5);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "minimum must be <= maximum");
+    }
+
+    #[test]
+    fn test_string_schema_with_default() {
+        let schema = StringSchema::new()
+            .with_default("example@test.com")
+            .description("Email with default");
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "string");
+        assert_eq!(json["default"], "example@test.com");
+        assert_eq!(json["description"], "Email with default");
+    }
+
+    #[test]
+    fn test_string_schema_without_default() {
+        let schema = StringSchema::new().description("Email without default");
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "string");
+        assert!(json.get("default").is_none());
+    }
+
+    #[test]
+    fn test_number_schema_with_default() {
+        let schema = NumberSchema::new()
+            .range(0.0, 100.0)
+            .with_default(50.0)
+            .description("Percentage with default");
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "number");
+        assert_eq!(json["default"], 50.0);
+        assert_eq!(json["minimum"], 0.0);
+        assert_eq!(json["maximum"], 100.0);
+    }
+
+    #[test]
+    fn test_number_schema_without_default() {
+        let schema = NumberSchema::new().range(0.0, 100.0);
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "number");
+        assert!(json.get("default").is_none());
+    }
+
+    #[test]
+    fn test_enum_schema_with_default() {
+        let schema = EnumSchema::new(vec!["US".to_string(), "UK".to_string(), "CA".to_string()])
+            .with_default("US".to_string())
+            .description("Country with default");
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "string");
+        assert_eq!(json["enum"], json!(["US", "UK", "CA"]));
+        assert_eq!(json["default"], "US");
+    }
+
+    #[test]
+    fn test_enum_schema_without_default() {
+        let schema = EnumSchema::new(vec!["US".to_string(), "UK".to_string()]);
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "string");
+        assert!(json.get("default").is_none());
+    }
+
+    #[test]
+    fn test_elicitation_schema_with_defaults() {
+        let schema = ElicitationSchema::builder()
+            .required_string_with("name", |s| s.length(1, 100))
+            .property(
+                "email",
+                PrimitiveSchema::String(StringSchema::email().with_default("user@example.com")),
+            )
+            .property(
+                "age",
+                PrimitiveSchema::Number(NumberSchema::new().range(0.0, 150.0).with_default(25.0)),
+            )
+            .property(
+                "country",
+                PrimitiveSchema::Enum(
+                    EnumSchema::new(vec!["US".to_string(), "UK".to_string()])
+                        .with_default("US".to_string()),
+                ),
+            )
+            .description("User registration with defaults")
+            .build()
+            .unwrap();
+
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "object");
+        assert_eq!(json["properties"]["email"]["default"], "user@example.com");
+        assert_eq!(json["properties"]["age"]["default"], 25.0);
+        assert_eq!(json["properties"]["country"]["default"], "US");
+        assert!(json["properties"]["name"].get("default").is_none());
+    }
+
+    #[test]
+    fn test_default_serialization_roundtrip() {
+        let original = StringSchema::new()
+            .with_default("test")
+            .description("Test schema");
+
+        let json = serde_json::to_value(&original).unwrap();
+        let deserialized: StringSchema = serde_json::from_value(json).unwrap();
+
+        assert_eq!(original, deserialized);
+        assert_eq!(deserialized.default, Some(Cow::Borrowed("test")));
     }
 }
