@@ -77,6 +77,8 @@ pub struct ToolAttribute {
     pub annotations: Option<ToolAnnotationsAttribute>,
     /// Optional icons for the tool
     pub icons: Option<Expr>,
+    /// Optional metadata for the tool
+    pub meta: Option<Expr>,
 }
 
 pub struct ResolvedToolAttribute {
@@ -87,6 +89,7 @@ pub struct ResolvedToolAttribute {
     pub output_schema: Option<Expr>,
     pub annotations: Expr,
     pub icons: Option<Expr>,
+    pub meta: Option<Expr>,
 }
 
 impl ResolvedToolAttribute {
@@ -99,6 +102,7 @@ impl ResolvedToolAttribute {
             output_schema,
             annotations,
             icons,
+            meta,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
@@ -120,6 +124,11 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
+        let meta = if let Some(meta) = meta {
+            quote! { Some(#meta) }
+        } else {
+            quote! { None }
+        };
         let doc_comment = format!("Generated tool metadata function for {name}");
         let doc_attr: syn::Attribute = parse_quote!(#[doc = #doc_comment]);
         let tokens = quote! {
@@ -133,6 +142,7 @@ impl ResolvedToolAttribute {
                     output_schema: #output_schema,
                     annotations: #annotations,
                     icons: #icons,
+                    meta: #meta,
                 }
             }
         };
@@ -264,6 +274,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         annotations: annotations_expr,
         title: attribute.title,
         icons: attribute.icons,
+        meta: attribute.meta,
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
     // modify the the input function
