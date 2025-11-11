@@ -6,6 +6,7 @@ use http::{Method, Request, Response, header::ALLOW};
 use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 
 use super::session::SessionManager;
 use crate::{
@@ -33,6 +34,11 @@ pub struct StreamableHttpServerConfig {
     pub sse_keep_alive: Option<Duration>,
     /// If true, the server will create a session for each request and keep it alive.
     pub stateful_mode: bool,
+    /// Cancellation token for the Streamable HTTP server.
+    ///
+    /// When this token is cancelled, all active sessions are terminated and
+    /// the server stops accepting new requests.
+    pub cancellation_token: CancellationToken,
 }
 
 impl Default for StreamableHttpServerConfig {
@@ -40,6 +46,7 @@ impl Default for StreamableHttpServerConfig {
         Self {
             sse_keep_alive: Some(Duration::from_secs(15)),
             stateful_mode: true,
+            cancellation_token: CancellationToken::new(),
         }
     }
 }
@@ -209,7 +216,11 @@ where
                 .resume(&session_id, last_event_id)
                 .await
                 .map_err(internal_error_response("resume session"))?;
-            Ok(sse_stream_response(stream, self.config.sse_keep_alive))
+            Ok(sse_stream_response(
+                stream,
+                self.config.sse_keep_alive,
+                self.config.cancellation_token.child_token(),
+            ))
         } else {
             // create standalone stream
             let stream = self
@@ -217,7 +228,11 @@ where
                 .create_standalone_stream(&session_id)
                 .await
                 .map_err(internal_error_response("create standalone stream"))?;
-            Ok(sse_stream_response(stream, self.config.sse_keep_alive))
+            Ok(sse_stream_response(
+                stream,
+                self.config.sse_keep_alive,
+                self.config.cancellation_token.child_token(),
+            ))
         }
     }
 
@@ -307,7 +322,11 @@ where
                             .create_stream(&session_id, message)
                             .await
                             .map_err(internal_error_response("get session"))?;
-                        Ok(sse_stream_response(stream, self.config.sse_keep_alive))
+                        Ok(sse_stream_response(
+                            stream,
+                            self.config.sse_keep_alive,
+                            self.config.cancellation_token.child_token(),
+                        ))
                     }
                     ClientJsonRpcMessage::Notification(_)
                     | ClientJsonRpcMessage::Response(_)
@@ -380,6 +399,7 @@ where
                         }
                     }),
                     self.config.sse_keep_alive,
+                    self.config.cancellation_token.child_token(),
                 );
 
                 response.headers_mut().insert(
@@ -413,6 +433,7 @@ where
                             }
                         }),
                         self.config.sse_keep_alive,
+                        self.config.cancellation_token.child_token(),
                     ))
                 }
                 ClientJsonRpcMessage::Notification(_notification) => {
