@@ -66,6 +66,8 @@ variant_extension! {
         UnsubscribeRequest
         CallToolRequest
         ListToolsRequest
+        GetTaskInfoRequest
+        ListTasksRequest
     }
 }
 
@@ -103,6 +105,7 @@ variant_extension! {
 #[serde(transparent)]
 pub struct Meta(pub JsonObject);
 const PROGRESS_TOKEN_FIELD: &str = "progressToken";
+const TASK_FIELD: &str = "modelcontextprotocol.io/task";
 impl Meta {
     pub fn new() -> Self {
         Self(JsonObject::new())
@@ -131,6 +134,12 @@ impl Meta {
             }
             _ => None,
         })
+    }
+
+    pub fn get_task(&self) -> Option<String> {
+        self.0
+            .get(TASK_FIELD)
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
     }
 
     pub fn set_progress_token(&mut self, token: ProgressToken) {
