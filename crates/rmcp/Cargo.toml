@@ -197,3 +197,8 @@ path = "tests/test_progress_subscriber.rs"
 name = "test_elicitation"
 required-features = ["elicitation", "client", "server"]
 path = "tests/test_elicitation.rs"
+
+[[test]]
+name = "test_task"
+required-features = ["server", "client", "macros"]
+path = "tests/test_task.rs"

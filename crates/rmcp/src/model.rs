@@ -8,6 +8,7 @@ mod meta;
 mod prompt;
 mod resource;
 mod serde_impl;
+mod task;
 mod tool;
 pub use annotated::*;
 pub use capabilities::*;
@@ -19,6 +20,7 @@ pub use prompt::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+pub use task::*;
 pub use tool::*;
 
 /// A JSON object type alias for convenient handling of JSON data.
@@ -1705,6 +1707,8 @@ pub struct CallToolRequestParam {
     /// Arguments to pass to the tool (must match the tool's input schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<JsonObject>,
 }
 
 /// Request to call a specific tool
@@ -1741,6 +1745,61 @@ pub struct GetPromptResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
+}
+
+// =============================================================================
+// TASK MANAGEMENT
+// =============================================================================
+
+const_string!(GetTaskInfoMethod = "tasks/get");
+pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParam>;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskInfoParam {
+    pub task_id: String,
+}
+
+const_string!(ListTasksMethod = "tasks/list");
+pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParam>;
+
+const_string!(GetTaskResultMethod = "tasks/result");
+pub type GetTaskResultRequest = Request<GetTaskResultMethod, GetTaskResultParam>;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskResultParam {
+    pub task_id: String,
+}
+
+const_string!(CancelTaskMethod = "tasks/cancel");
+pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParam>;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CancelTaskParam {
+    pub task_id: String,
+}
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskInfoResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::model::Task>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ListTasksResult {
+    pub tasks: Vec<crate::model::Task>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
 }
 
 // =============================================================================
@@ -1810,7 +1869,11 @@ ts_union!(
     | UnsubscribeRequest
     | CallToolRequest
     | ListToolsRequest
-    | CustomRequest;
+    | CustomRequest
+    | GetTaskInfoRequest
+    | ListTasksRequest
+    | GetTaskResultRequest
+    | CancelTaskRequest;
 );
 
 impl ClientRequest {
@@ -1830,6 +1893,10 @@ impl ClientRequest {
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
+            ClientRequest::GetTaskInfoRequest(r) => r.method.as_str(),
+            ClientRequest::ListTasksRequest(r) => r.method.as_str(),
+            ClientRequest::GetTaskResultRequest(r) => r.method.as_str(),
+            ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -1895,6 +1962,10 @@ ts_union!(
     | CreateElicitationResult
     | EmptyResult
     | CustomResult
+    | CreateTaskResult
+    | ListTasksResult
+    | GetTaskInfoResult
+    | TaskResult
     ;
 );
 

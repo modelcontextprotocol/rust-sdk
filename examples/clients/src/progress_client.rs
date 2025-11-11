@@ -184,6 +184,7 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
         .call_tool(CallToolRequestParam {
             name: "stream_processor".into(),
             arguments: None,
+            task: None,
         })
         .await?;
 
@@ -238,6 +239,7 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
         .call_tool(CallToolRequestParam {
             name: "stream_processor".into(),
             arguments: None,
+            task: None,
         })
         .await?;
 
