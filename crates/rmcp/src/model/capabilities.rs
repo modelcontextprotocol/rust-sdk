@@ -40,6 +40,25 @@ pub struct RootsCapabilities {
     pub list_changed: Option<bool>,
 }
 
+/// Task capability negotiation for SEP-1686.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TasksCapability {
+    /// Map of request category (e.g. "tools.call") to a boolean indicating support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requests: Option<TaskRequestMap>,
+    /// Whether the receiver supports `tasks/list`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<bool>,
+    /// Whether the receiver supports `tasks/cancel`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<bool>,
+}
+
+/// A convenience alias for describing per-request task support.
+pub type TaskRequestMap = BTreeMap<String, bool>;
+
 /// Capability for handling elicitation requests from servers.
 ///
 /// Elicitation allows servers to request interactive input from users during tool execution.
@@ -78,6 +97,8 @@ pub struct ClientCapabilities {
     /// Capability to handle elicitation requests from servers for interactive user input
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<TasksCapability>,
 }
 
 ///
@@ -109,6 +130,8 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<TasksCapability>,
 }
 
 macro_rules! builder {
@@ -223,12 +246,13 @@ builder! {
         completions: JsonObject,
         prompts: PromptsCapability,
         resources: ResourcesCapability,
-        tools: ToolsCapability
+        tools: ToolsCapability,
+        tasks: TasksCapability
     }
 }
 
-impl<const E: bool, const L: bool, const C: bool, const P: bool, const R: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, R, true>>
+impl<const E: bool, const L: bool, const C: bool, const P: bool, const R: bool, const TASKS: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, R, true, TASKS>>
 {
     pub fn enable_tool_list_changed(mut self) -> Self {
         if let Some(c) = self.tools.as_mut() {
@@ -238,8 +262,8 @@ impl<const E: bool, const L: bool, const C: bool, const P: bool, const R: bool>
     }
 }
 
-impl<const E: bool, const L: bool, const C: bool, const R: bool, const T: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, true, R, T>>
+impl<const E: bool, const L: bool, const C: bool, const R: bool, const T: bool, const TASKS: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, true, R, T, TASKS>>
 {
     pub fn enable_prompts_list_changed(mut self) -> Self {
         if let Some(c) = self.prompts.as_mut() {
@@ -249,8 +273,8 @@ impl<const E: bool, const L: bool, const C: bool, const R: bool, const T: bool>
     }
 }
 
-impl<const E: bool, const L: bool, const C: bool, const P: bool, const T: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, true, T>>
+impl<const E: bool, const L: bool, const C: bool, const P: bool, const T: bool, const TASKS: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, true, T, TASKS>>
 {
     pub fn enable_resources_list_changed(mut self) -> Self {
         if let Some(c) = self.resources.as_mut() {
@@ -273,11 +297,12 @@ builder! {
         roots: RootsCapabilities,
         sampling: JsonObject,
         elicitation: ElicitationCapability,
+        tasks: TasksCapability,
     }
 }
 
-impl<const E: bool, const S: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, true, S>>
+impl<const E: bool, const S: bool, const EL: bool, const TASKS: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, true, S, EL, TASKS>>
 {
     pub fn enable_roots_list_changed(mut self) -> Self {
         if let Some(c) = self.roots.as_mut() {
@@ -288,8 +313,8 @@ impl<const E: bool, const S: bool>
 }
 
 #[cfg(feature = "elicitation")]
-impl<const E: bool, const R: bool, const S: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, R, S, true>>
+impl<const E: bool, const R: bool, const S: bool, const TASKS: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, R, S, true, TASKS>>
 {
     /// Enable JSON Schema validation for elicitation responses.
     /// When enabled, the client will validate user input against the requested_schema
