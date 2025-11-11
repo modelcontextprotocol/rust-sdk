@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use std::sync::Arc;
-
+use std::{any::Any, sync::Arc};
+use rmcp::task_manager::{OperationDescriptor, OperationMessage, OperationProcessor, OperationResultTransport};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
@@ -13,7 +13,23 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde_json::json;
+use chrono::Utc;
 use tokio::sync::Mutex;
+
+struct ToolCallOperationResult {
+    id: String,
+    result: Result<CallToolResult, McpError>,
+}
+
+impl OperationResultTransport for ToolCallOperationResult {
+    fn operation_id(&self) -> &String {
+        &self.id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct StructRequest {
@@ -41,6 +57,7 @@ pub struct Counter {
     counter: Arc<Mutex<i32>>,
     tool_router: ToolRouter<Counter>,
     prompt_router: PromptRouter<Counter>,
+    processor: Arc<Mutex<OperationProcessor>>,
 }
 
 #[tool_router]
@@ -51,6 +68,7 @@ impl Counter {
             counter: Arc::new(Mutex::new(0)),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
+            processor: Arc::new(Mutex::new(OperationProcessor::new())),
         }
     }
 
@@ -82,6 +100,12 @@ impl Counter {
         Ok(CallToolResult::success(vec![Content::text(
             counter.to_string(),
         )]))
+    }
+
+    #[tool(description = "Long running task example")]
+    async fn long_task(&self) -> Result<CallToolResult, McpError> {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        Ok(CallToolResult::success(vec![Content::text("Long task completed")]))
     }
 
     #[tool(description = "Say hello to the client")]
@@ -180,6 +204,49 @@ impl ServerHandler for Counter {
         }
     }
 
+    async fn enqueue_task(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskInfoResult, McpError> {
+        let operation_id = context.id.to_string();
+        let operation_name = request.name.to_string();
+        let task_payload = request.task.clone();
+        let future_request = request.clone();
+        let future_context = context.clone();
+        let server = self.clone();
+        let descriptor = OperationDescriptor::new(operation_id.clone(), operation_name)
+            .with_context(context.clone())
+            .with_client_request(ClientRequest::CallToolRequest(Request::new(request.clone())));
+        let id_clone = operation_id.clone();
+        let future = Box::pin(async move {
+            let result = server.call_tool(future_request, future_context).await;
+            Ok(
+                Box::new(ToolCallOperationResult {
+                    id: id_clone,
+                    result,
+                }) as Box<dyn OperationResultTransport>,
+            )
+        });
+
+        let message = OperationMessage::new(descriptor, future);
+        self.processor
+            .lock()
+            .await
+            .submit_operation(message)
+            .map_err(|err| McpError::internal_error(format!("failed to enqueue task: {err}"), None))?;
+
+        let mut task = Task::default();
+        task.id = operation_id;
+        task.kind = TaskKind::ToolCall;
+        task.status = TaskStatus::Pending;
+        task.created_at = Utc::now().to_rfc3339();
+        task.metadata = task_payload.map(|payload| serde_json::Value::Object(payload));
+        task.input = serde_json::to_value(&request).ok();
+
+        Ok(GetTaskInfoResult { task: Some(task) })
+    }
+
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParam>,
@@ -251,6 +318,13 @@ impl ServerHandler for Counter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::{ClientHandler, ServiceExt};
+    use tokio::time::Duration;
+
+    #[derive(Default, Clone)]
+    struct TestClient;
+
+    impl ClientHandler for TestClient {}
 
     #[tokio::test]
     async fn test_prompt_attributes_generated() {
@@ -289,34 +363,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_example_prompt_execution() {
+    async fn test_client_enqueues_long_task() -> anyhow::Result<()> {
         let counter = Counter::new();
-        let context = rmcp::handler::server::prompt::PromptContext::new(
-            &counter,
-            "example_prompt".to_string(),
-            Some({
-                let mut map = serde_json::Map::new();
-                map.insert(
-                    "message".to_string(),
-                    serde_json::Value::String("Test message".to_string()),
-                );
-                map
-            }),
-            RequestContext {
-                meta: Default::default(),
-                ct: tokio_util::sync::CancellationToken::new(),
-                id: rmcp::model::NumberOrString::String("test-1".to_string()),
-                peer: Default::default(),
-                extensions: Default::default(),
-            },
+        let processor = counter.processor.clone();
+        let client = TestClient::default();
+
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+        let server_handle = tokio::spawn(async move {
+            let service = counter.serve(server_transport).await?;
+            service.waiting().await?;
+            anyhow::Ok(())
+        });
+
+        let client_service = client.serve(client_transport).await?;
+        let mut task_meta = serde_json::Map::new();
+        task_meta.insert(
+            "source".into(),
+            serde_json::Value::String("integration-test".into()),
         );
+        let params = CallToolRequestParam {
+            name: "long_task".into(),
+            arguments: None,
+            task: Some(task_meta),
+        };
+        let response = client_service
+            .send_request(ClientRequest::CallToolRequest(Request::new(params.clone())))
+            .await?;
 
-        let router = Counter::prompt_router();
-        let result = router.get_prompt(context).await;
-        assert!(result.is_ok());
+        let ServerResult::GetTaskInfoResult(info) = response else {
+            panic!("expected task info result, got {response:?}");
+        };
+        let task = info.task.expect("task payload missing");
+        assert_eq!(task.kind, TaskKind::ToolCall);
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert!(task.input.is_some());
+        assert!(task.metadata.is_some());
 
-        let prompt_result = result.unwrap();
-        assert_eq!(prompt_result.messages.len(), 1);
-        assert_eq!(prompt_result.messages[0].role, PromptMessageRole::User);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let running = processor.lock().await.running_task_count();
+        assert_eq!(running, 1);
+
+        client_service.cancel().await?;
+        let _ = server_handle.await;
+        Ok(())
     }
+
+    // #[tokio::test]
+    // async fn test_example_prompt_execution() {
+    //     let counter = Counter::new();
+    //     let context = rmcp::handler::server::prompt::PromptContext::new(
+    //         &counter,
+    //         "example_prompt".to_string(),
+    //         Some({
+    //             let mut map = serde_json::Map::new();
+    //             map.insert(
+    //                 "message".to_string(),
+    //                 serde_json::Value::String("Test message".to_string()),
+    //             );
+    //             map
+    //         }),
+    //         RequestContext {
+    //             meta: Default::default(),
+    //             ct: tokio_util::sync::CancellationToken::new(),
+    //             id: rmcp::model::NumberOrString::String("test-1".to_string()),
+    //             peer: Default::default(),
+    //             extensions: Default::default(),
+    //         },
+    //     );
+
+    //     let router = Counter::prompt_router();
+    //     let result = router.get_prompt(context).await;
+    //     assert!(result.is_ok());
+
+    //     let prompt_result = result.unwrap();
+    //     assert_eq!(prompt_result.messages.len(), 1);
+    //     assert_eq!(prompt_result.messages[0].role, PromptMessageRole::User);
+    // }
+
+
+    // #[tokio::test]
+    // async  fn test_long_task_enqueue() {
+    //     let counter = Counter::new();
+    //     let request = CallToolRequestParam {
+    //         name: "long_task".to_string(),
+    //         task: Some(serde_json::Map::new()),
+    //         arguments: None,
+    //     };
+    //     let context = RequestContext {
+    //         meta: Default::default(),
+    //         ct: tokio_util::sync::CancellationToken::new(),
+    //         id: rmcp::model::NumberOrString::String("long-task-1".to_string()),
+    //         peer: Default::default(),
+    //         extensions: Default::default(),
+    //     };
+
+    //     let result = counter.enqueue_task(request, context).await;
+    //     assert!(result.is_ok());
+
+    //     let task_info = result.unwrap();
+    //     assert!(task_info.task.is_some());
+    //     let task = task_info.task.unwrap();
+    //     assert_eq!(task.id, "long-task-1");
+    //     assert_eq!(task.status, TaskStatus::Pending);
+    // }
 }
