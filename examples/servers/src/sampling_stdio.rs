@@ -123,6 +123,7 @@ impl ServerHandler for SamplingDemoServer {
                 output_schema: None,
                 annotations: None,
                 icons: None,
+                meta: None,
             }],
             next_cursor: None,
         })

@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Icon, JsonObject};
+use super::{Icon, JsonObject, Meta};
 
 /// A tool that can be used by a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,6 +32,9 @@ pub struct Tool {
     /// Optional list of icons for the tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
+    /// Optional additional metadata for this tool
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 /// Additional properties describing a Tool to clients.
@@ -150,6 +153,7 @@ impl Tool {
             output_schema: None,
             annotations: None,
             icons: None,
+            meta: None,
         }
     }
 

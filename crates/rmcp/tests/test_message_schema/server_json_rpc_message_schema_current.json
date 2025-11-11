@@ -2292,6 +2292,14 @@
       "description": "A tool that can be used by a model.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional additional metadata for this tool",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "annotations": {
           "description": "Optional additional tool information.",
           "anyOf": [
