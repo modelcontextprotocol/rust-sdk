@@ -2,7 +2,10 @@
 //!
 //! Demonstrates user name collection via elicitation
 
-use std::sync::Arc;
+use std::{
+    fmt::{Display, Formatter},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use rmcp::{
@@ -18,12 +21,32 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing_subscriber::{self, EnvFilter};
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub enum UserType {
+    #[schemars(title = "Guest User")]
+    #[default]
+    Guest,
+    #[schemars(title = "Admin User")]
+    Admin,
+}
+
+impl Display for UserType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserType::Guest => write!(f, "Guest"),
+            UserType::Admin => write!(f, "Admin"),
+        }
+    }
+}
+
 /// User information request
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(description = "User information")]
 pub struct UserInfo {
     #[schemars(description = "User's name")]
     pub name: String,
+    #[schemars(title = "What kind of user you are?", default)]
+    pub user_type: UserType,
 }
 
 // Mark as safe for elicitation
@@ -44,14 +67,14 @@ pub struct GreetRequest {
 /// Simple server with elicitation
 #[derive(Clone)]
 pub struct ElicitationServer {
-    user_name: Arc<Mutex<Option<String>>>,
+    user_info: Arc<Mutex<Option<UserInfo>>>,
     tool_router: ToolRouter<ElicitationServer>,
 }
 
 impl ElicitationServer {
     pub fn new() -> Self {
         Self {
-            user_name: Arc::new(Mutex::new(None)),
+            user_info: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -71,11 +94,11 @@ impl ElicitationServer {
         context: RequestContext<RoleServer>,
         Parameters(request): Parameters<GreetRequest>,
     ) -> Result<CallToolResult, McpError> {
-        // Check if we have user name
-        let current_name = self.user_name.lock().await.clone();
+        // Check if we have user info
+        let current_info = self.user_info.lock().await.clone();
 
-        let user_name = if let Some(name) = current_name {
-            name
+        let user_info = if let Some(info) = current_info {
+            info
         } else {
             // Request user name via elicitation
             match context
@@ -84,24 +107,32 @@ impl ElicitationServer {
                 .await
             {
                 Ok(Some(user_info)) => {
-                    let name = user_info.name.clone();
-                    *self.user_name.lock().await = Some(name.clone());
-                    name
+                    *self.user_info.lock().await = Some(user_info.clone());
+                    user_info
                 }
-                Ok(None) => "Guest".to_string(), // Never happen if client checks schema
-                Err(_) => "Unknown".to_string(),
+                Ok(None) => UserInfo {
+                    name: "Guest".to_string(),
+                    user_type: UserType::Guest,
+                }, // Never happen if client checks schema
+                Err(err) => {
+                    tracing::error!("Failed to elicit user info: {:?}", err);
+                    UserInfo {
+                        name: "Unknown".to_string(),
+                        user_type: UserType::Guest,
+                    }
+                }
             }
         };
 
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{} {}!",
-            request.greeting, user_name
+            "{} {}! You are {}",
+            request.greeting, user_info.name, user_info.user_type
         ))]))
     }
 
     #[tool(description = "Reset stored user name")]
     async fn reset_name(&self) -> Result<CallToolResult, McpError> {
-        *self.user_name.lock().await = None;
+        *self.user_info.lock().await = None;
         Ok(CallToolResult::success(vec![Content::text(
             "User name reset. Next greeting will ask for name again.".to_string(),
         )]))
@@ -128,16 +159,16 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    println!("Simple MCP Elicitation Demo");
+    eprintln!("Simple MCP Elicitation Demo");
 
     // Get current executable path for Inspector
     let current_exe = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap();
 
-    println!("To test with MCP Inspector:");
-    println!("1. Run: npx @modelcontextprotocol/inspector");
-    println!("2. Enter server command: {}", current_exe);
+    eprintln!("To test with MCP Inspector:");
+    eprintln!("1. Run: npx @modelcontextprotocol/inspector");
+    eprintln!("2. Enter server command: {}", current_exe);
 
     let service = ElicitationServer::new()
         .serve(stdio())

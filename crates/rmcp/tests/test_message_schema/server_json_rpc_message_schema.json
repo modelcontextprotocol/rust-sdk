@@ -307,6 +307,11 @@
         }
       }
     },
+    "ArrayTypeConst": {
+      "type": "string",
+      "format": "const",
+      "const": "array"
+    },
     "BooleanSchema": {
       "description": "Schema definition for boolean properties.",
       "type": "object",
@@ -443,6 +448,22 @@
       },
       "required": [
         "values"
+      ]
+    },
+    "ConstTitle": {
+      "description": "Schema definition for enum properties.\n\nRepresent single entry for titled item",
+      "type": "object",
+      "properties": {
+        "const": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "const",
+        "title"
       ]
     },
     "ContextInclusion": {
@@ -664,52 +685,17 @@
       "type": "object"
     },
     "EnumSchema": {
-      "description": "Schema definition for enum properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nEnums must have string type and can optionally include human-readable names.",
-      "type": "object",
-      "properties": {
-        "description": {
-          "description": "Human-readable description",
-          "type": [
-            "string",
-            "null"
-          ]
+      "description": "Compliant with MCP 2025-11-25 specification for elicitation schemas.\nEnums must have string type for values and can optionally include human-readable names.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet enum_schema = EnumSchema::builder(vec![\"US\".to_string(), \"UK\".to_string()])\n   .multiselect()\n   .min_items(1u64).expect(\"Min items should be correct value\")\n   .max_items(4u64).expect(\"Max items should be correct value\")\n   .description(\"Country code\")\n   .build();\n```",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SingleSelectEnumSchema"
         },
-        "enum": {
-          "description": "Allowed enum values (string values only per MCP spec)",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+        {
+          "$ref": "#/definitions/MultiSelectEnumSchema"
         },
-        "enumNames": {
-          "description": "Optional human-readable names for each enum value",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "title": {
-          "description": "Optional title for the schema",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "description": "Type discriminator (always \"string\" for enums)",
-          "allOf": [
-            {
-              "$ref": "#/definitions/StringTypeConst"
-            }
-          ]
+        {
+          "$ref": "#/definitions/LegacyEnumSchema"
         }
-      },
-      "required": [
-        "type",
-        "enum"
       ]
     },
     "ErrorCode": {
@@ -1028,6 +1014,46 @@
       "format": "const",
       "const": "2.0"
     },
+    "LegacyEnumSchema": {
+      "description": "Legacy enum schema, keep for backward compatibility",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enumNames": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/StringTypeConst"
+        }
+      },
+      "required": [
+        "type",
+        "enum"
+      ]
+    },
     "ListPromptsResult": {
       "type": "object",
       "properties": {
@@ -1212,6 +1238,17 @@
           "format": "float"
         }
       }
+    },
+    "MultiSelectEnumSchema": {
+      "description": "Multi-select enum options",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UntitledMultiSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/TitledMultiSelectEnumSchema"
+        }
+      ]
     },
     "Notification": {
       "type": "object",
@@ -2198,6 +2235,17 @@
         }
       ]
     },
+    "SingleSelectEnumSchema": {
+      "description": "Combined single-select",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UntitledSingleSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/TitledSingleSelectEnumSchema"
+        }
+      ]
+    },
     "StringFormat": {
       "description": "String format types allowed by the MCP specification.",
       "oneOf": [
@@ -2287,6 +2335,111 @@
       "type": "string",
       "format": "const",
       "const": "string"
+    },
+    "TitledItems": {
+      "description": "Items for titled multi-select options",
+      "type": "object",
+      "properties": {
+        "anyOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConstTitle"
+          }
+        }
+      },
+      "required": [
+        "anyOf"
+      ]
+    },
+    "TitledMultiSelectEnumSchema": {
+      "description": "Multi-select titled options",
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "$ref": "#/definitions/TitledItems"
+        },
+        "maxItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "minItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/ArrayTypeConst"
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ]
+    },
+    "TitledSingleSelectEnumSchema": {
+      "description": "Titled single-select",
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oneOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConstTitle"
+          }
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/StringTypeConst"
+        }
+      },
+      "required": [
+        "type",
+        "oneOf"
+      ]
     },
     "Tool": {
       "description": "A tool that can be used by a model.",
@@ -2414,6 +2567,115 @@
           ]
         }
       }
+    },
+    "UntitledItems": {
+      "description": "Items for untitled multi-select options",
+      "type": "object",
+      "properties": {
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "$ref": "#/definitions/StringTypeConst"
+        }
+      },
+      "required": [
+        "type",
+        "enum"
+      ]
+    },
+    "UntitledMultiSelectEnumSchema": {
+      "description": "Multi-select untitled options",
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "$ref": "#/definitions/UntitledItems"
+        },
+        "maxItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "minItems": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/ArrayTypeConst"
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ]
+    },
+    "UntitledSingleSelectEnumSchema": {
+      "description": "Untitled single-select",
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/StringTypeConst"
+        }
+      },
+      "required": [
+        "type",
+        "enum"
+      ]
     }
   }
 }

@@ -19,6 +19,7 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{const_string, model::ConstString};
 
@@ -32,6 +33,7 @@ const_string!(NumberTypeConst = "number");
 const_string!(IntegerTypeConst = "integer");
 const_string!(BooleanTypeConst = "boolean");
 const_string!(EnumTypeConst = "string");
+const_string!(ArrayTypeConst = "array");
 
 // =============================================================================
 // PRIMITIVE SCHEMA DEFINITIONS
@@ -466,61 +468,409 @@ impl BooleanSchema {
 
 /// Schema definition for enum properties.
 ///
-/// Compliant with MCP 2025-06-18 specification for elicitation schemas.
-/// Enums must have string type and can optionally include human-readable names.
+/// Represent single entry for titled item
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ConstTitle {
+    #[serde(rename = "const")]
+    pub const_: String,
+    pub title: String,
+}
+
+/// Legacy enum schema, keep for backward compatibility
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct LegacyEnumSchema {
+    #[serde(rename = "type")]
+    pub type_: StringTypeConst,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Cow<'static, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
+    #[serde(rename = "enum")]
+    pub enum_: Vec<String>,
+    pub enum_names: Option<Vec<String>>,
+}
+
+/// Untitled single-select
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct UntitledSingleSelectEnumSchema {
+    #[serde(rename = "type")]
+    pub type_: StringTypeConst,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Cow<'static, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
+    #[serde(rename = "enum")]
+    pub enum_: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// Titled single-select
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TitledSingleSelectEnumSchema {
+    #[serde(rename = "type")]
+    pub type_: StringTypeConst,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Cow<'static, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
+    #[serde(rename = "oneOf")]
+    pub one_of: Vec<ConstTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// Combined single-select
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum SingleSelectEnumSchema {
+    Untitled(UntitledSingleSelectEnumSchema),
+    Titled(TitledSingleSelectEnumSchema),
+}
+
+/// Items for untitled multi-select options
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct UntitledItems {
+    #[serde(rename = "type")]
+    pub type_: StringTypeConst,
+    #[serde(rename = "enum")]
+    pub enum_: Vec<String>,
+}
+
+/// Items for titled multi-select options
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TitledItems {
+    #[serde(rename = "anyOf")]
+    pub any_of: Vec<ConstTitle>,
+}
+
+/// Multi-select untitled options
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct EnumSchema {
-    /// Type discriminator (always "string" for enums)
+pub struct UntitledMultiSelectEnumSchema {
     #[serde(rename = "type")]
-    pub type_: StringTypeConst,
-
-    /// Allowed enum values (string values only per MCP spec)
-    #[serde(rename = "enum")]
-    pub enum_values: Vec<String>,
-
-    /// Optional human-readable names for each enum value
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enum_names: Option<Vec<String>>,
-
-    /// Optional title for the schema
+    pub type_: ArrayTypeConst,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<Cow<'static, str>>,
-
-    /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<Cow<'static, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u64>,
+    pub items: UntitledItems,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Vec<String>>,
 }
 
-impl EnumSchema {
-    /// Create a new enum schema with string values
-    pub fn new(values: Vec<String>) -> Self {
+/// Multi-select titled options
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TitledMultiSelectEnumSchema {
+    #[serde(rename = "type")]
+    pub type_: ArrayTypeConst,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Cow<'static, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Cow<'static, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u64>,
+    pub items: TitledItems,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Vec<String>>,
+}
+
+/// Multi-select enum options
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum MultiSelectEnumSchema {
+    Untitled(UntitledMultiSelectEnumSchema),
+    Titled(TitledMultiSelectEnumSchema),
+}
+
+/// Compliant with MCP 2025-11-25 specification for elicitation schemas.
+/// Enums must have string type for values and can optionally include human-readable names.
+///
+/// # Example
+///
+/// ```rust
+/// use rmcp::model::*;
+///
+/// let enum_schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
+///    .multiselect()
+///    .min_items(1u64).expect("Min items should be correct value")
+///    .max_items(4u64).expect("Max items should be correct value")
+///    .description("Country code")
+///    .build();
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum EnumSchema {
+    Single(SingleSelectEnumSchema),
+    Multi(MultiSelectEnumSchema),
+    Legacy(LegacyEnumSchema),
+}
+
+/// Builder for EnumSchema
+#[derive(Debug)]
+pub struct EnumSchemaBuilder {
+    /// Enum values
+    enum_values: Vec<String>,
+    /// If true generate SingleSelect EnumSchema, MultiSelect otherwise
+    single_select: bool,
+    /// If true generate Titled EnumSchema, UnTitled otherwise
+    titled: bool,
+    /// Title of EnumSchema
+    schema_title: Option<Cow<'static, str>>,
+    /// Description of EnumSchema
+    description: Option<Cow<'static, str>>,
+    /// Titles of given enum values
+    enum_titles: Vec<String>,
+    /// Minimum number of items to choose for MultiSelect
+    min_items: Option<u64>,
+    /// Maximum number of items to choose for MultiSelect
+    max_items: Option<u64>,
+    /// Default values for enum
+    default: Vec<String>,
+}
+
+impl Default for EnumSchemaBuilder {
+    fn default() -> Self {
         Self {
-            type_: StringTypeConst,
-            enum_values: values,
-            enum_names: None,
-            title: None,
+            schema_title: None,
             description: None,
+            single_select: true,
+            titled: false,
+            enum_titles: Vec::new(),
+            enum_values: Vec::new(),
+            min_items: None,
+            max_items: None,
+            default: Vec::new(),
+        }
+    }
+}
+
+macro_rules! enum_schema_builder {
+    ($field:ident: $type:ty) => {
+        pub fn $field(mut self, value: $type) -> Self {
+            self.$field = Some(value.into());
+            self
+        }
+    };
+}
+
+/// Enum selection builder
+impl EnumSchemaBuilder {
+    pub fn new(values: Vec<String>) -> EnumSchemaBuilder {
+        EnumSchemaBuilder {
+            enum_values: values,
+            single_select: true,
+            titled: false,
+            ..Default::default()
         }
     }
 
-    /// Set enum names (human-readable names for each enum value)
-    pub fn enum_names(mut self, names: Vec<String>) -> Self {
-        self.enum_names = Some(names);
+    /// Set titles to enum values. Also, implicitly set this enum schema as titled
+    pub fn enum_titles(mut self, titles: Vec<String>) -> Result<EnumSchemaBuilder, String> {
+        if titles.len() != self.enum_values.len() {
+            return Err(format!(
+                "Provided number of titles do not matched to number of values: expected {}, but got {}",
+                self.enum_values.len(),
+                titles.len()
+            ));
+        }
+        self.titled = true;
+        self.enum_titles = titles;
+        Ok(self)
+    }
+
+    /// Set enum as single-select
+    /// If it was multi-select, clear default values
+    pub fn single_select(mut self) -> EnumSchemaBuilder {
+        if !self.single_select {
+            self.default = Vec::new();
+        }
+        self.single_select = true;
         self
     }
 
-    /// Set title
-    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
-        self.title = Some(title.into());
+    /// Set enum as multi-select
+    /// If it was single-select, clear default value
+    pub fn multiselect(mut self) -> EnumSchemaBuilder {
+        if self.single_select {
+            self.default = Vec::new();
+        }
+        self.single_select = false;
         self
     }
 
-    /// Set description
-    pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
-        self.description = Some(description.into());
+    /// Set enum as untitled
+    pub fn untitled(mut self) -> EnumSchemaBuilder {
+        self.titled = false;
         self
+    }
+
+    /// Set default value for single-select enum
+    pub fn single_select_default(
+        mut self,
+        default_value: String,
+    ) -> Result<EnumSchemaBuilder, &'static str> {
+        if self.single_select {
+            return Err(
+                "Set single default value available only when the builder is set to single-select. \
+            Use multi_select_default method for multi-select options",
+            );
+        }
+        self.default = vec![default_value];
+        Ok(self)
+    }
+
+    /// Set default value for multi-select enum
+    pub fn multi_select_default(
+        mut self,
+        default_values: Vec<String>,
+    ) -> Result<EnumSchemaBuilder, &'static str> {
+        if self.single_select {
+            return Err(
+                "Set multiple default values available only when the builder is set to multi-select. \
+            Use single_select_default method for single-select options",
+            );
+        }
+        self.default = default_values;
+        Ok(self)
+    }
+
+    /// Set minimal number of items for multi-select enum options
+    pub fn min_items(mut self, value: u64) -> Result<EnumSchemaBuilder, &'static str> {
+        if let Some(max) = self.max_items
+            && value > max
+        {
+            return Err("Provided value is greater than max_items");
+        }
+        self.min_items = Some(value);
+        Ok(self)
+    }
+
+    /// Set maximal number of items for multi-select enum options
+    pub fn max_items(mut self, value: u64) -> Result<EnumSchemaBuilder, &'static str> {
+        if let Some(min) = self.min_items
+            && value < min
+        {
+            return Err("Provided value is less than min_items");
+        }
+        self.max_items = Some(value);
+        Ok(self)
+    }
+
+    enum_schema_builder!(schema_title: impl Into<Cow<'static, str>>);
+    enum_schema_builder!(description: impl Into<Cow<'static, str>>);
+
+    /// Build enum schema
+    pub fn build(mut self) -> EnumSchema {
+        match (self.single_select, self.titled) {
+            (true, false) => EnumSchema::Single(SingleSelectEnumSchema::Untitled(
+                UntitledSingleSelectEnumSchema {
+                    type_: StringTypeConst,
+                    title: self.schema_title,
+                    description: self.description,
+                    enum_: self.enum_values,
+                    default: self.default.pop(),
+                },
+            )),
+            (true, true) => EnumSchema::Single(SingleSelectEnumSchema::Titled(
+                TitledSingleSelectEnumSchema {
+                    type_: StringTypeConst,
+                    title: self.schema_title,
+                    description: self.description,
+                    one_of: self
+                        .enum_titles
+                        .into_iter()
+                        .zip(self.enum_values)
+                        .map(|(title, const_)| ConstTitle { const_, title })
+                        .collect(),
+                    default: self.default.pop(),
+                },
+            )),
+            (false, false) => EnumSchema::Multi(MultiSelectEnumSchema::Untitled(
+                UntitledMultiSelectEnumSchema {
+                    type_: ArrayTypeConst,
+                    title: self.schema_title,
+                    description: self.description,
+                    min_items: self.min_items,
+                    max_items: self.max_items,
+                    items: UntitledItems {
+                        type_: StringTypeConst,
+                        enum_: self.enum_values,
+                    },
+                    default: if self.default.is_empty() {
+                        None
+                    } else {
+                        Some(self.default)
+                    },
+                },
+            )),
+            (false, true) => {
+                EnumSchema::Multi(MultiSelectEnumSchema::Titled(TitledMultiSelectEnumSchema {
+                    type_: ArrayTypeConst,
+                    title: self.schema_title,
+                    description: self.description,
+                    min_items: self.min_items,
+                    max_items: self.max_items,
+                    items: TitledItems {
+                        any_of: self
+                            .enum_titles
+                            .into_iter()
+                            .zip(self.enum_values)
+                            .map(|(title, const_)| ConstTitle { const_, title })
+                            .collect(),
+                    },
+                    default: if self.default.is_empty() {
+                        None
+                    } else {
+                        Some(self.default)
+                    },
+                }))
+            }
+        }
+    }
+}
+
+impl EnumSchema {
+    /// Creates a new `EnumSchemaBuilder` with the given enum values.
+    ///
+    /// This convenience method allows you to construct an enum schema by specifying
+    /// the possible string values for the enum. Use the returned builder to further
+    /// configure the schema before building it.
+    ///
+    /// # Arguments
+    ///
+    /// * `values` - A vector of strings representing the allowed enum values.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rmcp::model::*;
+    ///
+    /// let builder = EnumSchema::builder(vec!["A".to_string(), "B".to_string()]);
+    /// ```
+    pub fn builder(values: Vec<String>) -> EnumSchemaBuilder {
+        EnumSchemaBuilder::new(values)
     }
 }
 
@@ -599,7 +949,63 @@ impl ElicitationSchema {
     /// Returns a [`serde_json::Error`] if the JSON object cannot be deserialized
     /// into a valid ElicitationSchema.
     pub fn from_json_schema(schema: crate::model::JsonObject) -> Result<Self, serde_json::Error> {
-        serde_json::from_value(serde_json::Value::Object(schema))
+        let mut schema_value = Value::Object(schema);
+        let defs_snapshot = schema_value.get("$defs").cloned();
+        let definitions = schema_value.get("definitions").cloned();
+
+        if let Some(properties) = schema_value
+            .get_mut("properties")
+            .and_then(|value| value.as_object_mut())
+        {
+            for property in properties.values_mut() {
+                normalize_property(property, defs_snapshot.as_ref(), definitions.as_ref());
+            }
+        }
+
+        let Value::Object(mut schema_map) = schema_value else {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "Elicitation schema root must be an object",
+            ));
+        };
+
+        let properties_value = match schema_map.remove("properties") {
+            Some(Value::Object(map)) => map,
+            Some(_) => {
+                return Err(<serde_json::Error as serde::de::Error>::custom(
+                    "Elicitation schema properties must be an object",
+                ));
+            }
+            None => serde_json::Map::new(),
+        };
+
+        let mut properties = BTreeMap::new();
+        for (name, value) in properties_value {
+            let primitive = if is_enum_schema(&value) {
+                PrimitiveSchema::Enum(serde_json::from_value(value)?)
+            } else {
+                serde_json::from_value(value)?
+            };
+            properties.insert(name, primitive);
+        }
+
+        let mut elicitation_schema = ElicitationSchema::new(properties);
+
+        if let Some(required_value) = schema_map.get("required") {
+            let required: Vec<String> = serde_json::from_value(required_value.clone())?;
+            if !required.is_empty() {
+                elicitation_schema.required = Some(required);
+            }
+        }
+
+        if let Some(title_value) = schema_map.get("title").and_then(Value::as_str) {
+            elicitation_schema.title = Some(Cow::Owned(title_value.to_string()));
+        }
+
+        if let Some(description_value) = schema_map.get("description").and_then(Value::as_str) {
+            elicitation_schema.description = Some(Cow::Owned(description_value.to_string()));
+        }
+
+        Ok(elicitation_schema)
     }
 
     /// Generate an ElicitationSchema from a Rust type that implements JsonSchema
@@ -670,6 +1076,90 @@ impl ElicitationSchema {
     pub fn builder() -> ElicitationSchemaBuilder {
         ElicitationSchemaBuilder::new()
     }
+}
+
+fn is_enum_schema(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            if map.contains_key("enum") || map.contains_key("oneOf") || map.contains_key("anyOf") {
+                return true;
+            }
+            if let Some(items) = map.get("items") {
+                return is_enum_schema(items);
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn normalize_property(value: &mut Value, defs: Option<&Value>, definitions: Option<&Value>) {
+    let reference = value
+        .as_object()
+        .and_then(|map| map.get("$ref").and_then(Value::as_str))
+        .map(|s| s.to_owned());
+    if let Some(reference) = reference {
+        if let Some(Value::Object(mut resolved_map)) = resolve_ref(&reference, defs, definitions) {
+            let overrides = value.as_object().map(|map| {
+                let mut overrides = map.clone();
+                overrides.remove("$ref");
+                overrides
+            });
+            if let Some(overrides) = overrides {
+                for (key, override_value) in overrides {
+                    resolved_map.insert(key, override_value);
+                }
+            }
+            *value = Value::Object(resolved_map);
+            normalize_property(value, defs, definitions);
+            return;
+        }
+    }
+
+    let Value::Object(map) = value else {
+        return;
+    };
+
+    let is_array = map
+        .get("type")
+        .and_then(Value::as_str)
+        .map(|type_name| type_name == "array")
+        .unwrap_or(false);
+    if is_array {
+        if let Some(items) = map.get_mut("items") {
+            normalize_property(items, defs, definitions);
+            if let Some(items_object) = items.as_object_mut() {
+                if let Some(one_of) = items_object.remove("oneOf") {
+                    items_object.insert("anyOf".to_string(), one_of);
+                }
+            }
+        }
+        return;
+    }
+
+    ensure_enum_string_type(map);
+}
+
+fn ensure_enum_string_type(map: &mut serde_json::Map<String, Value>) {
+    if (map.contains_key("enum") || map.contains_key("oneOf") || map.contains_key("anyOf"))
+        && !map.contains_key("type")
+    {
+        map.insert("type".to_string(), Value::String("string".to_string()));
+    }
+}
+
+fn resolve_ref(
+    reference: &str,
+    defs: Option<&Value>,
+    definitions: Option<&Value>,
+) -> Option<Value> {
+    resolve_with(reference, "#/$defs", defs)
+        .or_else(|| resolve_with(reference, "#/definitions", definitions))
+}
+
+fn resolve_with(reference: &str, prefix: &str, root: Option<&Value>) -> Option<Value> {
+    let remainder = reference.strip_prefix(prefix)?;
+    root?.pointer(remainder).cloned()
 }
 
 // =============================================================================
@@ -972,13 +1462,13 @@ impl ElicitationSchemaBuilder {
     // Enum convenience methods
 
     /// Add a required enum property
-    pub fn required_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
-        self.required_property(name, PrimitiveSchema::Enum(EnumSchema::new(values)))
+    pub fn required_enum(self, name: impl Into<String>, enum_schema: EnumSchema) -> Self {
+        self.required_property(name, PrimitiveSchema::Enum(enum_schema))
     }
 
     /// Add an optional enum property
-    pub fn optional_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
-        self.property(name, PrimitiveSchema::Enum(EnumSchema::new(values)))
+    pub fn optional_enum(self, name: impl Into<String>, enum_schema: EnumSchema) -> Self {
+        self.property(name, PrimitiveSchema::Enum(enum_schema))
     }
 
     /// Mark an existing property as required
@@ -1041,6 +1531,8 @@ impl ElicitationSchemaBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use serde_json::json;
 
     use super::*;
@@ -1087,22 +1579,84 @@ mod tests {
     }
 
     #[test]
-    fn test_enum_schema_serialization() {
-        let schema = EnumSchema::new(vec!["US".to_string(), "UK".to_string()])
-            .enum_names(vec![
-                "United States".to_string(),
-                "United Kingdom".to_string(),
-            ])
-            .description("Country code");
+    fn test_enum_schema_untitled_single_select_serialization() {
+        let schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
+            .description("Country code")
+            .build();
         let json = serde_json::to_value(&schema).unwrap();
 
         assert_eq!(json["type"], "string");
         assert_eq!(json["enum"], json!(["US", "UK"]));
+        assert_eq!(json["description"], "Country code");
+    }
+
+    #[test]
+    fn test_enum_schema_untitled_multi_select_serialization() -> Result<(), Box<dyn Error>> {
+        let schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
+            .multiselect()
+            .min_items(1u64)?
+            .max_items(4u64)?
+            .description("Country code")
+            .build();
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "array");
+        assert_eq!(json["minItems"], 1u64);
+        assert_eq!(json["maxItems"], 4u64);
+        assert_eq!(json["items"], json!({"type":"string", "enum":["US", "UK"]}));
+        assert_eq!(json["description"], "Country code");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_titled_single_select_serialization() -> Result<(), Box<dyn Error>> {
+        let schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
+            .enum_titles(vec![
+                "United States".to_string(),
+                "United Kingdom".to_string(),
+            ])?
+            .description("Country code")
+            .build();
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "string");
         assert_eq!(
-            json["enumNames"],
-            json!(["United States", "United Kingdom"])
+            json["oneOf"],
+            json!([
+                {"const": "US", "title":"United States"},
+                {"const": "UK", "title":"United Kingdom"}
+            ])
         );
         assert_eq!(json["description"], "Country code");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_titled_multi_select_serialization() -> Result<(), Box<dyn Error>> {
+        let schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
+            .enum_titles(vec![
+                "United States".to_string(),
+                "United Kingdom".to_string(),
+            ])?
+            .multiselect()
+            .min_items(1u64)?
+            .max_items(4u64)?
+            .description("Country code")
+            .build();
+        let json = serde_json::to_value(&schema).unwrap();
+
+        assert_eq!(json["type"], "array");
+        assert_eq!(json["minItems"], 1u64);
+        assert_eq!(json["maxItems"], 4u64);
+        assert_eq!(
+            json["items"],
+            json!({"anyOf":[
+                {"const":"US","title":"United States"},
+                {"const":"UK","title":"United Kingdom"}
+            ]})
+        );
+        assert_eq!(json["description"], "Country code");
+        Ok(())
     }
 
     #[test]
@@ -1121,14 +1675,13 @@ mod tests {
 
     #[test]
     fn test_elicitation_schema_builder_complex() {
+        let enum_schema =
+            EnumSchema::builder(vec!["US".to_string(), "UK".to_string(), "CA".to_string()]).build();
         let schema = ElicitationSchema::builder()
             .required_string_with("name", |s| s.length(1, 100))
             .required_integer("age", 0, 150)
             .optional_bool("newsletter", false)
-            .required_enum(
-                "country",
-                vec!["US".to_string(), "UK".to_string(), "CA".to_string()],
-            )
+            .required_enum("country", enum_schema)
             .description("User registration")
             .build()
             .unwrap();
@@ -1176,5 +1729,128 @@ mod tests {
         let result = IntegerSchema::new().with_range(10, 5);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "minimum must be <= maximum");
+    }
+
+    #[cfg(feature = "schemars")]
+    mod schemars_tests {
+        use std::error::Error;
+
+        use schemars::JsonSchema;
+        use serde::{Deserialize, Serialize};
+        use serde_json::json;
+
+        use crate::model::ElicitationSchema;
+
+        #[derive(Debug, Serialize, Deserialize, JsonSchema, Default)]
+        enum TitledEnum {
+            #[schemars(title = "Title for the first value")]
+            #[default]
+            FirstValue,
+            #[schemars(title = "Title for the second value")]
+            SecondValue,
+        }
+
+        #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+        enum UntitledEnum {
+            First,
+            Second,
+            Third,
+        }
+
+        fn default_untitled_multi_select() -> Vec<UntitledEnum> {
+            vec![UntitledEnum::Second, UntitledEnum::Third]
+        }
+
+        #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+        #[schemars(description = "User information")]
+        struct UserInfo {
+            #[schemars(description = "User's name")]
+            pub name: String,
+            pub single_select_untitled: UntitledEnum,
+            #[schemars(
+                title = "Single Select Titled",
+                description = "Description for single select enum",
+                default
+            )]
+            pub single_select_titled: TitledEnum,
+            #[serde(default = "default_untitled_multi_select")]
+            pub multi_select_untitled: Vec<UntitledEnum>,
+            #[schemars(
+                title = "Multi Select Titled",
+                description = "Multi Select Description"
+            )]
+            pub multi_select_titled: Vec<TitledEnum>,
+        }
+
+        #[test]
+        fn test_schema_inference() -> Result<(), Box<dyn Error>> {
+            let schema = ElicitationSchema::from_type::<UserInfo>()?;
+
+            let json = serde_json::to_value(&schema)?;
+            assert_eq!(json["type"], "object");
+            assert_eq!(json["description"], "User information");
+            assert_eq!(
+                json["required"],
+                json!(["name", "single_select_untitled", "multi_select_titled"])
+            );
+            let properties = match json.get("properties") {
+                Some(serde_json::Value::Object(map)) => map,
+                _ => panic!("Schema does not have 'properties' field or it is not object type"),
+            };
+
+            assert_eq!(properties.len(), 5);
+            assert_eq!(
+                properties["name"],
+                json!({"description":"User's name", "type":"string"})
+            );
+
+            assert_eq!(
+                properties["single_select_untitled"],
+                serde_json::json!({
+                    "type":"string",
+                    "enum":["First", "Second", "Third"]
+                })
+            );
+
+            assert_eq!(
+                properties["single_select_titled"],
+                json!({
+                    "type":"string",
+                    "title":"Single Select Titled",
+                    "description":"Description for single select enum",
+                    "oneOf":[
+                        {"const":"FirstValue", "title":"Title for the first value"},
+                        {"const":"SecondValue", "title":"Title for the second value"}
+                    ],
+                    "default":"FirstValue"
+                })
+            );
+            assert_eq!(
+                properties["multi_select_untitled"],
+                serde_json::json!({
+                    "type":"array",
+                    "items" : {
+                        "type":"string",
+                        "enum":["First", "Second", "Third"]
+                    },
+                    "default":["Second", "Third"]
+                })
+            );
+            assert_eq!(
+                properties["multi_select_titled"],
+                serde_json::json!({
+                    "type":"array",
+                    "title":"Multi Select Titled",
+                    "description":"Multi Select Description",
+                    "items":{
+                        "anyOf":[
+                            {"const":"FirstValue", "title":"Title for the first value"},
+                            {"const":"SecondValue", "title":"Title for the second value"}
+                        ]
+                    }
+                })
+            );
+            Ok(())
+        }
     }
 }
