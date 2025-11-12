@@ -146,6 +146,33 @@ type OAuthClient = oauth2::Client<
 >;
 type Credentials = (String, Option<OAuthTokenResponse>);
 
+/// Callback trait for OAuth token updates
+///
+/// Implement this trait to be notified when tokens are updated (initial exchange or refresh).
+/// This allows applications to persist tokens for future use.
+pub trait TokenUpdateCallback: Send + Sync {
+    /// Called when OAuth credentials are successfully updated
+    ///
+    /// # Arguments
+    /// * `client_id` - The OAuth client ID
+    /// * `token_response` - The updated token response containing access token, refresh token, etc.
+    fn on_token_updated(&self, client_id: &str, token_response: &OAuthTokenResponse);
+}
+
+/// Helper for creating callbacks from closures
+pub struct CallbackFn<F>(pub F)
+where
+    F: Fn(&str, &OAuthTokenResponse) + Send + Sync;
+
+impl<F> TokenUpdateCallback for CallbackFn<F>
+where
+    F: Fn(&str, &OAuthTokenResponse) + Send + Sync,
+{
+    fn on_token_updated(&self, client_id: &str, token_response: &OAuthTokenResponse) {
+        (self.0)(client_id, token_response)
+    }
+}
+
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: HttpClient,
@@ -154,6 +181,7 @@ pub struct AuthorizationManager {
     credentials: RwLock<Option<OAuthTokenResponse>>,
     state: RwLock<Option<AuthorizationState>>,
     base_url: Url,
+    token_update_callback: Option<Arc<dyn TokenUpdateCallback>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,6 +240,13 @@ impl AuthorizationManager {
 
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
+        Self::new_with_callback(base_url, None).await
+    }
+
+    pub async fn new_with_callback<U: IntoUrl>(
+        base_url: U,
+        callback: Option<Arc<dyn TokenUpdateCallback>>,
+    ) -> Result<Self, AuthError> {
         let base_url = base_url.into_url()?;
         let http_client = HttpClient::builder()
             .timeout(Duration::from_secs(30))
@@ -225,9 +260,23 @@ impl AuthorizationManager {
             credentials: RwLock::new(None),
             state: RwLock::new(None),
             base_url,
+            token_update_callback: callback,
         };
 
         Ok(manager)
+    }
+
+    pub fn set_token_update_callback(&mut self, callback: Option<Arc<dyn TokenUpdateCallback>>) {
+        self.token_update_callback = callback;
+    }
+
+    fn notify_token_update(&self, token_response: &OAuthTokenResponse) {
+        if let Some(callback) = &self.token_update_callback {
+            if let Some(client) = &self.oauth_client {
+                let client_id = client.client_id().to_string();
+                callback.on_token_updated(&client_id, token_response);
+            }
+        }
     }
 
     pub fn with_client(&mut self, http_client: HttpClient) -> Result<(), AuthError> {
@@ -482,6 +531,8 @@ impl AuthorizationManager {
         // store credentials
         *self.credentials.write().await = Some(token_result.clone());
 
+        self.notify_token_update(&token_result);
+
         Ok(token_result)
     }
 
@@ -537,6 +588,8 @@ impl AuthorizationManager {
 
         // store new credentials
         *self.credentials.write().await = Some(token_result.clone());
+
+        self.notify_token_update(&token_result);
 
         Ok(token_result)
     }
@@ -970,7 +1023,16 @@ impl OAuthState {
         base_url: U,
         client: Option<HttpClient>,
     ) -> Result<Self, AuthError> {
-        let mut manager = AuthorizationManager::new(base_url).await?;
+        Self::new_with_callback(base_url, client, None).await
+    }
+
+    /// Create new OAuth state machine with token update callback
+    pub async fn new_with_callback<U: IntoUrl>(
+        base_url: U,
+        client: Option<HttpClient>,
+        callback: Option<Arc<dyn TokenUpdateCallback>>,
+    ) -> Result<Self, AuthError> {
+        let mut manager = AuthorizationManager::new_with_callback(base_url, callback).await?;
         if let Some(client) = client {
             manager.with_client(client)?;
         }
