@@ -406,7 +406,7 @@ async fn test_elicitation_structured_schemas() {
         .optional_bool("newsletter", false)
         .required_enum(
             "country",
-            vec!["US".to_string(), "UK".to_string(), "CA".to_string()],
+            EnumSchema::builder(vec!["US".to_string(), "UK".to_string(), "CA".to_string()]).build(),
         )
         .description("User registration information")
         .build()
