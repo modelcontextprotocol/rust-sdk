@@ -1,5 +1,5 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
-
+use async_trait::async_trait;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope,
@@ -16,6 +16,91 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, warn};
 
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
+
+/// Trait for storing and retrieving OAuth tokens
+///
+/// Implement this trait to provide custom token persistence, such as:
+/// - File-based storage
+/// - Database storage
+/// - Encrypted credential storage
+/// - OS keychain integration
+///
+/// # Examples
+///
+/// ```no_run
+/// use rmcp::transport::auth::{TokenStore, OAuthTokenResponse};
+/// use async_trait::async_trait;
+///
+/// struct FileTokenStore {
+///     path: std::path::PathBuf,
+/// }
+///
+/// #[async_trait]
+/// impl TokenStore for FileTokenStore {
+///     async fn load(&self) -> Result<Option<OAuthTokenResponse>, Box<dyn std::error::Error + Send + Sync>> {
+///         // Load from file
+///         Ok(None)
+///     }
+///
+///     async fn save(&self, token: &OAuthTokenResponse) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///         // Save to file
+///         Ok(())
+///     }
+///
+///     async fn clear(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///         // Delete file
+///         Ok(())
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait TokenStore: Send + Sync {
+    async fn load(
+        &self,
+    ) -> Result<Option<OAuthTokenResponse>, Box<dyn std::error::Error + Send + Sync>>;
+
+    async fn save(
+        &self,
+        token: &OAuthTokenResponse,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    async fn clear(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+}
+
+#[derive(Default)]
+pub struct InMemoryTokenStore {
+    token: RwLock<Option<OAuthTokenResponse>>,
+}
+
+impl InMemoryTokenStore {
+    pub fn new() -> Self {
+        Self {
+            token: RwLock::new(None),
+        }
+    }
+}
+
+#[async_trait]
+impl TokenStore for InMemoryTokenStore {
+    async fn load(
+        &self,
+    ) -> Result<Option<OAuthTokenResponse>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.token.read().await.clone())
+    }
+
+    async fn save(
+        &self,
+        token: &OAuthTokenResponse,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        *self.token.write().await = Some(token.clone());
+        Ok(())
+    }
+
+    async fn clear(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        *self.token.write().await = None;
+        Ok(())
+    }
+}
 
 /// sse client with oauth2 authorization
 #[derive(Clone)]
@@ -34,7 +119,6 @@ impl<C: std::fmt::Debug> std::fmt::Debug for AuthClient<C> {
 }
 
 impl<C> AuthClient<C> {
-    /// create new authorized sse client
     pub fn new(http_client: C, auth_manager: AuthorizationManager) -> Self {
         Self {
             http_client,
@@ -105,7 +189,6 @@ pub struct AuthorizationMetadata {
     pub issuer: Option<String>,
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
-    // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
@@ -151,7 +234,7 @@ pub struct AuthorizationManager {
     http_client: HttpClient,
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
-    credentials: RwLock<Option<OAuthTokenResponse>>,
+    token_store: Arc<dyn TokenStore>,
     state: RwLock<Option<AuthorizationState>>,
     base_url: Url,
 }
@@ -171,7 +254,6 @@ pub struct ClientRegistrationResponse {
     pub client_secret: Option<String>,
     pub client_name: Option<String>,
     pub redirect_uris: Vec<String>,
-    // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
@@ -210,7 +292,7 @@ impl AuthorizationManager {
         candidates
     }
 
-    /// create new auth manager with base url
+    /// Create new auth manager with base url and default in-memory token store
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
         let base_url = base_url.into_url()?;
         let http_client = HttpClient::builder()
@@ -222,12 +304,17 @@ impl AuthorizationManager {
             http_client,
             metadata: None,
             oauth_client: None,
-            credentials: RwLock::new(None),
+            token_store: Arc::new(InMemoryTokenStore::new()),
             state: RwLock::new(None),
             base_url,
         };
 
         Ok(manager)
+    }
+
+    /// Set a custom token store for persisting OAuth tokens
+    pub fn set_token_store(&mut self, token_store: Arc<dyn TokenStore>) {
+        self.token_store = token_store;
     }
 
     pub fn with_client(&mut self, http_client: HttpClient) -> Result<(), AuthError> {
@@ -252,13 +339,17 @@ impl AuthorizationManager {
 
     /// get client id and credentials
     pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
-        let credentials = self.credentials.read().await;
+        let credentials = self
+            .token_store
+            .load()
+            .await
+            .map_err(|e| AuthError::InternalError(format!("Failed to load token: {}", e)))?;
         let client_id = self
             .oauth_client
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?
             .client_id();
-        Ok((client_id.to_string(), credentials.clone()))
+        Ok((client_id.to_string(), credentials))
     }
 
     /// configure oauth2 client with client credentials
@@ -309,7 +400,6 @@ impl AuthorizationManager {
             ));
         };
 
-        // prepare registration request
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
             redirect_uris: vec![redirect_uri.to_string()],
@@ -479,24 +569,29 @@ impl AuthorizationManager {
         };
 
         debug!("exchange token result: {:?}", token_result);
-        // store credentials
-        *self.credentials.write().await = Some(token_result.clone());
+        // store credentials via token store
+        self.token_store
+            .save(&token_result)
+            .await
+            .map_err(|e| AuthError::InternalError(format!("Failed to save token: {}", e)))?;
 
         Ok(token_result)
     }
 
     /// get access token, if expired, refresh it automatically
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
-        let credentials = self.credentials.read().await;
+        let credentials = self
+            .token_store
+            .load()
+            .await
+            .map_err(|e| AuthError::InternalError(format!("Failed to load token: {}", e)))?;
 
-        if let Some(creds) = credentials.as_ref() {
+        if let Some(creds) = credentials {
             // check if the token is expire
             let expires_in = creds.expires_in().unwrap_or(Duration::from_secs(0));
             if expires_in <= Duration::from_secs(0) {
                 tracing::info!("Access token expired, refreshing.");
-                // token expired, try to refresh , release the lock
-                drop(credentials);
-
+                // token expired, try to refresh
                 let new_creds = self.refresh_token().await?;
                 tracing::info!("Refreshed access token.");
                 return Ok(new_creds.access_token().secret().to_string());
@@ -518,10 +613,10 @@ impl AuthorizationManager {
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
         let current_credentials = self
-            .credentials
-            .read()
+            .token_store
+            .load()
             .await
-            .clone()
+            .map_err(|e| AuthError::InternalError(format!("Failed to load token: {}", e)))?
             .ok_or_else(|| AuthError::AuthorizationRequired)?;
 
         let refresh_token = current_credentials.refresh_token().ok_or_else(|| {
@@ -535,8 +630,11 @@ impl AuthorizationManager {
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
-        // store new credentials
-        *self.credentials.write().await = Some(token_result.clone());
+        // store new credentials via token store
+        self.token_store
+            .save(&token_result)
+            .await
+            .map_err(|e| AuthError::InternalError(format!("Failed to save token: {}", e)))?;
 
         Ok(token_result)
     }
@@ -1003,8 +1101,12 @@ impl OAuthState {
                 AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?,
             );
 
-            // write credentials
-            *manager.credentials.write().await = Some(credentials);
+            // write credentials via token store
+            manager
+                .token_store
+                .save(&credentials)
+                .await
+                .map_err(|e| AuthError::InternalError(format!("Failed to save token: {}", e)))?;
 
             // discover metadata
             let metadata = manager.discover_metadata().await?;
