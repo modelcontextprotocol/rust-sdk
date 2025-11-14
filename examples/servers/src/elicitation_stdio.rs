@@ -163,11 +163,11 @@ impl ElicitationServer {
                     let recipient = reply_data
                         .get("recipient")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
+                        .unwrap_or("sender@example.com");
                     let cc = reply_data
                         .get("cc")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("none");
+                        .unwrap_or("team@example.com");
                     let subject = reply_data
                         .get("subject")
                         .and_then(|v| v.as_str())
@@ -183,7 +183,7 @@ impl ElicitationServer {
                     let confidence = reply_data
                         .get("confidence")
                         .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
+                        .unwrap_or(0.8);
 
                     Ok(CallToolResult::success(vec![Content::text(format!(
                         "Email reply configured:\nTo: {}\nCC: {}\nSubject: {}\nBody: {}\nPriority: {}\nConfidence: {:.2}\n\nDefaults were used for pre-filling the form!",
