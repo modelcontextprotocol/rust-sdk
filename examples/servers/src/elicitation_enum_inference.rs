@@ -6,8 +6,10 @@
 //! - Use `#[schemars(extend("type" = "string"))]` to manually add the required type field, since `schemars` does not provide it for enums.
 //! - Optionally, use `#[schemars(title = "...")]` to provide titles for enum variants.
 //! For more details, see: https://docs.rs/schemars/latest/schemars/
-use rmcp::transport::StreamableHttpService;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use std::{
+    fmt::{Display, Formatter},
+    sync::Arc,
+};
 
 use rmcp::{
     ErrorData as McpError, ServerHandler, elicit_safe,
@@ -15,15 +17,14 @@ use rmcp::{
     model::*,
     service::{RequestContext, RoleServer},
     tool, tool_handler, tool_router,
+    transport::{
+        StreamableHttpService, streamable_http_server::session::local::LocalSessionManager,
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const BIND_ADDRESS: &str = "127.0.0.1:8000";
 

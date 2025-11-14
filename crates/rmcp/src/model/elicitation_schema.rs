@@ -42,11 +42,14 @@ const_string!(ArrayTypeConst = "array");
 ///
 /// According to MCP 2025-06-18 specification, elicitation schemas must have
 /// properties of primitive types only (string, number, integer, boolean, enum).
+///
+/// Note: Put Enum as the first variant to avoid ambiguity during deserialization.
+/// This is due to the fact that EnumSchema can contain StringSchema internally and serde
+/// uses first match wins strategy when deserializing untagged enums.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum PrimitiveSchema {
-    // Note: Enum must be first to avoid ambiguity during deserialization
     /// Enum property (explicit enum schema)
     Enum(EnumSchema),
     /// String property (with optional enum constraint)
@@ -468,9 +471,9 @@ impl BooleanSchema {
 
 /// Schema definition for enum properties.
 ///
-/// Represent single entry for titled item
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+/// Represent single entry for titled item
 pub struct ConstTitle {
     #[serde(rename = "const")]
     pub const_: String,
@@ -604,7 +607,7 @@ pub enum MultiSelectEnumSchema {
     Titled(TitledMultiSelectEnumSchema),
 }
 
-/// Compliant with MCP 2025-11-25 specification for elicitation schemas.
+/// Compliant with MCP 2025-06-18 specification for elicitation schemas.
 /// Enums must have string type for values and can optionally include human-readable names.
 ///
 /// # Example
@@ -722,7 +725,9 @@ impl EnumSchemaBuilder {
     }
 
     /// Set enum as untitled
+    /// Clears any previously set titles
     pub fn untitled(mut self) -> EnumSchemaBuilder {
+        self.enum_titles = Vec::new();
         self.titled = false;
         self
     }
@@ -732,7 +737,7 @@ impl EnumSchemaBuilder {
         mut self,
         default_value: String,
     ) -> Result<EnumSchemaBuilder, &'static str> {
-        if self.single_select {
+        if !self.single_select {
             return Err(
                 "Set single default value available only when the builder is set to single-select. \
             Use multi_select_default method for multi-select options",
@@ -1393,7 +1398,6 @@ impl ElicitationSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use anyhow::{Result, anyhow};
-
     use serde_json::json;
 
     use super::*;
