@@ -72,7 +72,7 @@ impl Display for SelectEnumForm {
         let s = format!(
             "Current Selections:\n\
                 Single Select Untitled: {:?}\n\
-                Single Select Titled: {:?}\
+                Single Select Titled: {:?}\n\
             Multi Select Untitled: {:?}\n\
             Multi Select Titled: {:?}\n",
             self.single_select_untitled,
