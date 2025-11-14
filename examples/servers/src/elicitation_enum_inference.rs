@@ -1,7 +1,11 @@
 //! Demonstration how to use enum selection in elicitation forms.
 //!
 //! This example server allows users to select enum values via elicitation forms.
-//! To work with enum inference it is required to use `schemars` attributes and use some workarounds
+//! To work with enum inference, it is required to use specific `schemars` attributes and apply some workarounds:
+//! - Use `#[schemars(inline)]` to ensure the enum is inlined in the schema.
+//! - Use `#[schemars(extend("type" = "string"))]` to manually add the required type field, since `schemars` does not provide it for enums.
+//! - Optionally, use `#[schemars(title = "...")]` to provide titles for enum variants.
+//! For more details, see: https://docs.rs/schemars/latest/schemars/
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
