@@ -667,6 +667,13 @@
       "description": "Schema definition for enum properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nEnums must have string type and can optionally include human-readable names.",
       "type": "object",
       "properties": {
+        "default": {
+          "description": "Default value",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "description": "Human-readable description",
           "type": [
@@ -1320,6 +1327,14 @@
       "description": "Schema definition for number properties (floating-point).\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec.",
       "type": "object",
       "properties": {
+        "default": {
+          "description": "Default value",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
         "description": {
           "description": "Human-readable description",
           "type": [
@@ -2227,6 +2242,13 @@
       "description": "Schema definition for string properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec:\n- format limited to: \"email\", \"uri\", \"date\", \"date-time\"",
       "type": "object",
       "properties": {
+        "default": {
+          "description": "Default value",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "description": "Human-readable description",
           "type": [
