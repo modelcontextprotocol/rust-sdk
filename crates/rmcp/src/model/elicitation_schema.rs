@@ -950,7 +950,6 @@ impl ElicitationSchema {
     /// Returns a [`serde_json::Error`] if the JSON object cannot be deserialized
     /// into a valid ElicitationSchema.
     pub fn from_json_schema(schema: crate::model::JsonObject) -> Result<Self, serde_json::Error> {
-        println!("{}", serde_json::to_string_pretty(&schema)?);
         serde_json::from_value(serde_json::Value::Object(schema))
     }
 
