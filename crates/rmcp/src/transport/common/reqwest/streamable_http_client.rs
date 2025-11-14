@@ -33,7 +33,7 @@ impl StreamableHttpClient for reqwest::Client {
     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
         let mut request_builder = self
             .get(uri.as_ref())
-            .header(ACCEPT, EVENT_STREAM_MIME_TYPE)
+            .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "))
             .header(HEADER_SESSION_ID, session_id.as_ref());
         if let Some(last_event_id) = last_event_id {
             request_builder = request_builder.header(HEADER_LAST_EVENT_ID, last_event_id);
@@ -48,7 +48,9 @@ impl StreamableHttpClient for reqwest::Client {
         let response = response.error_for_status()?;
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
             Some(ct) => {
-                if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) {
+                if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
+                    && !ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes())
+                {
                     return Err(StreamableHttpError::UnexpectedContentType(Some(
                         String::from_utf8_lossy(ct.as_bytes()).to_string(),
                     )));
