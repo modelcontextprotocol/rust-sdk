@@ -164,18 +164,30 @@ impl ElicitationServer {
                         .get("recipient")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
+                    let cc = reply_data
+                        .get("cc")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("none");
                     let subject = reply_data
                         .get("subject")
                         .and_then(|v| v.as_str())
                         .unwrap_or("No subject");
+                    let body = reply_data
+                        .get("body")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("No body");
                     let priority = reply_data
                         .get("priority")
                         .and_then(|v| v.as_str())
                         .unwrap_or("normal");
+                    let confidence = reply_data
+                        .get("confidence")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
 
                     Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Email reply configured:\nTo: {}\nSubject: {}\nPriority: {}\n\nDefaults were used for pre-filling the form!",
-                        recipient, subject, priority
+                        "Email reply configured:\nTo: {}\nCC: {}\nSubject: {}\nBody: {}\nPriority: {}\nConfidence: {:.2}\n\nDefaults were used for pre-filling the form!",
+                        recipient, cc, subject, body, priority, confidence
                     ))]))
                 } else {
                     Ok(CallToolResult::success(vec![Content::text(
