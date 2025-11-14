@@ -685,7 +685,7 @@
       "type": "object"
     },
     "EnumSchema": {
-      "description": "Compliant with MCP 2025-11-25 specification for elicitation schemas.\nEnums must have string type for values and can optionally include human-readable names.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet enum_schema = EnumSchema::builder(vec![\"US\".to_string(), \"UK\".to_string()])\n   .multiselect()\n   .min_items(1u64).expect(\"Min items should be correct value\")\n   .max_items(4u64).expect(\"Max items should be correct value\")\n   .description(\"Country code\")\n   .build();\n```",
+      "description": "Compliant with MCP 2025-06-18 specification for elicitation schemas.\nEnums must have string type for values and can optionally include human-readable names.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet enum_schema = EnumSchema::builder(vec![\"US\".to_string(), \"UK\".to_string()])\n   .multiselect()\n   .min_items(1u64).expect(\"Min items should be correct value\")\n   .max_items(4u64).expect(\"Max items should be correct value\")\n   .description(\"Country code\")\n   .build();\n```",
       "anyOf": [
         {
           "$ref": "#/definitions/SingleSelectEnumSchema"
@@ -1416,7 +1416,7 @@
       "const": "ping"
     },
     "PrimitiveSchema": {
-      "description": "Primitive schema definition for elicitation properties.\n\nAccording to MCP 2025-06-18 specification, elicitation schemas must have\nproperties of primitive types only (string, number, integer, boolean, enum).",
+      "description": "Primitive schema definition for elicitation properties.\n\nAccording to MCP 2025-06-18 specification, elicitation schemas must have\nproperties of primitive types only (string, number, integer, boolean, enum).\n\nNote: Put Enum as the first variant to avoid ambiguity during deserialization.\nThis is due to the fact that EnumSchema can contain StringSchema internally and serde\nuses first match wins strategy when deserializing untagged enums.",
       "anyOf": [
         {
           "description": "Enum property (explicit enum schema)",
