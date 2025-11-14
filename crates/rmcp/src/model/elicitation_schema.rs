@@ -691,7 +691,7 @@ impl EnumSchemaBuilder {
     pub fn enum_titles(mut self, titles: Vec<String>) -> Result<EnumSchemaBuilder, String> {
         if titles.len() != self.enum_values.len() {
             return Err(format!(
-                "Provided number of titles do not matched to number of values: expected {}, but got {}",
+                "Provided number of titles do not match number of values: expected {}, but got {}",
                 self.enum_values.len(),
                 titles.len()
             ));
