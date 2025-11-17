@@ -1,15 +1,18 @@
 [package]
 name = "wasi-mcp-example"
-edition = { workspace = true }
-version = { workspace = true }
-authors = { workspace = true }
-license = { workspace = true }
-repository = { workspace = true }
-description = { workspace = true }
-keywords = { workspace = true }
-homepage = { workspace = true }
-categories = { workspace = true }
-readme = { workspace = true }
+edition = "2024"
+version = "0.8.5"
+authors = ["4t145 <u4t145@163.com>"]
+license = "MIT"
+repository = "https://github.com/modelcontextprotocol/rust-sdk/"
+description = "Rust SDK for Model Context Protocol"
+keywords = ["mcp", "sdk", "tokio", "modelcontextprotocol"]
+homepage = "https://github.com/modelcontextprotocol/rust-sdk"
+categories = [
+    "network-programming",
+    "asynchronous",
+]
+readme = "README.md"
 publish = false
 
 [lib]
@@ -18,7 +21,7 @@ crate-type = ["cdylib"]
 [dependencies]
 wasi = { version = "0.14.2"}
 tokio = { version = "1", features = ["rt", "io-util", "sync", "macros", "time"] }
-rmcp = { workspace = true, features = ["server", "macros"] }
+rmcp = { version = "0.8.5", path = "../../crates/rmcp", features = ["server", "macros"] }
 serde = { version  = "1", features = ["derive"]}
 tracing-subscriber = { version = "0.3", features = [
     "env-filter",
