@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/rmcp", "crates/rmcp-macros", "examples/*"]
-exclude = ["examples/wasi"]
+default-members = ["crates/rmcp", "crates/rmcp-macros"]
 resolver = "2"
 
 [workspace.dependencies]
