@@ -604,12 +604,14 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        let metadata = response
-            .json::<AuthorizationMetadata>()
-            .await
-            .map_err(|e| AuthError::MetadataError(format!("Failed to parse metadata: {}", e)))?;
-        debug!("metadata: {:?}", metadata);
-        Ok(Some(metadata))
+        let body = response.text().await?;
+        match serde_json::from_str::<AuthorizationMetadata>(&body) {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(err) => {
+                debug!("Failed to parse metadata for {}: {}", discovery_url, err);
+                Ok(None) // malformed JSON ⇒ try next candidate
+            }
+        }
     }
 
     async fn discover_oauth_server_via_resource_metadata(
