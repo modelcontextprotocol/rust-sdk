@@ -43,24 +43,60 @@ impl Demo {
     }
 }
 
+fn expected_schema() -> serde_json::Value {
+    serde_json::json!({
+      "$defs": {
+        "ChatMessage": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ChatRole"
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "type": "object"
+        },
+        "ChatRole": {
+          "enum": [
+            "System",
+            "User",
+            "Assistant",
+            "Tool"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "type": "array"
+        },
+        "system": {
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "title": "ChatRequest",
+      "type": "object"
+    })
+}
+
 #[test]
 fn test_complex_schema() {
     let attr = Demo::chat_tool_attr();
     let input_schema = attr.input_schema;
-    let enum_number = input_schema
-        .get("definitions")
-        .unwrap()
-        .as_object()
-        .unwrap()
-        .get("ChatRole")
-        .unwrap()
-        .as_object()
-        .unwrap()
-        .get("enum")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .len();
-    assert_eq!(enum_number, 4);
-    println!("{}", serde_json::to_string_pretty(&input_schema).unwrap());
+    let expected = expected_schema();
+    let produced = serde_json::Value::Object(input_schema.as_ref().clone());
+    assert_eq!(produced, expected, "schema mismatch");
 }
