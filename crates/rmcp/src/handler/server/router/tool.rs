@@ -4,8 +4,11 @@ use futures::{FutureExt, future::BoxFuture};
 use schemars::JsonSchema;
 
 use crate::{
-    handler::server::tool::{
-        CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type,
+    handler::server::{
+        tool::{
+            CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type,
+        },
+        tool_name_validation::validate_and_warn_tool_name,
     },
     model::{CallToolResult, Tool, ToolAnnotations},
 };
@@ -219,7 +222,11 @@ where
     }
 
     pub fn add_route(&mut self, item: ToolRoute<S>) {
-        self.map.insert(item.attr.name.clone(), item);
+        let new_name = &item.attr.name;
+        // Validate tool name according to SEP specification
+        // This validates both new routes and updates (when replacing a route with a different name)
+        validate_and_warn_tool_name(new_name);
+        self.map.insert(new_name.clone(), item);
     }
 
     pub fn merge(&mut self, other: ToolRouter<S>) {
