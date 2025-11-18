@@ -37,7 +37,7 @@ impl ToolNameValidationResult {
 /// # Examples
 ///
 /// ```
-/// use rmcp::model::tool_name_validation::validate_tool_name;
+/// use rmcp::handler::server::tool_name_validation::validate_tool_name;
 ///
 /// let result = validate_tool_name("my_tool");
 /// assert!(result.is_valid);
@@ -48,10 +48,7 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 
     // Check length
     if name.is_empty() {
-        return ToolNameValidationResult::new(
-            false,
-            vec!["Tool name cannot be empty".to_string()],
-        );
+        return ToolNameValidationResult::new(false, vec!["Tool name cannot be empty".to_string()]);
     }
 
     if name.len() > 128 {
@@ -66,15 +63,11 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 
     // Check for specific problematic patterns (these are warnings, not validation failures)
     if name.contains(' ') {
-        warnings.push(
-            "Tool name contains spaces, which may cause parsing issues".to_string(),
-        );
+        warnings.push("Tool name contains spaces, which may cause parsing issues".to_string());
     }
 
     if name.contains(',') {
-        warnings.push(
-            "Tool name contains commas, which may cause parsing issues".to_string(),
-        );
+        warnings.push("Tool name contains commas, which may cause parsing issues".to_string());
     }
 
     // Check for potentially confusing patterns (leading/trailing dashes, dots, slashes)
@@ -94,9 +87,10 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 
     // Check for invalid characters
     let mut invalid_chars = HashSet::new();
-    let valid_chars: HashSet<char> = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
-        .chars()
-        .collect();
+    let valid_chars: HashSet<char> =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+            .chars()
+            .collect();
 
     for ch in name.chars() {
         if !valid_chars.contains(&ch) {
@@ -105,10 +99,8 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
     }
 
     if !invalid_chars.is_empty() {
-        let invalid_chars_list: Vec<String> = invalid_chars
-            .iter()
-            .map(|c| format!("\"{}\"", c))
-            .collect();
+        let invalid_chars_list: Vec<String> =
+            invalid_chars.iter().map(|c| format!("\"{}\"", c)).collect();
         warnings.push(format!(
             "Tool name contains invalid characters: {}",
             invalid_chars_list.join(", ")
@@ -123,7 +115,7 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 
     // Verify the pattern matches (double check with character-by-character validation)
     // We've already validated characters above, just need to verify length is within bounds
-    if name.len() < 1 || name.len() > 128 {
+    if name.is_empty() || name.len() > 128 {
         return ToolNameValidationResult::new(
             false,
             vec!["Tool name length must be between 1 and 128 characters".to_string()],
@@ -143,9 +135,9 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 /// # Examples
 ///
 /// ```
-/// use rmcp::model::tool_name_validation::issue_tool_name_warning;
+/// use rmcp::handler::server::tool_name_validation::issue_tool_name_warning;
 ///
-/// issue_tool_name_warning("my tool", vec!["Tool name contains spaces".to_string()]);
+/// issue_tool_name_warning("my tool", &vec!["Tool name contains spaces".to_string()]);
 /// ```
 pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
     if !warnings.is_empty() {
@@ -154,7 +146,9 @@ pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
             tracing::warn!("  - {}", warning);
         }
         tracing::warn!("Tool registration will proceed, but this may cause compatibility issues.");
-        tracing::warn!("Consider updating the tool name to conform to the MCP tool naming standard.");
+        tracing::warn!(
+            "Consider updating the tool name to conform to the MCP tool naming standard."
+        );
         tracing::warn!(
             "See SEP: Specify Format for Tool Names (https://github.com/modelcontextprotocol/modelcontextprotocol/issues/986) for more details."
         );
@@ -174,7 +168,7 @@ pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
 /// # Examples
 ///
 /// ```
-/// use rmcp::model::tool_name_validation::validate_and_warn_tool_name;
+/// use rmcp::handler::server::tool_name_validation::validate_and_warn_tool_name;
 ///
 /// let is_valid = validate_and_warn_tool_name("my_tool");
 /// assert!(is_valid);
@@ -206,11 +200,7 @@ mod tests {
 
         for name in valid_names {
             let result = validate_tool_name(name);
-            assert!(
-                result.is_valid,
-                "Tool name '{}' should be valid",
-                name
-            );
+            assert!(result.is_valid, "Tool name '{}' should be valid", name);
         }
     }
 
@@ -218,7 +208,11 @@ mod tests {
     fn test_empty_tool_name() {
         let result = validate_tool_name("");
         assert!(!result.is_valid);
-        assert!(result.warnings.contains(&"Tool name cannot be empty".to_string()));
+        assert!(
+            result
+                .warnings
+                .contains(&"Tool name cannot be empty".to_string())
+        );
     }
 
     #[test]
@@ -233,50 +227,60 @@ mod tests {
     fn test_tool_name_with_spaces() {
         let result = validate_tool_name("my tool");
         assert!(!result.is_valid);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("contains spaces")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("contains spaces"))
+        );
     }
 
     #[test]
     fn test_tool_name_with_commas() {
         let result = validate_tool_name("my,tool");
         assert!(!result.is_valid);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("contains commas")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("contains commas"))
+        );
     }
 
     #[test]
     fn test_tool_name_starting_with_dash() {
         let result = validate_tool_name("-tool");
         assert!(result.is_valid); // Still valid, but has warning
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("starts or ends with a dash")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("starts or ends with a dash"))
+        );
     }
 
     #[test]
     fn test_tool_name_ending_with_dot() {
         let result = validate_tool_name("tool.");
         assert!(result.is_valid); // Still valid, but has warning
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("starts or ends with a dot")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("starts or ends with a dot"))
+        );
     }
 
     #[test]
     fn test_tool_name_with_invalid_characters() {
         let result = validate_tool_name("my@tool");
         assert!(!result.is_valid);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("contains invalid characters")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("contains invalid characters"))
+        );
     }
 
     #[test]
@@ -306,4 +310,3 @@ mod tests {
         assert!(result.is_valid);
     }
 }
-

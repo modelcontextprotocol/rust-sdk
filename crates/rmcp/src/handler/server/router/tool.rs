@@ -5,9 +5,7 @@ use schemars::JsonSchema;
 
 use crate::{
     handler::server::{
-        tool::{
-            CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type,
-        },
+        tool::{CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type},
         tool_name_validation::validate_and_warn_tool_name,
     },
     model::{CallToolResult, Tool, ToolAnnotations},
