@@ -25,24 +25,6 @@ impl ToolNameValidationResult {
 }
 
 /// Validates a tool name according to the SEP specification.
-///
-/// # Arguments
-///
-/// * `name` - The tool name to validate
-///
-/// # Returns
-///
-/// A `ToolNameValidationResult` containing validation result and any warnings
-///
-/// # Examples
-///
-/// ```
-/// use rmcp::handler::server::tool_name_validation::validate_tool_name;
-///
-/// let result = validate_tool_name("my_tool");
-/// assert!(result.is_valid);
-/// assert!(result.warnings.is_empty());
-/// ```
 pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
     let mut warnings = Vec::new();
 
@@ -126,19 +108,6 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 }
 
 /// Issues warnings for non-conforming tool names.
-///
-/// # Arguments
-///
-/// * `name` - The tool name that triggered the warnings
-/// * `warnings` - Array of warning messages
-///
-/// # Examples
-///
-/// ```
-/// use rmcp::handler::server::tool_name_validation::issue_tool_name_warning;
-///
-/// issue_tool_name_warning("my tool", &vec!["Tool name contains spaces".to_string()]);
-/// ```
 pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
     tracing::warn!("Tool name validation warning for \"{}\":", name);
     for warning in warnings {
@@ -152,23 +121,6 @@ pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
 }
 
 /// Validates a tool name and issues warnings for non-conforming names.
-///
-/// # Arguments
-///
-/// * `name` - The tool name to validate
-///
-/// # Returns
-///
-/// `true` if the name is valid, `false` otherwise
-///
-/// # Examples
-///
-/// ```
-/// use rmcp::handler::server::tool_name_validation::validate_and_warn_tool_name;
-///
-/// let is_valid = validate_and_warn_tool_name("my_tool");
-/// assert!(is_valid);
-/// ```
 pub fn validate_and_warn_tool_name(name: &str) -> bool {
     let result = validate_tool_name(name);
 
