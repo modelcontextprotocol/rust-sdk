@@ -140,19 +140,15 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 /// issue_tool_name_warning("my tool", &vec!["Tool name contains spaces".to_string()]);
 /// ```
 pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
-    if !warnings.is_empty() {
-        tracing::warn!("Tool name validation warning for \"{}\":", name);
-        for warning in warnings {
-            tracing::warn!("  - {}", warning);
-        }
-        tracing::warn!("Tool registration will proceed, but this may cause compatibility issues.");
-        tracing::warn!(
-            "Consider updating the tool name to conform to the MCP tool naming standard."
-        );
-        tracing::warn!(
-            "See SEP: Specify Format for Tool Names (https://github.com/modelcontextprotocol/modelcontextprotocol/issues/986) for more details."
-        );
+    tracing::warn!("Tool name validation warning for \"{}\":", name);
+    for warning in warnings {
+        tracing::warn!("  - {}", warning);
     }
+    tracing::warn!("Tool registration will proceed, but this may cause compatibility issues.");
+    tracing::warn!("Consider updating the tool name to conform to the MCP tool naming standard.");
+    tracing::warn!(
+        "See SEP: Specify Format for Tool Names (https://github.com/modelcontextprotocol/modelcontextprotocol/issues/986) for more details."
+    );
 }
 
 /// Validates a tool name and issues warnings for non-conforming names.
