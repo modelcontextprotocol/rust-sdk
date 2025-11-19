@@ -176,8 +176,9 @@ pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
 pub fn validate_and_warn_tool_name(name: &str) -> bool {
     let result = validate_tool_name(name);
 
-    // Always issue warnings for any validation issues (both invalid names and warnings)
-    issue_tool_name_warning(name, &result.warnings);
+    if !result.warnings.is_empty() {
+        issue_tool_name_warning(name, &result.warnings);
+    }
 
     result.is_valid
 }
