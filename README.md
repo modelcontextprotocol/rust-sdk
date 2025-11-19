@@ -28,7 +28,8 @@ rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "mai
 Basic dependencies:
 - [tokio required](https://github.com/tokio-rs/tokio)
 - [serde required](https://github.com/serde-rs/serde)
-
+Json Schema generation(Must follow the 2020-12 version):
+- [shemars required](https://github.com/GREsau/schemars)
 
 
 ### Build a Client

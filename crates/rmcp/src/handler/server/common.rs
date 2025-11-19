@@ -11,9 +11,8 @@ use crate::{
 /// A shortcut for generating a JSON schema for a type.
 pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
     // explicitly to align json schema version to official specifications.
-    // https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-03-26/schema.json
-    // TODO: update to 2020-12 waiting for the mcp spec update
-    let mut settings = SchemaSettings::draft07();
+    // refer to https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655 for details.
+    let mut settings = SchemaSettings::draft2020_12();
     settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
     let generator = settings.into_generator();
     let schema = generator.into_root_schema_for::<T>();

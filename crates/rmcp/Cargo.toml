@@ -143,7 +143,7 @@ schemars = ["dep:schemars"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-schemars = { version = "1.0", features = ["chrono04"] }
+schemars = { version = "1.1.0", features = ["chrono04"] }
 
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
