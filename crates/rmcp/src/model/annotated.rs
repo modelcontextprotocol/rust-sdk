@@ -222,3 +222,244 @@ pub trait AnnotateAble: sealed::Sealed {
         self.with_timestamp(Utc::now())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_annotations_default() {
+        let annotations = Annotations::default();
+        assert_eq!(annotations.audience, None);
+        assert_eq!(annotations.priority, None);
+        assert_eq!(annotations.last_modified, None);
+    }
+
+    #[test]
+    fn test_annotations_for_resource() {
+        let timestamp = Utc::now();
+        let annotations = Annotations::for_resource(0.5, timestamp);
+        assert_eq!(annotations.priority, Some(0.5));
+        assert_eq!(annotations.last_modified, Some(timestamp));
+        assert_eq!(annotations.audience, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Priority")]
+    fn test_annotations_for_resource_invalid_priority_high() {
+        let timestamp = Utc::now();
+        Annotations::for_resource(1.5, timestamp);
+    }
+
+    #[test]
+    #[should_panic(expected = "Priority")]
+    fn test_annotations_for_resource_invalid_priority_low() {
+        let timestamp = Utc::now();
+        Annotations::for_resource(-0.1, timestamp);
+    }
+
+    #[test]
+    fn test_annotated_new() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content.clone(), None);
+        assert_eq!(annotated.raw, content);
+        assert_eq!(annotated.annotations, None);
+    }
+
+    #[test]
+    fn test_annotated_deref() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content.clone(), None);
+        assert_eq!(annotated.text, "test");
+    }
+
+    #[test]
+    fn test_annotated_deref_mut() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let mut annotated = Annotated::new(content, None);
+        annotated.text = "modified".to_string();
+        assert_eq!(annotated.text, "modified");
+    }
+
+    #[test]
+    fn test_annotated_remove_annotation() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let mut annotated = Annotated::new(content, Some(Annotations::default()));
+        assert!(annotated.annotations.is_some());
+        let removed = annotated.remove_annotation();
+        assert!(removed.is_some());
+        assert!(annotated.annotations.is_none());
+    }
+
+    #[test]
+    fn test_annotated_getters() {
+        let timestamp = Utc::now();
+        let annotations = Annotations {
+            audience: Some(vec![Role::User]),
+            priority: Some(0.7),
+            last_modified: Some(timestamp),
+        };
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content, Some(annotations));
+
+        assert_eq!(annotated.audience(), Some(&vec![Role::User]));
+        assert_eq!(annotated.priority(), Some(0.7));
+        assert_eq!(annotated.timestamp(), Some(timestamp));
+    }
+
+    #[test]
+    fn test_annotated_with_audience() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content, None);
+        let with_audience = annotated.with_audience(vec![Role::User, Role::Assistant]);
+
+        assert_eq!(
+            with_audience.audience(),
+            Some(&vec![Role::User, Role::Assistant])
+        );
+    }
+
+    #[test]
+    fn test_annotated_with_priority() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content, None);
+        let with_priority = annotated.with_priority(0.9);
+
+        assert_eq!(with_priority.priority(), Some(0.9));
+    }
+
+    #[test]
+    fn test_annotated_with_timestamp() {
+        let timestamp = Utc::now();
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content, None);
+        let with_timestamp = annotated.with_timestamp(timestamp);
+
+        assert_eq!(with_timestamp.timestamp(), Some(timestamp));
+    }
+
+    #[test]
+    fn test_annotated_with_timestamp_now() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = Annotated::new(content, None);
+        let with_timestamp = annotated.with_timestamp_now();
+
+        assert!(with_timestamp.timestamp().is_some());
+    }
+
+    #[test]
+    fn test_annotate_able_optional_annotate() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = content.optional_annotate(None);
+        assert_eq!(annotated.annotations, None);
+    }
+
+    #[test]
+    fn test_annotate_able_annotate() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotations = Annotations::default();
+        let annotated = content.annotate(annotations);
+        assert!(annotated.annotations.is_some());
+    }
+
+    #[test]
+    fn test_annotate_able_no_annotation() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = content.no_annotation();
+        assert_eq!(annotated.annotations, None);
+    }
+
+    #[test]
+    fn test_annotate_able_with_audience() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = content.with_audience(vec![Role::User]);
+        assert_eq!(annotated.audience(), Some(&vec![Role::User]));
+    }
+
+    #[test]
+    fn test_annotate_able_with_priority() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = content.with_priority(0.5);
+        assert_eq!(annotated.priority(), Some(0.5));
+    }
+
+    #[test]
+    fn test_annotate_able_with_timestamp() {
+        let timestamp = Utc::now();
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = content.with_timestamp(timestamp);
+        assert_eq!(annotated.timestamp(), Some(timestamp));
+    }
+
+    #[test]
+    fn test_annotate_able_with_timestamp_now() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let annotated = content.with_timestamp_now();
+        assert!(annotated.timestamp().is_some());
+    }
+
+    #[test]
+    fn test_chaining_annotations() {
+        let content = RawTextContent {
+            text: "test".to_string(),
+            meta: None,
+        };
+        let timestamp = Utc::now();
+        let annotated = Annotated::new(content, None)
+            .with_audience(vec![Role::User])
+            .with_priority(0.8)
+            .with_timestamp(timestamp);
+
+        assert_eq!(annotated.audience(), Some(&vec![Role::User]));
+        assert_eq!(annotated.priority(), Some(0.8));
+        assert_eq!(annotated.timestamp(), Some(timestamp));
+    }
+}
