@@ -396,6 +396,19 @@
         "content"
       ]
     },
+    "CustomClientNotification": {
+      "description": "A catch-all notification the client can use to send custom messages to a server.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
     "ElicitationAction": {
       "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
       "oneOf": [
@@ -636,6 +649,9 @@
         },
         {
           "$ref": "#/definitions/NotificationNoParam2"
+        },
+        {
+          "$ref": "#/definitions/CustomClientNotification"
         }
       ],
       "required": [
