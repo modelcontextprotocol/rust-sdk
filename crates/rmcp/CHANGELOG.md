@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.9.0...rmcp-v0.9.1) - 2025-11-21
+
+### Added
+
+- *(streamable-http)* support both SSE and JSON response formats ([#540](https://github.com/modelcontextprotocol/rust-sdk/pull/540))
+
+### Fixed
+
+- don't block on creating the SSE stream ([#553](https://github.com/modelcontextprotocol/rust-sdk/pull/553))
+- *(shemars)* use JSON Schema 2020-12 as Default Dialect ([#549](https://github.com/modelcontextprotocol/rust-sdk/pull/549))
+- *(oauth)* let OAuth discovery skip to next well-known URL candidate on JSON parse error. ([#545](https://github.com/modelcontextprotocol/rust-sdk/pull/545))
+
 ## [0.9.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.8.5...rmcp-v0.9.0) - 2025-11-17
 
 ### Added
