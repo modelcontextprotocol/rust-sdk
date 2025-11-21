@@ -627,6 +627,40 @@ const_string!(CancelledNotificationMethod = "notifications/cancelled");
 pub type CancelledNotification =
     Notification<CancelledNotificationMethod, CancelledNotificationParam>;
 
+/// A catch-all notification the client can use to send custom messages to a server.
+///
+/// This preserves the raw `method` name and `params` payload so handlers can
+/// deserialize them into domain-specific types.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CustomClientNotification {
+    pub method: String,
+    pub params: Option<Value>,
+    /// extensions will carry anything possible in the context, including [`Meta`]
+    ///
+    /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub extensions: Extensions,
+}
+
+impl CustomClientNotification {
+    pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
+        Self {
+            method: method.into(),
+            params,
+            extensions: Extensions::default(),
+        }
+    }
+
+    /// Deserialize `params` into a strongly-typed structure.
+    pub fn params_as<T: DeserializeOwned>(&self) -> Result<Option<T>, serde_json::Error> {
+        self.params
+            .as_ref()
+            .map(|params| serde_json::from_value(params.clone()))
+            .transpose()
+    }
+}
+
 const_string!(InitializeResultMethod = "initialize");
 /// # Initialization
 /// This request is sent from the client to the server when it first connects, asking it to begin initialization.
@@ -1748,7 +1782,8 @@ ts_union!(
     | CancelledNotification
     | ProgressNotification
     | InitializedNotification
-    | RootsListChangedNotification;
+    | RootsListChangedNotification
+    | CustomClientNotification;
 );
 
 ts_union!(
@@ -1853,6 +1888,38 @@ mod tests {
             }) => {}
             _ => panic!("Expected Notification"),
         }
+        let json = serde_json::to_value(message).expect("valid json");
+        assert_eq!(json, raw);
+    }
+
+    #[test]
+    fn test_custom_client_notification_roundtrip() {
+        let raw = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/custom",
+            "params": {"foo": "bar"},
+        });
+
+        let message: ClientJsonRpcMessage =
+            serde_json::from_value(raw.clone()).expect("invalid notification");
+        match &message {
+            ClientJsonRpcMessage::Notification(JsonRpcNotification {
+                notification: ClientNotification::CustomClientNotification(notification),
+                ..
+            }) => {
+                assert_eq!(notification.method, "notifications/custom");
+                assert_eq!(
+                    notification
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("foo"))
+                        .expect("foo present"),
+                    "bar"
+                );
+            }
+            _ => panic!("Expected custom client notification"),
+        }
+
         let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
     }

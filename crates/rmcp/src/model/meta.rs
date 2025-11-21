@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    ClientNotification, ClientRequest, Extensions, JsonObject, JsonRpcMessage, NumberOrString,
-    ProgressToken, ServerNotification, ServerRequest,
+    ClientNotification, ClientRequest, CustomClientNotification, Extensions, JsonObject,
+    JsonRpcMessage, NumberOrString, ProgressToken, ServerNotification, ServerRequest,
 };
 
 pub trait GetMeta {
@@ -16,6 +16,26 @@ pub trait GetMeta {
 pub trait GetExtensions {
     fn extensions(&self) -> &Extensions;
     fn extensions_mut(&mut self) -> &mut Extensions;
+}
+
+impl GetExtensions for CustomClientNotification {
+    fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+    fn extensions_mut(&mut self) -> &mut Extensions {
+        &mut self.extensions
+    }
+}
+
+impl GetMeta for CustomClientNotification {
+    fn get_meta_mut(&mut self) -> &mut Meta {
+        self.extensions_mut().get_or_insert_default()
+    }
+    fn get_meta(&self) -> &Meta {
+        self.extensions()
+            .get::<Meta>()
+            .unwrap_or(Meta::static_empty())
+    }
 }
 
 macro_rules! variant_extension {
@@ -84,6 +104,7 @@ variant_extension! {
         ProgressNotification
         InitializedNotification
         RootsListChangedNotification
+        CustomClientNotification
     }
 }
 
