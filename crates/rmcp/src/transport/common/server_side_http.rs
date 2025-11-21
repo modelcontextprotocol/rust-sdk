@@ -6,6 +6,7 @@ use http::Response;
 use http_body::Body;
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use sse_stream::{KeepAlive, Sse, SseBody};
+use tokio_util::sync::CancellationToken;
 
 use super::http_header::EVENT_STREAM_MIME_TYPE;
 use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
@@ -65,20 +66,26 @@ pub struct ServerSseMessage {
 pub(crate) fn sse_stream_response(
     stream: impl futures::Stream<Item = ServerSseMessage> + Send + Sync + 'static,
     keep_alive: Option<Duration>,
+    ct: CancellationToken,
 ) -> Response<BoxBody<Bytes, Infallible>> {
     use futures::StreamExt;
-    let stream = SseBody::new(stream.map(|message| {
-        let data = serde_json::to_string(&message.message).expect("valid message");
-        let mut sse = Sse::default().data(data);
-        sse.id = message.event_id;
-        Result::<Sse, Infallible>::Ok(sse)
-    }));
+    let stream = stream
+        .map(|message| {
+            let data = serde_json::to_string(&message.message).expect("valid message");
+            let mut sse = Sse::default().data(data);
+            sse.id = message.event_id;
+            Result::<Sse, Infallible>::Ok(sse)
+        })
+        .take_until(async move { ct.cancelled().await });
+    let stream = SseBody::new(stream);
+
     let stream = match keep_alive {
         Some(duration) => stream
             .with_keep_alive::<TokioTimer>(KeepAlive::new().interval(duration))
             .boxed(),
         None => stream.boxed(),
     };
+
     Response::builder()
         .status(http::StatusCode::OK)
         .header(http::header::CONTENT_TYPE, EVENT_STREAM_MIME_TYPE)
