@@ -10,12 +10,21 @@ mod resource;
 pub mod router;
 pub mod tool;
 pub mod wrapper;
+
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,
         request: <RoleServer as ServiceRole>::PeerReq,
         context: RequestContext<RoleServer>,
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
+        // Pre-dispatch: check task meta and optionally enqueue as task
+        if context.meta.get_task().is_some() {
+            // Allow handler to decide whether and how to enqueue task
+            if let Some(result) = self.enqueue_task(&request, context.clone()).await? {
+                return Ok(result);
+            }
+        }
+
         match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
@@ -68,6 +77,14 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
+            ClientRequest::ListTasksRequest(request) => self
+                .list_tasks(request.params, context)
+                .await
+                .map(ServerResult::ListTasksResult),
+            ClientRequest::GetTaskInfoRequest(request) => self
+                .get_task_info(request.params, context)
+                .await
+                .map(ServerResult::GetTaskInfoResult),
         }
     }
 
@@ -100,6 +117,19 @@ impl<H: ServerHandler> Service<RoleServer> for H {
 
 #[allow(unused_variables)]
 pub trait ServerHandler: Sized + Send + Sync + 'static {
+    /// Optional pre-dispatch hook to enqueue incoming request as a background task.
+    /// Default: do nothing and return None.
+    /// Implementors that also act as an OperationHandler may override this to:
+    /// - Inspect `context.meta` (e.g., key "modelcontextprotocol.io/task")
+    /// - Build an operation and submit to a task manager
+    /// - Return an immediate ServerResult (e.g., EmptyResult or a Task ack)
+    fn enqueue_task(
+        &self,
+        _request: &ClientRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<Option<ServerResult>, McpError>> + Send + '_ {
+        std::future::ready(Ok(None))
+    }
     fn ping(
         &self,
         context: RequestContext<RoleServer>,
@@ -227,5 +257,21 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
 
     fn get_info(&self) -> ServerInfo {
         ServerInfo::default()
+    }
+
+    fn list_tasks(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<ListTasksMethod>()))
+    }
+
+    fn get_task_info(
+        &self,
+        request: GetTaskInfoParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
     }
 }

@@ -162,6 +162,7 @@ pub use service::{RoleClient, serve_client};
 pub use service::{RoleServer, serve_server};
 
 pub mod handler;
+pub mod task_manager;
 pub mod transport;
 
 // re-export
