@@ -9,6 +9,7 @@ pub mod prompt;
 mod resource;
 pub mod router;
 pub mod tool;
+pub mod tool_name_validation;
 pub mod wrapper;
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
