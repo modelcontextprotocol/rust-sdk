@@ -221,8 +221,6 @@ where
 
     pub fn add_route(&mut self, item: ToolRoute<S>) {
         let new_name = &item.attr.name;
-        // Validate tool name according to SEP specification
-        // This validates both new routes and updates (when replacing a route with a different name)
         validate_and_warn_tool_name(new_name);
         self.map.insert(new_name.clone(), item);
     }
