@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.9.0...rmcp-macros-v0.9.1) - 2025-11-24
+
+### Fixed
+
+- *(shemars)* use JSON Schema 2020-12 as Default Dialect ([#549](https://github.com/modelcontextprotocol/rust-sdk/pull/549))
+
 ## [0.9.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.8.5...rmcp-macros-v0.9.0) - 2025-11-17
 
 ### Added
