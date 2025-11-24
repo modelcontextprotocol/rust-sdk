@@ -10,22 +10,22 @@ use std::collections::HashSet;
 
 /// Result of tool name validation containing validation status and warnings.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolNameValidationResult {
+struct ToolNameValidationResult {
     /// Whether the tool name is valid according to the specification
-    pub is_valid: bool,
+    is_valid: bool,
     /// Array of warning messages about non-conforming aspects of the tool name
-    pub warnings: Vec<String>,
+    warnings: Vec<String>,
 }
 
 impl ToolNameValidationResult {
     /// Create a new validation result
-    pub fn new(is_valid: bool, warnings: Vec<String>) -> Self {
+    fn new(is_valid: bool, warnings: Vec<String>) -> Self {
         Self { is_valid, warnings }
     }
 }
 
 /// Validates a tool name according to the SEP specification.
-pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
+fn validate_tool_name(name: &str) -> ToolNameValidationResult {
     let mut warnings = Vec::new();
 
     // Check length
@@ -108,7 +108,7 @@ pub fn validate_tool_name(name: &str) -> ToolNameValidationResult {
 }
 
 /// Issues warnings for non-conforming tool names.
-pub fn issue_tool_name_warning(name: &str, warnings: &[String]) {
+fn issue_tool_name_warning(name: &str, warnings: &[String]) {
     tracing::warn!("Tool name validation warning for \"{}\":", name);
     for warning in warnings {
         tracing::warn!("  - {}", warning);
