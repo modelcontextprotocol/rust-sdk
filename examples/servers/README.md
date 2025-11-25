@@ -11,23 +11,6 @@ A basic MCP server that communicates using standard input/output transport.
 - Provides a simple counter tool with increment, decrement, and get_value operations
 - Demonstrates basic tool implementation and stdio transport
 
-### Counter SSE Server (`counter_sse.rs`)
-
-A server that provides counter functionality using Server-Sent Events (SSE) transport.
-
-- Runs on `http://127.0.0.1:8000/sse` by default
-- Provides the same counter tools as the stdio version
-- Demonstrates SSE transport setup with graceful shutdown
-- Can be accessed via web browsers or SSE-compatible clients
-
-### Counter SSE Direct Server (`counter_sse_directly.rs`)
-
-A minimal SSE server implementation showing direct SSE server usage.
-
-- Simplified version of the SSE server
-- Demonstrates basic SSE server configuration
-- Provides counter functionality with minimal setup
-
 ### Memory Standard I/O Server (`memory_stdio.rs`)
 
 A minimal server example using stdio transport.
@@ -52,34 +35,13 @@ A server using streamable HTTP transport for MCP communication, with hyper.
 - Provides counter tools via HTTP streaming
 - Demonstrates streamable HTTP transport configuration
 
-### Complex OAuth SSE Server (`complex_auth_sse.rs`)
-
-A comprehensive example demonstrating OAuth 2.0 integration with MCP servers.
-
-- Full OAuth 2.0 authorization server implementation
-- Client registration and token management
-- User authorization flow with web interface
-- Token validation middleware
-- Integrated with MCP SSE transport
-- Demonstrates enterprise-grade authentication patterns
-
-### Simple OAuth SSE Server (`simple_auth_sse.rs`)
-
-A simplified OAuth example showing basic token-based authentication.
-
-- Basic token store and validation
-- Authorization middleware for SSE endpoints
-- Token generation API
-- Simplified authentication flow
-- Good starting point for adding authentication to MCP servers
-
 ### Elicitation Demo (`elicitation_stdio.rs`)
 
 A working MCP server demonstrating elicitation for user name collection.
 
 - Real MCP server using rmcp library
 - `context.peer.elicit::<T>()` API usage
-- Type-safe elicitation with `elicit_safe!` macro  
+- Type-safe elicitation with `elicit_safe!` macro
 - JSON Schema validation with schemars
 - Tools: `greet_user` (collects name), `reset_name` (clears stored name)
 
@@ -101,6 +63,51 @@ A server that demonstrates progress notifications during long-running operations
 - Demonstrates progress notifications during long-running operations
 - Can be run with `cargo run --example servers_progress_demo -- {stdio|sse|http|all}`
 
+<details>
+<summary>Deprecated: SSE Transport Examples</summary>
+
+> **Note:** SSE (Server-Sent Events) transport has been removed from newer versions of the MCP specification. Streamable HTTP is the preferred transport for HTTP-based MCP servers as it is more reliable. These examples are kept for reference but should not be used for new implementations.
+
+### Counter SSE Server (`counter_sse.rs`)
+
+A server that provides counter functionality using Server-Sent Events (SSE) transport.
+
+- Runs on `http://127.0.0.1:8000/sse` by default
+- Provides the same counter tools as the stdio version
+- Demonstrates SSE transport setup with graceful shutdown
+- Can be accessed via web browsers or SSE-compatible clients
+
+### Counter SSE Direct Server (`counter_sse_directly.rs`)
+
+A minimal SSE server implementation showing direct SSE server usage.
+
+- Simplified version of the SSE server
+- Demonstrates basic SSE server configuration
+- Provides counter functionality with minimal setup
+
+### Complex OAuth SSE Server (`complex_auth_sse.rs`)
+
+A comprehensive example demonstrating OAuth 2.0 integration with MCP servers.
+
+- Full OAuth 2.0 authorization server implementation
+- Client registration and token management
+- User authorization flow with web interface
+- Token validation middleware
+- Integrated with MCP SSE transport
+- Demonstrates enterprise-grade authentication patterns
+
+### Simple OAuth SSE Server (`simple_auth_sse.rs`)
+
+A simplified OAuth example showing basic token-based authentication.
+
+- Basic token store and validation
+- Authorization middleware for SSE endpoints
+- Token generation API
+- Simplified authentication flow
+- Good starting point for adding authentication to MCP servers
+
+</details>
+
 ## How to Run
 
 Each example can be run using Cargo:
@@ -109,23 +116,11 @@ Each example can be run using Cargo:
 # Run the counter standard I/O server
 cargo run --example servers_counter_stdio
 
-# Run the counter SSE server
-cargo run --example servers_counter_sse
-
-# Run the counter SSE direct server
-cargo run --example servers_counter_sse_directly
-
 # Run the memory standard I/O server
 cargo run --example servers_memory_stdio
 
 # Run the counter streamable HTTP server
 cargo run --example servers_counter_streamhttp
-
-# Run the complex OAuth SSE server
-cargo run --example servers_complex_auth_sse
-
-# Run the simple OAuth SSE server
-cargo run --example servers_simple_auth_sse
 
 # Run the elicitation standard I/O server
 cargo run --example servers_elicitation_stdio
