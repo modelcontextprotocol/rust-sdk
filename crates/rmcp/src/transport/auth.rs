@@ -74,7 +74,7 @@ impl CredentialStore for InMemoryCredentialStore {
     }
 }
 
-/// sse client with oauth2 authorization
+/// HTTP client with OAuth 2.0 authorization
 #[derive(Clone)]
 pub struct AuthClient<C> {
     pub http_client: C,
@@ -91,7 +91,7 @@ impl<C: std::fmt::Debug> std::fmt::Debug for AuthClient<C> {
 }
 
 impl<C> AuthClient<C> {
-    /// create new authorized sse client
+    /// Create a new authorized HTTP client
     pub fn new(http_client: C, auth_manager: AuthorizationManager) -> Self {
         Self {
             http_client,

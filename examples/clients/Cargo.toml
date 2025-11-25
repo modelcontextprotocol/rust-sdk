@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 rmcp = { workspace = true, features = [
     "client",
-    "transport-sse-client-reqwest",
     "reqwest",
     "transport-streamable-http-client-reqwest",
     "transport-child-process",
@@ -29,10 +28,6 @@ tower = "0.5"
 axum = "0.8"
 reqwest = "0.12"
 clap = { version = "4.0", features = ["derive"] }
-
-[[example]]
-name = "clients_sse"
-path = "src/sse.rs"
 
 [[example]]
 name = "clients_git_stdio"

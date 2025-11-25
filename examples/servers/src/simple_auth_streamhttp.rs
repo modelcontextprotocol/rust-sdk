@@ -1,11 +1,13 @@
-/// This example shows how to use the RMCP SSE server with OAuth authorization.
+/// This example shows how to use the RMCP streamable HTTP server with simple token authorization.
 /// Use the inspector to view this server https://github.com/modelcontextprotocol/inspector
 /// The default index page is available at http://127.0.0.1:8000/
 /// # Get a token
 /// curl http://127.0.0.1:8000/api/token/demo
-/// # Connect to SSE using the token
-/// curl -H "Authorization: Bearer demo-token" http://127.0.0.1:8000/sse
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+/// # Connect using the token
+/// curl -X POST -H "Authorization: Bearer demo-token" -H "Content-Type: application/json" \
+///   -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}' \
+///   http://127.0.0.1:8000/mcp
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
@@ -16,14 +18,27 @@ use axum::{
     response::{Html, Response},
     routing::get,
 };
-use rmcp::transport::{SseServer, sse_server::SseServerConfig};
-use tokio_util::sync::CancellationToken;
+use rmcp::transport::{
+    StreamableHttpServerConfig,
+    streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
+};
 mod common;
 use common::counter::Counter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const BIND_ADDRESS: &str = "127.0.0.1:8000";
-const INDEX_HTML: &str = include_str!("html/sse_auth_index.html");
+const INDEX_HTML: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>MCP Streamable HTTP Auth Server</title>
+</head>
+<body>
+    <h1>MCP Streamable HTTP Server with Auth</h1>
+    <p>Get a token: <code>curl http://127.0.0.1:8000/api/token/demo</code></p>
+    <p>Connect: <code>curl -X POST -H "Authorization: Bearer demo-token" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}' http://127.0.0.1:8000/mcp</code></p>
+</body>
+</html>"#;
+
 // A simple token store
 struct TokenStore {
     valid_tokens: Vec<String>,
@@ -115,69 +130,44 @@ async fn main() -> Result<()> {
     // Set up port
     let addr = BIND_ADDRESS.parse::<SocketAddr>()?;
 
-    // Create SSE server configuration
-    let sse_config = SseServerConfig {
-        bind: addr,
-        sse_path: "/sse".to_string(),
-        post_path: "/message".to_string(),
-        ct: CancellationToken::new(),
-        sse_keep_alive: Some(Duration::from_secs(15)),
-    };
-
-    // Create SSE server
-    let (sse_server, sse_router) = SseServer::new(sse_config);
+    // Create streamable HTTP service
+    let mcp_service: StreamableHttpService<Counter, LocalSessionManager> =
+        StreamableHttpService::new(
+            || Ok(Counter::new()),
+            LocalSessionManager::default().into(),
+            StreamableHttpServerConfig::default(),
+        );
 
     // Create API routes
     let api_routes = Router::new()
         .route("/health", get(health_check))
         .route("/token/{token_id}", get(get_token));
 
-    // Create protected SSE routes (require authorization)
-    let protected_sse_router = sse_router.layer(middleware::from_fn_with_state(
-        token_store.clone(),
-        auth_middleware,
-    ));
+    // Create protected MCP routes (require authorization)
+    let protected_mcp_router =
+        Router::new()
+            .nest_service("/mcp", mcp_service)
+            .layer(middleware::from_fn_with_state(
+                token_store.clone(),
+                auth_middleware,
+            ));
 
     // Create main router, public endpoints don't require authorization
     let app = Router::new()
         .route("/", get(index))
         .nest("/api", api_routes)
-        .merge(protected_sse_router)
-        .with_state(());
-
-    // Start server and register service
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let ct = sse_server.config.ct.clone();
-
-    // Start SSE server with Counter service
-    sse_server.with_service(Counter::new);
-
-    // Handle signals for graceful shutdown
-    let cancel_token = ct.clone();
-    tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                println!("Received Ctrl+C, shutting down server...");
-                cancel_token.cancel();
-            }
-            Err(err) => {
-                eprintln!("Unable to listen for Ctrl+C signal: {}", err);
-            }
-        }
-    });
+        .merge(protected_mcp_router);
 
     // Start HTTP server
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Server started on {}", addr);
-    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-        // Wait for cancellation signal
-        ct.cancelled().await;
-        println!("Server is shutting down...");
-    });
 
-    if let Err(e) = server.await {
-        eprintln!("Server error: {}", e);
-    }
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            println!("Shutting down...");
+        })
+        .await?;
 
-    println!("Server has been shut down");
     Ok(())
 }

@@ -34,7 +34,7 @@ schemars = { version = "1.0", optional = true, features = ["chrono04"] }
 # for image encoding
 base64 = { version = "0.22", optional = true }
 
-# for SSE client
+# for HTTP client
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "stream",
@@ -100,19 +100,15 @@ server-side-http = [
   "dep:sse-stream",
   "tower",
 ]
-# SSE client
-client-side-sse = ["dep:sse-stream", "dep:http"]
-
-transport-sse-client = ["client-side-sse", "transport-worker"]
-transport-sse-client-reqwest = ["transport-sse-client", "reqwest"]
 
 transport-worker = ["dep:tokio-stream"]
 
+# SSE stream parsing utilities (used by streamable HTTP client for SSE-formatted responses)
+client-side-sse = ["dep:sse-stream", "dep:http"]
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
 transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "reqwest"]
-
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
@@ -120,12 +116,6 @@ transport-child-process = [
   "transport-async-rw",
   "tokio/process",
   "dep:process-wrap",
-]
-transport-sse-server = [
-  "transport-async-rw",
-  "transport-worker",
-  "server-side-http",
-  "dep:axum",
 ]
 transport-streamable-http-server = [
   "transport-streamable-http-server-session",
@@ -163,8 +153,6 @@ required-features = [
   "reqwest",
   "server",
   "client",
-  "transport-sse-server",
-  "transport-sse-client",
   "transport-child-process",
 ]
 path = "tests/test_with_python.rs"
@@ -174,7 +162,6 @@ name = "test_with_js"
 required-features = [
   "server",
   "client",
-  "transport-sse-server",
   "transport-child-process",
   "transport-streamable-http-server",
   "transport-streamable-http-client",
