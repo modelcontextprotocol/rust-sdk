@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, marker::PhantomData};
 
-use paste::paste;
+use pastey::paste;
 use serde::{Deserialize, Serialize};
 
 use super::JsonObject;

@@ -167,7 +167,7 @@ pub mod transport;
 // re-export
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
-pub use paste::paste;
+pub use pastey::paste;
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
 pub use rmcp_macros::*;
