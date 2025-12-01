@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.9.1...rmcp-v0.10.0) - 2025-12-01
+
+### Added
+
+- add support for custom client notifications ([#556](https://github.com/modelcontextprotocol/rust-sdk/pull/556))
+
+### Other
+
+- replace paste with pastey for macros feature ([#564](https://github.com/modelcontextprotocol/rust-sdk/pull/564))
+
 ## [0.9.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.9.0...rmcp-v0.9.1) - 2025-11-24
 
 ### Added
