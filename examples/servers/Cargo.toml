@@ -105,3 +105,7 @@ path = "src/completion_stdio.rs"
 [[example]]
 name = "servers_progress_demo"
 path = "src/progress_demo.rs"
+
+[[example]]
+name = "elicitation_enum_select"
+path = "src/elicitation_enum_inference.rs"
