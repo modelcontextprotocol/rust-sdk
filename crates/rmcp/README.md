@@ -203,8 +203,6 @@ RMCP uses feature flags to control which components are included:
   - `transport-async-rw`: Async read/write support
   - `transport-io`: I/O stream support
   - `transport-child-process`: Child process support
-  - `transport-sse-client` / `transport-sse-server`: SSE support (client agnostic)
-    - `transport-sse-client-reqwest`: a default `reqwest` implementation of the SSE client
   - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming (client agnostic, see [`StreamableHttpClientTransport`] for details)
     - `transport-streamable-http-client-reqwest`: a default `reqwest` implementation of the streamable http client
 - `auth`: OAuth2 authentication support
@@ -214,22 +212,19 @@ RMCP uses feature flags to control which components are included:
 ## Transports
 
 - `transport-io`: Server stdio transport
-- `transport-sse-server`: Server SSE transport
 - `transport-child-process`: Client stdio transport
-- `transport-sse-client`: Client sse transport
 - `transport-streamable-http-server` streamable http server transport
 - `transport-streamable-http-client` streamable http client transport
 
 <details>
 <summary>Transport</summary>
 The transport type must implemented [`Transport`] trait, which allow it send message concurrently and receive message sequentially.
-There are 3 pairs of standard transport types:
+There are 2 pairs of standard transport types:
 
 | transport         | client                                                    | server                                                |
 |:-:                |:-:                                                        |:-:                                                    |
 | std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
 | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::session::create_session`]   |
-| sse               | [`sse_client::SseClientTransport`]                        | [`sse_server::SseServer`]                             |
 
 #### [IntoTransport](`IntoTransport`) trait
 [`IntoTransport`] is a helper trait that implicitly convert a type into a transport type.

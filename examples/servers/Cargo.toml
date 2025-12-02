@@ -9,7 +9,6 @@ rmcp = { workspace = true, features = [
     "server",
     "macros",
     "client",
-    "transport-sse-server",
     "transport-io",
     "transport-streamable-http-server",
     "auth",
@@ -55,28 +54,12 @@ name = "servers_counter_stdio"
 path = "src/counter_stdio.rs"
 
 [[example]]
-name = "servers_counter_sse"
-path = "src/counter_sse.rs"
-
-[[example]]
-name = "servers_counter_sse_directly"
-path = "src/counter_sse_directly.rs"
-
-[[example]]
 name = "servers_memory_stdio"
 path = "src/memory_stdio.rs"
 
 [[example]]
 name = "servers_counter_streamhttp"
 path = "src/counter_streamhttp.rs"
-
-[[example]]
-name = "servers_complex_auth_sse"
-path = "src/complex_auth_sse.rs"
-
-[[example]]
-name = "servers_simple_auth_sse"
-path = "src/simple_auth_sse.rs"
 
 [[example]]
 name = "servers_prompt_stdio"
@@ -105,3 +88,11 @@ path = "src/completion_stdio.rs"
 [[example]]
 name = "servers_progress_demo"
 path = "src/progress_demo.rs"
+
+[[example]]
+name = "servers_simple_auth_streamhttp"
+path = "src/simple_auth_streamhttp.rs"
+
+[[example]]
+name = "servers_complex_auth_streamhttp"
+path = "src/complex_auth_streamhttp.rs"

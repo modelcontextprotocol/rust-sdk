@@ -2,13 +2,12 @@
 //! The transport type must implemented [`Transport`] trait, which allow it send message concurrently and receive message sequentially.
 //！
 //! ## Standard Transport Types
-//! There are 3 pairs of standard transport types:
+//! There are 2 pairs of standard transport types:
 //!
 //! | transport         | client                                                    | server                                                |
 //! |:-:                |:-:                                                        |:-:                                                    |
 //! | std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
 //! | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::StreamableHttpService`]     |
-//! | sse               | [`sse_client::SseClientTransport`]                        | [`sse_server::SseServer`]                             |
 //!
 //！## Helper Transport Types
 //! Thers are several helper transport types that can help you to create transport quickly.
@@ -94,20 +93,6 @@ pub mod io;
 #[cfg(feature = "transport-io")]
 #[cfg_attr(docsrs, doc(cfg(feature = "transport-io")))]
 pub use io::stdio;
-
-#[cfg(feature = "transport-sse-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-client")))]
-pub mod sse_client;
-#[cfg(feature = "transport-sse-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-client")))]
-pub use sse_client::SseClientTransport;
-
-#[cfg(feature = "transport-sse-server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
-pub mod sse_server;
-#[cfg(feature = "transport-sse-server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-sse-server")))]
-pub use sse_server::SseServer;
 
 #[cfg(feature = "auth")]
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]

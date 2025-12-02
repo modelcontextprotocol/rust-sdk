@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use askama::Template;
@@ -13,17 +13,13 @@ use axum::{
 };
 use rand::{Rng, distr::Alphanumeric};
 use rmcp::transport::{
-    SseServer,
-    auth::{
-        AuthorizationMetadata, ClientRegistrationRequest, ClientRegistrationResponse,
-        OAuthClientConfig,
-    },
-    sse_server::SseServerConfig,
+    StreamableHttpServerConfig,
+    auth::{AuthorizationMetadata, ClientRegistrationResponse, OAuthClientConfig},
+    streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -34,6 +30,13 @@ use common::counter::Counter;
 
 const BIND_ADDRESS: &str = "127.0.0.1:3000";
 const INDEX_HTML: &str = include_str!("html/mcp_oauth_index.html");
+
+// Local registration request - only uses fields needed for this demo
+#[derive(Debug, Deserialize)]
+struct LocalClientRegistrationRequest {
+    client_name: String,
+    redirect_uris: Vec<String>,
+}
 
 // A easy way to manage MCP OAuth Store for managing tokens and sessions
 #[derive(Clone, Debug)]
@@ -480,7 +483,7 @@ async fn oauth_token(
     }
 }
 
-// Auth middleware for SSE connections
+// Auth middleware for MCP connections
 async fn validate_token_middleware(
     State(token_store): State<Arc<McpOAuthStore>>,
     request: Request<axum::body::Body>,
@@ -537,7 +540,7 @@ async fn oauth_authorization_server() -> impl IntoResponse {
 // handle client registration request
 async fn oauth_register(
     State(state): State<Arc<McpOAuthStore>>,
-    Json(req): Json<ClientRegistrationRequest>,
+    Json(req): Json<LocalClientRegistrationRequest>,
 ) -> impl IntoResponse {
     debug!("register request: {:?}", req);
     if req.redirect_uris.is_empty() {
@@ -640,23 +643,22 @@ async fn main() -> Result<()> {
     // Set up port
     let addr = BIND_ADDRESS.parse::<SocketAddr>()?;
 
-    // Create SSE server configuration for MCP
-    let sse_config = SseServerConfig {
-        bind: addr,
-        sse_path: "/mcp/sse".to_string(),
-        post_path: "/mcp/message".to_string(),
-        ct: CancellationToken::new(),
-        sse_keep_alive: Some(Duration::from_secs(15)),
-    };
+    // Create streamable HTTP service for MCP
+    let mcp_service: StreamableHttpService<Counter, LocalSessionManager> =
+        StreamableHttpService::new(
+            || Ok(Counter::new()),
+            LocalSessionManager::default().into(),
+            StreamableHttpServerConfig::default(),
+        );
 
-    // Create SSE server
-    let (sse_server, sse_router) = SseServer::new(sse_config);
-
-    // Create protected SSE routes (require authorization)
-    let protected_sse_router = sse_router.layer(middleware::from_fn_with_state(
-        oauth_store.clone(),
-        validate_token_middleware,
-    ));
+    // Create protected MCP routes (require authorization)
+    let protected_mcp_router =
+        Router::new()
+            .nest_service("/mcp", mcp_service)
+            .layer(middleware::from_fn_with_state(
+                oauth_store.clone(),
+                validate_token_middleware,
+            ));
 
     // Create CORS layer for the oauth authorization server endpoint
     let cors_layer = CorsLayer::new()
@@ -681,43 +683,23 @@ async fn main() -> Result<()> {
     // Create HTTP router with request logging middleware
     let app = Router::new()
         .route("/", get(index))
-        .route("/mcp", get(index))
         .route("/oauth/authorize", get(oauth_authorize))
         .route("/oauth/approve", post(oauth_approve))
         .merge(oauth_server_router) // Merge the CORS-enabled oauth server router
-        // .merge(protected_sse_router)
+        .merge(protected_mcp_router)
         .with_state(oauth_store.clone())
         .layer(middleware::from_fn(log_request));
-
-    let app = app.merge(protected_sse_router);
-    // Register token validation middleware for SSE
-    let cancel_token = sse_server.config.ct.clone();
-    // Handle Ctrl+C
-    let cancel_token2 = sse_server.config.ct.clone();
-    // Start SSE server with Counter service
-    sse_server.with_service(Counter::new);
 
     // Start HTTP server
     info!("MCP OAuth Server started on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-        cancel_token.cancelled().await;
-        info!("Server is shutting down");
-    });
 
-    tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                info!("Received Ctrl+C, shutting down");
-                cancel_token2.cancel();
-            }
-            Err(e) => error!("Failed to listen for Ctrl+C: {}", e),
-        }
-    });
-
-    if let Err(e) = server.await {
-        error!("Server error: {}", e);
-    }
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            info!("Shutting down...");
+        })
+        .await?;
 
     Ok(())
 }

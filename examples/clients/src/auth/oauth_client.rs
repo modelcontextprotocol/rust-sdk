@@ -11,9 +11,9 @@ use rmcp::{
     ServiceExt,
     model::ClientInfo,
     transport::{
-        SseClientTransport,
+        StreamableHttpClientTransport,
         auth::{AuthClient, OAuthState},
-        sse_client::SseClientConfig,
+        streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
 use serde::Deserialize;
@@ -25,7 +25,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const MCP_SERVER_URL: &str = "http://localhost:3000/mcp";
 const MCP_REDIRECT_URI: &str = "http://localhost:8080/callback";
-const MCP_SSE_URL: &str = "http://localhost:3000/mcp/sse";
 const CALLBACK_PORT: u16 = 8080;
 const CALLBACK_HTML: &str = include_str!("callback.html");
 
@@ -150,14 +149,10 @@ async fn main() -> Result<()> {
         .into_authorization_manager()
         .ok_or_else(|| anyhow::anyhow!("Failed to get authorization manager"))?;
     let client = AuthClient::new(reqwest::Client::default(), am);
-    let transport = SseClientTransport::start_with_client(
+    let transport = StreamableHttpClientTransport::with_client(
         client,
-        SseClientConfig {
-            sse_endpoint: MCP_SSE_URL.into(),
-            ..Default::default()
-        },
-    )
-    .await?;
+        StreamableHttpClientTransportConfig::with_uri(MCP_SERVER_URL),
+    );
 
     // Create client and connect to MCP server
     let client_service = ClientInfo::default();

@@ -61,52 +61,26 @@ A server that demonstrates progress notifications during long-running operations
 
 - Provides a stream_processor tool that generates progress notifications
 - Demonstrates progress notifications during long-running operations
-- Can be run with `cargo run --example servers_progress_demo -- {stdio|sse|http|all}`
+- Can be run with `cargo run --example servers_progress_demo -- {stdio|http|all}`
 
-<details>
-<summary>Deprecated: SSE Transport Examples</summary>
+### Simple Auth Streamable HTTP Server (`simple_auth_streamhttp.rs`)
 
-> **Note:** SSE (Server-Sent Events) transport has been removed from newer versions of the MCP specification. Streamable HTTP is the preferred transport for HTTP-based MCP servers as it is more reliable. These examples are kept for reference but should not be used for new implementations.
+A server demonstrating simple token-based authentication with streamable HTTP transport.
 
-### Counter SSE Server (`counter_sse.rs`)
+- Uses bearer token authentication via Authorization header
+- Provides `/api/token/{id}` endpoint to get demo tokens
+- Protected MCP endpoint at `/mcp`
+- Shows how to add auth middleware to streamable HTTP services
 
-A server that provides counter functionality using Server-Sent Events (SSE) transport.
+### Complex Auth Streamable HTTP Server (`complex_auth_streamhttp.rs`)
 
-- Runs on `http://127.0.0.1:8000/sse` by default
-- Provides the same counter tools as the stdio version
-- Demonstrates SSE transport setup with graceful shutdown
-- Can be accessed via web browsers or SSE-compatible clients
+A full OAuth 2.0 authorization server implementation with streamable HTTP MCP transport.
 
-### Counter SSE Direct Server (`counter_sse_directly.rs`)
-
-A minimal SSE server implementation showing direct SSE server usage.
-
-- Simplified version of the SSE server
-- Demonstrates basic SSE server configuration
-- Provides counter functionality with minimal setup
-
-### Complex OAuth SSE Server (`complex_auth_sse.rs`)
-
-A comprehensive example demonstrating OAuth 2.0 integration with MCP servers.
-
-- Full OAuth 2.0 authorization server implementation
-- Client registration and token management
-- User authorization flow with web interface
-- Token validation middleware
-- Integrated with MCP SSE transport
-- Demonstrates enterprise-grade authentication patterns
-
-### Simple OAuth SSE Server (`simple_auth_sse.rs`)
-
-A simplified OAuth example showing basic token-based authentication.
-
-- Basic token store and validation
-- Authorization middleware for SSE endpoints
-- Token generation API
-- Simplified authentication flow
-- Good starting point for adding authentication to MCP servers
-
-</details>
+- Complete OAuth 2.0 authorization code flow
+- Client registration endpoint
+- Authorization server metadata discovery
+- Protected MCP endpoint with token validation
+- Demonstrates building a production-like auth server
 
 ## How to Run
 
@@ -127,6 +101,12 @@ cargo run --example servers_elicitation_stdio
 
 # Run the prompt standard I/O server
 cargo run --example servers_prompt_stdio
+
+# Run the simple auth streamable HTTP server
+cargo run --example servers_simple_auth_streamhttp
+
+# Run the complex auth streamable HTTP server
+cargo run --example servers_complex_auth_streamhttp
 ```
 
 ## Testing with MCP Inspector
@@ -145,11 +125,6 @@ These examples use the following main dependencies:
 - `anyhow`: Error handling
 - `axum`: Web framework for HTTP-based transports
 - `tokio-util`: Utilities for async programming
-- `askama`: Template engine (used in OAuth examples)
-- `tower-http`: HTTP middleware (used for CORS in OAuth examples)
-- `uuid`: UUID generation (used in OAuth examples)
-- `chrono`: Date and time handling (used in OAuth examples)
-- `rand`: Random number generation (used in OAuth examples)
 - `schemars`: JSON Schema generation (used in elicitation examples)
 
 ## Common Module

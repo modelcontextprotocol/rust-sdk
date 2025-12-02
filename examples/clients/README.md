@@ -4,15 +4,6 @@ This directory contains Model Context Protocol (MCP) client examples implemented
 
 ## Example List
 
-
-### SSE Client (`sse.rs`)
-
-A client that communicates with an MCP server using Server-Sent Events (SSE) transport.
-
-- Connects to an MCP server running at `http://localhost:8000/sse`
-- Retrieves server information and list of available tools
-- Calls a tool named "increment"
-
 ### Git Standard I/O Client (`git_stdio.rs`)
 
 A client that communicates with a Git-related MCP server using standard input/output.
@@ -68,14 +59,14 @@ A client demonstrating how to use the sampling tool.
 - Retrieves server information and list of available tools
 - Calls the `ask_llm` tool
 
-### Progress Test Client (`progress_test_client.rs`)
+### Progress Test Client (`progress_client.rs`)
 
 A client that communicates with an MCP server using progress notifications.
 
-- Launches the `cargo run --example clients_progress_client -- --transport {stdio|sse|http|all}` to test the progress notifications
+- Launches the `cargo run --example clients_progress_client -- --transport {stdio|http|all}` to test the progress notifications
 - Connects to the server using different transport methods
 - Tests the progress notifications
-- The sse and http should run the server first
+- The http transport should run the server first
 
 
 ## How to Run
@@ -83,9 +74,6 @@ A client that communicates with an MCP server using progress notifications.
 Each example can be run using Cargo:
 
 ```bash
-# Run the SSE client example
-cargo run --example clients_sse
-
 # Run the Git standard I/O client example
 cargo run --example clients_git_stdio
 

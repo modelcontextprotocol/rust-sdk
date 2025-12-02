@@ -32,9 +32,6 @@ pub enum McpServerTransportConfig {
     Streamable {
         url: String,
     },
-    Sse {
-        url: String,
-    },
     Stdio {
         command: String,
         #[serde(default)]
@@ -50,11 +47,6 @@ impl McpServerTransportConfig {
             McpServerTransportConfig::Streamable { url } => {
                 let transport =
                     rmcp::transport::StreamableHttpClientTransport::from_uri(url.to_string());
-                ().serve(transport).await?
-            }
-            McpServerTransportConfig::Sse { url } => {
-                let transport =
-                    rmcp::transport::sse_client::SseClientTransport::start(url.to_owned()).await?;
                 ().serve(transport).await?
             }
             McpServerTransportConfig::Stdio {

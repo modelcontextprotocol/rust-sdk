@@ -12,7 +12,7 @@ use rmcp::{
         ProgressNotificationParam,
     },
     service::{NotificationContext, RoleClient},
-    transport::{SseClientTransport, StreamableHttpClientTransport, TokioChildProcess},
+    transport::{StreamableHttpClientTransport, TokioChildProcess},
 };
 use tokio::{process::Command, time::sleep};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -20,7 +20,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Debug, Clone, ValueEnum)]
 enum TransportType {
     Stdio,
-    Sse,
     Http,
     All,
 }
@@ -36,10 +35,6 @@ struct Args {
     /// Number of records to process
     #[arg(short, long, default_value_t = 10)]
     records: u32,
-
-    /// SSE server URL
-    #[arg(long, default_value = "http://127.0.0.1:8000/sse")]
-    sse_url: String,
 
     /// HTTP server URL
     #[arg(long, default_value = "http://127.0.0.1:8001/mcp")]
@@ -203,59 +198,7 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     tracing::info!("STDIO transport test completed successfully!");
     Ok(())
 }
-// Test SSE transport, must run the server with `cargo run --example servers_progress_demo -- sse` in the servers directory
-async fn test_sse_transport(sse_url: &str, records: u32) -> Result<()> {
-    tracing::info!("Testing SSE Transport");
-    tracing::info!("=========================");
-    tracing::info!("SSE URL: {}", sse_url);
 
-    // Wait a bit for server to be ready
-    sleep(Duration::from_secs(1)).await;
-
-    let transport = SseClientTransport::start(sse_url).await?;
-
-    // Create progress-aware client handler
-    let client_handler = ProgressAwareClient::new();
-    client_handler.start_tracking();
-    let client_handler_clone = client_handler.clone();
-
-    let client = client_handler.serve(transport).await.inspect_err(|e| {
-        tracing::error!("SSE client error: {:?}", e);
-    })?;
-
-    // Initialize
-    let server_info = client.peer_info();
-    if let Some(info) = server_info {
-        tracing::info!("Connected to server: {:?}", info.server_info.name);
-    }
-
-    // List tools
-    let tools = client.list_tools(Default::default()).await?;
-    tracing::info!(
-        "Available tools: {:?}",
-        tools.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
-    );
-
-    // Call stream processor tool
-    tracing::info!("Starting to process {} records...", records);
-    let tool_result = client
-        .call_tool(CallToolRequestParam {
-            name: "stream_processor".into(),
-            arguments: None,
-        })
-        .await?;
-
-    if let Some(content) = tool_result.content.first() {
-        if let Some(text) = content.as_text() {
-            tracing::info!("Processing completed: {}", text.text);
-        }
-    }
-
-    client.cancel().await?;
-    client_handler_clone.stop_tracking();
-    tracing::info!("SSE transport test completed successfully!");
-    Ok(())
-}
 // Test HTTP transport, must run the server with `cargo run --example servers_progress_demo -- http` in the servers directory
 async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     tracing::info!("Testing HTTP Streaming Transport");
@@ -316,13 +259,6 @@ async fn run_single_test(transport_type: &TransportType, args: &Args) -> Result<
             test_stdio_transport(args.records).await?;
             Ok(true)
         }
-        TransportType::Sse => match test_sse_transport(&args.sse_url, args.records).await {
-            Ok(_) => Ok(true),
-            Err(e) => {
-                tracing::error!("SSE test failed: {}", e);
-                Ok(false)
-            }
-        },
         TransportType::Http => match test_http_transport(&args.http_url, args.records).await {
             Ok(_) => Ok(true),
             Err(e) => {
@@ -357,11 +293,7 @@ async fn main() -> Result<()> {
             // Test all transport types
             let mut results = std::collections::HashMap::new();
 
-            for transport_type in [
-                TransportType::Stdio,
-                TransportType::Sse,
-                TransportType::Http,
-            ] {
+            for transport_type in [TransportType::Stdio, TransportType::Http] {
                 let transport_name = format!("{:?}", transport_type).to_uppercase();
                 tracing::info!("\n");
 
