@@ -239,6 +239,15 @@ struct AuthorizationState {
     csrf_token: CsrfToken,
 }
 
+/// SEP-991: URL-based Client IDs
+/// Validate that the client_id is a valid URL with https scheme and non-root pathname
+fn is_https_url(value: &str) -> bool {
+    match Url::parse(value) {
+        Ok(url) => url.scheme() == "https" && url.path() != "/",
+        Err(_) => false,
+    }
+}
+
 impl AuthorizationManager {
     fn well_known_paths(base_path: &str, resource: &str) -> Vec<String> {
         let trimmed = base_path.trim_start_matches('/').trim_end_matches('/');
@@ -950,30 +959,60 @@ impl AuthorizationSession {
         scopes: &[&str],
         redirect_uri: &str,
         client_name: Option<&str>,
+        client_metadata_url: Option<&str>,
     ) -> Result<Self, AuthError> {
-        // Default client config
-        let config = OAuthClientConfig {
-            client_id: "mcp-client".to_string(),
-            client_secret: None,
-            scopes: scopes.iter().map(|s| s.to_string()).collect(),
-            redirect_uri: redirect_uri.to_string(),
-        };
+        let metadata = auth_manager.metadata.as_ref();
+        let supports_url_based_client_id = metadata
+            .and_then(|m| m.additional_fields.get("client_id_metadata_document_supported"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        // try to dynamic register client
-        let config = match auth_manager
-            .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
-            .await
-        {
-            Ok(config) => config,
-            Err(e) => {
-                warn!(
-                    "Dynamic registration failed: {}, fallback to default config",
-                    e
-                );
-                // fallback to default config
-                config
+        let config = if supports_url_based_client_id {
+            if let Some(client_metadata_url) = client_metadata_url {
+                if !is_https_url(client_metadata_url) {
+                    return Err(AuthError::RegistrationFailed(format!(
+                        "client_metadata_url must be a valid HTTPS URL with a non-root pathname, got: {}",
+                        client_metadata_url
+                    )));
+                }
+                // SEP-991: URL-based Client IDs - use URL as client_id directly
+                OAuthClientConfig {
+                    client_id: client_metadata_url.to_string(),
+                    client_secret: None,
+                    scopes: scopes.iter().map(|s| s.to_string()).collect(),
+                    redirect_uri: redirect_uri.to_string(),
+                }
+            } else {
+                // Fallback to dynamic registration
+                match auth_manager
+                    .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
+                    .await
+                {
+                    Ok(config) => config,
+                    Err(e) => {
+                        return Err(AuthError::RegistrationFailed(format!(
+                            "Dynamic registration failed: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+        } else {
+            // Fallback to dynamic registration
+            match auth_manager
+                .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
+                .await
+            {
+                Ok(config) => config,
+                Err(e) => {
+                    return Err(AuthError::RegistrationFailed(format!(
+                        "Dynamic registration failed: {}",
+                        e
+                    )));
+                }
             }
         };
+
         // reset client config
         auth_manager.configure_client(config)?;
         let auth_url = auth_manager.get_authorization_url(scopes).await?;
@@ -1126,6 +1165,18 @@ impl OAuthState {
         redirect_uri: &str,
         client_name: Option<&str>,
     ) -> Result<(), AuthError> {
+        self.start_authorization_with_metadata_url(scopes, redirect_uri, client_name, None)
+            .await
+    }
+
+    /// start authorization with optional client metadata URL (SEP-991)
+    pub async fn start_authorization_with_metadata_url(
+        &mut self,
+        scopes: &[&str],
+        redirect_uri: &str,
+        client_name: Option<&str>,
+        client_metadata_url: Option<&str>,
+    ) -> Result<(), AuthError> {
         if let OAuthState::Unauthorized(mut manager) = std::mem::replace(
             self,
             OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
@@ -1134,8 +1185,14 @@ impl OAuthState {
             let metadata = manager.discover_metadata().await?;
             manager.metadata = Some(metadata);
             debug!("start session");
-            let session =
-                AuthorizationSession::new(manager, scopes, redirect_uri, client_name).await?;
+            let session = AuthorizationSession::new(
+                manager,
+                scopes,
+                redirect_uri,
+                client_name,
+                client_metadata_url,
+            )
+            .await?;
             *self = OAuthState::Session(session);
             Ok(())
         } else {

@@ -79,6 +79,7 @@ async fn main() -> Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], CALLBACK_PORT));
     tracing::info!("Starting callback server at: http://{}", addr);
+    tracing::warn!("Note: Callback server may not receive callbacks if redirect URI doesn't match localhost");
 
     // Start server in a separate task
     tokio::spawn(async move {
@@ -98,11 +99,15 @@ async fn main() -> Result<()> {
     let mut oauth_state = OAuthState::new(&server_url, None)
         .await
         .context("Failed to initialize oauth state machine")?;
+    
+    tracing::info!("Using CIMD (SEP-991) with client metadata URL: {}", CLIENT_METADATA_URL);
+    // Use CIMD (SEP-991) with client metadata URL
     oauth_state
-        .start_authorization(
+        .start_authorization_with_metadata_url(
             &["mcp", "profile", "email"],
             MCP_REDIRECT_URI,
             Some("Test MCP Client"),
+            Some(CLIENT_METADATA_URL),
         )
         .await
         .context("Failed to start authorization")?;
