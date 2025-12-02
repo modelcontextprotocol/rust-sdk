@@ -263,4 +263,278 @@ mod tests {
             panic!("Expected ResourceLink variant");
         }
     }
+
+    #[test]
+    fn test_prompt_new() {
+        let prompt = Prompt::new("test_prompt", Some("A test prompt"), None);
+        assert_eq!(prompt.name, "test_prompt");
+        assert_eq!(prompt.description, Some("A test prompt".to_string()));
+        assert_eq!(prompt.arguments, None);
+        assert_eq!(prompt.title, None);
+        assert_eq!(prompt.icons, None);
+    }
+
+    #[test]
+    fn test_prompt_with_arguments() {
+        let arg = PromptArgument {
+            name: "input".to_string(),
+            title: Some("Input".to_string()),
+            description: Some("Input parameter".to_string()),
+            required: Some(true),
+        };
+        let prompt = Prompt::new("test", Some("desc"), Some(vec![arg.clone()]));
+        assert_eq!(prompt.arguments.as_ref().unwrap().len(), 1);
+        assert_eq!(prompt.arguments.as_ref().unwrap()[0].name, "input");
+    }
+
+    #[test]
+    fn test_prompt_message_new_text() {
+        let message = PromptMessage::new_text(PromptMessageRole::User, "Hello");
+        assert_eq!(message.role, PromptMessageRole::User);
+        match message.content {
+            PromptMessageContent::Text { text } => assert_eq!(text, "Hello"),
+            _ => panic!("Expected Text content"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_message_content_text() {
+        let content = PromptMessageContent::text("test message");
+        match content {
+            PromptMessageContent::Text { text } => assert_eq!(text, "test message"),
+            _ => panic!("Expected Text content"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_message_new_text_with_meta() {
+        let meta = Some(crate::model::Meta::default());
+        let message =
+            PromptMessage::new_text_with_meta(PromptMessageRole::Assistant, "Response", meta);
+        assert_eq!(message.role, PromptMessageRole::Assistant);
+        match message.content {
+            PromptMessageContent::Text { text } => assert_eq!(text, "Response"),
+            _ => panic!("Expected Text content"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "base64")]
+    fn test_prompt_message_new_image() {
+        let data = vec![1, 2, 3, 4];
+        let message =
+            PromptMessage::new_image(PromptMessageRole::User, &data, "image/png", None, None);
+        assert_eq!(message.role, PromptMessageRole::User);
+        match message.content {
+            PromptMessageContent::Image { image } => {
+                assert_eq!(image.mime_type, "image/png");
+                assert!(!image.data.is_empty());
+            }
+            _ => panic!("Expected Image content"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_message_new_resource() {
+        let message = PromptMessage::new_resource(
+            PromptMessageRole::Assistant,
+            "file:///test.txt".to_string(),
+            Some("text/plain".to_string()),
+            Some("content".to_string()),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(message.role, PromptMessageRole::Assistant);
+        match message.content {
+            PromptMessageContent::Resource { .. } => {}
+            _ => panic!("Expected Resource content"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_argument_optional_fields() {
+        let arg = PromptArgument {
+            name: "param".to_string(),
+            title: None,
+            description: None,
+            required: None,
+        };
+        assert_eq!(arg.name, "param");
+        assert_eq!(arg.title, None);
+    }
+
+    #[test]
+    fn test_prompt_message_role_variants() {
+        let user_role = PromptMessageRole::User;
+        let assistant_role = PromptMessageRole::Assistant;
+        assert_eq!(user_role, PromptMessageRole::User);
+        assert_eq!(assistant_role, PromptMessageRole::Assistant);
+    }
+
+    #[test]
+    fn test_prompt_message_content_resource_link_constructor() {
+        use super::super::resource::RawResource;
+        let resource = RawResource::new("file:///test.txt", "test.txt");
+        let content = PromptMessageContent::resource_link(resource.no_annotation());
+        match content {
+            PromptMessageContent::ResourceLink { link } => {
+                assert_eq!(link.uri, "file:///test.txt");
+            }
+            _ => panic!("Expected ResourceLink content"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_with_title() {
+        let prompt = Prompt {
+            name: "test".to_string(),
+            title: Some("Test Title".to_string()),
+            description: None,
+            arguments: None,
+            icons: None,
+        };
+        assert_eq!(prompt.title, Some("Test Title".to_string()));
+    }
+
+    #[test]
+    fn test_prompt_with_icons() {
+        let icon = Icon {
+            src: "icon.png".to_string(),
+            mime_type: Some("image/png".to_string()),
+            sizes: None,
+        };
+        let prompt = Prompt {
+            name: "test".to_string(),
+            title: None,
+            description: None,
+            arguments: None,
+            icons: Some(vec![icon]),
+        };
+        assert_eq!(prompt.icons.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_argument_all_fields() {
+        let arg = PromptArgument {
+            name: "param".to_string(),
+            title: Some("Parameter".to_string()),
+            description: Some("A parameter".to_string()),
+            required: Some(true),
+        };
+        assert_eq!(arg.name, "param");
+        assert_eq!(arg.title, Some("Parameter".to_string()));
+        assert_eq!(arg.description, Some("A parameter".to_string()));
+        assert_eq!(arg.required, Some(true));
+    }
+
+    #[test]
+    fn test_prompt_message_role_serialization() {
+        let json_user = serde_json::to_string(&PromptMessageRole::User).unwrap();
+        let json_assistant = serde_json::to_string(&PromptMessageRole::Assistant).unwrap();
+        assert!(json_user.contains("user"));
+        assert!(json_assistant.contains("assistant"));
+    }
+
+    #[test]
+    fn test_prompt_message_new_text_with_meta_ignores_meta() {
+        let meta = Some(crate::model::Meta::default());
+        let message1 = PromptMessage::new_text_with_meta(PromptMessageRole::User, "test", meta);
+        let message2 = PromptMessage::new_text(PromptMessageRole::User, "test");
+
+        // Should be equivalent since meta is ignored for text content
+        assert_eq!(message1, message2);
+    }
+
+    #[test]
+    fn test_prompt_arguments_required_vs_optional() {
+        let required_arg = PromptArgument {
+            name: "required".to_string(),
+            title: None,
+            description: None,
+            required: Some(true),
+        };
+
+        let optional_arg = PromptArgument {
+            name: "optional".to_string(),
+            title: None,
+            description: None,
+            required: Some(false),
+        };
+
+        assert_ne!(required_arg.required, optional_arg.required);
+        assert!(required_arg.required.unwrap());
+        assert!(!optional_arg.required.unwrap());
+    }
+
+    #[test]
+    fn test_prompt_new_with_none_description() {
+        let prompt = Prompt::new::<_, String>("test", None, None);
+        assert_eq!(prompt.name, "test");
+        assert_eq!(prompt.description, None);
+    }
+
+    #[test]
+    fn test_prompt_message_new_resource_blob() {
+        let message = PromptMessage::new_resource(
+            PromptMessageRole::User,
+            "file:///binary.dat".to_string(),
+            Some("application/octet-stream".to_string()),
+            None,
+            None,
+            None,
+            None,
+        );
+        match message.content {
+            PromptMessageContent::Resource { resource } => match &resource.resource {
+                ResourceContents::BlobResourceContents { uri, .. } => {
+                    assert_eq!(uri, "file:///binary.dat");
+                }
+                _ => panic!("Expected BlobResourceContents"),
+            },
+            _ => panic!("Expected Resource content"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_message_roles_are_distinct() {
+        let user_msg = PromptMessage::new_text(PromptMessageRole::User, "user text");
+        let assistant_msg = PromptMessage::new_text(PromptMessageRole::Assistant, "assistant text");
+
+        assert_ne!(user_msg.role, assistant_msg.role);
+        assert!(matches!(user_msg.role, PromptMessageRole::User));
+        assert!(matches!(assistant_msg.role, PromptMessageRole::Assistant));
+    }
+
+    #[test]
+    fn test_prompt_argument_without_required_field() {
+        let arg = PromptArgument {
+            name: "param".to_string(),
+            title: None,
+            description: None,
+            required: None,
+        };
+        // When required is None, the argument's requirement is unspecified
+        assert!(arg.required.is_none());
+    }
+
+    #[test]
+    fn test_prompt_with_multiple_arguments() {
+        let args = vec![
+            PromptArgument {
+                name: "arg1".to_string(),
+                title: None,
+                description: None,
+                required: Some(true),
+            },
+            PromptArgument {
+                name: "arg2".to_string(),
+                title: None,
+                description: None,
+                required: Some(false),
+            },
+        ];
+        let prompt = Prompt::new("test", Some("desc"), Some(args));
+        assert_eq!(prompt.arguments.as_ref().unwrap().len(), 2);
+    }
 }
