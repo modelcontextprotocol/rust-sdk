@@ -1,7 +1,3 @@
-<div align = "right">
-<a href="docs/readme/README.zh-cn.md">简体中文(待更新)</a>
-</div>
-
 # RMCP
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
 <!-- ![Release status](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg) -->
@@ -28,7 +24,6 @@ rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "mai
 Basic dependencies:
 - [tokio required](https://github.com/tokio-rs/tokio)
 - [serde required](https://github.com/serde-rs/serde)
-Json Schema generation(Must follow the 2020-12 version):
 - [shemars required](https://github.com/GREsau/schemars)
 
 
@@ -116,8 +111,11 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
-- [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
-- [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
+- [MCP Specification 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18)
+
+
+- [Schema 2025-06-18](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-06-18/schema.ts)
+(Note that the spec now declares 2020-12 as default, [reference](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655/files#top))
 
 ## Related Projects
 
