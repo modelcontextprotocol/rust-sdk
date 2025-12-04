@@ -44,6 +44,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 hyper = { version = "1" }
 hyper-util = { version = "0", features = ["server"] }
 tokio-util = { version = "0.7" }
+url = "2.5"
 
 [dev-dependencies]
 tokio-stream = { version = "0.1" }
@@ -96,3 +97,7 @@ path = "src/simple_auth_streamhttp.rs"
 [[example]]
 name = "servers_complex_auth_streamhttp"
 path = "src/complex_auth_streamhttp.rs"
+
+[[example]]
+name = "servers_cimd_auth_streamhttp"
+path = "src/cimd_auth_streamhttp.rs"
