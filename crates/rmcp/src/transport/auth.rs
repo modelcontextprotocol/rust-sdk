@@ -1313,7 +1313,50 @@ impl OAuthState {
 mod tests {
     use url::Url;
 
-    use super::AuthorizationManager;
+    use super::{is_https_url, AuthorizationManager};
+
+    // SEP-991: URL-based Client IDs
+    // Tests adapted from the TypeScript SDK's isHttpsUrl test suite
+    #[test]
+    fn is_https_url_returns_true_for_valid_https_url_with_path() {
+        assert!(is_https_url("https://example.com/client-metadata.json"));
+    }
+
+    #[test]
+    fn is_https_url_returns_true_for_https_url_with_query_params() {
+        assert!(is_https_url("https://example.com/metadata?version=1"));
+    }
+
+    #[test]
+    fn is_https_url_returns_false_for_https_url_without_path() {
+        assert!(!is_https_url("https://example.com"));
+        assert!(!is_https_url("https://example.com/"));
+    }
+
+    #[test]
+    fn is_https_url_returns_false_for_http_url() {
+        assert!(!is_https_url("http://example.com/metadata"));
+    }
+
+    #[test]
+    fn is_https_url_returns_false_for_non_url_strings() {
+        assert!(!is_https_url("not a url"));
+    }
+
+    #[test]
+    fn is_https_url_returns_false_for_empty_string() {
+        assert!(!is_https_url(""));
+    }
+
+    #[test]
+    fn is_https_url_returns_false_for_javascript_scheme() {
+        assert!(!is_https_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn is_https_url_returns_false_for_data_scheme() {
+        assert!(!is_https_url("data:text/html,<script>alert(1)</script>"));
+    }
 
     #[test]
     fn parses_resource_metadata_parameter() {
