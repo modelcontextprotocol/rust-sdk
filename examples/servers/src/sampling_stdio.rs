@@ -125,6 +125,7 @@ impl ServerHandler for SamplingDemoServer {
                 icons: None,
                 meta: None,
             }],
+            meta: None,
             next_cursor: None,
         })
     }

@@ -18,6 +18,8 @@ pub struct PromptAttribute {
     pub arguments: Option<Expr>,
     /// Optional icons for the prompt
     pub icons: Option<Expr>,
+    /// Optional metadata for the prompt
+    pub meta: Option<Expr>,
 }
 
 pub struct ResolvedPromptAttribute {
@@ -26,6 +28,7 @@ pub struct ResolvedPromptAttribute {
     pub description: Option<Expr>,
     pub arguments: Expr,
     pub icons: Option<Expr>,
+    pub meta: Option<Expr>,
 }
 
 impl ResolvedPromptAttribute {
@@ -36,6 +39,7 @@ impl ResolvedPromptAttribute {
             arguments,
             title,
             icons,
+            meta,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
@@ -52,6 +56,11 @@ impl ResolvedPromptAttribute {
         } else {
             quote! { None }
         };
+        let meta = if let Some(meta) = meta {
+            quote! { Some(#meta) }
+        } else {
+            quote! { None }
+        };
         let tokens = quote! {
             pub fn #fn_ident() -> rmcp::model::Prompt {
                 rmcp::model::Prompt {
@@ -60,6 +69,7 @@ impl ResolvedPromptAttribute {
                     arguments: #arguments,
                     title: #title,
                     icons: #icons,
+                    meta: #meta,
                 }
             }
         };
@@ -114,6 +124,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
         arguments: arguments.clone(),
         title: attribute.title,
         icons: attribute.icons,
+        meta: attribute.meta,
     };
     let prompt_attr_fn = resolved_prompt_attr.into_fn(prompt_attr_fn_ident.clone())?;
 
