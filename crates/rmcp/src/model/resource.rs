@@ -29,6 +29,9 @@ pub struct RawResource {
     /// Optional list of icons for the resource
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
+    /// Optional additional metadata for this resource
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 pub type Resource = Annotated<RawResource>;
@@ -95,6 +98,7 @@ impl RawResource {
             mime_type: None,
             size: None,
             icons: None,
+            meta: None,
         }
     }
 }
@@ -115,6 +119,7 @@ mod tests {
             mime_type: Some("text/plain".to_string()),
             size: Some(100),
             icons: None,
+            meta: None,
         };
 
         let json = serde_json::to_string(&resource).unwrap();

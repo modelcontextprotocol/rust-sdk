@@ -110,7 +110,10 @@ impl Counter {
 #[prompt_router]
 impl Counter {
     /// This is an example prompt that takes one required argument, message
-    #[prompt(name = "example_prompt")]
+    #[prompt(
+        name = "example_prompt",
+        meta = Meta(rmcp::object!({"meta_key": "meta_value"}))
+    )]
     async fn example_prompt(
         &self,
         Parameters(args): Parameters<ExamplePromptArgs>,
@@ -161,8 +164,8 @@ impl Counter {
     }
 }
 
-#[tool_handler]
-#[prompt_handler]
+#[tool_handler(meta = Meta(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
+#[prompt_handler(meta = Meta(rmcp::object!({"router_meta_key": "router_meta_value"})))]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -188,6 +191,7 @@ impl ServerHandler for Counter {
                 self._create_resource_text("memo://insights", "memo-name"),
             ],
             next_cursor: None,
+            meta: None,
         })
     }
 
@@ -226,6 +230,7 @@ impl ServerHandler for Counter {
         Ok(ListResourceTemplatesResult {
             next_cursor: None,
             resource_templates: Vec::new(),
+            meta: None,
         })
     }
 

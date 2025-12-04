@@ -828,6 +828,8 @@ macro_rules! paginated_result {
         #[serde(rename_all = "camelCase")]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub struct $t {
+            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+            pub meta: Option<Meta>,
             #[serde(skip_serializing_if = "Option::is_none")]
             pub next_cursor: Option<Cursor>,
             pub $i_item: $t_item,
@@ -838,6 +840,7 @@ macro_rules! paginated_result {
                 items: $t_item,
             ) -> Self {
                 Self {
+                    meta: None,
                     next_cursor: None,
                     $i_item: items,
                 }

@@ -258,6 +258,7 @@ mod tests {
             mime_type: Some("text/plain".to_string()),
             size: Some(100),
             icons: None,
+            meta: None,
         });
 
         let json = serde_json::to_string(&resource_link).unwrap();

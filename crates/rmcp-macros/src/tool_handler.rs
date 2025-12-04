@@ -7,6 +7,7 @@ use syn::{Expr, ImplItem, ItemImpl};
 #[darling(default)]
 pub struct ToolHandlerAttribute {
     pub router: Expr,
+    pub meta: Option<Expr>,
 }
 
 impl Default for ToolHandlerAttribute {
@@ -16,13 +17,14 @@ impl Default for ToolHandlerAttribute {
                 self.tool_router
             })
             .unwrap(),
+            meta: None,
         }
     }
 }
 
 pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let attr_args = NestedMeta::parse_meta_list(attr)?;
-    let ToolHandlerAttribute { router } = ToolHandlerAttribute::from_list(&attr_args)?;
+    let ToolHandlerAttribute { router, meta } = ToolHandlerAttribute::from_list(&attr_args)?;
     let mut item_impl = syn::parse2::<ItemImpl>(input.clone())?;
     let tool_call_fn = quote! {
         async fn call_tool(
@@ -34,13 +36,24 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             #router.call(tcc).await
         }
     };
+
+    let result_meta = if let Some(meta) = meta {
+        quote! { Some(#meta) }
+    } else {
+        quote! { None }
+    };
+
     let tool_list_fn = quote! {
         async fn list_tools(
             &self,
             _request: Option<rmcp::model::PaginatedRequestParam>,
             _context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-            Ok(rmcp::model::ListToolsResult::with_all_items(#router.list_all()))
+            Ok(rmcp::model::ListToolsResult{
+                tools: #router.list_all(),
+                meta: #result_meta,
+                next_cursor: None,
+            })
         }
     };
     let tool_call_fn = syn::parse2::<ImplItem>(tool_call_fn)?;

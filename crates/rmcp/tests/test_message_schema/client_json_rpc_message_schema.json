@@ -992,6 +992,14 @@
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional additional metadata for this resource",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "description": {
           "description": "Optional description of the resource",
           "type": [

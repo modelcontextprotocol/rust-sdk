@@ -7,6 +7,7 @@ use syn::{Expr, ImplItem, ItemImpl, parse_quote};
 #[darling(default)]
 pub struct PromptHandlerAttribute {
     pub router: Option<Expr>,
+    pub meta: Option<Expr>,
 }
 
 pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
@@ -40,6 +41,12 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
         }
     };
 
+    let meta = if let Some(meta) = attribute.meta {
+        quote! { Some(#meta) }
+    } else {
+        quote! { None }
+    };
+
     // Add list_prompts implementation
     let list_prompts_impl: ImplItem = parse_quote! {
         async fn list_prompts(
@@ -50,6 +57,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
             let prompts = #router_expr.list_all();
             Ok(ListPromptsResult {
                 prompts,
+                meta: #meta,
                 next_cursor: None,
             })
         }

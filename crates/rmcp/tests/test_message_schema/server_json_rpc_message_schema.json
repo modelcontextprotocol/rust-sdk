@@ -172,6 +172,14 @@
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional additional metadata for this resource",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "annotations": {
           "anyOf": [
             {
@@ -1031,6 +1039,13 @@
     "ListPromptsResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1051,6 +1066,13 @@
     "ListResourceTemplatesResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1071,6 +1093,13 @@
     "ListResourcesResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1096,6 +1125,13 @@
     "ListToolsResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1472,6 +1508,14 @@
       "description": "A prompt that can be used to generate text from a model",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional additional metadata for this prompt",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "arguments": {
           "description": "Optional arguments that can be passed to customize the prompt",
           "type": [
@@ -1660,6 +1704,14 @@
           "description": "A link to a resource that can be fetched separately",
           "type": "object",
           "properties": {
+            "_meta": {
+              "description": "Optional additional metadata for this resource",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "annotations": {
               "anyOf": [
                 {
@@ -1816,6 +1868,14 @@
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional additional metadata for this resource",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "description": {
           "description": "Optional description of the resource",
           "type": [

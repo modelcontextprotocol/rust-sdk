@@ -102,7 +102,7 @@ where
                 let tools = self.tool_router.list_all();
                 Ok(ServerResult::ListToolsResult(ListToolsResult {
                     tools,
-                    next_cursor: None,
+                    ..Default::default()
                 }))
             }
             ClientRequest::GetPromptRequest(request) => {
@@ -125,7 +125,7 @@ where
                 let prompts = self.prompt_router.list_all();
                 Ok(ServerResult::ListPromptsResult(ListPromptsResult {
                     prompts,
-                    next_cursor: None,
+                    ..Default::default()
                 }))
             }
             rest => self.service.handle_request(rest, context).await,
