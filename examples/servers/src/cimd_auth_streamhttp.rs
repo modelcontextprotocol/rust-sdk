@@ -21,6 +21,7 @@ use rmcp::transport::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use url::Url;
@@ -71,7 +72,8 @@ fn generate_access_token() -> String {
 /// Validate that the client_id is a URL that meets CIMD mandatory requirements.
 /// Mirrors the JS validateClientIdUrl helper.
 fn validate_client_id_url(raw: &str) -> Result<String, String> {
-    let url = Url::parse(raw).map_err(|_| "invalid_client_id: client_id must be a valid URL".to_string())?;
+    let url = Url::parse(raw)
+        .map_err(|_| "invalid_client_id: client_id must be a valid URL".to_string())?;
 
     // MUST have https scheme
     if url.scheme() != "https" {
@@ -94,13 +96,16 @@ fn validate_client_id_url(raw: &str) -> Result<String, String> {
 
     // MUST NOT contain a fragment component
     if url.fragment().is_some() {
-        return Err("invalid_client_id: client_id URL MUST NOT contain a fragment component".to_string());
+        return Err(
+            "invalid_client_id: client_id URL MUST NOT contain a fragment component".to_string(),
+        );
     }
 
     // MUST NOT contain a username or password
     if !url.username().is_empty() || url.password().is_some() {
         return Err(
-            "invalid_client_id: client_id URL MUST NOT contain a username or password component".to_string(),
+            "invalid_client_id: client_id URL MUST NOT contain a username or password component"
+                .to_string(),
         );
     }
 
@@ -135,9 +140,9 @@ async fn fetch_and_validate_client_metadata(client_id_url: &str) -> Result<Value
     }
 
     // MUST contain a client_id property equal to the URL of the document
-    let client_id_value = json
-        .get("client_id")
-        .ok_or_else(|| "invalid_client: client metadata document MUST contain client_id".to_string())?;
+    let client_id_value = json.get("client_id").ok_or_else(|| {
+        "invalid_client: client metadata document MUST contain client_id".to_string()
+    })?;
     if client_id_value != client_id_url {
         return Err(
             "invalid_client: client_id property in metadata document MUST match the document URL"
@@ -148,10 +153,12 @@ async fn fetch_and_validate_client_metadata(client_id_url: &str) -> Result<Value
     // token_endpoint_auth_method MUST NOT be any shared secret based method
     if let Some(method) = json.get("token_endpoint_auth_method") {
         if let Some(method_str) = method.as_str() {
-            let forbidden = ["client_secret_post", "client_secret_basic", "client_secret_jwt"];
-            if forbidden.contains(&method_str)
-                || method_str.starts_with("client_secret_")
-            {
+            let forbidden = [
+                "client_secret_post",
+                "client_secret_basic",
+                "client_secret_jwt",
+            ];
+            if forbidden.contains(&method_str) || method_str.starts_with("client_secret_") {
                 return Err("invalid_client: token_endpoint_auth_method MUST NOT be a shared secret based method".to_string());
             }
         }
@@ -159,11 +166,14 @@ async fn fetch_and_validate_client_metadata(client_id_url: &str) -> Result<Value
 
     // client_secret and client_secret_expires_at MUST NOT be used
     if json.get("client_secret").is_some() {
-        return Err("invalid_client: client_secret MUST NOT be present in client metadata".to_string());
+        return Err(
+            "invalid_client: client_secret MUST NOT be present in client metadata".to_string(),
+        );
     }
     if json.get("client_secret_expires_at").is_some() {
         return Err(
-            "invalid_client: client_secret_expires_at MUST NOT be present in client metadata".to_string(),
+            "invalid_client: client_secret_expires_at MUST NOT be present in client metadata"
+                .to_string(),
         );
     }
 
@@ -172,9 +182,9 @@ async fn fetch_and_validate_client_metadata(client_id_url: &str) -> Result<Value
 
 /// Validate redirect_uri against metadata.redirect_uris (exact match).
 fn validate_redirect_uri(requested_redirect_uri: &str, metadata: &Value) -> Result<(), String> {
-    let redirect_uris = metadata
-        .get("redirect_uris")
-        .ok_or_else(|| "invalid_client: client metadata must include redirect_uris array".to_string())?;
+    let redirect_uris = metadata.get("redirect_uris").ok_or_else(|| {
+        "invalid_client: client metadata must include redirect_uris array".to_string()
+    })?;
 
     let arr = redirect_uris
         .as_array()
@@ -185,7 +195,8 @@ fn validate_redirect_uri(requested_redirect_uri: &str, metadata: &Value) -> Resu
 
     if !found {
         return Err(
-            "invalid_request: redirect_uri MUST exactly match one of the registered redirect_uris".to_string(),
+            "invalid_request: redirect_uri MUST exactly match one of the registered redirect_uris"
+                .to_string(),
         );
     }
 
@@ -194,8 +205,8 @@ fn validate_redirect_uri(requested_redirect_uri: &str, metadata: &Value) -> Resu
 
 /// Minimal Authorization Server Metadata with CIMD support.
 async fn oauth_metadata() -> impl IntoResponse {
-    let issuer = std::env::var("CIMD_ISSUER")
-        .unwrap_or_else(|_| format!("http://{}", BIND_ADDRESS));
+    let issuer =
+        std::env::var("CIMD_ISSUER").unwrap_or_else(|_| format!("http://{}", BIND_ADDRESS));
 
     let body = serde_json::json!({
         "issuer": issuer,
@@ -288,9 +299,7 @@ fn render_login_form(params: &AuthorizeQuery, error: Option<&str>) -> Html<Strin
     Html(html)
 }
 
-async fn authorize_get(
-    Query(params): Query<AuthorizeQuery>,
-) -> impl IntoResponse {
+async fn authorize_get(Query(params): Query<AuthorizeQuery>) -> impl IntoResponse {
     render_login_form(&params, None)
 }
 
@@ -306,7 +315,7 @@ async fn authorize_post(
         state: form.state.clone(),
         scope: form.scope.clone(),
     };
-    
+
     match handle_authorize(&state, &params, &form).await {
         Ok(redirect_response) => redirect_response,
         Err(error_response) => error_response,
@@ -337,10 +346,10 @@ async fn handle_authorize(
         ));
     }
 
-    let client_id_url =
-        validate_client_id_url(client_id_raw).map_err(|e| bad_request(&e))?;
-    let metadata =
-        fetch_and_validate_client_metadata(&client_id_url).await.map_err(|e| bad_request(&e))?;
+    let client_id_url = validate_client_id_url(client_id_raw).map_err(|e| bad_request(&e))?;
+    let metadata = fetch_and_validate_client_metadata(&client_id_url)
+        .await
+        .map_err(|e| bad_request(&e))?;
     validate_redirect_uri(redirect_uri, &metadata).map_err(|e| bad_request(&e))?;
 
     // If this is a login POST, validate credentials
@@ -366,12 +375,11 @@ async fn handle_authorize(
             );
         }
 
-        let mut url =
-            Url::parse(redirect_uri).map_err(|_| bad_request("invalid_request: redirect_uri is invalid"))?;
+        let mut url = Url::parse(redirect_uri)
+            .map_err(|_| bad_request("invalid_request: redirect_uri is invalid"))?;
         url.query_pairs_mut().append_pair("code", &code);
         if let Some(state_param) = &params.state {
-            url.query_pairs_mut()
-                .append_pair("state", state_param);
+            url.query_pairs_mut().append_pair("state", state_param);
         }
 
         Ok(Redirect::to(url.as_str()).into_response())
@@ -396,10 +404,7 @@ struct TokenRequest {
     code: Option<String>,
 }
 
-async fn token(
-    State(state): State<AppState>,
-    Form(form): Form<TokenRequest>,
-) -> impl IntoResponse {
+async fn token(State(state): State<AppState>, Form(form): Form<TokenRequest>) -> impl IntoResponse {
     if form.grant_type.as_deref() != Some("authorization_code") {
         let body = serde_json::json!({
             "error": "unsupported_grant_type",
@@ -454,7 +459,9 @@ async fn token(
 }
 
 async fn index() -> Html<&'static str> {
-    Html("<html><body><h1>CIMD OAuth + MCP Server</h1><p>This server supports Client ID Metadata Documents (SEP-991) and exposes an MCP endpoint at <code>/mcp</code>.</p></body></html>")
+    Html(
+        "<html><body><h1>CIMD OAuth + MCP Server</h1><p>This server supports Client ID Metadata Documents (SEP-991) and exposes an MCP endpoint at <code>/mcp</code>.</p></body></html>",
+    )
 }
 
 #[tokio::main]
@@ -480,11 +487,19 @@ async fn main() -> Result<()> {
 
     let addr = BIND_ADDRESS.parse::<SocketAddr>()?;
 
+    let cors_layer = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let app = Router::new()
         .route("/", get(index))
-        .route("/.well-known/oauth-authorization-server", get(oauth_metadata))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_metadata),
+        )
         .route("/authorize", get(authorize_get).post(authorize_post))
-        .route("/token", post(token))
+        .route("/token", post(token).layer(cors_layer.clone()))
         .nest_service("/mcp", mcp_service)
         .with_state(state);
 
@@ -497,5 +512,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
-

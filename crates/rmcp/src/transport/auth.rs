@@ -963,7 +963,10 @@ impl AuthorizationSession {
     ) -> Result<Self, AuthError> {
         let metadata = auth_manager.metadata.as_ref();
         let supports_url_based_client_id = metadata
-            .and_then(|m| m.additional_fields.get("client_id_metadata_document_supported"))
+            .and_then(|m| {
+                m.additional_fields
+                    .get("client_id_metadata_document_supported")
+            })
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -1313,7 +1316,7 @@ impl OAuthState {
 mod tests {
     use url::Url;
 
-    use super::{is_https_url, AuthorizationManager};
+    use super::{AuthorizationManager, is_https_url};
 
     // SEP-991: URL-based Client IDs
     // Tests adapted from the TypeScript SDK's isHttpsUrl test suite

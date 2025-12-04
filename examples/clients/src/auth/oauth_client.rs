@@ -80,7 +80,9 @@ async fn main() -> Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], CALLBACK_PORT));
     tracing::info!("Starting callback server at: http://{}", addr);
-    tracing::warn!("Note: Callback server may not receive callbacks if redirect URI doesn't match localhost if using CIMD (SEP-991)");
+    tracing::warn!(
+        "Note: Callback server may not receive callbacks if redirect URI doesn't match localhost if using CIMD (SEP-991)"
+    );
 
     // Start server in a separate task
     tokio::spawn(async move {
