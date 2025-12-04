@@ -50,6 +50,50 @@ pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject
     })
 }
 
+/// Generate and validate a JSON schema for outputSchema (must have root type "object").
+pub fn schema_for_output<T: JsonSchema>() -> Result<JsonObject, String> {
+    let schema = schema_for_type::<T>();
+
+    match schema.get("type") {
+        Some(serde_json::Value::String(t)) if t == "object" => Ok(schema),
+        Some(serde_json::Value::String(t)) => Err(format!(
+            "MCP specification requires tool outputSchema to have root type 'object', but found '{}'.",
+            t
+        )),
+        None => Err(
+            "Schema is missing 'type' field. MCP specification requires outputSchema to have root type 'object'.".to_string()
+        ),
+        Some(other) => Err(format!(
+            "Schema 'type' field has unexpected format: {:?}. Expected \"object\".",
+            other
+        )),
+    }
+}
+
+/// Call [`schema_for_output`] with a cache.
+pub fn cached_schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String>
+{
+    thread_local! {
+        static CACHE_FOR_OUTPUT: std::sync::RwLock<HashMap<TypeId, Result<Arc<JsonObject>, String>>> = Default::default();
+    };
+    CACHE_FOR_OUTPUT.with(|cache| {
+        if let Some(result) = cache
+            .read()
+            .expect("output schema cache lock poisoned")
+            .get(&TypeId::of::<T>())
+        {
+            result.clone()
+        } else {
+            let result = schema_for_output::<T>().map(Arc::new);
+            cache
+                .write()
+                .expect("output schema cache lock poisoned")
+                .insert(TypeId::of::<T>(), result.clone());
+            result
+        }
+    })
+}
+
 /// Trait for extracting parts from a context, unifying tool and prompt extraction
 pub trait FromContextPart<C>: Sized {
     fn from_context_part(context: &mut C) -> Result<Self, crate::ErrorData>;
@@ -142,4 +186,26 @@ where
 pub trait AsRequestContext {
     fn as_request_context(&self) -> &RequestContext<RoleServer>;
     fn as_request_context_mut(&mut self) -> &mut RequestContext<RoleServer>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct TestObject {
+        value: i32,
+    }
+
+    #[test]
+    fn test_schema_for_output_rejects_primitive() {
+        let result = schema_for_output::<i32>();
+        assert!(result.is_err(),);
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_object() {
+        let result = schema_for_output::<TestObject>();
+        assert!(result.is_ok(),);
+    }
 }
