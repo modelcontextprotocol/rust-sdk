@@ -86,6 +86,8 @@ variant_extension! {
         UnsubscribeRequest
         CallToolRequest
         ListToolsRequest
+        GetTaskInfoRequest
+        ListTasksRequest
     }
 }
 
@@ -153,6 +155,7 @@ impl Meta {
             _ => None,
         })
     }
+
 
     pub fn set_progress_token(&mut self, token: ProgressToken) {
         match token.0 {

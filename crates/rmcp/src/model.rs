@@ -8,6 +8,7 @@ mod meta;
 mod prompt;
 mod resource;
 mod serde_impl;
+mod task;
 mod tool;
 pub use annotated::*;
 pub use capabilities::*;
@@ -19,6 +20,7 @@ pub use prompt::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+pub use task::*;
 pub use tool::*;
 
 /// A JSON object type alias for convenient handling of JSON data.
@@ -1639,6 +1641,7 @@ paginated_result!(
     }
 );
 
+
 const_string!(CallToolRequestMethod = "tools/call");
 /// Parameters for calling a tool provided by an MCP server.
 ///
@@ -1653,6 +1656,8 @@ pub struct CallToolRequestParam {
     /// Arguments to pass to the tool (must match the tool's input schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<JsonObject>,
 }
 
 /// Request to call a specific tool
@@ -1690,6 +1695,23 @@ pub struct GetPromptResult {
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
 }
+
+// =============================================================================
+// TASK MANAGEMENT
+// =============================================================================
+
+const_string!(GetTaskInfoMethod = "tasks/get");
+pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParam>;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskInfoParam {
+    pub task_id: String,
+}
+
+const_string!(ListTasksMethod = "tasks/list");
+pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParam>;
 
 // =============================================================================
 // MESSAGE TYPE UNIONS
@@ -1757,7 +1779,9 @@ ts_union!(
     | SubscribeRequest
     | UnsubscribeRequest
     | CallToolRequest
-    | ListToolsRequest;
+    | ListToolsRequest
+    | GetTaskInfoRequest
+    | ListTasksRequest;
 );
 
 impl ClientRequest {
@@ -1776,6 +1800,8 @@ impl ClientRequest {
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
+            ClientRequest::GetTaskInfoRequest(r) => r.method.as_str(),
+            ClientRequest::ListTasksRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -1832,6 +1858,8 @@ ts_union!(
     | CallToolResult
     | ListToolsResult
     | CreateElicitationResult
+    | GetTaskInfoResult
+    | ListTasksResult
     | EmptyResult
     ;
 );
@@ -1840,6 +1868,28 @@ impl ServerResult {
     pub fn empty(_: ()) -> ServerResult {
         ServerResult::EmptyResult(EmptyResult {})
     }
+}
+
+// =============================================================================
+// TASK RESULT TYPES (Server responses for task queries)
+// =============================================================================
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskInfoResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::model::Task>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ListTasksResult {
+    pub tasks: Vec<crate::model::Task>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;

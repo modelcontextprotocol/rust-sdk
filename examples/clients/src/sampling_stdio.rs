@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
                     arguments: Some(object!({
                         "question": "Hello world"
                     })),
+                    task: None,
                 })
                 .await
             {

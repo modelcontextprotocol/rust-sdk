@@ -110,6 +110,7 @@ async fn test_progress_subscriber() -> anyhow::Result<()> {
             ClientRequest::CallToolRequest(Request::new(CallToolRequestParam {
                 name: "some_progress".into(),
                 arguments: None,
+                task: None,
             })),
             PeerRequestOptions::no_options(),
         )

@@ -33,12 +33,13 @@ pub struct ToolCallContext<'s, S> {
     pub service: &'s S,
     pub name: Cow<'static, str>,
     pub arguments: Option<JsonObject>,
+    pub task:Option<JsonObject>,
 }
 
 impl<'s, S> ToolCallContext<'s, S> {
     pub fn new(
         service: &'s S,
-        CallToolRequestParam { name, arguments }: CallToolRequestParam,
+        CallToolRequestParam { name, arguments, task }: CallToolRequestParam,
         request_context: RequestContext<RoleServer>,
     ) -> Self {
         Self {
@@ -46,6 +47,7 @@ impl<'s, S> ToolCallContext<'s, S> {
             service,
             name,
             arguments,
+            task,
         }
     }
     pub fn name(&self) -> &str {
