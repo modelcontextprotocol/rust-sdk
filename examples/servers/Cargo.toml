@@ -96,3 +96,7 @@ path = "src/simple_auth_streamhttp.rs"
 [[example]]
 name = "servers_complex_auth_streamhttp"
 path = "src/complex_auth_streamhttp.rs"
+
+[[example]]
+name = "servers_calculator_stdio"
+path = "src/calculator_stdio.rs"

@@ -2,10 +2,7 @@
 
 use rmcp::{
     ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        wrapper::{Json, Parameters},
-    },
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
 };
@@ -44,8 +41,8 @@ impl Calculator {
     }
 
     #[tool(description = "Calculate the difference of two numbers")]
-    fn sub(&self, Parameters(SubRequest { a, b }): Parameters<SubRequest>) -> Json<i32> {
-        Json(a - b)
+    fn sub(&self, Parameters(SubRequest { a, b }): Parameters<SubRequest>) -> String {
+        (a - b).to_string()
     }
 }
 
