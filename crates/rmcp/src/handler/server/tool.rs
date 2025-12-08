@@ -9,9 +9,7 @@ use serde::de::DeserializeOwned;
 
 use super::common::{AsRequestContext, FromContextPart};
 pub use super::{
-    common::{
-        Extension, RequestId, cached_schema_for_output, cached_schema_for_type, schema_for_type,
-    },
+    common::{Extension, RequestId, cached_schema_for_type, schema_for_output, schema_for_type},
     router::tool::{ToolRoute, ToolRouter},
 };
 use crate::{
