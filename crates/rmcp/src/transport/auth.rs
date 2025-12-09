@@ -242,10 +242,10 @@ struct AuthorizationState {
 /// SEP-991: URL-based Client IDs
 /// Validate that the client_id is a valid URL with https scheme and non-root pathname
 fn is_https_url(value: &str) -> bool {
-    match Url::parse(value) {
-        Ok(url) => url.scheme() == "https" && url.path() != "/",
-        Err(_) => false,
-    }
+    Url::parse(value)
+        .ok()
+        .map(|url| url.scheme() == "https" && url.path() != "/" && url.host_str().is_some())
+        .unwrap_or(false)
 }
 
 impl AuthorizationManager {
@@ -1321,43 +1321,23 @@ mod tests {
     // SEP-991: URL-based Client IDs
     // Tests adapted from the TypeScript SDK's isHttpsUrl test suite
     #[test]
-    fn is_https_url_returns_true_for_valid_https_url_with_path() {
+    fn test_is_https_url_scenarios() {
+        // Returns true for valid https url with path
         assert!(is_https_url("https://example.com/client-metadata.json"));
-    }
-
-    #[test]
-    fn is_https_url_returns_true_for_https_url_with_query_params() {
+        // Returns true for https url with query params
         assert!(is_https_url("https://example.com/metadata?version=1"));
-    }
-
-    #[test]
-    fn is_https_url_returns_false_for_https_url_without_path() {
+        // Returns false for https url without path
         assert!(!is_https_url("https://example.com"));
         assert!(!is_https_url("https://example.com/"));
-    }
-
-    #[test]
-    fn is_https_url_returns_false_for_http_url() {
+        // Returns false for http url
         assert!(!is_https_url("http://example.com/metadata"));
-    }
-
-    #[test]
-    fn is_https_url_returns_false_for_non_url_strings() {
+        // Returns false for non-url strings
         assert!(!is_https_url("not a url"));
-    }
-
-    #[test]
-    fn is_https_url_returns_false_for_empty_string() {
+        // Returns false for empty string
         assert!(!is_https_url(""));
-    }
-
-    #[test]
-    fn is_https_url_returns_false_for_javascript_scheme() {
+        // Returns false for javascript scheme
         assert!(!is_https_url("javascript:alert(1)"));
-    }
-
-    #[test]
-    fn is_https_url_returns_false_for_data_scheme() {
+        // Returns false for data scheme
         assert!(!is_https_url("data:text/html,<script>alert(1)</script>"));
     }
 
