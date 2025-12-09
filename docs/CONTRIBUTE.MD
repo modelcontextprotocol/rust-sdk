@@ -22,7 +22,7 @@ cargo install cargo-llvm-cov
 rustup component add llvm-tools-preview
 ```
 
-If you are using goverage gutters plugin, add these config to let it know lcov output.
+If you are using coverage gutters plugin, add these config to let it know lcov output.
 ```json
 {
     "coverage-gutters.coverageFileNames": [
