@@ -135,6 +135,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [terminator](https://github.com/mediar-ai/terminator) - AI-powered desktop automation MCP server with cross-platform support and >95% success rate
 - [stakpak-agent](https://github.com/stakpak/agent) - Security-hardened terminal agent for DevOps with MCP over mTLS, streaming, secret tokenization, and async task management
 - [video-transcriber-mcp-rs](https://github.com/nhatvu148/video-transcriber-mcp-rs) - High-performance MCP server for transcribing videos from 1000+ platforms using whisper.cpp
+- [NexusCore MCP](https://github.com/sjkim1127/Nexuscore_MCP) - Advanced malware analysis & dynamic instrumentation MCP server with Frida integration and stealth unpacking capabilities
 
 
 ## Development
