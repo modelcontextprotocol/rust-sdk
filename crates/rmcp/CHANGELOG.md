@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.10.0...rmcp-v0.11.0) - 2025-12-08
+
+### Added
+
+- *(meta)* add _meta field to prompts, resources and paginated result ([#558](https://github.com/modelcontextprotocol/rust-sdk/pull/558))
+- [**breaking**] remove SSE transport support ([#562](https://github.com/modelcontextprotocol/rust-sdk/pull/562))
+
+### Fixed
+
+- *(streamable-http)* gracefully shutdown while client connected ([#494](https://github.com/modelcontextprotocol/rust-sdk/pull/494))
+
+### Other
+
+- Implements outputSchema validation ([#566](https://github.com/modelcontextprotocol/rust-sdk/pull/566))
+- add video-transcriber-mcp-rs to projects built with rmcp ([#565](https://github.com/modelcontextprotocol/rust-sdk/pull/565))
+
 ## [0.10.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.9.1...rmcp-v0.10.0) - 2025-12-01
 
 ### Added

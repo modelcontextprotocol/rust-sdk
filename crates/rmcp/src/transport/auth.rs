@@ -1329,6 +1329,7 @@ mod tests {
         // Returns false for https url without path
         assert!(!is_https_url("https://example.com"));
         assert!(!is_https_url("https://example.com/"));
+        assert!(!is_https_url("https://"));
         // Returns false for http url
         assert!(!is_https_url("http://example.com/metadata"));
         // Returns false for non-url strings

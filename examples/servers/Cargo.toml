@@ -101,3 +101,7 @@ path = "src/complex_auth_streamhttp.rs"
 [[example]]
 name = "servers_cimd_auth_streamhttp"
 path = "src/cimd_auth_streamhttp.rs"
+
+[[example]]
+name = "servers_calculator_stdio"
+path = "src/calculator_stdio.rs"
