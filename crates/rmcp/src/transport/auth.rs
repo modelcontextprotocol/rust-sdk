@@ -987,18 +987,12 @@ impl AuthorizationSession {
                 }
             } else {
                 // Fallback to dynamic registration
-                match auth_manager
+                auth_manager
                     .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
                     .await
-                {
-                    Ok(config) => config,
-                    Err(e) => {
-                        return Err(AuthError::RegistrationFailed(format!(
-                            "Dynamic registration failed: {}",
-                            e
-                        )));
-                    }
-                }
+                    .map_err(|e| {
+                        AuthError::RegistrationFailed(format!("Dynamic registration failed: {}", e))
+                    })?
             }
         } else {
             // Fallback to dynamic registration
