@@ -55,7 +55,7 @@ impl TestServer {
     }
 
     /// Tool with explicit output_schema attribute - should have output schema
-    #[tool(name = "explicit-schema", output_schema = rmcp::handler::server::tool::cached_schema_for_type::<TestData>())]
+    #[tool(name = "explicit-schema", output_schema = rmcp::handler::server::tool::schema_for_type::<TestData>())]
     pub async fn explicit_schema(&self) -> Result<String, String> {
         Ok("test".to_string())
     }

@@ -220,7 +220,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         if let Some(params_ty) = params_ty {
             // if found, use the Parameters schema
             syn::parse2::<Expr>(quote! {
-                rmcp::handler::server::common::cached_schema_for_type::<#params_ty>()
+                rmcp::handler::server::common::schema_for_type::<#params_ty>()
             })?
         } else {
             // if not found, use a default empty JSON schema object

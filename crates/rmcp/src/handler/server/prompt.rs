@@ -325,7 +325,7 @@ impl_prompt_handler_for!(T0 T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14 T15);
 /// as PromptArgument entries with name, description, and required status
 pub fn cached_arguments_from_schema<T: schemars::JsonSchema + std::any::Any>()
 -> Option<Vec<crate::model::PromptArgument>> {
-    let schema = super::common::cached_schema_for_type::<T>();
+    let schema = super::common::schema_for_type::<T>();
     let schema_value = serde_json::Value::Object((*schema).clone());
 
     let properties = schema_value.get("properties").and_then(|p| p.as_object());

@@ -8,26 +8,8 @@ use crate::{
     RoleServer, model::JsonObject, schemars::generate::SchemaSettings, service::RequestContext,
 };
 
-/// A shortcut for generating a JSON schema for a type.
-pub fn schema_for_type<T: JsonSchema>() -> JsonObject {
-    // explicitly to align json schema version to official specifications.
-    // refer to https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655 for details.
-    let mut settings = SchemaSettings::draft2020_12();
-    settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
-    let generator = settings.into_generator();
-    let schema = generator.into_root_schema_for::<T>();
-    let object = serde_json::to_value(schema).expect("failed to serialize schema");
-    match object {
-        serde_json::Value::Object(object) => object,
-        _ => panic!(
-            "Schema serialization produced non-object value: expected JSON object but got {:?}",
-            object
-        ),
-    }
-}
-
-/// Call [`schema_for_type`] with a cache
-pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+/// Generates a JSON schema for a type
+pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     thread_local! {
         static CACHE_FOR_TYPE: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
     };
@@ -39,12 +21,26 @@ pub fn cached_schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject
         {
             x.clone()
         } else {
-            let schema = schema_for_type::<T>();
-            let schema = Arc::new(schema);
+            // explicitly to align json schema version to official specifications.
+            // refer to https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655 for details.
+            let mut settings = SchemaSettings::draft2020_12();
+            settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
+            let generator = settings.into_generator();
+            let schema = generator.into_root_schema_for::<T>();
+            let object = serde_json::to_value(schema).expect("failed to serialize schema");
+            let object = match object {
+                serde_json::Value::Object(object) => object,
+                _ => panic!(
+                    "Schema serialization produced non-object value: expected JSON object but got {:?}",
+                    object
+                ),
+            };
+            let schema = Arc::new(object);
             cache
                 .write()
                 .expect("schema cache lock poisoned")
                 .insert(TypeId::of::<T>(), schema.clone());
+
             schema
         }
     })
@@ -69,7 +65,7 @@ pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObje
         // Generate and validate schema
         let schema = schema_for_type::<T>();
         let result = match schema.get("type") {
-            Some(serde_json::Value::String(t)) if t == "object" => Ok(Arc::new(schema)),
+            Some(serde_json::Value::String(t)) if t == "object" => Ok(schema.clone()),
             Some(serde_json::Value::String(t)) => Err(format!(
                 "MCP specification requires tool outputSchema to have root type 'object', but found '{}'.",
                 t
@@ -194,6 +190,71 @@ mod tests {
     #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
     struct TestObject {
         value: i32,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct AnotherTestObject {
+        value: i32,
+    }
+
+    #[test]
+    fn test_schema_for_type_handles_primitive() {
+        let schema = schema_for_type::<i32>();
+
+        assert_eq!(schema.get("type"), Some(&serde_json::json!("integer")));
+    }
+
+    #[test]
+    fn test_schema_for_type_handles_array() {
+        let schema = schema_for_type::<Vec<i32>>();
+
+        assert_eq!(schema.get("type"), Some(&serde_json::json!("array")));
+        let items = schema.get("items").and_then(|v| v.as_object());
+        assert_eq!(
+            items.unwrap().get("type"),
+            Some(&serde_json::json!("integer"))
+        );
+    }
+
+    #[test]
+    fn test_schema_for_type_handles_struct() {
+        let schema = schema_for_type::<TestObject>();
+
+        assert_eq!(schema.get("type"), Some(&serde_json::json!("object")));
+        let properties = schema.get("properties").and_then(|v| v.as_object());
+        assert!(properties.unwrap().contains_key("value"));
+    }
+
+    #[test]
+    fn test_schema_for_type_caches_primitive_types() {
+        let schema1 = schema_for_type::<i32>();
+        let schema2 = schema_for_type::<i32>();
+
+        assert!(Arc::ptr_eq(&schema1, &schema2));
+    }
+
+    #[test]
+    fn test_schema_for_type_caches_struct_types() {
+        let schema1 = schema_for_type::<TestObject>();
+        let schema2 = schema_for_type::<TestObject>();
+
+        assert!(Arc::ptr_eq(&schema1, &schema2));
+    }
+
+    #[test]
+    fn test_schema_for_type_different_types_different_schemas() {
+        let schema1 = schema_for_type::<TestObject>();
+        let schema2 = schema_for_type::<AnotherTestObject>();
+
+        assert!(!Arc::ptr_eq(&schema1, &schema2));
+    }
+
+    #[test]
+    fn test_schema_for_type_arc_can_be_shared() {
+        let schema = schema_for_type::<TestObject>();
+        let cloned = schema.clone();
+
+        assert!(Arc::ptr_eq(&schema, &cloned));
     }
 
     #[test]

@@ -154,8 +154,8 @@ where
         self.attr.description = Some(description.into());
         self
     }
-    pub fn parameters<T: JsonSchema>(mut self) -> Self {
-        self.attr.input_schema = schema_for_type::<T>().into();
+    pub fn parameters<T: JsonSchema + 'static>(mut self) -> Self {
+        self.attr.input_schema = schema_for_type::<T>();
         self
     }
     pub fn parameters_value(mut self, schema: serde_json::Value) -> Self {
