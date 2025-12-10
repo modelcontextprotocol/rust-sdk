@@ -136,6 +136,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [stakpak-agent](https://github.com/stakpak/agent) - Security-hardened terminal agent for DevOps with MCP over mTLS, streaming, secret tokenization, and async task management
 - [video-transcriber-mcp-rs](https://github.com/nhatvu148/video-transcriber-mcp-rs) - High-performance MCP server for transcribing videos from 1000+ platforms using whisper.cpp
 - [NexusCore MCP](https://github.com/sjkim1127/Nexuscore_MCP) - Advanced malware analysis & dynamic instrumentation MCP server with Frida integration and stealth unpacking capabilities
+- [spreadsheet-read-mcp](https://github.com/PSU3D0/spreadsheet-read-mcp) - Token-efficient MCP server for spreadsheet analysis with automatic region detection, column profiling, and sampling modes for LLM agents
 
 
 ## Development
