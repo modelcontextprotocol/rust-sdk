@@ -178,7 +178,7 @@ impl Tool {
 
     /// Set the input schema using a type that implements JsonSchema
     pub fn with_input_schema<T: JsonSchema + 'static>(mut self) -> Self {
-        self.input_schema = crate::handler::server::tool::cached_schema_for_type::<T>();
+        self.input_schema = crate::handler::server::tool::schema_for_type::<T>();
         self
     }
 
