@@ -27,7 +27,7 @@ const MCP_SERVER_URL: &str = "http://127.0.0.1:3000/mcp";
 const MCP_REDIRECT_URI: &str = "http://127.0.0.1:8080/callback";
 const CALLBACK_PORT: u16 = 8080;
 const CALLBACK_HTML: &str = include_str!("callback.html");
-const CLIENT_METADATA_URL: &str = "https://raw.githubusercontent.com/tanish111/cimd-local-oauth-server/refs/heads/main/client-metadata.json";
+const CLIENT_METADATA_URL: &str = "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/refs/heads/main/client-metadata.json";
 
 #[derive(Clone)]
 struct AppState {
