@@ -392,6 +392,19 @@
         "content"
       ]
     },
+    "CustomServerNotification": {
+      "description": "A catch-all notification the server can use to send custom messages to a client.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
     "CancelledNotificationMethod": {
       "type": "string",
       "format": "const",
@@ -977,6 +990,9 @@
         },
         {
           "$ref": "#/definitions/NotificationNoParam3"
+        },
+        {
+          "$ref": "#/definitions/CustomServerNotification"
         }
       ],
       "required": [
