@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.11.0...rmcp-v0.12.0) - 2025-12-10
+
+### Fixed
+
+- *(oauth)* rfc8414 should judement the response_types ([#485](https://github.com/modelcontextprotocol/rust-sdk/pull/485))
+
+### Other
+
+- Add SEP-991 (CIMD) support for URL-based client IDs ([#570](https://github.com/modelcontextprotocol/rust-sdk/pull/570))
+- merge cached_schema_for_type into schema_for_type ([#581](https://github.com/modelcontextprotocol/rust-sdk/pull/581))
+- Add NexusCore MCP to project list ([#573](https://github.com/modelcontextprotocol/rust-sdk/pull/573))
+
 ## [0.11.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.10.0...rmcp-v0.11.0) - 2025-12-08
 
 ### Added
