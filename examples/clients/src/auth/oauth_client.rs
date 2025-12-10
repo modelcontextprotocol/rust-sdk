@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -23,10 +23,11 @@ use tokio::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const MCP_SERVER_URL: &str = "http://localhost:3000/mcp";
-const MCP_REDIRECT_URI: &str = "http://localhost:8080/callback";
+const MCP_SERVER_URL: &str = "http://127.0.0.1:3000/mcp";
+const MCP_REDIRECT_URI: &str = "http://127.0.0.1:8080/callback";
 const CALLBACK_PORT: u16 = 8080;
 const CALLBACK_HTML: &str = include_str!("callback.html");
+const CLIENT_METADATA_URL: &str = "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/refs/heads/main/client-metadata.json";
 
 #[derive(Clone)]
 struct AppState {
@@ -79,6 +80,9 @@ async fn main() -> Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], CALLBACK_PORT));
     tracing::info!("Starting callback server at: http://{}", addr);
+    tracing::warn!(
+        "Note: Callback server may not receive callbacks if redirect URI doesn't match localhost if using CIMD (SEP-991)"
+    );
 
     // Start server in a separate task
     tokio::spawn(async move {
@@ -90,19 +94,37 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Get server URL
-    let server_url = MCP_SERVER_URL.to_string();
+    // Get server URL and client metadata URL from CLI (with defaults)
+    //
+    // Usage:
+    //   cargo run --example clients_oauth_client -- <server_url> <client_metadata_url>
+    let args: Vec<String> = env::args().collect();
+    let server_url = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| MCP_SERVER_URL.to_string());
+    let client_metadata_url = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| CLIENT_METADATA_URL.to_string());
+
     tracing::info!("Using MCP server URL: {}", server_url);
+    tracing::info!(
+        "Using CIMD (SEP-991) with client metadata URL: {}",
+        client_metadata_url
+    );
 
     // Initialize oauth state machine
     let mut oauth_state = OAuthState::new(&server_url, None)
         .await
         .context("Failed to initialize oauth state machine")?;
+    // Use CIMD (SEP-991) with client metadata URL
     oauth_state
-        .start_authorization(
+        .start_authorization_with_metadata_url(
             &["mcp", "profile", "email"],
             MCP_REDIRECT_URI,
             Some("Test MCP Client"),
+            Some(&client_metadata_url),
         )
         .await
         .context("Failed to start authorization")?;
