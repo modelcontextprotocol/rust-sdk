@@ -11,6 +11,7 @@ pub mod router;
 pub mod tool;
 pub mod tool_name_validation;
 pub mod wrapper;
+
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,
@@ -61,14 +62,38 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .unsubscribe(request.params, context)
                 .await
                 .map(ServerResult::empty),
-            ClientRequest::CallToolRequest(request) => self
-                .call_tool(request.params, context)
-                .await
-                .map(ServerResult::CallToolResult),
+            ClientRequest::CallToolRequest(request) => {
+                if request.params.task.is_some() {
+                    tracing::info!("Enqueueing task for tool call: {}", request.params.name);
+                    self.enqueue_task(request.params, context.clone())
+                        .await
+                        .map(ServerResult::CreateTaskResult)
+                } else {
+                    self.call_tool(request.params, context)
+                        .await
+                        .map(ServerResult::CallToolResult)
+                }
+            }
             ClientRequest::ListToolsRequest(request) => self
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
+            ClientRequest::ListTasksRequest(request) => self
+                .list_tasks(request.params, context)
+                .await
+                .map(ServerResult::ListTasksResult),
+            ClientRequest::GetTaskInfoRequest(request) => self
+                .get_task_info(request.params, context)
+                .await
+                .map(ServerResult::GetTaskInfoResult),
+            ClientRequest::GetTaskResultRequest(request) => self
+                .get_task_result(request.params, context)
+                .await
+                .map(ServerResult::TaskResult),
+            ClientRequest::CancelTaskRequest(request) => self
+                .cancel_task(request.params, context)
+                .await
+                .map(ServerResult::empty),
         }
     }
 
@@ -104,6 +129,16 @@ impl<H: ServerHandler> Service<RoleServer> for H {
 
 #[allow(unused_variables)]
 pub trait ServerHandler: Sized + Send + Sync + 'static {
+    fn enqueue_task(
+        &self,
+        _request: CallToolRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::internal_error(
+            "Task processing not implemented".to_string(),
+            None,
+        )))
+    }
     fn ping(
         &self,
         context: RequestContext<RoleServer>,
@@ -239,5 +274,39 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
 
     fn get_info(&self) -> ServerInfo {
         ServerInfo::default()
+    }
+
+    fn list_tasks(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<ListTasksMethod>()))
+    }
+
+    fn get_task_info(
+        &self,
+        request: GetTaskInfoParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
+    }
+
+    fn get_task_result(
+        &self,
+        request: GetTaskResultParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<TaskResult, McpError>> + Send + '_ {
+        let _ = (request, context);
+        std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
+    }
+
+    fn cancel_task(
+        &self,
+        request: CancelTaskParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        let _ = (request, context);
+        std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
     }
 }

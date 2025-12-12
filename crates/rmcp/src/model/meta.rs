@@ -86,6 +86,10 @@ variant_extension! {
         UnsubscribeRequest
         CallToolRequest
         ListToolsRequest
+        GetTaskInfoRequest
+        ListTasksRequest
+        GetTaskResultRequest
+        CancelTaskRequest
     }
 }
 

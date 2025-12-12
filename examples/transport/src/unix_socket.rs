@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
                         "a": 10,
                         "b": 20
                     })),
+                    task: None,
                 })
                 .await?;
 

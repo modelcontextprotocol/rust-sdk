@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
         .call_tool(CallToolRequestParam {
             name: "increment".into(),
             arguments: serde_json::json!({}).as_object().cloned(),
+            task: None,
         })
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
