@@ -1,7 +1,7 @@
 use std::process::Stdio;
 
 use futures::future::Future;
-use process_wrap::tokio::{TokioChildWrapper, TokioCommandWrap};
+use process_wrap::tokio::{ChildWrapper, CommandWrap};
 use tokio::{
     io::AsyncRead,
     process::{ChildStderr, ChildStdin, ChildStdout},
@@ -13,7 +13,7 @@ use crate::RoleClient;
 const MAX_WAIT_ON_DROP_SECS: u64 = 3;
 /// The parts of a child process.
 type ChildProcessParts = (
-    Box<dyn TokioChildWrapper>,
+    Box<dyn ChildWrapper>,
     ChildStdout,
     ChildStdin,
     Option<ChildStderr>,
@@ -23,7 +23,7 @@ type ChildProcessParts = (
 /// Returns `(child, stdout, stdin, stderr)` where `stderr` is `Some` only
 /// if the process was spawned with `Stdio::piped()`.
 #[inline]
-fn child_process(mut child: Box<dyn TokioChildWrapper>) -> std::io::Result<ChildProcessParts> {
+fn child_process(mut child: Box<dyn ChildWrapper>) -> std::io::Result<ChildProcessParts> {
     let child_stdin = match child.inner_mut().stdin().take() {
         Some(stdin) => stdin,
         None => return Err(std::io::Error::other("stdin was already taken")),
@@ -42,7 +42,7 @@ pub struct TokioChildProcess {
 }
 
 pub struct ChildWithCleanup {
-    inner: Option<Box<dyn TokioChildWrapper>>,
+    inner: Option<Box<dyn ChildWrapper>>,
 }
 
 impl Drop for ChildWithCleanup {
@@ -87,13 +87,13 @@ impl AsyncRead for TokioChildProcessOut {
 
 impl TokioChildProcess {
     /// Convenience: spawn with default `piped` stdio
-    pub fn new(command: impl Into<TokioCommandWrap>) -> std::io::Result<Self> {
+    pub fn new(command: impl Into<CommandWrap>) -> std::io::Result<Self> {
         let (proc, _ignored) = TokioChildProcessBuilder::new(command).spawn()?;
         Ok(proc)
     }
 
     /// Builder entry-point allowing fine-grained stdio control.
-    pub fn builder(command: impl Into<TokioCommandWrap>) -> TokioChildProcessBuilder {
+    pub fn builder(command: impl Into<CommandWrap>) -> TokioChildProcessBuilder {
         TokioChildProcessBuilder::new(command)
     }
 
@@ -111,7 +111,7 @@ impl TokioChildProcess {
         if let Some(mut child) = self.child.inner.take() {
             self.transport.close().await?;
 
-            let wait_fut = Box::into_pin(child.wait());
+            let wait_fut = child.wait();
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(MAX_WAIT_ON_DROP_SECS)) => {
                     if let Err(e) = Box::into_pin(child.kill()).await {
@@ -136,7 +136,7 @@ impl TokioChildProcess {
     }
 
     /// Take ownership of the inner child process
-    pub fn into_inner(mut self) -> Option<Box<dyn TokioChildWrapper>> {
+    pub fn into_inner(mut self) -> Option<Box<dyn ChildWrapper>> {
         self.child.inner.take()
     }
 
@@ -152,14 +152,14 @@ impl TokioChildProcess {
 
 /// Builder for `TokioChildProcess` allowing custom `Stdio` configuration.
 pub struct TokioChildProcessBuilder {
-    cmd: TokioCommandWrap,
+    cmd: CommandWrap,
     stdin: Stdio,
     stdout: Stdio,
     stderr: Stdio,
 }
 
 impl TokioChildProcessBuilder {
-    fn new(cmd: impl Into<TokioCommandWrap>) -> Self {
+    fn new(cmd: impl Into<CommandWrap>) -> Self {
         Self {
             cmd: cmd.into(),
             stdin: Stdio::piped(),
