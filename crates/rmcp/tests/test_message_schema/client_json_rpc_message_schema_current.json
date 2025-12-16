@@ -288,6 +288,9 @@
         },
         {
           "$ref": "#/definitions/EmptyObject"
+        },
+        {
+          "$ref": "#/definitions/CustomResult"
         }
       ]
     },
@@ -409,6 +412,22 @@
         "method"
       ]
     },
+    "CustomRequest": {
+      "description": "A catch-all request either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "CustomResult": {
+      "description": "A catch-all response either side can use for custom requests."
+    },
     "ElicitationAction": {
       "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
       "oneOf": [
@@ -444,7 +463,8 @@
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "ErrorCode": {
       "description": "Standard JSON-RPC error codes used throughout the MCP protocol.\n\nThese codes follow the JSON-RPC 2.0 specification and provide\nstandardized error reporting across all MCP implementations.",
@@ -707,6 +727,9 @@
         },
         {
           "$ref": "#/definitions/RequestOptionalParam4"
+        },
+        {
+          "$ref": "#/definitions/CustomRequest"
         }
       ],
       "required": [

@@ -26,6 +26,10 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 .create_elicitation(request.params, context)
                 .await
                 .map(ClientResult::CreateElicitationResult),
+            ServerRequest::CustomRequest(request) => self
+                .on_custom_request(request, context)
+                .await
+                .map(ClientResult::CustomResult),
         }
     }
 
@@ -121,6 +125,20 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
             action: ElicitationAction::Decline,
             content: None,
         }))
+    }
+
+    fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+        let CustomRequest { method, .. } = request;
+        let _ = context;
+        std::future::ready(Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            method,
+            None,
+        )))
     }
 
     fn on_cancelled(

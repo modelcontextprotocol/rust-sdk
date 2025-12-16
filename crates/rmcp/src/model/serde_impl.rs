@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CustomNotification, Extensions, Meta, Notification, NotificationNoParam, Request,
-    RequestNoParam, RequestOptionalParam,
+    CustomNotification, CustomRequest, Extensions, Meta, Notification, NotificationNoParam,
+    Request, RequestNoParam, RequestOptionalParam,
 };
 #[derive(Serialize, Deserialize)]
 struct WithMeta<'a, P> {
@@ -245,6 +245,59 @@ where
         Ok(NotificationNoParam {
             extensions,
             method: body.method,
+        })
+    }
+}
+
+impl Serialize for CustomRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let extensions = &self.extensions;
+        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
+        let params = self.params.as_ref();
+
+        let params = if _meta.is_some() || params.is_some() {
+            Some(WithMeta {
+                _meta,
+                _rest: &self.params,
+            })
+        } else {
+            None
+        };
+
+        ProxyOptionalParam::serialize(
+            &ProxyOptionalParam {
+                method: &self.method,
+                params,
+            },
+            serializer,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for CustomRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let body =
+            ProxyOptionalParam::<'_, _, Option<serde_json::Value>>::deserialize(deserializer)?;
+        let mut params = None;
+        let mut _meta = None;
+        if let Some(body_params) = body.params {
+            params = body_params._rest;
+            _meta = body_params._meta.map(|m| m.into_owned());
+        }
+        let mut extensions = Extensions::new();
+        if let Some(meta) = _meta {
+            extensions.insert(meta);
+        }
+        Ok(CustomRequest {
+            extensions,
+            method: body.method,
+            params,
         })
     }
 }

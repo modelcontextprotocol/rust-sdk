@@ -55,6 +55,7 @@ macro_rules! object {
 ///
 /// without returning any specific data.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy, Eq)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "server", derive(schemars::JsonSchema))]
 pub struct EmptyObject {}
 
@@ -606,6 +607,23 @@ impl From<EmptyResult> for () {
     fn from(_value: EmptyResult) {}
 }
 
+/// A catch-all response either side can use for custom requests.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(transparent)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CustomResult(pub Value);
+
+impl CustomResult {
+    pub fn new(result: Value) -> Self {
+        Self(result)
+    }
+
+    /// Deserialize the result into a strongly-typed structure.
+    pub fn result_as<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_value(self.0.clone())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -644,6 +662,40 @@ pub struct CustomNotification {
 }
 
 impl CustomNotification {
+    pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
+        Self {
+            method: method.into(),
+            params,
+            extensions: Extensions::default(),
+        }
+    }
+
+    /// Deserialize `params` into a strongly-typed structure.
+    pub fn params_as<T: DeserializeOwned>(&self) -> Result<Option<T>, serde_json::Error> {
+        self.params
+            .as_ref()
+            .map(|params| serde_json::from_value(params.clone()))
+            .transpose()
+    }
+}
+
+/// A catch-all request either side can use to send custom messages to its peer.
+///
+/// This preserves the raw `method` name and `params` payload so handlers can
+/// deserialize them into domain-specific types.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CustomRequest {
+    pub method: String,
+    pub params: Option<Value>,
+    /// extensions will carry anything possible in the context, including [`Meta`]
+    ///
+    /// this is similar with the Extensions in `http` crate
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub extensions: Extensions,
+}
+
+impl CustomRequest {
     pub fn new(method: impl Into<String>, params: Option<Value>) -> Self {
         Self {
             method: method.into(),
@@ -1757,11 +1809,12 @@ ts_union!(
     | SubscribeRequest
     | UnsubscribeRequest
     | CallToolRequest
-    | ListToolsRequest;
+    | ListToolsRequest
+    | CustomRequest;
 );
 
 impl ClientRequest {
-    pub fn method(&self) -> &'static str {
+    pub fn method(&self) -> &str {
         match &self {
             ClientRequest::PingRequest(r) => r.method.as_str(),
             ClientRequest::InitializeRequest(r) => r.method.as_str(),
@@ -1776,6 +1829,7 @@ impl ClientRequest {
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
+            ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -1790,7 +1844,12 @@ ts_union!(
 );
 
 ts_union!(
-    export type ClientResult = box CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
+    export type ClientResult =
+    box CreateMessageResult
+    | ListRootsResult
+    | CreateElicitationResult
+    | EmptyResult
+    | CustomResult;
 );
 
 impl ClientResult {
@@ -1806,7 +1865,8 @@ ts_union!(
     | PingRequest
     | CreateMessageRequest
     | ListRootsRequest
-    | CreateElicitationRequest;
+    | CreateElicitationRequest
+    | CustomRequest;
 );
 
 ts_union!(
@@ -1834,6 +1894,7 @@ ts_union!(
     | ListToolsResult
     | CreateElicitationResult
     | EmptyResult
+    | CustomResult
     ;
 );
 
@@ -1954,6 +2015,40 @@ mod tests {
                 );
             }
             _ => panic!("Expected custom server notification"),
+        }
+
+        let json = serde_json::to_value(message).expect("valid json");
+        assert_eq!(json, raw);
+    }
+
+    #[test]
+    fn test_custom_request_roundtrip() {
+        let raw = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 42,
+            "method": "requests/custom",
+            "params": {"foo": "bar"},
+        });
+
+        let message: ClientJsonRpcMessage =
+            serde_json::from_value(raw.clone()).expect("invalid request");
+        match &message {
+            ClientJsonRpcMessage::Request(JsonRpcRequest { id, request, .. }) => {
+                assert_eq!(id, &RequestId::Number(42));
+                match request {
+                    ClientRequest::CustomRequest(custom) => {
+                        let expected_request = json!({
+                            "method": "requests/custom",
+                            "params": {"foo": "bar"},
+                        });
+                        let actual_request =
+                            serde_json::to_value(custom).expect("serialize custom request");
+                        assert_eq!(actual_request, expected_request);
+                    }
+                    other => panic!("Expected custom request, got: {other:?}"),
+                }
+            }
+            other => panic!("Expected request, got: {other:?}"),
         }
 
         let json = serde_json::to_value(message).expect("valid json");

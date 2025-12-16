@@ -392,19 +392,6 @@
         "content"
       ]
     },
-    "CustomNotification": {
-      "description": "A catch-all notification either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string"
-        },
-        "params": true
-      },
-      "required": [
-        "method"
-      ]
-    },
     "CancelledNotificationMethod": {
       "type": "string",
       "format": "const",
@@ -606,6 +593,35 @@
         "maxTokens"
       ]
     },
+    "CustomNotification": {
+      "description": "A catch-all notification either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "CustomRequest": {
+      "description": "A catch-all request either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "CustomResult": {
+      "description": "A catch-all response either side can use for custom requests."
+    },
     "ElicitationAction": {
       "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
       "oneOf": [
@@ -682,7 +698,8 @@
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false
     },
     "EnumSchema": {
       "description": "Schema definition for enum properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nEnums must have string type and can optionally include human-readable names.",
@@ -1021,6 +1038,9 @@
         },
         {
           "$ref": "#/definitions/Request2"
+        },
+        {
+          "$ref": "#/definitions/CustomRequest"
         }
       ],
       "required": [
@@ -2271,6 +2291,9 @@
         },
         {
           "$ref": "#/definitions/EmptyObject"
+        },
+        {
+          "$ref": "#/definitions/CustomResult"
         }
       ]
     },
