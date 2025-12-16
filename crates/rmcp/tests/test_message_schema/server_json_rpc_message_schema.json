@@ -392,6 +392,19 @@
         "content"
       ]
     },
+    "CustomNotification": {
+      "description": "A catch-all notification either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
     "CancelledNotificationMethod": {
       "type": "string",
       "format": "const",
@@ -977,6 +990,9 @@
         },
         {
           "$ref": "#/definitions/NotificationNoParam3"
+        },
+        {
+          "$ref": "#/definitions/CustomNotification"
         }
       ],
       "required": [

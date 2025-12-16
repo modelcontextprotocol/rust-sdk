@@ -396,8 +396,8 @@
         "content"
       ]
     },
-    "CustomClientNotification": {
-      "description": "A catch-all notification the client can use to send custom messages to a server.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+    "CustomNotification": {
+      "description": "A catch-all notification either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
       "type": "object",
       "properties": {
         "method": {
@@ -651,7 +651,7 @@
           "$ref": "#/definitions/NotificationNoParam2"
         },
         {
-          "$ref": "#/definitions/CustomClientNotification"
+          "$ref": "#/definitions/CustomNotification"
         }
       ],
       "required": [
