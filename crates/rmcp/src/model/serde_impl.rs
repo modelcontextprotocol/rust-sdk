@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CustomClientNotification, Extensions, Meta, Notification, NotificationNoParam, Request,
+    CustomNotification, Extensions, Meta, Notification, NotificationNoParam, Request,
     RequestNoParam, RequestOptionalParam,
 };
 #[derive(Serialize, Deserialize)]
@@ -249,7 +249,7 @@ where
     }
 }
 
-impl Serialize for CustomClientNotification {
+impl Serialize for CustomNotification {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -277,7 +277,7 @@ impl Serialize for CustomClientNotification {
     }
 }
 
-impl<'de> Deserialize<'de> for CustomClientNotification {
+impl<'de> Deserialize<'de> for CustomNotification {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -294,7 +294,7 @@ impl<'de> Deserialize<'de> for CustomClientNotification {
         if let Some(meta) = _meta {
             extensions.insert(meta);
         }
-        Ok(CustomClientNotification {
+        Ok(CustomNotification {
             extensions,
             method: body.method,
             params,

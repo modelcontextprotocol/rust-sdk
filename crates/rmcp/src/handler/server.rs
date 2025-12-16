@@ -90,7 +90,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             ClientNotification::RootsListChangedNotification(_notification) => {
                 self.on_roots_list_changed(context).await
             }
-            ClientNotification::CustomClientNotification(notification) => {
+            ClientNotification::CustomNotification(notification) => {
                 self.on_custom_notification(notification, context).await
             }
         };
@@ -230,7 +230,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     }
     fn on_custom_notification(
         &self,
-        notification: CustomClientNotification,
+        notification: CustomNotification,
         context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
         let _ = (notification, context);
