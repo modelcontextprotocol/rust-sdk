@@ -8,7 +8,7 @@ use crate::{
         ArgumentInfo, CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
         CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult,
-        CompletionContext, CompletionInfo, GetPromptRequest, GetPromptRequestParam,
+        CompletionContext, CompletionInfo, ErrorData, GetPromptRequest, GetPromptRequestParam,
         GetPromptResult, InitializeRequest, InitializedNotification, JsonRpcResponse,
         ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
         ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
@@ -43,6 +43,9 @@ pub enum ClientInitializeError {
         error: DynamicTransportError,
         context: Cow<'static, str>,
     },
+
+    #[error("JSON-RPC error: {0}")]
+    JsonRpcError(ErrorData),
 
     #[error("Cancelled")]
     Cancelled,
@@ -91,6 +94,10 @@ where
             // Expected message to complete the initialization
             ServerJsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => {
                 break Ok((result, id));
+            }
+            // Handle JSON-RPC error responses
+            ServerJsonRpcMessage::Error(error) => {
+                break Err(ClientInitializeError::JsonRpcError(error.error));
             }
             // Server could send logging messages before handshake
             ServerJsonRpcMessage::Notification(mut notification) => {
