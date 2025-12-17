@@ -12,7 +12,7 @@ use tracing_subscriber::{self, EnvFilter};
 /// Simple Sampling Demo Server
 ///
 /// This server demonstrates how to request LLM sampling from clients.
-/// Run with: cargo run --example servers_sampling_stdio
+/// Run with: cargo run -p mcp-server-examples --example servers_sampling_stdio
 #[derive(Clone, Debug, Default)]
 pub struct SamplingDemoServer;
 
