@@ -69,6 +69,10 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
+            ClientRequest::CustomRequest(request) => self
+                .on_custom_request(request, context)
+                .await
+                .map(ServerResult::CustomResult),
         }
     }
 
@@ -199,6 +203,19 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListToolsResult::default()))
+    }
+    fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+        let CustomRequest { method, .. } = request;
+        let _ = context;
+        std::future::ready(Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            method,
+            None,
+        )))
     }
 
     fn on_cancelled(
