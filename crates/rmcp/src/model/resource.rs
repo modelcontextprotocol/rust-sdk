@@ -48,6 +48,9 @@ pub struct RawResourceTemplate {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Optional list of icons for the resource template
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<Icon>>,
 }
 
 pub type ResourceTemplate = Annotated<RawResourceTemplate>;
@@ -145,5 +148,41 @@ mod tests {
         // Verify it contains mimeType (camelCase) not mime_type (snake_case)
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_resource_template_with_icons() {
+        let resource_template = RawResourceTemplate {
+            uri_template: "file:///{path}".to_string(),
+            name: "template".to_string(),
+            title: Some("Test Template".to_string()),
+            description: Some("A test resource template".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            icons: Some(vec![Icon {
+                src: "https://example.com/icon.png".to_string(),
+                mime_type: Some("image/png".to_string()),
+                sizes: Some(vec!["48x48".to_string()]),
+            }]),
+        };
+
+        let json = serde_json::to_value(&resource_template).unwrap();
+        assert!(json["icons"].is_array());
+        assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
+        assert_eq!(json["icons"][0]["sizes"][0], "48x48");
+    }
+
+    #[test]
+    fn test_resource_template_without_icons() {
+        let resource_template = RawResourceTemplate {
+            uri_template: "file:///{path}".to_string(),
+            name: "template".to_string(),
+            title: None,
+            description: None,
+            mime_type: None,
+            icons: None,
+        };
+
+        let json = serde_json::to_value(&resource_template).unwrap();
+        assert!(json.get("icons").is_none());
     }
 }

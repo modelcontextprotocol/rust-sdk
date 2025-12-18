@@ -263,6 +263,16 @@
             "null"
           ]
         },
+        "icons": {
+          "description": "Optional list of icons for the resource template",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
         "mimeType": {
           "type": [
             "string",
