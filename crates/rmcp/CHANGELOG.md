@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.12.0...rmcp-v0.13.0) - 2025-12-18
+
+### Other
+
+- Add optional icons field to RawResourceTemplate ([#589](https://github.com/modelcontextprotocol/rust-sdk/pull/589))
+
 ## [0.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.11.0...rmcp-v0.12.0) - 2025-12-18
 
 ### Added
