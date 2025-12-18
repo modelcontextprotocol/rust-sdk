@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.11.0...rmcp-macros-v0.12.0) - 2025-12-18
+
+### Other
+
+- merge cached_schema_for_type into schema_for_type ([#581](https://github.com/modelcontextprotocol/rust-sdk/pull/581))
+- Add NexusCore MCP to project list ([#573](https://github.com/modelcontextprotocol/rust-sdk/pull/573))
+- *(deps)* update darling requirement from 0.21 to 0.23 ([#574](https://github.com/modelcontextprotocol/rust-sdk/pull/574))
+
 ## [0.11.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.10.0...rmcp-macros-v0.11.0) - 2025-12-08
 
 ### Added
