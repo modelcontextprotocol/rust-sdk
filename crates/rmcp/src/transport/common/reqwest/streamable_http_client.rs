@@ -120,6 +120,25 @@ impl StreamableHttpClient for reqwest::Client {
                 }));
             }
         }
+        if response.status() == reqwest::StatusCode::FORBIDDEN {
+            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
+                let header_str = header
+                    .to_str()
+                    .map_err(|_| {
+                        StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                            "invalid www-authenticate header value",
+                        ))
+                    })?;
+                // Extract scope parameter from WWW-Authenticate header
+                let scope = extract_scope_from_header(header_str);
+                return Err(StreamableHttpError::InsufficientScope(
+                    InsufficientScopeError {
+                        www_authenticate_header: header_str.to_string(),
+                        required_scope: scope,
+                    },
+                ));
+            }
+        }
         let status = response.status();
         let response = response.error_for_status()?;
         if matches!(
@@ -197,4 +216,33 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
         StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
     }
+}
+
+/// Extract scope parameter from WWW-Authenticate header
+/// Parses the header to find scope="value" or scope=value
+fn extract_scope_from_header(header: &str) -> Option<String> {
+    let header_lowercase = header.to_ascii_lowercase();
+    let scope_key = "scope=";
+
+    if let Some(pos) = header_lowercase.find(scope_key) {
+        let start = pos + scope_key.len();
+        let value_slice = &header[start..];
+
+        // Handle quoted values: scope="value"
+        if let Some(stripped) = value_slice.strip_prefix('"') {
+            if let Some(end_quote) = stripped.find('"') {
+                return Some(stripped[..end_quote].to_string());
+            }
+        } else {
+            // Handle unquoted values: scope=value
+            let end = value_slice
+                .find(|c: char| c == ',' || c == ';' || c.is_whitespace())
+                .unwrap_or(value_slice.len());
+            if end > 0 {
+                return Some(value_slice[..end].to_string());
+            }
+        }
+    }
+
+    None
 }

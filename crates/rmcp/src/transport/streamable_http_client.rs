@@ -24,6 +24,12 @@ pub struct AuthRequiredError {
     pub www_authenticate_header: String,
 }
 
+#[derive(Debug)]
+pub struct InsufficientScopeError {
+    pub www_authenticate_header: String,
+    pub required_scope: Option<String>,
+}
+
 #[derive(Error, Debug)]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("SSE error: {0}")]
@@ -56,6 +62,8 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Auth(#[from] crate::transport::auth::AuthError),
     #[error("Auth required")]
     AuthRequired(AuthRequiredError),
+    #[error("Insufficient scope")]
+    InsufficientScope(InsufficientScopeError),
 }
 
 #[derive(Debug, Clone, Error)]

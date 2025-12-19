@@ -174,6 +174,13 @@ struct ResourceServerMetadata {
     authorization_servers: Option<Vec<String>>,
 }
 
+/// Parameters extracted from WWW-Authenticate header
+#[derive(Debug, Clone, Default)]
+pub struct WWWAuthenticateParams {
+    pub resource_metadata_url: Option<Url>,
+    pub scope: Option<String>,
+}
+
 /// oauth2 client config
 #[derive(Debug, Clone)]
 pub struct OAuthClientConfig {
@@ -848,9 +855,11 @@ impl AuthorizationManager {
             let Ok(value_str) = value.to_str() else {
                 continue;
             };
-            if let Some(url) =
-                Self::extract_resource_metadata_url_from_header(value_str, &self.base_url)
-            {
+            let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+            if let Some(url) = params.resource_metadata_url {
+                if let Some(scope) = params.scope {
+                    debug!("WWW-Authenticate header contains scope: {}", scope);
+                }
                 parsed_url = Some(url);
                 break;
             }
@@ -898,7 +907,57 @@ impl AuthorizationManager {
         Ok(Some(metadata))
     }
 
+    /// Extracts parameters from WWW-Authenticate header (resource_metadata and scope)
+    fn extract_www_authenticate_params(header: &str, base_url: &Url) -> WWWAuthenticateParams {
+        let mut params = WWWAuthenticateParams::default();
+        let header_lowercase = header.to_ascii_lowercase();
+
+        // Extract resource_metadata
+        let mut search_offset = 0;
+        let resource_key = "resource_metadata=";
+        while let Some(pos) = header_lowercase[search_offset..].find(resource_key) {
+            let global_pos = search_offset + pos + resource_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, consumed)) = Self::parse_next_header_value(value_slice) {
+                if let Ok(url) = Url::parse(&value) {
+                    params.resource_metadata_url = Some(url);
+                    break;
+                }
+                if let Ok(url) = base_url.join(&value) {
+                    params.resource_metadata_url = Some(url);
+                    break;
+                }
+                debug!("failed to parse resource metadata value `{value}` as URL");
+                search_offset = global_pos + consumed;
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        // Extract scope
+        search_offset = 0;
+        let scope_key = "scope=";
+        while let Some(pos) = header_lowercase[search_offset..].find(scope_key) {
+            let global_pos = search_offset + pos + scope_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.scope = Some(value);
+                break;
+            } else {
+                break;
+            }
+        }
+
+        params
+    }
+
     /// Extracts a url following `resource_metadata=` in a header value
+    ///
+    /// # Deprecated
+    /// Use `extract_www_authenticate_params` instead which extracts both resource_metadata and scope
+    #[deprecated(since = "0.13.0", note = "Use extract_www_authenticate_params instead")]
+    #[allow(dead_code)]
     fn extract_resource_metadata_url_from_header(header: &str, base_url: &Url) -> Option<Url> {
         let header_lowercase = header.to_ascii_lowercase();
         let fragment_key = "resource_metadata=";
@@ -1456,5 +1515,60 @@ mod tests {
                 "/.well-known/oauth-authorization-server".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_both_parameters() {
+        let header = r#"Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource", scope="read:data write:data""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource"
+        );
+        assert_eq!(params.scope.unwrap(), "read:data write:data");
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_only_scope() {
+        let header = r#"Bearer error="insufficient_scope", scope="admin:write""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert_eq!(params.scope.unwrap(), "admin:write");
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_only_resource_metadata() {
+        let header = r#"Bearer resource_metadata="/.well-known/oauth-protected-resource""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource"
+        );
+        assert!(params.scope.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_no_parameters() {
+        let header = r#"Bearer error="invalid_token""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.scope.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_unquoted_scope() {
+        let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(params.scope.unwrap(), "read:data");
     }
 }
