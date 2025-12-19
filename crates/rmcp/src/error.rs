@@ -1,6 +1,5 @@
 use std::{borrow::Cow, fmt::Display};
 
-use crate::ServiceError;
 pub use crate::model::ErrorData;
 #[deprecated(
     note = "Use `rmcp::ErrorData` instead, `rmcp::ErrorData` could become `RmcpError` in the future."
@@ -21,8 +20,9 @@ impl std::error::Error for ErrorData {}
 /// This is an unified error type for the errors could be returned by the service.
 #[derive(Debug, thiserror::Error)]
 pub enum RmcpError {
+    #[cfg(any(feature = "client", feature = "server"))]
     #[error("Service error: {0}")]
-    Service(#[from] ServiceError),
+    Service(#[from] crate::ServiceError),
     #[cfg(feature = "client")]
     #[error("Client initialization error: {0}")]
     ClientInitialize(#[from] crate::service::ClientInitializeError),
