@@ -30,6 +30,18 @@ pub struct InsufficientScopeError {
     pub required_scope: Option<String>,
 }
 
+impl InsufficientScopeError {
+    /// Check if scope upgrade is possible (i.e., we know what scope is required)
+    pub fn can_upgrade(&self) -> bool {
+        self.required_scope.is_some()
+    }
+
+    /// Get the required scope for upgrade
+    pub fn get_required_scope(&self) -> Option<&str> {
+        self.required_scope.as_deref()
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("SSE error: {0}")]

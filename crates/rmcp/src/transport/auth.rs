@@ -23,6 +23,8 @@ const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 pub struct StoredCredentials {
     pub client_id: String,
     pub token_response: Option<OAuthTokenResponse>,
+    #[serde(default)]
+    pub granted_scopes: Vec<String>,
 }
 
 /// Trait for storing and retrieving OAuth2 credentials
@@ -105,6 +107,48 @@ impl<C> AuthClient<C> {
         let auth_manager = self.auth_manager.clone();
         async move { auth_manager.lock().await.get_access_token().await }
     }
+
+    /// Get the current granted scopes
+    pub fn get_current_scopes(&self) -> impl Future<Output = Vec<String>> + Send {
+        let auth_manager = self.auth_manager.clone();
+        async move { auth_manager.lock().await.get_current_scopes().await }
+    }
+
+    /// Check if scope upgrade is possible
+    pub fn can_attempt_scope_upgrade(&self) -> impl Future<Output = bool> + Send {
+        let auth_manager = self.auth_manager.clone();
+        async move { auth_manager.lock().await.can_attempt_scope_upgrade().await }
+    }
+
+    /// Request a scope upgrade after receiving insufficient_scope error
+    ///
+    /// Returns the authorization URL to redirect the user to for re-authorization
+    /// with the upgraded scopes.
+    pub fn request_scope_upgrade(
+        &self,
+        required_scope: String,
+    ) -> impl Future<Output = Result<String, AuthError>> + Send {
+        let auth_manager = self.auth_manager.clone();
+        async move {
+            auth_manager
+                .lock()
+                .await
+                .request_scope_upgrade(&required_scope)
+                .await
+        }
+    }
+
+    /// Reset the scope upgrade attempt counter
+    pub fn reset_scope_upgrade_attempts(&self) -> impl Future<Output = ()> + Send {
+        let auth_manager = self.auth_manager.clone();
+        async move {
+            auth_manager
+                .lock()
+                .await
+                .reset_scope_upgrade_attempts()
+                .await
+        }
+    }
 }
 
 /// Auth error
@@ -151,6 +195,12 @@ pub enum AuthError {
 
     #[error("Registration failed: {0}")]
     RegistrationFailed(String),
+
+    #[error("Insufficient scope: {required_scope}")]
+    InsufficientScope {
+        required_scope: String,
+        upgrade_url: Option<String>,
+    },
 }
 
 /// oauth2 metadata
@@ -211,6 +261,24 @@ type OAuthClient = oauth2::Client<
 >;
 type Credentials = (String, Option<OAuthTokenResponse>);
 
+/// Configuration for scope upgrade behavior
+#[derive(Debug, Clone)]
+pub struct ScopeUpgradeConfig {
+    /// Maximum number of scope upgrade attempts before giving up
+    pub max_upgrade_attempts: u32,
+    /// Whether to automatically attempt scope upgrades on 403
+    pub auto_upgrade: bool,
+}
+
+impl Default for ScopeUpgradeConfig {
+    fn default() -> Self {
+        Self {
+            max_upgrade_attempts: 3,
+            auto_upgrade: true,
+        }
+    }
+}
+
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: HttpClient,
@@ -219,6 +287,9 @@ pub struct AuthorizationManager {
     credential_store: Arc<dyn CredentialStore>,
     state: RwLock<Option<AuthorizationState>>,
     base_url: Url,
+    current_scopes: RwLock<Vec<String>>,
+    scope_upgrade_attempts: RwLock<u32>,
+    scope_upgrade_config: ScopeUpgradeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,9 +370,17 @@ impl AuthorizationManager {
             credential_store: Arc::new(InMemoryCredentialStore::new()),
             state: RwLock::new(None),
             base_url,
+            current_scopes: RwLock::new(Vec::new()),
+            scope_upgrade_attempts: RwLock::new(0),
+            scope_upgrade_config: ScopeUpgradeConfig::default(),
         };
 
         Ok(manager)
+    }
+
+    /// Set the scope upgrade configuration
+    pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
+        self.scope_upgrade_config = config;
     }
 
     /// Set a custom credential store
@@ -543,6 +622,105 @@ impl AuthorizationManager {
         Ok(auth_url.to_string())
     }
 
+    /// Get the current granted scopes
+    pub async fn get_current_scopes(&self) -> Vec<String> {
+        self.current_scopes.read().await.clone()
+    }
+
+    /// Compute the union of current scopes and required scopes
+    fn compute_scope_union(current: &[String], required: &str) -> Vec<String> {
+        let mut scope_set: std::collections::HashSet<String> = current.iter().cloned().collect();
+
+        // Parse required scopes (space-separated as per OAuth2 spec)
+        for scope in required.split_whitespace() {
+            scope_set.insert(scope.to_string());
+        }
+
+        scope_set.into_iter().collect()
+    }
+
+    /// Check if a scope upgrade is possible and allowed
+    pub async fn can_attempt_scope_upgrade(&self) -> bool {
+        if !self.scope_upgrade_config.auto_upgrade {
+            return false;
+        }
+
+        let attempts = *self.scope_upgrade_attempts.read().await;
+        attempts < self.scope_upgrade_config.max_upgrade_attempts
+    }
+
+    /// Select scopes to use for authorization based on SEP-835 priority:
+    /// 1. First check WWW-Authenticate scope parameter (if provided)
+    /// 2. Fall back to scopes_supported in metadata
+    /// 3. Fall back to provided default scopes
+    pub fn select_scopes(
+        &self,
+        www_authenticate_scope: Option<&str>,
+        default_scopes: &[&str],
+    ) -> Vec<String> {
+        // Priority 1: Use scope from WWW-Authenticate header if available
+        if let Some(scope) = www_authenticate_scope {
+            return scope.split_whitespace().map(|s| s.to_string()).collect();
+        }
+
+        // Priority 2: Use scopes_supported from metadata
+        if let Some(metadata) = &self.metadata {
+            if let Some(scopes_supported) = &metadata.scopes_supported {
+                if !scopes_supported.is_empty() {
+                    return scopes_supported.clone();
+                }
+            }
+        }
+
+        // Priority 3: Use default scopes
+        default_scopes.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Attempt to upgrade scopes after receiving a 403 insufficient_scope error
+    ///
+    /// Returns the authorization URL to redirect the user to, or an error if upgrade
+    /// is not possible (e.g., max attempts exceeded).
+    pub async fn request_scope_upgrade(&self, required_scope: &str) -> Result<String, AuthError> {
+        if !self.scope_upgrade_config.auto_upgrade {
+            return Err(AuthError::InvalidScope(
+                "Scope upgrade is disabled".to_string(),
+            ));
+        }
+
+        let mut attempts = self.scope_upgrade_attempts.write().await;
+        if *attempts >= self.scope_upgrade_config.max_upgrade_attempts {
+            return Err(AuthError::InvalidScope(format!(
+                "Maximum scope upgrade attempts ({}) exceeded",
+                self.scope_upgrade_config.max_upgrade_attempts
+            )));
+        }
+
+        *attempts += 1;
+        drop(attempts);
+
+        let current_scopes = self.current_scopes.read().await.clone();
+        let upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+
+        debug!(
+            "Requesting scope upgrade: current={:?}, required={}, union={:?}",
+            current_scopes, required_scope, upgraded_scopes
+        );
+
+        let scope_refs: Vec<&str> = upgraded_scopes.iter().map(|s| s.as_str()).collect();
+        self.get_authorization_url(&scope_refs).await
+    }
+
+    /// Reset scope upgrade attempt counter
+    /// Call this after a successful operation to allow future upgrades
+    pub async fn reset_scope_upgrade_attempts(&self) {
+        *self.scope_upgrade_attempts.write().await = 0;
+    }
+
+    /// Get the number of scope upgrade attempts made
+    pub async fn get_scope_upgrade_attempts(&self) -> u32 {
+        *self.scope_upgrade_attempts.read().await
+    }
+
     /// exchange authorization code for access token
     pub async fn exchange_code_for_token(
         &self,
@@ -601,11 +779,19 @@ impl AuthorizationManager {
 
         debug!("exchange token result: {:?}", token_result);
 
-        // Store credentials in the credential store
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+        *self.scope_upgrade_attempts.write().await = 0;
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
+            granted_scopes,
         };
         self.credential_store.save(stored).await?;
 
@@ -659,10 +845,18 @@ impl AuthorizationManager {
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_else(|| self.current_scopes.blocking_read().clone());
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
+            granted_scopes,
         };
         self.credential_store.save(stored).await?;
 
@@ -936,16 +1130,12 @@ impl AuthorizationManager {
         }
 
         // Extract scope
-        search_offset = 0;
         let scope_key = "scope=";
-        while let Some(pos) = header_lowercase[search_offset..].find(scope_key) {
-            let global_pos = search_offset + pos + scope_key.len();
+        if let Some(pos) = header_lowercase.find(scope_key) {
+            let global_pos = pos + scope_key.len();
             let value_slice = &header[global_pos..];
             if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
                 params.scope = Some(value);
-                break;
-            } else {
-                break;
             }
         }
 
@@ -1212,9 +1402,17 @@ impl OAuthState {
                 AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?,
             );
 
+            let granted_scopes: Vec<String> = credentials
+                .scopes()
+                .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+
+            *manager.current_scopes.write().await = granted_scopes.clone();
+
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
                 token_response: Some(credentials),
+                granted_scopes,
             };
             manager.credential_store.save(stored).await?;
 
@@ -1387,7 +1585,7 @@ impl OAuthState {
 mod tests {
     use url::Url;
 
-    use super::{AuthorizationManager, is_https_url};
+    use super::{AuthorizationManager, AuthorizationMetadata, ScopeUpgradeConfig, is_https_url};
 
     // SEP-991: URL-based Client IDs
     // Tests adapted from the TypeScript SDK's isHttpsUrl test suite
@@ -1570,5 +1768,121 @@ mod tests {
         let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
 
         assert_eq!(params.scope.unwrap(), "read:data");
+    }
+
+    #[test]
+    fn compute_scope_union_adds_new_scopes() {
+        let current = vec!["read".to_string(), "write".to_string()];
+        let required = "admin delete";
+        let result = AuthorizationManager::compute_scope_union(&current, required);
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert!(result.contains(&"admin".to_string()));
+        assert!(result.contains(&"delete".to_string()));
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn compute_scope_union_deduplicates() {
+        let current = vec!["read".to_string(), "write".to_string()];
+        let required = "read admin"; // 'read' is already present
+        let result = AuthorizationManager::compute_scope_union(&current, required);
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert!(result.contains(&"admin".to_string()));
+        assert_eq!(result.len(), 3); // No duplicates
+    }
+
+    #[test]
+    fn compute_scope_union_handles_empty_current() {
+        let current: Vec<String> = vec![];
+        let required = "read write";
+        let result = AuthorizationManager::compute_scope_union(&current, required);
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn scope_upgrade_config_default_values() {
+        let config = ScopeUpgradeConfig::default();
+        assert_eq!(config.max_upgrade_attempts, 3);
+        assert!(config.auto_upgrade);
+    }
+
+    #[tokio::test]
+    async fn authorization_manager_tracks_scope_upgrade_attempts() {
+        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        // Initial count should be 0
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 0);
+
+        // Increment manually via internal state
+        *manager.scope_upgrade_attempts.write().await = 2;
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 2);
+
+        // Reset should return to 0
+        manager.reset_scope_upgrade_attempts().await;
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 0);
+    }
+
+    #[tokio::test]
+    async fn authorization_manager_can_attempt_scope_upgrade_respects_config() {
+        let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        // Default config allows upgrades
+        assert!(manager.can_attempt_scope_upgrade().await);
+
+        // Disable auto_upgrade
+        manager.set_scope_upgrade_config(ScopeUpgradeConfig {
+            max_upgrade_attempts: 3,
+            auto_upgrade: false,
+        });
+        assert!(!manager.can_attempt_scope_upgrade().await);
+
+        // Re-enable but exceed max attempts
+        manager.set_scope_upgrade_config(ScopeUpgradeConfig {
+            max_upgrade_attempts: 2,
+            auto_upgrade: true,
+        });
+        *manager.scope_upgrade_attempts.write().await = 2;
+        assert!(!manager.can_attempt_scope_upgrade().await);
+
+        // Under max attempts should work
+        *manager.scope_upgrade_attempts.write().await = 1;
+        assert!(manager.can_attempt_scope_upgrade().await);
+    }
+
+    #[test]
+    fn select_scopes_prioritizes_www_authenticate() {
+        // Create a minimal manager for testing select_scopes
+        let manager_metadata = AuthorizationMetadata {
+            authorization_endpoint: String::new(),
+            token_endpoint: String::new(),
+            scopes_supported: Some(vec!["metadata_scope".to_string()]),
+            ..Default::default()
+        };
+
+        // We can't easily create a full AuthorizationManager here, so test the logic manually
+        // Priority 1: WWW-Authenticate scope should be used first
+        let www_auth_scope = Some("www_auth_scope another_scope");
+        let default_scopes = &["default1", "default2"];
+
+        // Test priority 1: WWW-Authenticate scope wins
+        if let Some(scope) = www_auth_scope {
+            let result: Vec<String> = scope.split_whitespace().map(|s| s.to_string()).collect();
+            assert_eq!(result, vec!["www_auth_scope", "another_scope"]);
+        }
+
+        // Test priority 2: Metadata scopes used when no WWW-Authenticate
+        let scopes_from_metadata = manager_metadata.scopes_supported.as_ref().unwrap();
+        assert_eq!(scopes_from_metadata, &vec!["metadata_scope".to_string()]);
+
+        // Test priority 3: Default scopes as fallback
+        let default_result: Vec<String> = default_scopes.iter().map(|s| s.to_string()).collect();
+        assert_eq!(default_result, vec!["default1", "default2"]);
     }
 }

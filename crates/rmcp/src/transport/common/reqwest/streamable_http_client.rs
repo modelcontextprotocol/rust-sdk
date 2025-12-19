@@ -122,13 +122,11 @@ impl StreamableHttpClient for reqwest::Client {
         }
         if response.status() == reqwest::StatusCode::FORBIDDEN {
             if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let header_str = header
-                    .to_str()
-                    .map_err(|_| {
-                        StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                            "invalid www-authenticate header value",
-                        ))
-                    })?;
+                let header_str = header.to_str().map_err(|_| {
+                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                        "invalid www-authenticate header value",
+                    ))
+                })?;
                 // Extract scope parameter from WWW-Authenticate header
                 let scope = extract_scope_from_header(header_str);
                 return Err(StreamableHttpError::InsufficientScope(
