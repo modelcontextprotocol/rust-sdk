@@ -137,11 +137,13 @@ impl PromptMessage {
         meta: Option<crate::model::Meta>,
         annotations: Option<Annotations>,
     ) -> Self {
+        use base64::{Engine, prelude::BASE64_STANDARD};
+
         let base64 = BASE64_STANDARD.encode(data);
         Self {
             role,
             content: PromptMessageContent::Image {
-                image: RawImageContent {
+                image: crate::model::RawImageContent {
                     data: base64,
                     mime_type: mime_type.into(),
                     meta,
