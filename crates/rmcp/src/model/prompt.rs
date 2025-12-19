@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_prompt_message_image_serialization() {
-        let image_content = RawImageContent {
+        let image_content = crate::model::RawImageContent {
             data: "base64data".to_string(),
             mime_type: "image/png".to_string(),
             meta: None,
