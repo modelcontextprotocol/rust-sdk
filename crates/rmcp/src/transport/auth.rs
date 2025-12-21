@@ -1488,31 +1488,64 @@ mod tests {
         let base_url = Url::parse("https://auth.example.com").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
         assert_eq!(urls.len(), 2);
-        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server");
-        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration");
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration"
+        );
 
         // Test URL with single path segment: follow spec priority order
         let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
         assert_eq!(urls.len(), 3);
-        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server/tenant1");
-        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration/tenant1");
-        assert_eq!(urls[2].as_str(), "https://auth.example.com/tenant1/.well-known/openid-configuration");
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/tenant1"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/tenant1/.well-known/openid-configuration"
+        );
 
         // Test URL with path and trailing slash
         let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
         assert_eq!(urls.len(), 3);
-        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp");
-        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration/v1/mcp");
-        assert_eq!(urls[2].as_str(), "https://auth.example.com/v1/mcp/.well-known/openid-configuration");
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/v1/mcp"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/v1/mcp/.well-known/openid-configuration"
+        );
 
         // Test URL with multiple path segments
         let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
         assert_eq!(urls.len(), 3);
-        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant");
-        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant");
-        assert_eq!(urls[2].as_str(), "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration");
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration"
+        );
     }
 }
