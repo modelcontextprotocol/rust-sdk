@@ -684,16 +684,40 @@ impl AuthorizationManager {
         }
     }
 
+    /// Generate discovery endpoint URLs following the priority order in spec-2025-11-25 4.3 "Authorization Server Metadata Discovery".
+    fn generate_discovery_urls(base_url: &Url) -> Vec<Url> {
+        let mut candidates = Vec::new();
+        let path = base_url.path();
+        let trimmed = path.trim_start_matches('/').trim_end_matches('/');
+        let mut push_candidate = |discovery_path: String| {
+            let mut discovery_url = base_url.clone();
+            discovery_url.set_query(None);
+            discovery_url.set_fragment(None);
+            discovery_url.set_path(&discovery_path);
+            candidates.push(discovery_url);
+        };
+        if trimmed.is_empty() {
+            // No path components: try OAuth first, then OpenID Connect
+            push_candidate("/.well-known/oauth-authorization-server".to_string());
+            push_candidate("/.well-known/openid-configuration".to_string());
+        } else {
+            // Path components present: follow spec priority order
+            // 1. OAuth 2.0 with path insertion
+            push_candidate(format!("/.well-known/oauth-authorization-server/{trimmed}"));
+            // 2. OpenID Connect with path insertion
+            push_candidate(format!("/.well-known/openid-configuration/{trimmed}"));
+            // 3. OpenID Connect with path appending
+            push_candidate(format!("/{trimmed}/.well-known/openid-configuration"));
+        }
+
+        candidates
+    }
+
     async fn try_discover_oauth_server(
         &self,
         base_url: &Url,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        for candidate_path in Self::well_known_paths(base_url.path(), "oauth-authorization-server")
-        {
-            let mut discovery_url = base_url.clone();
-            discovery_url.set_query(None);
-            discovery_url.set_fragment(None);
-            discovery_url.set_path(&candidate_path);
+        for discovery_url in Self::generate_discovery_urls(base_url) {
             if let Some(metadata) = self.fetch_authorization_metadata(&discovery_url).await? {
                 return Ok(Some(metadata));
             }
@@ -1456,5 +1480,39 @@ mod tests {
                 "/.well-known/oauth-authorization-server".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn generate_discovery_urls() {
+        // Test root URL (no path components): OAuth first, then OpenID Connect
+        let base_url = Url::parse("https://auth.example.com").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server");
+        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration");
+
+        // Test URL with single path segment: follow spec priority order
+        let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server/tenant1");
+        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration/tenant1");
+        assert_eq!(urls[2].as_str(), "https://auth.example.com/tenant1/.well-known/openid-configuration");
+
+        // Test URL with path and trailing slash
+        let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp");
+        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration/v1/mcp");
+        assert_eq!(urls[2].as_str(), "https://auth.example.com/v1/mcp/.well-known/openid-configuration");
+
+        // Test URL with multiple path segments
+        let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0].as_str(), "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant");
+        assert_eq!(urls[1].as_str(), "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant");
+        assert_eq!(urls[2].as_str(), "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration");
     }
 }
