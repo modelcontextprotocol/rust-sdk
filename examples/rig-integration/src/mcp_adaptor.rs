@@ -47,6 +47,7 @@ impl RigTool for McpToolAdaptor {
                     name: self.tool.name.clone(),
                     arguments: serde_json::from_str(&args)
                         .map_err(rig::tool::ToolError::JsonError)?,
+                    task: None,
                 })
                 .await
                 .inspect(|result| tracing::info!(?result))

@@ -125,6 +125,7 @@
 //!         .call_tool(CallToolRequestParam {
 //!             name: "git_status".into(),
 //!             arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
+//!             task: None,
 //!         })
 //!         .await?;
 //!     println!("Tool result: {tool_result:#?}");
@@ -162,6 +163,7 @@ pub use service::{RoleClient, serve_client};
 pub use service::{RoleServer, serve_server};
 
 pub mod handler;
+pub mod task_manager;
 pub mod transport;
 
 // re-export

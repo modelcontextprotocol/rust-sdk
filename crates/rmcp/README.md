@@ -2,9 +2,6 @@
 
 `rmcp` is the official Rust implementation of the Model Context Protocol (MCP), a protocol designed for AI assistants to communicate with other services. This library can be used to build both servers that expose capabilities to AI assistants and clients that interact with such servers.
 
-wait for the first release.
-<!-- [![Crates.io](todo)](todo)
-[![Documentation](todo)](todo) -->
 
 
 
@@ -81,6 +78,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Tasks
+
+RMCP implements the task lifecycle from SEP-1686 so long-running or asynchronous tool calls can be queued and polled safely.
+
+- **Create:** set the `task` field on `CallToolRequestParam` to ask the server to enqueue the tool call. The response is a `CreateTaskResult` that includes the generated `task.task_id`.
+- **Inspect:** use `tasks/get` (`GetTaskInfoRequest`) to retrieve metadata such as status, timestamps, TTL, and poll interval.
+- **Await results:** call `tasks/result` (`GetTaskResultRequest`) to block until the task completes and receive either the final `CallToolResult` payload or a protocol error.
+- **Cancel:** call `tasks/cancel` (`CancelTaskRequest`) to request termination of a running task.
+
+To expose task support, enable the `tasks` capability when building `ServerCapabilities`. The `#[task_handler]` macro and `OperationProcessor` utility provide reference implementations for enqueuing, tracking, and collecting task results.
+
 ### Client Implementation
 
 Creating a client to interact with a server:
@@ -117,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .call_tool(CallToolRequestParam {
             name: "increment".into(),
             arguments: None,
+            task: None,
         })
         .await?;
     println!("Result: {result:#?}");

@@ -320,6 +320,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
                 .unwrap()
                 .clone(),
             ),
+            task: None,
         })
         .await?;
 
@@ -348,6 +349,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
                 .unwrap()
                 .clone(),
             ),
+            task: None,
         })
         .await?;
 

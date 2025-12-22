@@ -202,10 +202,33 @@
         "name": {
           "description": "The name of the tool to call",
           "type": "string"
+        },
+        "task": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       },
       "required": [
         "name"
+      ]
+    },
+    "CancelTaskMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/cancel"
+    },
+    "CancelTaskParam": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
       ]
     },
     "CancelledNotificationMethod": {
@@ -272,6 +295,16 @@
             "null"
           ],
           "additionalProperties": true
+        },
+        "tasks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TasksCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -520,6 +553,38 @@
         "name"
       ]
     },
+    "GetTaskInfoMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/get"
+    },
+    "GetTaskInfoParam": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ]
+    },
+    "GetTaskResultMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/result"
+    },
+    "GetTaskResultParam": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ]
+    },
     "Icon": {
       "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
       "type": "object",
@@ -730,6 +795,18 @@
         },
         {
           "$ref": "#/definitions/CustomRequest"
+        },
+        {
+          "$ref": "#/definitions/Request9"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam5"
+        },
+        {
+          "$ref": "#/definitions/Request10"
+        },
+        {
+          "$ref": "#/definitions/Request11"
         }
       ],
       "required": [
@@ -789,6 +866,11 @@
       "required": [
         "roots"
       ]
+    },
+    "ListTasksMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/list"
     },
     "ListToolsRequestMethod": {
       "type": "string",
@@ -1168,6 +1250,38 @@
         "params"
       ]
     },
+    "Request10": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetTaskResultMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetTaskResultParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request11": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CancelTaskMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CancelTaskParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
     "Request2": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
@@ -1280,6 +1394,22 @@
         "params"
       ]
     },
+    "Request9": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetTaskInfoMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetTaskInfoParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
     "RequestNoParam": {
       "type": "object",
       "properties": {
@@ -1359,6 +1489,27 @@
       "properties": {
         "method": {
           "$ref": "#/definitions/ListToolsRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParam"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam5": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListTasksMethod"
         },
         "params": {
           "anyOf": [
@@ -1533,6 +1684,36 @@
       "required": [
         "uri"
       ]
+    },
+    "TasksCapability": {
+      "description": "Task capability negotiation for SEP-1686.",
+      "type": "object",
+      "properties": {
+        "cancel": {
+          "description": "Whether the receiver supports `tasks/cancel`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "list": {
+          "description": "Whether the receiver supports `tasks/list`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "requests": {
+          "description": "Map of request category (e.g. \"tools.call\") to a boolean indicating support.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
     },
     "UnsubscribeRequestMethod": {
       "type": "string",
