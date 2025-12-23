@@ -12,8 +12,8 @@ An official Rust Model Context Protocol SDK implementation with tokio async runt
 
 This repository contains the following crates:
 
-- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation (If you want to get more information, please visit [rmcp](crates/rmcp/README.md))
-- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations (If you want to get more information, please visit [rmcp-macros](crates/rmcp-macros/README.md))
+- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation - see [rmcp](crates/rmcp/README.md)
+- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations - see [rmcp-macros](crates/rmcp-macros/README.md)
 
 ## Usage
 
@@ -25,14 +25,15 @@ rmcp = { version = "0.8.0", features = ["server"] }
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
 ### Third Dependencies
-Basic dependencies:
-- [tokio required](https://github.com/tokio-rs/tokio)
-- [serde required](https://github.com/serde-rs/serde)
-Json Schema generation(Must follow the 2020-12 version):
-- [shemars required](https://github.com/GREsau/schemars)
 
+Basic dependencies:
+- [tokio](https://github.com/tokio-rs/tokio)
+- [serde](https://github.com/serde-rs/serde)
+Json Schema generation (version 2020-12):
+- [schemars](https://github.com/GREsau/schemars)
 
 ### Build a Client
+
 <details>
 <summary>Start a client</summary>
 
@@ -108,11 +109,11 @@ let quit_reason = server.cancel().await?;
 
 ## Examples
 
-See [examples](examples/README.md)
+See [examples](examples/README.md).
 
 ## OAuth Support
 
-See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
+See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
