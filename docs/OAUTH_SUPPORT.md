@@ -1,6 +1,6 @@
 # Model Context Protocol OAuth Authorization
 
-This document describes the OAuth 2.1 authorization implementation for Model Context Protocol (MCP), following the [MCP 2025-03-26 Authorization Specification](https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/authorization/).
+This document describes the OAuth 2.1 authorization implementation for Model Context Protocol (MCP), following the [MCP 2025-03-26 Authorization Specification](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization/).
 
 ## Features
 
@@ -117,7 +117,7 @@ If you encounter authorization issues, check the following:
 
 ## References
 
-- [MCP Authorization Specification](https://spec.modelcontextprotocol.io/specification/2025-03-26/basic/authorization/)
+- [MCP Authorization Specification](https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization/)
 - [OAuth 2.1 Specification Draft](https://oauth.net/2.1/)
 - [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 7591: OAuth 2.0 Dynamic Client Registration Protocol](https://datatracker.ietf.org/doc/html/rfc7591)
