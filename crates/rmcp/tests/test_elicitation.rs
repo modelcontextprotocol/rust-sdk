@@ -404,9 +404,9 @@ async fn test_elicitation_structured_schemas() {
         .required_email("email")
         .required_integer("age", 0, 150)
         .optional_bool("newsletter", false)
-        .required_enum(
+        .required_enum_schema(
             "country",
-            vec!["US".to_string(), "UK".to_string(), "CA".to_string()],
+            EnumSchema::builder(vec!["US".to_string(), "UK".to_string(), "CA".to_string()]).build(),
         )
         .description("User registration information")
         .build()
@@ -625,6 +625,173 @@ mod typed_elicitation_tests {
             assert!(props.contains_key("notifications"));
             assert!(props.contains_key("language"));
         }
+    }
+}
+
+// =============================================================================
+// ELICITATION ENUM TESTS (MCP 2025-11-25 COMPLIANCE)
+// =============================================================================
+
+/// Test elicitation with multi-select enum schema
+#[tokio::test]
+async fn test_elicitation_multi_select_enum() {
+    let enum_schema = EnumSchema::builder(vec!["A".into(), "B".into(), "C".into()])
+        .multiselect()
+        .enum_titles(vec![
+            "A name".to_string(),
+            "B name".to_string(),
+            "C name".to_string(),
+        ])
+        .expect("Number of title must match number of enum values")
+        .min_items(1)
+        .expect("Min items must be less than or equal to number of enum values")
+        .max_items(2)
+        .expect("Max items must be less than or equal to number of enum values")
+        .build();
+
+    let schema = ElicitationSchema::builder()
+        .required_enum_schema("choices", enum_schema)
+        .build()
+        .unwrap();
+
+    let request = CreateElicitationRequestParam {
+        message: "Please provide your user information".to_string(),
+        requested_schema: schema,
+    };
+
+    // Test that complex schemas serialize/deserialize correctly
+    let json = serde_json::to_value(&request).unwrap();
+    let deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
+
+    assert_eq!(deserialized.message, "Please provide your user information");
+    assert_eq!(deserialized.requested_schema.properties.len(), 1);
+    assert!(
+        deserialized
+            .requested_schema
+            .properties
+            .contains_key("choices")
+    );
+    assert_eq!(
+        deserialized.requested_schema.required,
+        Some(vec!["choices".to_string()])
+    );
+
+    assert!(matches!(
+        deserialized
+            .requested_schema
+            .properties
+            .get("choices")
+            .unwrap(),
+        PrimitiveSchema::Enum(EnumSchema::Multi(_))
+    ));
+
+    if let Some(PrimitiveSchema::Enum(schema)) =
+        deserialized.requested_schema.properties.get("choices")
+    {
+        assert_eq!(
+            schema,
+            &EnumSchema::Multi(MultiSelectEnumSchema::Titled(TitledMultiSelectEnumSchema {
+                type_: ArrayTypeConst,
+                title: None,
+                description: None,
+                min_items: Some(1),
+                max_items: Some(2),
+                items: TitledItems {
+                    any_of: vec![
+                        ConstTitle {
+                            const_: "A".to_string(),
+                            title: "A name".to_string()
+                        },
+                        ConstTitle {
+                            const_: "B".to_string(),
+                            title: "B name".to_string()
+                        },
+                        ConstTitle {
+                            const_: "C".to_string(),
+                            title: "C name".to_string()
+                        }
+                    ],
+                },
+                default: None
+            }))
+        )
+    }
+}
+
+/// Test elicitation with single-select enum schema
+#[tokio::test]
+async fn test_elicitation_single_select_enum() {
+    let enum_schema = EnumSchema::builder(vec!["A".into(), "B".into(), "C".into()])
+        .enum_titles(vec![
+            "A name".to_string(),
+            "B name".to_string(),
+            "C name".to_string(),
+        ])
+        .expect("Number of title must match number of enum values")
+        .build();
+
+    let schema = ElicitationSchema::builder()
+        .required_enum_schema("choices", enum_schema)
+        .build()
+        .unwrap();
+
+    let request = CreateElicitationRequestParam {
+        message: "Please provide your user information".to_string(),
+        requested_schema: schema,
+    };
+
+    // Test that complex schemas serialize/deserialize correctly
+    let json = serde_json::to_value(&request).unwrap();
+    let deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized.message, "Please provide your user information");
+    assert_eq!(deserialized.requested_schema.properties.len(), 1);
+    assert!(
+        deserialized
+            .requested_schema
+            .properties
+            .contains_key("choices")
+    );
+    assert_eq!(
+        deserialized.requested_schema.required,
+        Some(vec!["choices".to_string()])
+    );
+    assert!(matches!(
+        deserialized
+            .requested_schema
+            .properties
+            .get("choices")
+            .unwrap(),
+        PrimitiveSchema::Enum(EnumSchema::Single(_))
+    ));
+
+    if let Some(PrimitiveSchema::Enum(schema)) =
+        deserialized.requested_schema.properties.get("choices")
+    {
+        assert_eq!(
+            schema,
+            &EnumSchema::Single(SingleSelectEnumSchema::Titled(
+                TitledSingleSelectEnumSchema {
+                    type_: StringTypeConst,
+                    title: None,
+                    description: None,
+                    one_of: vec![
+                        ConstTitle {
+                            const_: "A".to_string(),
+                            title: "A name".to_string()
+                        },
+                        ConstTitle {
+                            const_: "B".to_string(),
+                            title: "B name".to_string()
+                        },
+                        ConstTitle {
+                            const_: "C".to_string(),
+                            title: "C name".to_string()
+                        }
+                    ],
+                    default: None
+                }
+            ))
+        )
     }
 }
 

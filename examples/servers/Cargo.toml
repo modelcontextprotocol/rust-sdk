@@ -105,3 +105,7 @@ path = "src/cimd_auth_streamhttp.rs"
 [[example]]
 name = "servers_calculator_stdio"
 path = "src/calculator_stdio.rs"
+
+[[example]]
+name = "elicitation_enum_select"
+path = "src/elicitation_enum_inference.rs"
