@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.12.0...rmcp-macros-v0.13.0) - 2025-12-24
+
+### Added
+
+- *(task)* add task support (SEP-1686) ([#536](https://github.com/modelcontextprotocol/rust-sdk/pull/536))
+
+### Fixed
+
+- *(docs)* add spreadsheet-mcp to Built with rmcp ([#582](https://github.com/modelcontextprotocol/rust-sdk/pull/582))
+
 ## [0.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.11.0...rmcp-macros-v0.12.0) - 2025-12-18
 
 ### Other
