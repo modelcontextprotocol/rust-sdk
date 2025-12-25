@@ -116,8 +116,8 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
-- [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
-- [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
+- [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2025-11-25/schema.ts)
 
 ## Related Projects
 
