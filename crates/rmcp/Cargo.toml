@@ -97,6 +97,7 @@ server-side-http = [
   "dep:http-body-util",
   "dep:bytes",
   "dep:sse-stream",
+  "dep:axum",
   "tower",
 ]
 
@@ -202,3 +203,8 @@ path = "tests/test_elicitation.rs"
 name = "test_task"
 required-features = ["server", "client", "macros"]
 path = "tests/test_task.rs"
+
+[[test]]
+name = "test_streamable_http_priming"
+required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+path = "tests/test_streamable_http_priming.rs"

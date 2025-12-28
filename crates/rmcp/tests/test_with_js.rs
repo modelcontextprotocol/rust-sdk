@@ -72,6 +72,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
                 stateful_mode: true,
                 sse_keep_alive: None,
                 cancellation_token: ct.child_token(),
+                ..Default::default()
             },
         );
     let router = axum::Router::new().nest_service("/mcp", service);

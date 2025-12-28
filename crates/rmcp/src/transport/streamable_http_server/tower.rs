@@ -32,7 +32,10 @@ use crate::{
 pub struct StreamableHttpServerConfig {
     /// The ping message duration for SSE connections.
     pub sse_keep_alive: Option<Duration>,
+    /// The retry interval for SSE priming events.
+    pub sse_retry: Option<Duration>,
     /// If true, the server will create a session for each request and keep it alive.
+    /// When enabled, SSE priming events are sent to enable client reconnection.
     pub stateful_mode: bool,
     /// Cancellation token for the Streamable HTTP server.
     ///
@@ -45,6 +48,7 @@ impl Default for StreamableHttpServerConfig {
     fn default() -> Self {
         Self {
             sse_keep_alive: Some(Duration::from_secs(15)),
+            sse_retry: Some(Duration::from_secs(3)),
             stateful_mode: true,
             cancellation_token: CancellationToken::new(),
         }
@@ -216,6 +220,7 @@ where
                 .resume(&session_id, last_event_id)
                 .await
                 .map_err(internal_error_response("resume session"))?;
+            // Resume doesn't need priming - client already has the event ID
             Ok(sse_stream_response(
                 stream,
                 self.config.sse_keep_alive,
@@ -228,6 +233,19 @@ where
                 .create_standalone_stream(&session_id)
                 .await
                 .map_err(internal_error_response("create standalone stream"))?;
+            // Prepend priming event if sse_retry configured
+            let stream = if let Some(retry) = self.config.sse_retry {
+                let priming = ServerSseMessage {
+                    event_id: Some("0".into()),
+                    message: None,
+                    retry: Some(retry),
+                };
+                futures::stream::once(async move { priming })
+                    .chain(stream)
+                    .left_stream()
+            } else {
+                stream.right_stream()
+            };
             Ok(sse_stream_response(
                 stream,
                 self.config.sse_keep_alive,
@@ -322,6 +340,19 @@ where
                             .create_stream(&session_id, message)
                             .await
                             .map_err(internal_error_response("get session"))?;
+                        // Prepend priming event if sse_retry configured
+                        let stream = if let Some(retry) = self.config.sse_retry {
+                            let priming = ServerSseMessage {
+                                event_id: Some("0".into()),
+                                message: None,
+                                retry: Some(retry),
+                            };
+                            futures::stream::once(async move { priming })
+                                .chain(stream)
+                                .left_stream()
+                        } else {
+                            stream.right_stream()
+                        };
                         Ok(sse_stream_response(
                             stream,
                             self.config.sse_keep_alive,
@@ -389,15 +420,28 @@ where
                     .initialize_session(&session_id, message)
                     .await
                     .map_err(internal_error_response("create stream"))?;
+                let stream = futures::stream::once(async move {
+                    ServerSseMessage {
+                        event_id: None,
+                        message: Some(Arc::new(response)),
+                        retry: None,
+                    }
+                });
+                // Prepend priming event if sse_retry configured
+                let stream = if let Some(retry) = self.config.sse_retry {
+                    let priming = ServerSseMessage {
+                        event_id: Some("0".into()),
+                        message: None,
+                        retry: Some(retry),
+                    };
+                    futures::stream::once(async move { priming })
+                        .chain(stream)
+                        .left_stream()
+                } else {
+                    stream.right_stream()
+                };
                 let mut response = sse_stream_response(
-                    futures::stream::once({
-                        async move {
-                            ServerSseMessage {
-                                event_id: None,
-                                message: response.into(),
-                            }
-                        }
-                    }),
+                    stream,
                     self.config.sse_keep_alive,
                     self.config.cancellation_token.child_token(),
                 );
@@ -424,14 +468,17 @@ where
                         // on service created
                         let _ = service.waiting().await;
                     });
+                    // Stateless mode: no priming (no session to resume)
+                    let stream = ReceiverStream::new(receiver).map(|message| {
+                        tracing::info!(?message);
+                        ServerSseMessage {
+                            event_id: None,
+                            message: Some(Arc::new(message)),
+                            retry: None,
+                        }
+                    });
                     Ok(sse_stream_response(
-                        ReceiverStream::new(receiver).map(|message| {
-                            tracing::info!(?message);
-                            ServerSseMessage {
-                                event_id: None,
-                                message: message.into(),
-                            }
-                        }),
+                        stream,
                         self.config.sse_keep_alive,
                         self.config.cancellation_token.child_token(),
                     ))
