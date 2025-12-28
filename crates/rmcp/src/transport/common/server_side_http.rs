@@ -62,7 +62,8 @@ pub struct ServerSseMessage {
     /// The event ID for this message. When set, clients can use this ID
     /// with the `Last-Event-ID` header to resume the stream from this point.
     pub event_id: Option<String>,
-    /// The JSON-RPC message content. For priming events, set this to `None`.
+    /// The JSON-RPC message content. Set to `None` for priming events.
+    /// See [SEP-1699](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1699)
     pub message: Option<Arc<ServerJsonRpcMessage>>,
     /// The retry interval hint for clients. Clients should wait this duration
     /// before attempting to reconnect. This maps to the SSE `retry:` field.
@@ -81,7 +82,7 @@ pub(crate) fn sse_stream_response(
                 let data = serde_json::to_string(msg.as_ref()).expect("valid message");
                 Sse::default().data(data)
             } else {
-                // Priming event: empty data per SSE spec (just "data:\n")
+                // Priming event: empty data per SEP-1699 (just "data:\n")
                 Sse::default().data("")
             };
 
