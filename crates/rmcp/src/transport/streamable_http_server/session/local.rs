@@ -201,7 +201,7 @@ impl CachedTx {
         Self::new(tx, None)
     }
 
-    async fn send(&mut self, message: ServerJsonRpcMessage) {
+    fn next_event_id(&self) -> EventId {
         let index = self.cache.back().map_or(0, |m| {
             m.event_id
                 .as_deref()
@@ -211,14 +211,33 @@ impl CachedTx {
                 .index
                 + 1
         });
-        let event_id = EventId {
+        EventId {
             http_request_id: self.http_request_id,
             index,
-        };
+        }
+    }
+
+    async fn send(&mut self, message: ServerJsonRpcMessage) {
+        let event_id = self.next_event_id();
         let message = ServerSseMessage {
             event_id: Some(event_id.to_string()),
-            message: Arc::new(message),
+            message: Some(Arc::new(message)),
+            retry: None,
         };
+        self.cache_and_send(message).await;
+    }
+
+    async fn send_priming(&mut self, retry: Duration) {
+        let event_id = self.next_event_id();
+        let message = ServerSseMessage {
+            event_id: Some(event_id.to_string()),
+            message: None,
+            retry: Some(retry),
+        };
+        self.cache_and_send(message).await;
+    }
+
+    async fn cache_and_send(&mut self, message: ServerSseMessage) {
         if self.cache.len() >= self.capacity {
             self.cache.pop_front();
             self.cache.push_back(message.clone());
@@ -525,7 +544,53 @@ impl LocalSessionWorker {
             }
         }
     }
+
+    async fn close_sse_stream(
+        &mut self,
+        http_request_id: Option<HttpRequestId>,
+        retry_interval: Option<Duration>,
+    ) -> Result<(), SessionError> {
+        match http_request_id {
+            // Close a request-wise stream
+            Some(id) => {
+                let request_wise = self
+                    .tx_router
+                    .get_mut(&id)
+                    .ok_or(SessionError::ChannelClosed(Some(id)))?;
+
+                // Send priming event if retry interval is specified
+                if let Some(interval) = retry_interval {
+                    request_wise.tx.send_priming(interval).await;
+                }
+
+                // Close the stream by dropping the sender
+                let (tx, _rx) = tokio::sync::mpsc::channel(1);
+                request_wise.tx.tx = tx;
+
+                tracing::debug!(
+                    http_request_id = id,
+                    "closed SSE stream for server-initiated disconnection"
+                );
+                Ok(())
+            }
+            // Close the standalone (common) stream
+            None => {
+                // Send priming event if retry interval is specified
+                if let Some(interval) = retry_interval {
+                    self.common.send_priming(interval).await;
+                }
+
+                // Close the stream by dropping the sender
+                let (tx, _rx) = tokio::sync::mpsc::channel(1);
+                self.common.tx = tx;
+
+                tracing::debug!("closed standalone SSE stream for server-initiated disconnection");
+                Ok(())
+            }
+        }
+    }
 }
+
 #[derive(Debug)]
 pub enum SessionEvent {
     ClientMessage {
@@ -548,6 +613,13 @@ pub enum SessionEvent {
         responder: oneshot::Sender<Result<ServerJsonRpcMessage, SessionError>>,
     },
     Close,
+    CloseSseStream {
+        /// The HTTP request ID to close. If `None`, closes the standalone (common) stream.
+        http_request_id: Option<HttpRequestId>,
+        /// Optional retry interval. If provided, a priming event is sent before closing.
+        retry_interval: Option<Duration>,
+        responder: oneshot::Sender<Result<(), SessionError>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -676,6 +748,60 @@ impl LocalSessionHandle {
         self.event_tx
             .send(SessionEvent::InitializeRequest {
                 request,
+                responder: tx,
+            })
+            .await
+            .map_err(|_| SessionError::SessionServiceTerminated)?;
+        rx.await
+            .map_err(|_| SessionError::SessionServiceTerminated)?
+    }
+
+    /// Close an SSE stream for a specific request.
+    ///
+    /// This closes the SSE connection for a POST request stream, but keeps the session
+    /// and message cache active. Clients can reconnect using the `Last-Event-ID` header
+    /// via a GET request to resume receiving messages.
+    ///
+    /// # Arguments
+    ///
+    /// * `http_request_id` - The HTTP request ID of the stream to close
+    /// * `retry_interval` - Optional retry interval. If provided, a priming event is sent
+    pub async fn close_sse_stream(
+        &self,
+        http_request_id: HttpRequestId,
+        retry_interval: Option<Duration>,
+    ) -> Result<(), SessionError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.event_tx
+            .send(SessionEvent::CloseSseStream {
+                http_request_id: Some(http_request_id),
+                retry_interval,
+                responder: tx,
+            })
+            .await
+            .map_err(|_| SessionError::SessionServiceTerminated)?;
+        rx.await
+            .map_err(|_| SessionError::SessionServiceTerminated)?
+    }
+
+    /// Close the standalone SSE stream.
+    ///
+    /// This closes the standalone SSE connection (established via GET request),
+    /// but keeps the session and message cache active. Clients can reconnect using
+    /// the `Last-Event-ID` header via a GET request to resume receiving messages.
+    ///
+    /// # Arguments
+    ///
+    /// * `retry_interval` - Optional retry interval. If provided, a priming event is sent
+    pub async fn close_standalone_sse_stream(
+        &self,
+        retry_interval: Option<Duration>,
+    ) -> Result<(), SessionError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.event_tx
+            .send(SessionEvent::CloseSseStream {
+                http_request_id: None,
+                retry_interval,
                 responder: tx,
             })
             .await
@@ -847,6 +973,15 @@ impl Worker for LocalSessionWorker {
                 }
                 InnerEvent::FromHttpService(SessionEvent::Close) => {
                     return Err(WorkerQuitReason::TransportClosed);
+                }
+                InnerEvent::FromHttpService(SessionEvent::CloseSseStream {
+                    http_request_id,
+                    retry_interval,
+                    responder,
+                }) => {
+                    let handle_result =
+                        self.close_sse_stream(http_request_id, retry_interval).await;
+                    let _ = responder.send(handle_result);
                 }
                 _ => {
                     // ignore
