@@ -202,3 +202,18 @@ path = "tests/test_elicitation.rs"
 name = "test_task"
 required-features = ["server", "client", "macros"]
 path = "tests/test_task.rs"
+
+[[test]]
+name = "test_custom_request"
+required-features = ["server", "client"]
+path = "tests/test_custom_request.rs"
+
+[[test]]
+name = "test_prompt_macros"
+required-features = ["server", "client"]
+path = "tests/test_prompt_macros.rs"
+
+[[test]]
+name = "test_sampling"
+required-features = ["server", "client"]
+path = "tests/test_sampling.rs"
