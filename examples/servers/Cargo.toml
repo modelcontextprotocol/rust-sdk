@@ -39,7 +39,7 @@ reqwest = { version = "0.12", features = ["json"] }
 chrono = "0.4"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 serde_urlencoded = "0.7"
-askama = { version = "0.14" }
+askama = { version = "0.15" }
 tower-http = { version = "0.6", features = ["cors"] }
 hyper = { version = "1" }
 hyper-util = { version = "0", features = ["server"] }
