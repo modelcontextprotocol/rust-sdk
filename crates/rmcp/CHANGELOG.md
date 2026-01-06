@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.12.0...rmcp-v0.13.0) - 2026-01-06
+
+### Added
+
+- *(elicitation)* implement SEP-1330 Elicitation Enum Schema Improvements ([#539](https://github.com/modelcontextprotocol/rust-sdk/pull/539))
+- *(task)* add task support (SEP-1686) ([#536](https://github.com/modelcontextprotocol/rust-sdk/pull/536))
+
+### Fixed
+
+- *(docs)* add spreadsheet-mcp to Built with rmcp ([#582](https://github.com/modelcontextprotocol/rust-sdk/pull/582))
+
+### Other
+
+- update README external links ([#603](https://github.com/modelcontextprotocol/rust-sdk/pull/603))
+- clarity and formatting ([#602](https://github.com/modelcontextprotocol/rust-sdk/pull/602))
+- Add optional icons field to RawResourceTemplate ([#589](https://github.com/modelcontextprotocol/rust-sdk/pull/589))
+
 ## [0.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.11.0...rmcp-v0.12.0) - 2025-12-18
 
 ### Added
