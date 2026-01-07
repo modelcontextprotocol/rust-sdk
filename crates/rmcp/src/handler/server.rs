@@ -327,3 +327,393 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
     }
 }
+
+impl<H: ServerHandler + ?Sized> ServerHandler for Box<H> {
+    fn enqueue_task(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + Send + '_ {
+        (**self).enqueue_task(request, context)
+    }
+
+    fn ping(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).ping(context)
+    }
+
+    fn initialize(
+        &self,
+        request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        (**self).initialize(request, context)
+    }
+
+    fn complete(
+        &self,
+        request: CompleteRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
+        (**self).complete(request, context)
+    }
+
+    fn set_level(
+        &self,
+        request: SetLevelRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).set_level(request, context)
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        (**self).get_prompt(request, context)
+    }
+
+    fn list_prompts(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        (**self).list_prompts(request, context)
+    }
+
+    fn list_resources(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        (**self).list_resources(request, context)
+    }
+
+    fn list_resource_templates(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
+        (**self).list_resource_templates(request, context)
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        (**self).read_resource(request, context)
+    }
+
+    fn subscribe(
+        &self,
+        request: SubscribeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).subscribe(request, context)
+    }
+
+    fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).unsubscribe(request, context)
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+        (**self).call_tool(request, context)
+    }
+
+    fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        (**self).list_tools(request, context)
+    }
+
+    fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+        (**self).on_custom_request(request, context)
+    }
+
+    fn on_cancelled(
+        &self,
+        notification: CancelledNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_cancelled(notification, context)
+    }
+
+    fn on_progress(
+        &self,
+        notification: ProgressNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_progress(notification, context)
+    }
+
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_initialized(context)
+    }
+
+    fn on_roots_list_changed(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_roots_list_changed(context)
+    }
+
+    fn on_custom_notification(
+        &self,
+        notification: CustomNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_custom_notification(notification, context)
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        (**self).get_info()
+    }
+
+    fn list_tasks(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
+        (**self).list_tasks(request, context)
+    }
+
+    fn get_task_info(
+        &self,
+        request: GetTaskInfoParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
+        (**self).get_task_info(request, context)
+    }
+
+    fn get_task_result(
+        &self,
+        request: GetTaskResultParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<TaskResult, McpError>> + Send + '_ {
+        (**self).get_task_result(request, context)
+    }
+
+    fn cancel_task(
+        &self,
+        request: CancelTaskParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).cancel_task(request, context)
+    }
+}
+
+impl<H: ServerHandler + ?Sized> ServerHandler for std::sync::Arc<H> {
+    fn enqueue_task(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + Send + '_ {
+        (**self).enqueue_task(request, context)
+    }
+
+    fn ping(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).ping(context)
+    }
+
+    fn initialize(
+        &self,
+        request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        (**self).initialize(request, context)
+    }
+
+    fn complete(
+        &self,
+        request: CompleteRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
+        (**self).complete(request, context)
+    }
+
+    fn set_level(
+        &self,
+        request: SetLevelRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).set_level(request, context)
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        (**self).get_prompt(request, context)
+    }
+
+    fn list_prompts(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        (**self).list_prompts(request, context)
+    }
+
+    fn list_resources(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        (**self).list_resources(request, context)
+    }
+
+    fn list_resource_templates(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
+        (**self).list_resource_templates(request, context)
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        (**self).read_resource(request, context)
+    }
+
+    fn subscribe(
+        &self,
+        request: SubscribeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).subscribe(request, context)
+    }
+
+    fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).unsubscribe(request, context)
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+        (**self).call_tool(request, context)
+    }
+
+    fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        (**self).list_tools(request, context)
+    }
+
+    fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+        (**self).on_custom_request(request, context)
+    }
+
+    fn on_cancelled(
+        &self,
+        notification: CancelledNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_cancelled(notification, context)
+    }
+
+    fn on_progress(
+        &self,
+        notification: ProgressNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_progress(notification, context)
+    }
+
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_initialized(context)
+    }
+
+    fn on_roots_list_changed(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_roots_list_changed(context)
+    }
+
+    fn on_custom_notification(
+        &self,
+        notification: CustomNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        (**self).on_custom_notification(notification, context)
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        (**self).get_info()
+    }
+
+    fn list_tasks(
+        &self,
+        request: Option<PaginatedRequestParam>,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
+        (**self).list_tasks(request, context)
+    }
+
+    fn get_task_info(
+        &self,
+        request: GetTaskInfoParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
+        (**self).get_task_info(request, context)
+    }
+
+    fn get_task_result(
+        &self,
+        request: GetTaskResultParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<TaskResult, McpError>> + Send + '_ {
+        (**self).get_task_result(request, context)
+    }
+
+    fn cancel_task(
+        &self,
+        request: CancelTaskParam,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        (**self).cancel_task(request, context)
+    }
+}
