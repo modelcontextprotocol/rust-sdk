@@ -211,7 +211,7 @@ impl ClientHandler for ClientInfo {
     }
 }
 
-impl<H: ClientHandler + ?Sized> ClientHandler for Box<H> {
+impl<H: ClientHandler> ClientHandler for Box<H> {
     fn ping(
         &self,
         context: RequestContext<RoleClient>,
@@ -316,7 +316,7 @@ impl<H: ClientHandler + ?Sized> ClientHandler for Box<H> {
     }
 }
 
-impl<H: ClientHandler + ?Sized> ClientHandler for std::sync::Arc<H> {
+impl<H: ClientHandler> ClientHandler for std::sync::Arc<H> {
     fn ping(
         &self,
         context: RequestContext<RoleClient>,

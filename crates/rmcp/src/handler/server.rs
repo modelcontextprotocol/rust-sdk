@@ -328,7 +328,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     }
 }
 
-impl<H: ServerHandler + ?Sized> ServerHandler for Box<H> {
+impl<H: ServerHandler> ServerHandler for Box<H> {
     fn enqueue_task(
         &self,
         request: CallToolRequestParam,
@@ -523,7 +523,7 @@ impl<H: ServerHandler + ?Sized> ServerHandler for Box<H> {
     }
 }
 
-impl<H: ServerHandler + ?Sized> ServerHandler for std::sync::Arc<H> {
+impl<H: ServerHandler> ServerHandler for std::sync::Arc<H> {
     fn enqueue_task(
         &self,
         request: CallToolRequestParam,
