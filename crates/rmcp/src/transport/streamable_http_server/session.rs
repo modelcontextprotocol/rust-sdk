@@ -1,10 +1,9 @@
 use futures::Stream;
 
-pub use crate::transport::common::server_side_http::SessionId;
+pub use crate::transport::common::server_side_http::{ServerSseMessage, SessionId};
 use crate::{
     RoleServer,
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
-    transport::common::server_side_http::ServerSseMessage,
 };
 
 pub mod local;
