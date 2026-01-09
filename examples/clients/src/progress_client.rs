@@ -200,7 +200,7 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     Ok(())
 }
 
-// Test HTTP transport, must run the server with `cargo run --example servers_progress_demo -- http` in the servers directory
+// Test HTTP transport, must run the server with `cargo run -p mcp-client-examples --example servers_progress_demo -- http` in the servers directory
 async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     tracing::info!("Testing HTTP Streaming Transport");
     tracing::info!("=====================================");

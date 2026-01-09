@@ -63,7 +63,7 @@ A client demonstrating how to use the sampling tool.
 
 A client that communicates with an MCP server using progress notifications.
 
-- Launches the `cargo run --example clients_progress_client -- --transport {stdio|http|all}` to test the progress notifications
+- Launches the `cargo run -p mcp-client-examples --example clients_progress_client -- --transport {stdio|http|all}` to test the progress notifications
 - Connects to the server using different transport methods
 - Tests the progress notifications
 - The http transport should run the server first
@@ -75,22 +75,22 @@ Each example can be run using Cargo:
 
 ```bash
 # Run the Git standard I/O client example
-cargo run --example clients_git_stdio
+cargo run -p mcp-client-examples --example clients_git_stdio
 
 # Run the streamable HTTP client example
-cargo run --example clients_streamable_http
+cargo run -p mcp-client-examples --example clients_streamable_http
 
 # Run the full-featured standard I/O client example
-cargo run --example clients_everything_stdio
+cargo run -p mcp-client-examples --example clients_everything_stdio
 
 # Run the client collection example
-cargo run --example clients_collection
+cargo run -p mcp-client-examples --example clients_collection
 
 # Run the OAuth client example
-cargo run --example clients_oauth_client
+cargo run -p mcp-client-examples --example clients_oauth_client
 
 # Run the sampling standard I/O client example
-cargo run --example clients_sampling_stdio
+cargo run -p mcp-client-examples --example clients_sampling_stdio
 ```
 
 ## Dependencies
