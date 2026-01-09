@@ -4,9 +4,8 @@ mod common;
 
 use std::sync::Arc;
 
-use rmcp::{ClientHandler, ServerHandler};
-
 use common::handlers::{TestClientHandler, TestServer};
+use rmcp::{ClientHandler, ServerHandler};
 
 #[test]
 fn test_wrapped_server_handlers() {
