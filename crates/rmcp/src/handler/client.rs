@@ -210,3 +210,23 @@ impl ClientHandler for ClientInfo {
         self.clone()
     }
 }
+
+// Implement ClientHandler for Box<H> and Arc<H> using a macro to reduce boilerplate
+crate::impl_handler_for_box_and_arc! {
+    impl ClientHandler {
+        async fn ping(&self, context: RequestContext<RoleClient>) -> Result<(), McpError>;
+        async fn create_message(&self, params: CreateMessageRequestParam, context: RequestContext<RoleClient>) -> Result<CreateMessageResult, McpError>;
+        async fn list_roots(&self, context: RequestContext<RoleClient>) -> Result<ListRootsResult, McpError>;
+        async fn create_elicitation(&self, request: CreateElicitationRequestParam, context: RequestContext<RoleClient>) -> Result<CreateElicitationResult, McpError>;
+        async fn on_custom_request(&self, request: CustomRequest, context: RequestContext<RoleClient>) -> Result<CustomResult, McpError>;
+        async fn on_cancelled(&self, params: CancelledNotificationParam, context: NotificationContext<RoleClient>) -> ();
+        async fn on_progress(&self, params: ProgressNotificationParam, context: NotificationContext<RoleClient>) -> ();
+        async fn on_logging_message(&self, params: LoggingMessageNotificationParam, context: NotificationContext<RoleClient>) -> ();
+        async fn on_resource_updated(&self, params: ResourceUpdatedNotificationParam, context: NotificationContext<RoleClient>) -> ();
+        async fn on_resource_list_changed(&self, context: NotificationContext<RoleClient>) -> ();
+        async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) -> ();
+        async fn on_prompt_list_changed(&self, context: NotificationContext<RoleClient>) -> ();
+        async fn on_custom_notification(&self, notification: CustomNotification, context: NotificationContext<RoleClient>) -> ();
+        fn get_info(&self) -> ClientInfo;
+    }
+}

@@ -327,3 +327,34 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
     }
 }
+
+// Implement ServerHandler for Box<H> and Arc<H> using a macro to reduce boilerplate
+crate::impl_handler_for_box_and_arc! {
+    impl ServerHandler {
+        async fn enqueue_task(&self, request: CallToolRequestParam, context: RequestContext<RoleServer>) -> Result<CreateTaskResult, McpError>;
+        async fn ping(&self, context: RequestContext<RoleServer>) -> Result<(), McpError>;
+        async fn initialize(&self, request: InitializeRequestParam, context: RequestContext<RoleServer>) -> Result<InitializeResult, McpError>;
+        async fn complete(&self, request: CompleteRequestParam, context: RequestContext<RoleServer>) -> Result<CompleteResult, McpError>;
+        async fn set_level(&self, request: SetLevelRequestParam, context: RequestContext<RoleServer>) -> Result<(), McpError>;
+        async fn get_prompt(&self, request: GetPromptRequestParam, context: RequestContext<RoleServer>) -> Result<GetPromptResult, McpError>;
+        async fn list_prompts(&self, request: Option<PaginatedRequestParam>, context: RequestContext<RoleServer>) -> Result<ListPromptsResult, McpError>;
+        async fn list_resources(&self, request: Option<PaginatedRequestParam>, context: RequestContext<RoleServer>) -> Result<ListResourcesResult, McpError>;
+        async fn list_resource_templates(&self, request: Option<PaginatedRequestParam>, context: RequestContext<RoleServer>) -> Result<ListResourceTemplatesResult, McpError>;
+        async fn read_resource(&self, request: ReadResourceRequestParam, context: RequestContext<RoleServer>) -> Result<ReadResourceResult, McpError>;
+        async fn subscribe(&self, request: SubscribeRequestParam, context: RequestContext<RoleServer>) -> Result<(), McpError>;
+        async fn unsubscribe(&self, request: UnsubscribeRequestParam, context: RequestContext<RoleServer>) -> Result<(), McpError>;
+        async fn call_tool(&self, request: CallToolRequestParam, context: RequestContext<RoleServer>) -> Result<CallToolResult, McpError>;
+        async fn list_tools(&self, request: Option<PaginatedRequestParam>, context: RequestContext<RoleServer>) -> Result<ListToolsResult, McpError>;
+        async fn on_custom_request(&self, request: CustomRequest, context: RequestContext<RoleServer>) -> Result<CustomResult, McpError>;
+        async fn on_cancelled(&self, notification: CancelledNotificationParam, context: NotificationContext<RoleServer>) -> ();
+        async fn on_progress(&self, notification: ProgressNotificationParam, context: NotificationContext<RoleServer>) -> ();
+        async fn on_initialized(&self, context: NotificationContext<RoleServer>) -> ();
+        async fn on_roots_list_changed(&self, context: NotificationContext<RoleServer>) -> ();
+        async fn on_custom_notification(&self, notification: CustomNotification, context: NotificationContext<RoleServer>) -> ();
+        async fn list_tasks(&self, request: Option<PaginatedRequestParam>, context: RequestContext<RoleServer>) -> Result<ListTasksResult, McpError>;
+        async fn get_task_info(&self, request: GetTaskInfoParam, context: RequestContext<RoleServer>) -> Result<GetTaskInfoResult, McpError>;
+        async fn get_task_result(&self, request: GetTaskResultParam, context: RequestContext<RoleServer>) -> Result<TaskResult, McpError>;
+        async fn cancel_task(&self, request: CancelTaskParam, context: RequestContext<RoleServer>) -> Result<(), McpError>;
+        fn get_info(&self) -> ServerInfo;
+    }
+}
