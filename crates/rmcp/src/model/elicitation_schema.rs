@@ -16,7 +16,7 @@
 //!     .build();
 //! ```
 
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{borrow::Cow, collections::BTreeMap, marker::PhantomData};
 
 use serde::{Deserialize, Serialize};
 
@@ -632,6 +632,12 @@ pub enum EnumSchema {
     Legacy(LegacyEnumSchema),
 }
 
+/// Marker type for single-select enum builder
+#[derive(Debug)]
+pub struct SingleSelect;
+/// Marker type for multi-select enum builder
+#[derive(Debug)]
+pub struct MultiSelect;
 /// Builder for EnumSchema
 /// Allows to create various enum schema types (single/multi select, titled/untitled)
 /// with validation of provided parameters
@@ -649,11 +655,9 @@ pub enum EnumSchema {
 ///  .build();
 /// ```
 #[derive(Debug)]
-pub struct EnumSchemaBuilder {
+pub struct EnumSchemaBuilder<T> {
     /// Enum values
     enum_values: Vec<String>,
-    /// If true generate SingleSelect EnumSchema, MultiSelect otherwise
-    single_select: bool,
     /// If true generate Titled EnumSchema, UnTitled otherwise
     titled: bool,
     /// Title of EnumSchema
@@ -668,37 +672,50 @@ pub struct EnumSchemaBuilder {
     max_items: Option<u64>,
     /// Default values for enum
     default: Vec<String>,
+    select_type: PhantomData<T>,
 }
 
-impl Default for EnumSchemaBuilder {
+/// Default implementation for single-select enum builder
+impl Default for EnumSchemaBuilder<SingleSelect> {
     fn default() -> Self {
         Self {
             title: None,
             description: None,
-            single_select: true,
             titled: false,
             enum_titles: Vec::new(),
             enum_values: Vec::new(),
             min_items: None,
             max_items: None,
             default: Vec::new(),
+            select_type: PhantomData,
         }
     }
 }
 
-/// Enum selection builder
-impl EnumSchemaBuilder {
-    pub fn new(values: Vec<String>) -> EnumSchemaBuilder {
-        EnumSchemaBuilder {
-            enum_values: values,
-            single_select: true,
-            titled: false,
-            ..Default::default()
-        }
+/// Common enum schema builder methods
+impl<T> EnumSchemaBuilder<T> {
+    /// Set title of enum schema
+    pub fn title(mut self, value: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(value.into());
+        self
+    }
+
+    /// Set description of enum schema
+    pub fn description(mut self, value: impl Into<Cow<'static, str>>) -> Self {
+        self.description = Some(value.into());
+        self
+    }
+
+    /// Set enum as untitled
+    /// Clears any previously set titles
+    pub fn untitled(mut self) -> Self {
+        self.enum_titles = Vec::new();
+        self.titled = false;
+        self
     }
 
     /// Set titles to enum values. Also, implicitly set this enum schema as titled
-    pub fn enum_titles(mut self, titles: Vec<String>) -> Result<EnumSchemaBuilder, String> {
+    pub fn enum_titles(mut self, titles: Vec<String>) -> Result<EnumSchemaBuilder<T>, String> {
         if titles.len() != self.enum_values.len() {
             return Err(format!(
                 "Provided number of titles do not match number of values: expected {}, but got {}",
@@ -710,64 +727,102 @@ impl EnumSchemaBuilder {
         self.enum_titles = titles;
         Ok(self)
     }
+}
 
-    /// Set enum as single-select
-    /// If it was multi-select, clear default values
-    pub fn single_select(mut self) -> EnumSchemaBuilder {
-        if !self.single_select {
-            self.default = Vec::new();
+/// Enum selection builder for single-select enums
+impl EnumSchemaBuilder<SingleSelect> {
+    pub fn new(values: Vec<String>) -> EnumSchemaBuilder<SingleSelect> {
+        EnumSchemaBuilder {
+            enum_values: values,
+            ..Default::default()
         }
-        self.single_select = true;
-        self
     }
 
-    /// Set enum as multi-select
-    /// If it was single-select, clear default value
-    pub fn multiselect(mut self) -> EnumSchemaBuilder {
-        if self.single_select {
-            self.default = Vec::new();
+    /// Transition to multi-select enum builder.
+    ///
+    /// Clears any previously set default values and resets min/max items.
+    /// After this transition, you can use `min_items()`, `max_items()`, and
+    /// `with_default()` for multi-select semantics.
+    pub fn multiselect(self) -> EnumSchemaBuilder<MultiSelect> {
+        EnumSchemaBuilder {
+            enum_values: self.enum_values,
+            titled: self.titled,
+            title: self.title,
+            description: self.description,
+            enum_titles: self.enum_titles,
+            min_items: None,
+            max_items: None,
+            default: Vec::new(), // Clear default for multi-select
+            select_type: PhantomData,
         }
-        self.single_select = false;
-        self
     }
 
-    /// Set enum as untitled
-    /// Clears any previously set titles
-    pub fn untitled(mut self) -> EnumSchemaBuilder {
-        self.enum_titles = Vec::new();
-        self.titled = false;
-        self
-    }
-
-    /// Set default value for single-select enum
-    pub fn single_select_default(
+    /// Set default value
+    pub fn with_default(
         mut self,
-        default_value: String,
-    ) -> Result<EnumSchemaBuilder, String> {
-        if !self.enum_values.contains(&default_value) {
+        default_value: impl Into<String>,
+    ) -> Result<EnumSchemaBuilder<SingleSelect>, String> {
+        let value: String = default_value.into();
+        if !self.enum_values.contains(&value) {
             return Err("Provided default value is not in enum values".to_string());
         }
-        if !self.single_select {
-            return Err(
-                "Set single default value available only when the builder is set to single-select. \
-            Use multi_select_default method for multi-select options".to_string(),
-            );
-        }
-        self.default = vec![default_value];
+        self.default = vec![value];
         Ok(self)
     }
 
-    /// Set default value for multi-select enum
-    pub fn multi_select_default(
+    /// Build enum schema
+    pub fn build(mut self) -> EnumSchema {
+        match self.titled {
+            false => EnumSchema::Single(SingleSelectEnumSchema::Untitled(
+                UntitledSingleSelectEnumSchema {
+                    type_: StringTypeConst,
+                    title: self.title,
+                    description: self.description,
+                    enum_: self.enum_values,
+                    default: self.default.pop(),
+                },
+            )),
+            true => EnumSchema::Single(SingleSelectEnumSchema::Titled(
+                TitledSingleSelectEnumSchema {
+                    type_: StringTypeConst,
+                    title: self.title,
+                    description: self.description,
+                    one_of: self
+                        .enum_titles
+                        .into_iter()
+                        .zip(self.enum_values)
+                        .map(|(title, const_)| ConstTitle { const_, title })
+                        .collect(),
+                    default: self.default.pop(),
+                },
+            )),
+        }
+    }
+}
+
+/// Enum selection builder for multi-select enums
+impl EnumSchemaBuilder<MultiSelect> {
+    /// Set enum as single-select
+    /// If it was multi-select, clear default values
+    pub fn single_select(self) -> EnumSchemaBuilder<SingleSelect> {
+        EnumSchemaBuilder {
+            enum_values: self.enum_values,
+            titled: self.titled,
+            title: self.title,
+            description: self.description,
+            enum_titles: self.enum_titles,
+            min_items: None,
+            max_items: None,
+            default: Vec::new(), // Clear default for single-select
+            select_type: PhantomData,
+        }
+    }
+
+    /// Set default values
+    pub fn with_default(
         mut self,
         default_values: Vec<String>,
-    ) -> Result<EnumSchemaBuilder, String> {
-        if self.single_select {
-            return Err(
-                "Set multiple default values available only when the builder is set to multi-select. \
-            Use single_select_default method for single-select options".to_string(),
-            );
-        }
+    ) -> Result<EnumSchemaBuilder<MultiSelect>, String> {
         for value in &default_values {
             if !self.enum_values.contains(value) {
                 return Err("One of the provided default values is not in enum values".to_string());
@@ -790,7 +845,7 @@ impl EnumSchemaBuilder {
     }
 
     /// Set minimal number of items for multi-select enum options
-    pub fn min_items(mut self, value: u64) -> Result<EnumSchemaBuilder, String> {
+    pub fn min_items(mut self, value: u64) -> Result<EnumSchemaBuilder<MultiSelect>, String> {
         if let Some(max) = self.max_items
             && value > max
         {
@@ -801,7 +856,7 @@ impl EnumSchemaBuilder {
     }
 
     /// Set maximal number of items for multi-select enum options
-    pub fn max_items(mut self, value: u64) -> Result<EnumSchemaBuilder, String> {
+    pub fn max_items(mut self, value: u64) -> Result<EnumSchemaBuilder<MultiSelect>, String> {
         if let Some(min) = self.min_items
             && value < min
         {
@@ -811,45 +866,10 @@ impl EnumSchemaBuilder {
         Ok(self)
     }
 
-    /// Set title of enum schema
-    pub fn title(mut self, value: impl Into<Cow<'static, str>>) -> Self {
-        self.title = Some(value.into());
-        self
-    }
-
-    /// Set description of enum schema
-    pub fn description(mut self, value: impl Into<Cow<'static, str>>) -> Self {
-        self.description = Some(value.into());
-        self
-    }
-
     /// Build enum schema
-    pub fn build(mut self) -> EnumSchema {
-        match (self.single_select, self.titled) {
-            (true, false) => EnumSchema::Single(SingleSelectEnumSchema::Untitled(
-                UntitledSingleSelectEnumSchema {
-                    type_: StringTypeConst,
-                    title: self.title,
-                    description: self.description,
-                    enum_: self.enum_values,
-                    default: self.default.pop(),
-                },
-            )),
-            (true, true) => EnumSchema::Single(SingleSelectEnumSchema::Titled(
-                TitledSingleSelectEnumSchema {
-                    type_: StringTypeConst,
-                    title: self.title,
-                    description: self.description,
-                    one_of: self
-                        .enum_titles
-                        .into_iter()
-                        .zip(self.enum_values)
-                        .map(|(title, const_)| ConstTitle { const_, title })
-                        .collect(),
-                    default: self.default.pop(),
-                },
-            )),
-            (false, false) => EnumSchema::Multi(MultiSelectEnumSchema::Untitled(
+    pub fn build(self) -> EnumSchema {
+        match self.titled {
+            false => EnumSchema::Multi(MultiSelectEnumSchema::Untitled(
                 UntitledMultiSelectEnumSchema {
                     type_: ArrayTypeConst,
                     title: self.title,
@@ -867,28 +887,26 @@ impl EnumSchemaBuilder {
                     },
                 },
             )),
-            (false, true) => {
-                EnumSchema::Multi(MultiSelectEnumSchema::Titled(TitledMultiSelectEnumSchema {
-                    type_: ArrayTypeConst,
-                    title: self.title,
-                    description: self.description,
-                    min_items: self.min_items,
-                    max_items: self.max_items,
-                    items: TitledItems {
-                        any_of: self
-                            .enum_titles
-                            .into_iter()
-                            .zip(self.enum_values)
-                            .map(|(title, const_)| ConstTitle { const_, title })
-                            .collect(),
-                    },
-                    default: if self.default.is_empty() {
-                        None
-                    } else {
-                        Some(self.default)
-                    },
-                }))
-            }
+            true => EnumSchema::Multi(MultiSelectEnumSchema::Titled(TitledMultiSelectEnumSchema {
+                type_: ArrayTypeConst,
+                title: self.title,
+                description: self.description,
+                min_items: self.min_items,
+                max_items: self.max_items,
+                items: TitledItems {
+                    any_of: self
+                        .enum_titles
+                        .into_iter()
+                        .zip(self.enum_values)
+                        .map(|(title, const_)| ConstTitle { const_, title })
+                        .collect(),
+                },
+                default: if self.default.is_empty() {
+                    None
+                } else {
+                    Some(self.default)
+                },
+            })),
         }
     }
 }
@@ -909,9 +927,14 @@ impl EnumSchema {
     /// ```
     /// use rmcp::model::*;
     ///
-    /// let builder = EnumSchema::builder(vec!["A".to_string(), "B".to_string()]);
+    /// let enum_schema = EnumSchema::builder(vec!["A".to_string(), "B".to_string()]).
+    ///     with_default("A").
+    ///     expect("Default value should be valid").
+    ///     enum_titles(vec!["Option A".to_string(), "Option B".to_string()]).
+    ///     expect("Number of titles should match number of values").
+    ///     build();
     /// ```
-    pub fn builder(values: Vec<String>) -> EnumSchemaBuilder {
+    pub fn builder(values: Vec<String>) -> EnumSchemaBuilder<SingleSelect> {
         EnumSchemaBuilder::new(values)
     }
 }
@@ -1375,25 +1398,37 @@ impl ElicitationSchemaBuilder {
 
     /// Add a required enum property using values. Creates an untitled single-select enum.
     #[deprecated(
-        since = "0.12.0",
+        since = "0.13.0",
         note = "Use ElicitationSchemaBuilder::required_enum_schema with EnumSchema::builder instead"
     )]
     pub fn required_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
         self.required_property(
             name,
-            PrimitiveSchema::Enum(EnumSchema::builder(values).build()),
+            PrimitiveSchema::Enum(EnumSchema::Legacy(LegacyEnumSchema {
+                type_: StringTypeConst,
+                title: None,
+                description: None,
+                enum_: values,
+                enum_names: None,
+            })),
         )
     }
 
     /// Add an optional enum property using values. Creates an untitled single-select enum.
     #[deprecated(
-        since = "0.12.0",
+        since = "0.13.0",
         note = "Use ElicitationSchemaBuilder::optional_enum_schema with EnumSchema::builder instead"
     )]
     pub fn optional_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
         self.property(
             name,
-            PrimitiveSchema::Enum(EnumSchema::builder(values).build()),
+            PrimitiveSchema::Enum(EnumSchema::Legacy(LegacyEnumSchema {
+                type_: StringTypeConst,
+                title: None,
+                description: None,
+                enum_: values,
+                enum_names: None,
+            })),
         )
     }
 
@@ -1560,6 +1595,25 @@ mod tests {
     }
 
     #[test]
+    fn test_enum_schema_legacy_serialization() -> anyhow::Result<()> {
+        let schema = EnumSchema::Legacy(LegacyEnumSchema {
+            type_: StringTypeConst,
+            title: Some("Legacy Enum".into()),
+            description: Some("A legacy enum schema".into()),
+            enum_: vec!["A".to_string(), "B".to_string()],
+            enum_names: Some(vec!["Option A".to_string(), "Option B".to_string()]),
+        });
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "string");
+        assert_eq!(json["title"], "Legacy Enum");
+        assert_eq!(json["description"], "A legacy enum schema");
+        assert_eq!(json["enum"], json!(["A", "B"]));
+        assert_eq!(json["enumNames"], json!(["Option A", "Option B"]));
+        Ok(())
+    }
+
+    #[test]
     fn test_enum_schema_titled_multi_select_serialization() -> anyhow::Result<()> {
         let schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
             .enum_titles(vec![
@@ -1587,6 +1641,156 @@ mod tests {
             ]})
         );
         assert_eq!(json["description"], "Country code");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_single_select_with_default() -> anyhow::Result<()> {
+        let schema = EnumSchema::builder(vec![
+            "red".to_string(),
+            "green".to_string(),
+            "blue".to_string(),
+        ])
+        .with_default("green")
+        .map_err(|e| anyhow!("{e}"))?
+        .description("Favorite color")
+        .build();
+
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "string");
+        assert_eq!(json["enum"], json!(["red", "green", "blue"]));
+        assert_eq!(json["default"], "green");
+        assert_eq!(json["description"], "Favorite color");
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_multi_select_with_default() -> anyhow::Result<()> {
+        let schema = EnumSchema::builder(vec![
+            "red".to_string(),
+            "green".to_string(),
+            "blue".to_string(),
+        ])
+        .multiselect()
+        .with_default(vec!["red".to_string(), "blue".to_string()])
+        .map_err(|e| anyhow!("{e}"))?
+        .min_items(1)
+        .map_err(|e| anyhow!("{e}"))?
+        .max_items(3)
+        .map_err(|e| anyhow!("{e}"))?
+        .build();
+
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "array");
+        assert_eq!(json["items"]["enum"], json!(["red", "green", "blue"]));
+        assert_eq!(json["default"], json!(["red", "blue"]));
+        assert_eq!(json["minItems"], 1);
+        assert_eq!(json["maxItems"], 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_transition_clears_defaults() -> anyhow::Result<()> {
+        // Start with single-select with default
+        let builder = EnumSchema::builder(vec!["A".to_string(), "B".to_string()])
+            .with_default("A")
+            .map_err(|e| anyhow!("{e}"))?;
+
+        // Transition to multi-select should clear the default
+        let schema = builder.multiselect().build();
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "array");
+        assert!(json["default"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_multi_to_single_transition() -> anyhow::Result<()> {
+        // Start with multi-select with defaults
+        let builder = EnumSchema::builder(vec!["A".to_string(), "B".to_string(), "C".to_string()])
+            .multiselect()
+            .with_default(vec!["A".to_string(), "B".to_string()])
+            .map_err(|e| anyhow!("{e}"))?
+            .min_items(1)
+            .map_err(|e| anyhow!("{e}"))?;
+
+        // Transition back to single-select should clear defaults and min/max items
+        let schema = builder.single_select().build();
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "string");
+        assert!(json["default"].is_null());
+        assert!(json["minItems"].is_null());
+        assert!(json["maxItems"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_invalid_single_default() {
+        let result = EnumSchema::builder(vec!["A".to_string(), "B".to_string()]).with_default("C");
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "Provided default value is not in enum values"
+        );
+    }
+
+    #[test]
+    fn test_enum_schema_invalid_multi_default() {
+        let result = EnumSchema::builder(vec!["A".to_string(), "B".to_string()])
+            .multiselect()
+            .with_default(vec!["A".to_string(), "C".to_string()]);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "One of the provided default values is not in enum values"
+        );
+    }
+
+    #[test]
+    fn test_enum_schema_titled_with_default() -> anyhow::Result<()> {
+        let schema = EnumSchema::builder(vec!["US".to_string(), "UK".to_string()])
+            .enum_titles(vec![
+                "United States".to_string(),
+                "United Kingdom".to_string(),
+            ])
+            .map_err(|e| anyhow!("{e}"))?
+            .with_default("UK")
+            .map_err(|e| anyhow!("{e}"))?
+            .build();
+
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "string");
+        assert_eq!(json["default"], "UK");
+        assert_eq!(
+            json["oneOf"],
+            json!([
+                {"const": "US", "title": "United States"},
+                {"const": "UK", "title": "United Kingdom"}
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_untitled_after_titled() -> anyhow::Result<()> {
+        let schema = EnumSchema::builder(vec!["A".to_string(), "B".to_string()])
+            .enum_titles(vec!["Option A".to_string(), "Option B".to_string()])
+            .map_err(|e| anyhow!("{e}"))?
+            .untitled()
+            .build();
+
+        let json = serde_json::to_value(&schema)?;
+
+        assert_eq!(json["type"], "string");
+        assert_eq!(json["enum"], json!(["A", "B"]));
+        assert!(json["oneOf"].is_null());
         Ok(())
     }
 
