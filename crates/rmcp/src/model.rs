@@ -453,6 +453,7 @@ impl ErrorCode {
     pub const INVALID_PARAMS: Self = Self(-32602);
     pub const INTERNAL_ERROR: Self = Self(-32603);
     pub const PARSE_ERROR: Self = Self(-32700);
+    pub const URL_ELICITATION_REQUIRED: Self = Self(-32042);
 }
 
 /// Error information for JSON-RPC error responses.
@@ -503,6 +504,12 @@ impl ErrorData {
     }
     pub fn internal_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
+    }
+    pub fn url_elicitation_required(
+        message: impl Into<Cow<'static, str>>,
+        data: Option<Value>,
+    ) -> Self {
+        Self::new(ErrorCode::URL_ELICITATION_REQUIRED, message, data)
     }
 }
 
@@ -1447,6 +1454,7 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 // Elicitation allows servers to request interactive input from users during tool execution.
 const_string!(ElicitationCreateRequestMethod = "elicitation/create");
 const_string!(ElicitationResponseNotificationMethod = "notifications/elicitation/response");
+const_string!(ElicitationCompletionNotificationMethod = "notifications/elicitation/complete");
 
 /// Represents the possible actions a user can take in response to an elicitation request.
 ///
@@ -1466,6 +1474,61 @@ pub enum ElicitationAction {
     Cancel,
 }
 
+/// Helper enum for deserializing CreateElicitationRequestParam with backward compatibility.
+/// When mode is missing, it defaults to FormElicitationParam.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "mode")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+enum CreateElicitationRequestParamDeserializeHelper {
+    #[serde(rename = "form", rename_all = "camelCase")]
+    FormElicitationParam {
+        message: String,
+        requested_schema: ElicitationSchema,
+    },
+    #[serde(rename = "url", rename_all = "camelCase")]
+    UrlElicitationParam {
+        message: String,
+        url: String,
+        elicitation_id: String,
+    },
+    #[serde(untagged, rename_all = "camelCase")]
+    FormElicitationParamBackwardsCompat {
+        message: String,
+        requested_schema: ElicitationSchema,
+    },
+}
+
+impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitationRequestParam {
+    type Error = serde_json::Error;
+
+    fn try_from(
+        value: CreateElicitationRequestParamDeserializeHelper,
+    ) -> Result<Self, Self::Error> {
+        match value {
+            CreateElicitationRequestParamDeserializeHelper::FormElicitationParam {
+                message,
+                requested_schema,
+            }
+            | CreateElicitationRequestParamDeserializeHelper::FormElicitationParamBackwardsCompat {
+                message,
+                requested_schema,
+            } => Ok(CreateElicitationRequestParam::FormElicitationParam {
+                message,
+                requested_schema,
+            }),
+            CreateElicitationRequestParamDeserializeHelper::UrlElicitationParam {
+                message,
+                url,
+                elicitation_id,
+            } => Ok(CreateElicitationRequestParam::UrlElicitationParam {
+                message,
+                url,
+                elicitation_id,
+            }),
+        }
+    }
+}
+
 /// Parameters for creating an elicitation request to gather user input.
 ///
 /// This structure contains everything needed to request interactive input from a user:
@@ -1473,11 +1536,11 @@ pub enum ElicitationAction {
 /// - A type-safe schema defining the expected structure of the response
 ///
 /// # Example
-///
+/// 1. Form-based elicitation request
 /// ```rust
 /// use rmcp::model::*;
 ///
-/// let params = CreateElicitationRequestParam {
+/// let params = CreateElicitationRequestParam::FormElicitationParam {
 ///     message: "Please provide your email".to_string(),
 ///     requested_schema: ElicitationSchema::builder()
 ///         .required_email("email")
@@ -1485,19 +1548,47 @@ pub enum ElicitationAction {
 ///         .unwrap(),
 /// };
 /// ```
+/// 2. URL-based elicitation request
+/// ```rust
+/// use rmcp::model::*;
+/// let params = CreateElicitationRequestParam::UrlElicitationParam {
+///     message: "Please provide your feedback at the following URL".to_string(),
+///     url: "https://example.com/feedback".to_string(),
+///     elicitation_id: "unique-id-123".to_string(),
+/// };
+/// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    tag = "mode",
+    try_from = "CreateElicitationRequestParamDeserializeHelper"
+)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CreateElicitationRequestParam {
-    /// Human-readable message explaining what input is needed from the user.
-    /// This should be clear and provide sufficient context for the user to understand
-    /// what information they need to provide.
-    pub message: String,
+pub enum CreateElicitationRequestParam {
+    #[serde(rename = "form", rename_all = "camelCase")]
+    FormElicitationParam {
+        /// Human-readable message explaining what input is needed from the user.
+        /// This should be clear and provide sufficient context for the user to understand
+        /// what information they need to provide.
+        message: String,
 
-    /// Type-safe schema defining the expected structure and validation rules for the user's response.
-    /// This enforces the MCP 2025-06-18 specification that elicitation schemas must be objects
-    /// with primitive-typed properties.
-    pub requested_schema: ElicitationSchema,
+        /// Type-safe schema defining the expected structure and validation rules for the user's response.
+        /// This enforces the MCP 2025-06-18 specification that elicitation schemas must be objects
+        /// with primitive-typed properties.
+        requested_schema: ElicitationSchema,
+    },
+    #[serde(rename = "url", rename_all = "camelCase")]
+    UrlElicitationParam {
+        /// Human-readable message explaining what input is needed from the user.
+        /// This should be clear and provide sufficient context for the user to understand
+        /// what information they need to provide.
+        message: String,
+
+        /// The URL where the user can provide the requested information.
+        /// The client should direct the user to this URL to complete the elicitation.
+        url: String,
+        /// The unique identifier for this elicitation request.
+        elicitation_id: String,
+    },
 }
 
 /// The result returned by a client in response to an elicitation request.
@@ -1521,6 +1612,18 @@ pub struct CreateElicitationResult {
 /// Request type for creating an elicitation to gather user input
 pub type CreateElicitationRequest =
     Request<ElicitationCreateRequestMethod, CreateElicitationRequestParam>;
+
+/// Notification parameters for an url elicitation completion notification.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ElicitationResponseNotificationParam {
+    pub elicitation_id: String,
+}
+
+/// Notification sent when an url elicitation process is completed.
+pub type ElicitationCompletionNotification =
+    Notification<ElicitationCompletionNotificationMethod, ElicitationResponseNotificationParam>;
 
 // =============================================================================
 // TOOL EXECUTION RESULTS
@@ -1945,6 +2048,7 @@ ts_union!(
     | ResourceListChangedNotification
     | ToolListChangedNotification
     | PromptListChangedNotification
+    | ElicitationCompletionNotification
     | CustomNotification;
 );
 
@@ -2445,5 +2549,125 @@ mod tests {
         );
         assert_eq!(json["serverInfo"]["icons"][0]["sizes"][0], "48x48");
         assert_eq!(json["serverInfo"]["websiteUrl"], "https://docs.example.com");
+    }
+
+    #[test]
+    fn test_elicitation_deserialization_untagged() {
+        // Test deserialization without the "type" field (should default to FormElicitationParam)
+        let json_data_without_tag = json!({
+            "message": "Please provide more details.",
+            "requestedSchema": {
+                "title": "User Details",
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" }
+                },
+                "required": ["name", "age"]
+            }
+        });
+        let elicitation: CreateElicitationRequestParam =
+            serde_json::from_value(json_data_without_tag).expect("Deserialization failed");
+        if let CreateElicitationRequestParam::FormElicitationParam {
+            message,
+            requested_schema,
+        } = elicitation
+        {
+            assert_eq!(message, "Please provide more details.");
+            assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
+            assert_eq!(requested_schema.type_, ObjectTypeConst);
+        } else {
+            panic!("Expected FormElicitationParam");
+        }
+    }
+
+    #[test]
+    fn test_elicitation_deserialization() {
+        let json_data_form = json!({
+            "mode": "form",
+            "message": "Please provide more details.",
+            "requestedSchema": {
+                "title": "User Details",
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" }
+                },
+                "required": ["name", "age"]
+            }
+        });
+        let elicitation_form: CreateElicitationRequestParam =
+            serde_json::from_value(json_data_form).expect("Deserialization failed");
+        if let CreateElicitationRequestParam::FormElicitationParam {
+            message,
+            requested_schema,
+        } = elicitation_form
+        {
+            assert_eq!(message, "Please provide more details.");
+            assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
+            assert_eq!(requested_schema.type_, ObjectTypeConst);
+        } else {
+            panic!("Expected FormElicitationParam");
+        }
+
+        let json_data_url = json!({
+            "mode": "url",
+            "message": "Please fill out the form at the following URL.",
+            "url": "https://example.com/form",
+            "elicitationId": "elicitation-123"
+        });
+        let elicitation_url: CreateElicitationRequestParam =
+            serde_json::from_value(json_data_url).expect("Deserialization failed");
+        if let CreateElicitationRequestParam::UrlElicitationParam {
+            message,
+            url,
+            elicitation_id,
+        } = elicitation_url
+        {
+            assert_eq!(message, "Please fill out the form at the following URL.");
+            assert_eq!(url, "https://example.com/form");
+            assert_eq!(elicitation_id, "elicitation-123");
+        } else {
+            panic!("Expected UrlElicitationParam");
+        }
+    }
+
+    #[test]
+    fn test_elicitation_serialization() {
+        let form_elicitation = CreateElicitationRequestParam::FormElicitationParam {
+            message: "Please provide more details.".to_string(),
+            requested_schema: ElicitationSchema::builder()
+                .title("User Details")
+                .string_property("name", |s| s)
+                .build()
+                .expect("Valid schema"),
+        };
+        let json_form = serde_json::to_value(&form_elicitation).expect("Serialization failed");
+        let expected_form_json = json!({
+            "mode": "form",
+            "message": "Please provide more details.",
+            "requestedSchema": {
+                "title":"User Details",
+                "type":"object",
+                "properties":{
+                    "name": { "type": "string" },
+                },
+            }
+        });
+        assert_eq!(json_form, expected_form_json);
+
+        let url_elicitation = CreateElicitationRequestParam::UrlElicitationParam {
+            message: "Please fill out the form at the following URL.".to_string(),
+            url: "https://example.com/form".to_string(),
+            elicitation_id: "elicitation-123".to_string(),
+        };
+        let json_url = serde_json::to_value(&url_elicitation).expect("Serialization failed");
+        let expected_url_json = json!({
+            "mode": "url",
+            "message": "Please fill out the form at the following URL.",
+            "url": "https://example.com/form",
+            "elicitationId": "elicitation-123"
+        });
+        assert_eq!(json_url, expected_url_json);
     }
 }
