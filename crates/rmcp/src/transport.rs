@@ -173,7 +173,7 @@ where
 {
     message: Option<RxJsonRpcMessage<R>>,
     sender: tokio::sync::mpsc::Sender<TxJsonRpcMessage<R>>,
-    finished_signal: Arc<tokio::sync::Notify>,
+    termination: Arc<tokio::sync::Semaphore>,
 }
 
 impl<R> OneshotTransport<R>
@@ -188,7 +188,7 @@ where
             Self {
                 message: Some(message),
                 sender,
-                finished_signal: Arc::new(tokio::sync::Notify::new()),
+                termination: Arc::new(tokio::sync::Semaphore::new(0)),
             },
             receiver,
         )
@@ -208,21 +208,22 @@ where
         let sender = self.sender.clone();
         let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_))
             || matches!(item, TxJsonRpcMessage::<R>::Error(_));
-        let signal = self.finished_signal.clone();
+        let termination = self.termination.clone();
         async move {
             sender.send(item).await?;
             if terminate {
-                signal.notify_waiters();
+                termination.add_permits(1);
             }
             Ok(())
         }
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<R>> {
-        if self.message.is_none() {
-            self.finished_signal.notified().await;
+        if let Some(msg) = self.message.take() {
+            return Some(msg);
         }
-        self.message.take()
+        let _ = self.termination.acquire().await;
+        None
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
