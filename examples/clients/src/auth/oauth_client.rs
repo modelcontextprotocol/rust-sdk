@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
     let client = AuthClient::new(reqwest::Client::default(), am);
     let transport = StreamableHttpClientTransport::with_client(
         client,
-        StreamableHttpClientTransportConfig::with_uri(MCP_SERVER_URL),
+        StreamableHttpClientTransportConfig::with_uri(server_url.as_str()),
     );
 
     // Create client and connect to MCP server

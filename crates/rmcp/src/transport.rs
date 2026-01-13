@@ -99,7 +99,11 @@ pub use io::stdio;
 pub mod auth;
 #[cfg(feature = "auth")]
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
-pub use auth::{AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient};
+pub use auth::{
+    AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient, CredentialStore,
+    InMemoryCredentialStore, InMemoryStateStore, StateStore, StoredAuthorizationState,
+    StoredCredentials,
+};
 
 // #[cfg(feature = "transport-ws")]
 // #[cfg_attr(docsrs, doc(cfg(feature = "transport-ws")))]
