@@ -84,9 +84,9 @@ elicitation = []
 # reqwest http client
 __reqwest = ["dep:reqwest"]
 
-reqwest = ["__reqwest", "reqwest?/rustls-tls"]
+reqwest = ["__reqwest", "reqwest?/rustls"]
 
-reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
+reqwest-tls-no-provider = ["__reqwest", "reqwest?/__rustls"]
 
 server-side-http = [
   "uuid",
