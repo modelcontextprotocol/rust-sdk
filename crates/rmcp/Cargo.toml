@@ -25,7 +25,7 @@ tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
 pastey = { version = "0.2.0", optional = true }
 # oauth2 support
-oauth2 = { version = "5.0", optional = true }
+oauth2 = { version = "5.0", optional = true, default-features = false, features = ["reqwest"] }
 
 # for auto generate schema
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
@@ -108,7 +108,7 @@ client-side-sse = ["dep:sse-stream", "dep:http"]
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
-transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "reqwest"]
+transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "__reqwest"]
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]

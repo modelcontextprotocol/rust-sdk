@@ -335,7 +335,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         };
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
         let session_cleanup_info = session_id.as_ref().map(|sid| {
-            (self.client.clone(), config.uri.clone(), sid.clone(), config.auth_header.clone())
+            (
+                self.client.clone(),
+                config.uri.clone(),
+                sid.clone(),
+                config.auth_header.clone(),
+            )
         });
 
         context.send_to_handler(message).await?;
