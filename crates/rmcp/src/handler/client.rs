@@ -85,7 +85,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
 
     fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<CreateMessageResult, McpError>> + Send + '_ {
         std::future::ready(Err(
@@ -118,7 +118,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     /// Real clients should override this to provide user interaction.
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_ {
         // Default implementation declines all requests - real clients should override this
