@@ -2,7 +2,7 @@ use futures::StreamExt;
 use rmcp::{
     ClientHandler, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::{client::progress::ProgressDispatcher, server::tool::ToolRouter},
-    model::{CallToolRequestParam, ClientRequest, Meta, ProgressNotificationParam, Request},
+    model::{CallToolRequestParams, ClientRequest, Meta, ProgressNotificationParam, Request},
     service::PeerRequestOptions,
     tool, tool_handler, tool_router,
 };
@@ -107,7 +107,8 @@ async fn test_progress_subscriber() -> anyhow::Result<()> {
     let client_service = client.serve(transport_client).await?;
     let handle = client_service
         .send_cancellable_request(
-            ClientRequest::CallToolRequest(Request::new(CallToolRequestParam {
+            ClientRequest::CallToolRequest(Request::new(CallToolRequestParams {
+                meta: None,
                 name: "some_progress".into(),
                 arguments: None,
                 task: None,

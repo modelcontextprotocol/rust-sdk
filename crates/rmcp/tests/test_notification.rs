@@ -4,7 +4,7 @@ use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
         ClientNotification, CustomNotification, ResourceUpdatedNotificationParam,
-        ServerCapabilities, ServerInfo, ServerNotification, SubscribeRequestParam,
+        ServerCapabilities, ServerInfo, ServerNotification, SubscribeRequestParams,
     },
 };
 use serde_json::json;
@@ -87,7 +87,8 @@ async fn test_server_notification() -> anyhow::Result<()> {
     .serve(client_transport)
     .await?;
     client
-        .subscribe(SubscribeRequestParam {
+        .subscribe(SubscribeRequestParams {
+            meta: None,
             uri: "test://test-resource".to_owned(),
         })
         .await?;

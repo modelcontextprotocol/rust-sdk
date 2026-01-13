@@ -187,10 +187,18 @@
       "format": "const",
       "const": "tools/call"
     },
-    "CallToolRequestParam": {
-      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.",
+    "CallToolRequestParams": {
+      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.\n\nThis implements `TaskAugmentedRequestParamsMeta` as tool calls can be\nlong-running and may benefit from task-based execution.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "arguments": {
           "description": "Arguments to pass to the tool (must match the tool's input schema)",
           "type": [
@@ -204,6 +212,7 @@
           "type": "string"
         },
         "task": {
+          "description": "Task metadata for async task management (SEP-1319)",
           "type": [
             "object",
             "null"
@@ -220,9 +229,17 @@
       "format": "const",
       "const": "tasks/cancel"
     },
-    "CancelTaskParam": {
+    "CancelTaskParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "taskId": {
           "type": "string"
         }
@@ -332,9 +349,17 @@
       "format": "const",
       "const": "completion/complete"
     },
-    "CompleteRequestParam": {
+    "CompleteRequestParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "argument": {
           "$ref": "#/definitions/ArgumentInfo"
         },
@@ -534,10 +559,18 @@
       "format": "const",
       "const": "prompts/get"
     },
-    "GetPromptRequestParam": {
+    "GetPromptRequestParams": {
       "description": "Parameters for retrieving a specific prompt",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "arguments": {
           "type": [
             "object",
@@ -558,9 +591,17 @@
       "format": "const",
       "const": "tasks/get"
     },
-    "GetTaskInfoParam": {
+    "GetTaskInfoParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "taskId": {
           "type": "string"
         }
@@ -574,9 +615,17 @@
       "format": "const",
       "const": "tasks/result"
     },
-    "GetTaskResultParam": {
+    "GetTaskResultParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "taskId": {
           "type": "string"
         }
@@ -651,10 +700,18 @@
         "version"
       ]
     },
-    "InitializeRequestParam": {
+    "InitializeRequestParams": {
       "description": "Parameters sent by a client when initializing a connection to an MCP server.\n\nThis contains the client's protocol version, capabilities, and implementation\ninformation, allowing the server to understand what the client supports.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "capabilities": {
           "description": "The capabilities this client supports (sampling, roots, etc.)",
           "allOf": [
@@ -953,9 +1010,17 @@
         }
       ]
     },
-    "PaginatedRequestParam": {
+    "PaginatedRequestParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "cursor": {
           "type": [
             "string",
@@ -1183,10 +1248,18 @@
       "format": "const",
       "const": "resources/read"
     },
-    "ReadResourceRequestParam": {
+    "ReadResourceRequestParams": {
       "description": "Parameters for reading a specific resource",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource to read",
           "type": "string"
@@ -1242,7 +1315,7 @@
           "$ref": "#/definitions/InitializeResultMethod"
         },
         "params": {
-          "$ref": "#/definitions/InitializeRequestParam"
+          "$ref": "#/definitions/InitializeRequestParams"
         }
       },
       "required": [
@@ -1258,7 +1331,7 @@
           "$ref": "#/definitions/GetTaskResultMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskResultParam"
+          "$ref": "#/definitions/GetTaskResultParams"
         }
       },
       "required": [
@@ -1274,7 +1347,7 @@
           "$ref": "#/definitions/CancelTaskMethod"
         },
         "params": {
-          "$ref": "#/definitions/CancelTaskParam"
+          "$ref": "#/definitions/CancelTaskParams"
         }
       },
       "required": [
@@ -1290,7 +1363,7 @@
           "$ref": "#/definitions/CompleteRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CompleteRequestParam"
+          "$ref": "#/definitions/CompleteRequestParams"
         }
       },
       "required": [
@@ -1306,7 +1379,7 @@
           "$ref": "#/definitions/SetLevelRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SetLevelRequestParam"
+          "$ref": "#/definitions/SetLevelRequestParams"
         }
       },
       "required": [
@@ -1322,7 +1395,7 @@
           "$ref": "#/definitions/GetPromptRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetPromptRequestParam"
+          "$ref": "#/definitions/GetPromptRequestParams"
         }
       },
       "required": [
@@ -1338,7 +1411,7 @@
           "$ref": "#/definitions/ReadResourceRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/ReadResourceRequestParam"
+          "$ref": "#/definitions/ReadResourceRequestParams"
         }
       },
       "required": [
@@ -1354,7 +1427,7 @@
           "$ref": "#/definitions/SubscribeRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SubscribeRequestParam"
+          "$ref": "#/definitions/SubscribeRequestParams"
         }
       },
       "required": [
@@ -1370,7 +1443,7 @@
           "$ref": "#/definitions/UnsubscribeRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/UnsubscribeRequestParam"
+          "$ref": "#/definitions/UnsubscribeRequestParams"
         }
       },
       "required": [
@@ -1386,7 +1459,7 @@
           "$ref": "#/definitions/CallToolRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CallToolRequestParam"
+          "$ref": "#/definitions/CallToolRequestParams"
         }
       },
       "required": [
@@ -1402,7 +1475,7 @@
           "$ref": "#/definitions/GetTaskInfoMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskInfoParam"
+          "$ref": "#/definitions/GetTaskInfoParams"
         }
       },
       "required": [
@@ -1430,7 +1503,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1451,7 +1524,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1472,7 +1545,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1493,7 +1566,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1514,7 +1587,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1650,10 +1723,18 @@
       "format": "const",
       "const": "logging/setLevel"
     },
-    "SetLevelRequestParam": {
+    "SetLevelRequestParams": {
       "description": "Parameters for setting the logging level",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "level": {
           "description": "The desired logging level",
           "allOf": [
@@ -1672,10 +1753,18 @@
       "format": "const",
       "const": "resources/subscribe"
     },
-    "SubscribeRequestParam": {
+    "SubscribeRequestParams": {
       "description": "Parameters for subscribing to resource updates",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource to subscribe to",
           "type": "string"
@@ -1720,10 +1809,18 @@
       "format": "const",
       "const": "resources/unsubscribe"
     },
-    "UnsubscribeRequestParam": {
+    "UnsubscribeRequestParams": {
       "description": "Parameters for unsubscribing from resource updates",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource to unsubscribe from",
           "type": "string"
