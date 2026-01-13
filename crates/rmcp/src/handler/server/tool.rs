@@ -37,9 +37,11 @@ pub struct ToolCallContext<'s, S> {
 }
 
 impl<'s, S> ToolCallContext<'s, S> {
+    #[allow(deprecated)]
     pub fn new(
         service: &'s S,
         CallToolRequestParam {
+            meta: _,
             name,
             arguments,
             task,
