@@ -29,14 +29,14 @@ async fn main() -> anyhow::Result<()> {
     let config = config::Config::retrieve("config.toml").await?;
     let deepseek_client = {
         if let Some(key) = config.deepseek_key {
-            deepseek::Client::new(&key)
+            deepseek::Client::new(&key)?
         } else {
             deepseek::Client::from_env()
         }
     };
     let cohere_client = {
         if let Some(key) = config.cohere_key {
-            cohere::Client::new(&key)
+            cohere::Client::new(&key)?
         } else {
             cohere::Client::from_env()
         }
