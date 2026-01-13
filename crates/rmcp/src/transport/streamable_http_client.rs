@@ -333,37 +333,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             None
         };
-        // delete session when drop guard is dropped
-        if let Some(session_id) = &session_id {
-            let ct = transport_task_ct.clone();
-            let client = self.client.clone();
-            let session_id = session_id.clone();
-            let url = config.uri.clone();
-            let auth_header = config.auth_header.clone();
-            tokio::spawn(async move {
-                ct.cancelled().await;
-                let delete_session_result = client
-                    .delete_session(url, session_id.clone(), auth_header.clone())
-                    .await;
-                match delete_session_result {
-                    Ok(_) => {
-                        tracing::info!(session_id = session_id.as_ref(), "delete session success")
-                    }
-                    Err(StreamableHttpError::ServerDoesNotSupportDeleteSession) => {
-                        tracing::info!(
-                            session_id = session_id.as_ref(),
-                            "server doesn't support delete session"
-                        )
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            session_id = session_id.as_ref(),
-                            "fail to delete session: {e}"
-                        );
-                    }
-                };
-            });
-        }
+        // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
+        let session_cleanup_info = session_id.as_ref().map(|sid| {
+            (self.client.clone(), config.uri.clone(), sid.clone(), config.auth_header.clone())
+        });
 
         context.send_to_handler(message).await?;
         let initialized_notification = context.recv_from_handler().await?;
@@ -438,20 +411,23 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 }
             });
         }
-        loop {
+        // Main event loop - capture exit reason so we can do cleanup before returning
+        let loop_result: Result<(), WorkerQuitReason<Self::Error>> = 'main_loop: loop {
             let event = tokio::select! {
                 _ = transport_task_ct.cancelled() => {
                     tracing::debug!("cancelled");
-                    return Err(WorkerQuitReason::Cancelled);
+                    break 'main_loop Err(WorkerQuitReason::Cancelled);
                 }
                 message = context.recv_from_handler() => {
-                    let message = message?;
-                    Event::ClientMessage(message)
+                    match message {
+                        Ok(msg) => Event::ClientMessage(msg),
+                        Err(e) => break 'main_loop Err(e),
+                    }
                 },
                 message = sse_worker_rx.recv() => {
                     let Some(message) = message else {
                         tracing::trace!("transport dropped, exiting");
-                        return Err(WorkerQuitReason::HandlerTerminated);
+                        break 'main_loop Err(WorkerQuitReason::HandlerTerminated);
                     };
                     Event::ServerMessage(message)
                 },
@@ -526,7 +502,9 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 }
                 Event::ServerMessage(json_rpc_message) => {
                     // send the message to the handler
-                    context.send_to_handler(json_rpc_message).await?;
+                    if let Err(e) = context.send_to_handler(json_rpc_message).await {
+                        break 'main_loop Err(e);
+                    }
                 }
                 Event::StreamResult(result) => {
                     if result.is_err() {
@@ -537,7 +515,44 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     }
                 }
             }
+        };
+
+        // Cleanup session before returning (ensures close() waits for session deletion)
+        // Use a timeout to prevent indefinite hangs if the server is unresponsive
+        if let Some((client, url, session_id, auth_header)) = session_cleanup_info {
+            const SESSION_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            match tokio::time::timeout(
+                SESSION_CLEANUP_TIMEOUT,
+                client.delete_session(url, session_id.clone(), auth_header),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    tracing::info!(session_id = session_id.as_ref(), "delete session success")
+                }
+                Ok(Err(StreamableHttpError::ServerDoesNotSupportDeleteSession)) => {
+                    tracing::info!(
+                        session_id = session_id.as_ref(),
+                        "server doesn't support delete session"
+                    )
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        session_id = session_id.as_ref(),
+                        "fail to delete session: {e}"
+                    );
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        session_id = session_id.as_ref(),
+                        "session cleanup timed out after {:?}",
+                        SESSION_CLEANUP_TIMEOUT
+                    );
+                }
+            }
         }
+
+        loop_result
     }
 }
 
