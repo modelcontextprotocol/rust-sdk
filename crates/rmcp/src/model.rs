@@ -753,7 +753,7 @@ impl RequestParamsMeta for InitializeRequestParams {
 }
 
 /// Deprecated: Use [`InitializeRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use InitializeRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use InitializeRequestParams instead")]
 pub type InitializeRequestParam = InitializeRequestParams;
 
 /// The server's response to an initialization request.
@@ -878,7 +878,7 @@ impl RequestParamsMeta for PaginatedRequestParams {
 }
 
 /// Deprecated: Use [`PaginatedRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use PaginatedRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use PaginatedRequestParams instead")]
 pub type PaginatedRequestParam = PaginatedRequestParams;
 // =============================================================================
 // PROGRESS AND PAGINATION
@@ -981,7 +981,7 @@ impl RequestParamsMeta for ReadResourceRequestParams {
 }
 
 /// Deprecated: Use [`ReadResourceRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use ReadResourceRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use ReadResourceRequestParams instead")]
 pub type ReadResourceRequestParam = ReadResourceRequestParams;
 
 /// Result containing the contents of a read resource
@@ -1023,7 +1023,7 @@ impl RequestParamsMeta for SubscribeRequestParams {
 }
 
 /// Deprecated: Use [`SubscribeRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use SubscribeRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use SubscribeRequestParams instead")]
 pub type SubscribeRequestParam = SubscribeRequestParams;
 
 /// Request to subscribe to resource updates
@@ -1052,7 +1052,7 @@ impl RequestParamsMeta for UnsubscribeRequestParams {
 }
 
 /// Deprecated: Use [`UnsubscribeRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use UnsubscribeRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use UnsubscribeRequestParams instead")]
 pub type UnsubscribeRequestParam = UnsubscribeRequestParams;
 
 /// Request to unsubscribe from resource updates
@@ -1108,7 +1108,7 @@ impl RequestParamsMeta for GetPromptRequestParams {
 }
 
 /// Deprecated: Use [`GetPromptRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use GetPromptRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use GetPromptRequestParams instead")]
 pub type GetPromptRequestParam = GetPromptRequestParams;
 
 /// Request to get a specific prompt
@@ -1164,7 +1164,7 @@ impl RequestParamsMeta for SetLevelRequestParams {
 }
 
 /// Deprecated: Use [`SetLevelRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use SetLevelRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use SetLevelRequestParams instead")]
 pub type SetLevelRequestParam = SetLevelRequestParams;
 
 /// Request to set the logging level
@@ -1302,7 +1302,7 @@ impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
 }
 
 /// Deprecated: Use [`CreateMessageRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use CreateMessageRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use CreateMessageRequestParams instead")]
 pub type CreateMessageRequestParam = CreateMessageRequestParams;
 
 /// Preferences for model selection and behavior in sampling requests.
@@ -1414,7 +1414,7 @@ impl RequestParamsMeta for CompleteRequestParams {
 }
 
 /// Deprecated: Use [`CompleteRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use CompleteRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use CompleteRequestParams instead")]
 pub type CompleteRequestParam = CompleteRequestParams;
 
 pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParams>;
@@ -1680,7 +1680,7 @@ impl RequestParamsMeta for CreateElicitationRequestParams {
 }
 
 /// Deprecated: Use [`CreateElicitationRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use CreateElicitationRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use CreateElicitationRequestParams instead")]
 pub type CreateElicitationRequestParam = CreateElicitationRequestParams;
 
 /// The result returned by a client in response to an elicitation request.
@@ -1920,7 +1920,7 @@ impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
 }
 
 /// Deprecated: Use [`CallToolRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use CallToolRequestParams instead")]
+#[deprecated(since = "0.13.0", note = "Use CallToolRequestParams instead")]
 pub type CallToolRequestParam = CallToolRequestParams;
 
 /// Request to call a specific tool
@@ -1986,7 +1986,7 @@ impl RequestParamsMeta for GetTaskInfoParams {
 }
 
 /// Deprecated: Use [`GetTaskInfoParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use GetTaskInfoParams instead")]
+#[deprecated(since = "0.13.0", note = "Use GetTaskInfoParams instead")]
 pub type GetTaskInfoParam = GetTaskInfoParams;
 
 const_string!(ListTasksMethod = "tasks/list");
@@ -2015,7 +2015,7 @@ impl RequestParamsMeta for GetTaskResultParams {
 }
 
 /// Deprecated: Use [`GetTaskResultParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use GetTaskResultParams instead")]
+#[deprecated(since = "0.13.0", note = "Use GetTaskResultParams instead")]
 pub type GetTaskResultParam = GetTaskResultParams;
 
 const_string!(CancelTaskMethod = "tasks/cancel");
@@ -2041,7 +2041,7 @@ impl RequestParamsMeta for CancelTaskParams {
 }
 
 /// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.2.0", note = "Use CancelTaskParams instead")]
+#[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
 pub type CancelTaskParam = CancelTaskParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
