@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParam, GetPromptRequestParam, ReadResourceRequestParam},
+    model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
     object,
     transport::{ConfigureCommandExt, TokioChildProcess},
 };
@@ -37,7 +37,8 @@ async fn main() -> Result<()> {
 
     // Call tool echo
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "echo".into(),
             arguments: Some(object!({ "message": "hi from rmcp" })),
             task: None,
@@ -47,7 +48,8 @@ async fn main() -> Result<()> {
 
     // Call tool longRunningOperation
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "longRunningOperation".into(),
             arguments: Some(object!({ "duration": 3, "steps": 1 })),
             task: None,
@@ -61,7 +63,8 @@ async fn main() -> Result<()> {
 
     // Read resource
     let resource = client
-        .read_resource(ReadResourceRequestParam {
+        .read_resource(ReadResourceRequestParams {
+            meta: None,
             uri: "test://static/resource/3".into(),
         })
         .await?;
@@ -73,7 +76,8 @@ async fn main() -> Result<()> {
 
     // Get simple prompt
     let prompt = client
-        .get_prompt(GetPromptRequestParam {
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
             name: "simple_prompt".into(),
             arguments: None,
         })
@@ -82,7 +86,8 @@ async fn main() -> Result<()> {
 
     // Get complex prompt (returns text & image)
     let prompt = client
-        .get_prompt(GetPromptRequestParam {
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
             name: "complex_prompt".into(),
             arguments: Some(object!({ "temperature": "0.5", "style": "formal" })),
         })

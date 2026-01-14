@@ -56,7 +56,7 @@ async fn test_sampling_request_params() -> Result<()> {
 
     // Verify serialization/deserialization
     let json = serde_json::to_string(&params)?;
-    let deserialized: CreateMessageRequestParam = serde_json::from_str(&json)?;
+    let deserialized: CreateMessageRequestParams = serde_json::from_str(&json)?;
     assert_eq!(params, deserialized);
 
     // Verify specific fields

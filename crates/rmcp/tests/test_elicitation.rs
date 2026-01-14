@@ -36,7 +36,7 @@ async fn test_elicitation_serialization() {
     );
 }
 
-/// Test CreateElicitationRequestParam structure serialization/deserialization
+/// Test CreateElicitationRequestParams structure serialization/deserialization
 #[tokio::test]
 async fn test_elicitation_request_param_serialization() {
     let schema = ElicitationSchema::builder()
@@ -69,7 +69,7 @@ async fn test_elicitation_request_param_serialization() {
     assert_eq!(json, expected);
 
     // Test deserialization
-    let deserialized: CreateElicitationRequestParam = serde_json::from_value(expected).unwrap();
+    let deserialized: CreateElicitationRequestParams = serde_json::from_value(expected).unwrap();
     assert_eq!(deserialized.message, request_param.message);
     assert_eq!(
         deserialized.requested_schema,
@@ -261,7 +261,7 @@ async fn test_elicitation_performance() {
     // Serialize/deserialize 1000 times
     for _ in 0..1000 {
         let json = serde_json::to_value(&request).unwrap();
-        let _deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
+        let _deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
     }
 
     let duration = start.elapsed();
@@ -374,7 +374,7 @@ async fn test_elicitation_convenience_methods() {
             .contains("Option A")
     );
 
-    // Test that CreateElicitationRequestParam can be created with type-safe schemas
+    // Test that CreateElicitationRequestParams can be created with type-safe schemas
     let confirmation_request = CreateElicitationRequestParams {
         meta: None,
         message: "Test confirmation".to_string(),
@@ -426,7 +426,7 @@ async fn test_elicitation_structured_schemas() {
 
     // Test that complex schemas serialize/deserialize correctly
     let json = serde_json::to_value(&request).unwrap();
-    let deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
+    let deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
 
     assert_eq!(deserialized.message, "Please provide your user information");
     assert_eq!(deserialized.requested_schema.properties.len(), 5);
@@ -669,7 +669,7 @@ async fn test_elicitation_multi_select_enum() {
 
     // Test that complex schemas serialize/deserialize correctly
     let json = serde_json::to_value(&request).unwrap();
-    let deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
+    let deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
 
     assert_eq!(deserialized.message, "Please provide your user information");
     assert_eq!(deserialized.requested_schema.properties.len(), 1);
@@ -751,7 +751,7 @@ async fn test_elicitation_single_select_enum() {
 
     // Test that complex schemas serialize/deserialize correctly
     let json = serde_json::to_value(&request).unwrap();
-    let deserialized: CreateElicitationRequestParam = serde_json::from_value(json).unwrap();
+    let deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized.message, "Please provide your user information");
     assert_eq!(deserialized.requested_schema.properties.len(), 1);
     assert!(

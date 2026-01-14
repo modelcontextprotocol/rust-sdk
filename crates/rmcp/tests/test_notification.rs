@@ -27,7 +27,7 @@ impl ServerHandler for Server {
 
     async fn subscribe(
         &self,
-        request: rmcp::model::SubscribeRequestParam,
+        request: rmcp::model::SubscribeRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<(), rmcp::ErrorData> {
         let uri = request.uri;
