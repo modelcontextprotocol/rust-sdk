@@ -335,7 +335,7 @@ macro_rules! impl_server_handler_for_wrapper {
         impl<T: ServerHandler> ServerHandler for $wrapper<T> {
             fn enqueue_task(
                 &self,
-                request: CallToolRequestParam,
+                request: CallToolRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + Send + '_ {
                 (**self).enqueue_task(request, context)
@@ -350,7 +350,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn initialize(
                 &self,
-                request: InitializeRequestParam,
+                request: InitializeRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
                 (**self).initialize(request, context)
@@ -358,7 +358,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn complete(
                 &self,
-                request: CompleteRequestParam,
+                request: CompleteRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
                 (**self).complete(request, context)
@@ -366,7 +366,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn set_level(
                 &self,
-                request: SetLevelRequestParam,
+                request: SetLevelRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
                 (**self).set_level(request, context)
@@ -374,7 +374,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_prompt(
                 &self,
-                request: GetPromptRequestParam,
+                request: GetPromptRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
                 (**self).get_prompt(request, context)
@@ -382,7 +382,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn list_prompts(
                 &self,
-                request: Option<PaginatedRequestParam>,
+                request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
                 (**self).list_prompts(request, context)
@@ -390,7 +390,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn list_resources(
                 &self,
-                request: Option<PaginatedRequestParam>,
+                request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
                 (**self).list_resources(request, context)
@@ -398,7 +398,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn list_resource_templates(
                 &self,
-                request: Option<PaginatedRequestParam>,
+                request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_
             {
@@ -407,7 +407,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn read_resource(
                 &self,
-                request: ReadResourceRequestParam,
+                request: ReadResourceRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
                 (**self).read_resource(request, context)
@@ -415,7 +415,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn subscribe(
                 &self,
-                request: SubscribeRequestParam,
+                request: SubscribeRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
                 (**self).subscribe(request, context)
@@ -423,7 +423,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn unsubscribe(
                 &self,
-                request: UnsubscribeRequestParam,
+                request: UnsubscribeRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
                 (**self).unsubscribe(request, context)
@@ -431,7 +431,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn call_tool(
                 &self,
-                request: CallToolRequestParam,
+                request: CallToolRequestParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
                 (**self).call_tool(request, context)
@@ -439,7 +439,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn list_tools(
                 &self,
-                request: Option<PaginatedRequestParam>,
+                request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
                 (**self).list_tools(request, context)
@@ -497,7 +497,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn list_tasks(
                 &self,
-                request: Option<PaginatedRequestParam>,
+                request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
                 (**self).list_tasks(request, context)
@@ -505,7 +505,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_task_info(
                 &self,
-                request: GetTaskInfoParam,
+                request: GetTaskInfoParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
                 (**self).get_task_info(request, context)
@@ -513,7 +513,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_task_result(
                 &self,
-                request: GetTaskResultParam,
+                request: GetTaskResultParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<TaskResult, McpError>> + Send + '_ {
                 (**self).get_task_result(request, context)
@@ -521,7 +521,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn cancel_task(
                 &self,
-                request: CancelTaskParam,
+                request: CancelTaskParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
                 (**self).cancel_task(request, context)

@@ -225,7 +225,7 @@ macro_rules! impl_client_handler_for_wrapper {
 
             fn create_message(
                 &self,
-                params: CreateMessageRequestParam,
+                params: CreateMessageRequestParams,
                 context: RequestContext<RoleClient>,
             ) -> impl Future<Output = Result<CreateMessageResult, McpError>> + Send + '_ {
                 (**self).create_message(params, context)
@@ -240,7 +240,7 @@ macro_rules! impl_client_handler_for_wrapper {
 
             fn create_elicitation(
                 &self,
-                request: CreateElicitationRequestParam,
+                request: CreateElicitationRequestParams,
                 context: RequestContext<RoleClient>,
             ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_ {
                 (**self).create_elicitation(request, context)
