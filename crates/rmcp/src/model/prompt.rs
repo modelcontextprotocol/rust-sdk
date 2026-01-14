@@ -1,8 +1,7 @@
-use base64::engine::{Engine, general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AnnotateAble, Annotations, Icon, Meta, RawEmbeddedResource, RawImageContent,
+    AnnotateAble, Annotations, Icon, Meta, RawEmbeddedResource,
     content::{EmbeddedResource, ImageContent},
     resource::ResourceContents,
 };
@@ -138,11 +137,13 @@ impl PromptMessage {
         meta: Option<crate::model::Meta>,
         annotations: Option<Annotations>,
     ) -> Self {
+        use base64::{Engine, prelude::BASE64_STANDARD};
+
         let base64 = BASE64_STANDARD.encode(data);
         Self {
             role,
             content: PromptMessageContent::Image {
-                image: RawImageContent {
+                image: crate::model::RawImageContent {
                     data: base64,
                     mime_type: mime_type.into(),
                     meta,
@@ -215,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_prompt_message_image_serialization() {
-        let image_content = RawImageContent {
+        let image_content = crate::model::RawImageContent {
             data: "base64data".to_string(),
             mime_type: "image/png".to_string(),
             meta: None,
