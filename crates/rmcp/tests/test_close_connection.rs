@@ -4,7 +4,7 @@ mod common;
 use std::time::Duration;
 
 use common::handlers::{TestClientHandler, TestServer};
-use rmcp::{service::QuitReason, ServiceExt};
+use rmcp::{ServiceExt, service::QuitReason};
 
 /// Test that close() properly shuts down the connection
 #[tokio::test]
