@@ -1,4 +1,6 @@
 pub mod progress;
+use std::sync::Arc;
+
 use crate::{
     error::ErrorData as McpError,
     model::*,
@@ -210,3 +212,115 @@ impl ClientHandler for ClientInfo {
         self.clone()
     }
 }
+
+macro_rules! impl_client_handler_for_wrapper {
+    ($wrapper:ident) => {
+        impl<T: ClientHandler> ClientHandler for $wrapper<T> {
+            fn ping(
+                &self,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+                (**self).ping(context)
+            }
+
+            fn create_message(
+                &self,
+                params: CreateMessageRequestParam,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<CreateMessageResult, McpError>> + Send + '_ {
+                (**self).create_message(params, context)
+            }
+
+            fn list_roots(
+                &self,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<ListRootsResult, McpError>> + Send + '_ {
+                (**self).list_roots(context)
+            }
+
+            fn create_elicitation(
+                &self,
+                request: CreateElicitationRequestParam,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_ {
+                (**self).create_elicitation(request, context)
+            }
+
+            fn on_custom_request(
+                &self,
+                request: CustomRequest,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+                (**self).on_custom_request(request, context)
+            }
+
+            fn on_cancelled(
+                &self,
+                params: CancelledNotificationParam,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_cancelled(params, context)
+            }
+
+            fn on_progress(
+                &self,
+                params: ProgressNotificationParam,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_progress(params, context)
+            }
+
+            fn on_logging_message(
+                &self,
+                params: LoggingMessageNotificationParam,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_logging_message(params, context)
+            }
+
+            fn on_resource_updated(
+                &self,
+                params: ResourceUpdatedNotificationParam,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_resource_updated(params, context)
+            }
+
+            fn on_resource_list_changed(
+                &self,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_resource_list_changed(context)
+            }
+
+            fn on_tool_list_changed(
+                &self,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_tool_list_changed(context)
+            }
+
+            fn on_prompt_list_changed(
+                &self,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_prompt_list_changed(context)
+            }
+
+            fn on_custom_notification(
+                &self,
+                notification: CustomNotification,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + Send + '_ {
+                (**self).on_custom_notification(notification, context)
+            }
+
+            fn get_info(&self) -> ClientInfo {
+                (**self).get_info()
+            }
+        }
+    };
+}
+
+impl_client_handler_for_wrapper!(Box);
+impl_client_handler_for_wrapper!(Arc);
