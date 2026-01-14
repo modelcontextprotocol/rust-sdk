@@ -104,9 +104,14 @@
 //!
 //! ```rust
 //! use anyhow::Result;
-//! use rmcp::{model::CallToolRequestParam, service::ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
+//! use rmcp::{model::CallToolRequestParam, service::ServiceExt};
+//! #[cfg(feature = "transport-child-process")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
+//! use rmcp::transport::{TokioChildProcess, ConfigureCommandExt};
 //! use tokio::process::Command;
 //!
+//! #[cfg(feature = "transport-child-process")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
 //! async fn client() -> Result<()> {
 //!     let service = ().serve(TokioChildProcess::new(Command::new("uvx").configure(|cmd| {
 //!         cmd.arg("mcp-server-git");

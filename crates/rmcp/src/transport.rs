@@ -40,10 +40,15 @@
 //!
 //! ```rust
 //! # use rmcp::{
-//! #     ServiceExt, serve_client, serve_server,
+//! #     ServiceExt, serve_server,
 //! # };
+//! #[cfg(feature = "client")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
+//! # use rmcp::serve_client;
 //!
 //! // create transport from tcp stream
+//! #[cfg(feature = "client")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! async fn client() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stream = tokio::net::TcpSocket::new_v4()?
 //!         .connect("127.0.0.1:8001".parse()?)
@@ -55,6 +60,8 @@
 //! }
 //!
 //! // create transport from std io
+//! #[cfg(feature = "client")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! async fn io()  -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
 //!     let tools = client.peer().list_tools(Default::default()).await?;

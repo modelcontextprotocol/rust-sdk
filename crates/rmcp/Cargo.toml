@@ -208,3 +208,25 @@ path = "tests/test_task.rs"
 name = "test_streamable_http_priming"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_priming.rs"
+
+
+[[test]]
+name = "test_custom_request"
+required-features = ["server", "client"]
+path = "tests/test_custom_request.rs"
+
+[[test]]
+name = "test_prompt_macros"
+required-features = ["server", "client"]
+path = "tests/test_prompt_macros.rs"
+
+[[test]]
+name = "test_sampling"
+required-features = ["server", "client"]
+path = "tests/test_sampling.rs"
+
+
+[[test]]
+name = "test_close_connection"
+required-features = ["server", "client"]
+path = "tests/test_close_connection.rs"
