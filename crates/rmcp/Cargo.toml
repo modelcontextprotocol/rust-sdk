@@ -86,6 +86,8 @@ __reqwest = ["dep:reqwest"]
 
 reqwest = ["__reqwest", "reqwest?/rustls-tls"]
 
+reqwest-native-tls = ["__reqwest", "reqwest?/native-tls"]
+
 reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
 
 server-side-http = [
