@@ -47,7 +47,9 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     // Test ThisServer context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test message"),
@@ -89,7 +91,9 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     // Test AllServers context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test message"),
@@ -131,7 +135,9 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     // Test No context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test message"),
@@ -193,7 +199,9 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
     // Test that context requests are ignored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test message"),
@@ -254,7 +262,9 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
 
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![
                 SamplingMessage {
                     role: Role::User,
@@ -325,7 +335,9 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     // Test valid sequence: User -> Assistant -> User
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![
                 SamplingMessage {
                     role: Role::User,
@@ -369,7 +381,9 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     // Test invalid: No user message
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::Assistant,
                 content: Content::text("assistant message"),
@@ -422,7 +436,9 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     // Test ThisServer is honored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test message"),
@@ -462,7 +478,9 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     // Test AllServers is ignored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test message"),
@@ -519,7 +537,9 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
     // Test context handling
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("test"),

@@ -15,7 +15,7 @@ pub use super::{
 use crate::{
     RoleServer,
     handler::server::wrapper::Parameters,
-    model::{CallToolRequestParam, CallToolResult, IntoContents, JsonObject},
+    model::{CallToolRequestParams, CallToolResult, IntoContents, JsonObject},
     service::RequestContext,
 };
 
@@ -39,11 +39,12 @@ pub struct ToolCallContext<'s, S> {
 impl<'s, S> ToolCallContext<'s, S> {
     pub fn new(
         service: &'s S,
-        CallToolRequestParam {
+        CallToolRequestParams {
+            meta: _,
             name,
             arguments,
             task,
-        }: CallToolRequestParam,
+        }: CallToolRequestParams,
         request_context: RequestContext<RoleServer>,
     ) -> Self {
         Self {

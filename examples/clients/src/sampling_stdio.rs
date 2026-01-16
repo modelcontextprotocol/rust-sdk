@@ -31,7 +31,7 @@ impl SamplingDemoClient {
 impl ClientHandler for SamplingDemoClient {
     async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<CreateMessageResult, ErrorData> {
         tracing::info!("Received sampling request with {:?}", params);
@@ -101,7 +101,8 @@ async fn main() -> Result<()> {
             // Test the ask_llm tool
             tracing::info!("Testing ask_llm tool...");
             match client
-                .call_tool(CallToolRequestParam {
+                .call_tool(CallToolRequestParams {
+                    meta: None,
                     name: "ask_llm".into(),
                     arguments: Some(object!({
                         "question": "Hello world"

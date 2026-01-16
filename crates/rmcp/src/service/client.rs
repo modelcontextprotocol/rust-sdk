@@ -5,18 +5,18 @@ use thiserror::Error;
 use super::*;
 use crate::{
     model::{
-        ArgumentInfo, CallToolRequest, CallToolRequestParam, CallToolResult, CancelledNotification,
-        CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
-        ClientRequest, ClientResult, CompleteRequest, CompleteRequestParam, CompleteResult,
-        CompletionContext, CompletionInfo, ErrorData, GetPromptRequest, GetPromptRequestParam,
-        GetPromptResult, InitializeRequest, InitializedNotification, JsonRpcResponse,
-        ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+        ArgumentInfo, CallToolRequest, CallToolRequestParams, CallToolResult,
+        CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
+        ClientNotification, ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams,
+        CompleteResult, CompletionContext, CompletionInfo, ErrorData, GetPromptRequest,
+        GetPromptRequestParams, GetPromptResult, InitializeRequest, InitializedNotification,
+        JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
         ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-        ListToolsResult, PaginatedRequestParam, ProgressNotification, ProgressNotificationParam,
-        ReadResourceRequest, ReadResourceRequestParam, ReadResourceResult, Reference, RequestId,
+        ListToolsResult, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
+        ReadResourceRequest, ReadResourceRequestParams, ReadResourceResult, Reference, RequestId,
         RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
-        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParam, SubscribeRequest,
-        SubscribeRequestParam, UnsubscribeRequest, UnsubscribeRequestParam,
+        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SubscribeRequest,
+        SubscribeRequestParams, UnsubscribeRequest, UnsubscribeRequestParams,
     },
     transport::DynamicTransportError,
 };
@@ -350,17 +350,17 @@ macro_rules! method {
 }
 
 impl Peer<RoleClient> {
-    method!(peer_req complete CompleteRequest(CompleteRequestParam) => CompleteResult);
-    method!(peer_req set_level SetLevelRequest(SetLevelRequestParam));
-    method!(peer_req get_prompt GetPromptRequest(GetPromptRequestParam) => GetPromptResult);
-    method!(peer_req list_prompts ListPromptsRequest(PaginatedRequestParam)? => ListPromptsResult);
-    method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParam)? => ListResourcesResult);
-    method!(peer_req list_resource_templates ListResourceTemplatesRequest(PaginatedRequestParam)? => ListResourceTemplatesResult);
-    method!(peer_req read_resource ReadResourceRequest(ReadResourceRequestParam) => ReadResourceResult);
-    method!(peer_req subscribe SubscribeRequest(SubscribeRequestParam) );
-    method!(peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParam));
-    method!(peer_req call_tool CallToolRequest(CallToolRequestParam) => CallToolResult);
-    method!(peer_req list_tools ListToolsRequest(PaginatedRequestParam)? => ListToolsResult);
+    method!(peer_req complete CompleteRequest(CompleteRequestParams) => CompleteResult);
+    method!(peer_req set_level SetLevelRequest(SetLevelRequestParams));
+    method!(peer_req get_prompt GetPromptRequest(GetPromptRequestParams) => GetPromptResult);
+    method!(peer_req list_prompts ListPromptsRequest(PaginatedRequestParams)? => ListPromptsResult);
+    method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParams)? => ListResourcesResult);
+    method!(peer_req list_resource_templates ListResourceTemplatesRequest(PaginatedRequestParams)? => ListResourceTemplatesResult);
+    method!(peer_req read_resource ReadResourceRequest(ReadResourceRequestParams) => ReadResourceResult);
+    method!(peer_req subscribe SubscribeRequest(SubscribeRequestParams) );
+    method!(peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParams));
+    method!(peer_req call_tool CallToolRequest(CallToolRequestParams) => CallToolResult);
+    method!(peer_req list_tools ListToolsRequest(PaginatedRequestParams)? => ListToolsResult);
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -377,7 +377,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_tools(Some(PaginatedRequestParam { cursor }))
+                .list_tools(Some(PaginatedRequestParams { meta: None, cursor }))
                 .await?;
             tools.extend(result.tools);
             cursor = result.next_cursor;
@@ -396,7 +396,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_prompts(Some(PaginatedRequestParam { cursor }))
+                .list_prompts(Some(PaginatedRequestParams { meta: None, cursor }))
                 .await?;
             prompts.extend(result.prompts);
             cursor = result.next_cursor;
@@ -415,7 +415,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_resources(Some(PaginatedRequestParam { cursor }))
+                .list_resources(Some(PaginatedRequestParams { meta: None, cursor }))
                 .await?;
             resources.extend(result.resources);
             cursor = result.next_cursor;
@@ -436,7 +436,7 @@ impl Peer<RoleClient> {
         let mut cursor = None;
         loop {
             let result = self
-                .list_resource_templates(Some(PaginatedRequestParam { cursor }))
+                .list_resource_templates(Some(PaginatedRequestParams { meta: None, cursor }))
                 .await?;
             resource_templates.extend(result.resource_templates);
             cursor = result.next_cursor;
@@ -464,7 +464,8 @@ impl Peer<RoleClient> {
         current_value: impl Into<String>,
         context: Option<CompletionContext>,
     ) -> Result<CompletionInfo, ServiceError> {
-        let request = CompleteRequestParam {
+        let request = CompleteRequestParams {
+            meta: None,
             r#ref: Reference::for_prompt(prompt_name),
             argument: ArgumentInfo {
                 name: argument_name.into(),
@@ -494,7 +495,8 @@ impl Peer<RoleClient> {
         current_value: impl Into<String>,
         context: Option<CompletionContext>,
     ) -> Result<CompletionInfo, ServiceError> {
-        let request = CompleteRequestParam {
+        let request = CompleteRequestParams {
+            meta: None,
             r#ref: Reference::for_resource(uri_template),
             argument: ArgumentInfo {
                 name: argument_name.into(),

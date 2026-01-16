@@ -52,7 +52,8 @@ fn test_complete_request_param_serialization() {
     let mut args = HashMap::new();
     args.insert("previous_input".to_string(), "test".to_string());
 
-    let request = CompleteRequestParam {
+    let request = CompleteRequestParams {
+        meta: None,
         r#ref: Reference::for_prompt("weather_prompt"),
         argument: ArgumentInfo {
             name: "location".to_string(),
@@ -195,7 +196,8 @@ fn test_completion_context_empty() {
 #[test]
 fn test_mcp_schema_compliance() {
     // Test that our types serialize correctly according to MCP specification
-    let request = CompleteRequestParam {
+    let request = CompleteRequestParams {
+        meta: None,
         r#ref: Reference::for_resource("file://{path}"),
         argument: ArgumentInfo {
             name: "path".to_string(),

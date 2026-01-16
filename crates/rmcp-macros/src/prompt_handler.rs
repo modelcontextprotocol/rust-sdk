@@ -28,7 +28,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
     let get_prompt_impl: ImplItem = parse_quote! {
         async fn get_prompt(
             &self,
-            request: GetPromptRequestParam,
+            request: GetPromptRequestParams,
             context: RequestContext<RoleServer>,
         ) -> Result<GetPromptResult, rmcp::ErrorData> {
             let prompt_context = rmcp::handler::server::prompt::PromptContext::new(
@@ -51,7 +51,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
     let list_prompts_impl: ImplItem = parse_quote! {
         async fn list_prompts(
             &self,
-            _request: Option<PaginatedRequestParam>,
+            _request: Option<PaginatedRequestParams>,
             _context: RequestContext<RoleServer>,
         ) -> Result<ListPromptsResult, rmcp::ErrorData> {
             let prompts = #router_expr.list_all();

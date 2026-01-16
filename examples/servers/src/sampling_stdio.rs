@@ -33,7 +33,7 @@ impl ServerHandler for SamplingDemoServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         match request.name.as_ref() {
@@ -48,7 +48,9 @@ impl ServerHandler for SamplingDemoServer {
 
                 let response = context
                     .peer
-                    .create_message(CreateMessageRequestParam {
+                    .create_message(CreateMessageRequestParams {
+                        meta: None,
+                        task: None,
                         messages: vec![SamplingMessage {
                             role: Role::User,
                             content: Content::text(question),
@@ -99,7 +101,7 @@ impl ServerHandler for SamplingDemoServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {

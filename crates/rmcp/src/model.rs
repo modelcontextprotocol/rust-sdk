@@ -718,7 +718,7 @@ impl CustomRequest {
 const_string!(InitializeResultMethod = "initialize");
 /// # Initialization
 /// This request is sent from the client to the server when it first connects, asking it to begin initialization.
-pub type InitializeRequest = Request<InitializeResultMethod, InitializeRequestParam>;
+pub type InitializeRequest = Request<InitializeResultMethod, InitializeRequestParams>;
 
 const_string!(InitializedNotificationMethod = "notifications/initialized");
 /// This notification is sent from the client to the server after initialization has finished.
@@ -731,7 +731,10 @@ pub type InitializedNotification = NotificationNoParam<InitializedNotificationMe
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct InitializeRequestParam {
+pub struct InitializeRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The MCP protocol version this client supports
     pub protocol_version: ProtocolVersion,
     /// The capabilities this client supports (sampling, roots, etc.)
@@ -739,6 +742,19 @@ pub struct InitializeRequestParam {
     /// Information about the client implementation
     pub client_info: Implementation,
 }
+
+impl RequestParamsMeta for InitializeRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`InitializeRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use InitializeRequestParams instead")]
+pub type InitializeRequestParam = InitializeRequestParams;
 
 /// The server's response to an initialization request.
 ///
@@ -760,7 +776,7 @@ pub struct InitializeResult {
 }
 
 pub type ServerInfo = InitializeResult;
-pub type ClientInfo = InitializeRequestParam;
+pub type ClientInfo = InitializeRequestParams;
 
 #[allow(clippy::derivable_impls)]
 impl Default for ServerInfo {
@@ -778,6 +794,7 @@ impl Default for ServerInfo {
 impl Default for ClientInfo {
     fn default() -> Self {
         ClientInfo {
+            meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation::from_build_env(),
@@ -843,10 +860,26 @@ impl Implementation {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct PaginatedRequestParam {
+pub struct PaginatedRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
+
+impl RequestParamsMeta for PaginatedRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`PaginatedRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use PaginatedRequestParams instead")]
+pub type PaginatedRequestParam = PaginatedRequestParams;
 // =============================================================================
 // PROGRESS AND PAGINATION
 // =============================================================================
@@ -910,7 +943,7 @@ macro_rules! paginated_result {
 const_string!(ListResourcesRequestMethod = "resources/list");
 /// Request to list all available resources from a server
 pub type ListResourcesRequest =
-    RequestOptionalParam<ListResourcesRequestMethod, PaginatedRequestParam>;
+    RequestOptionalParam<ListResourcesRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(ListResourcesResult {
     resources: Vec<Resource>
@@ -919,7 +952,7 @@ paginated_result!(ListResourcesResult {
 const_string!(ListResourceTemplatesRequestMethod = "resources/templates/list");
 /// Request to list all available resource templates from a server
 pub type ListResourceTemplatesRequest =
-    RequestOptionalParam<ListResourceTemplatesRequestMethod, PaginatedRequestParam>;
+    RequestOptionalParam<ListResourceTemplatesRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(ListResourceTemplatesResult {
     resource_templates: Vec<ResourceTemplate>
@@ -930,10 +963,26 @@ const_string!(ReadResourceRequestMethod = "resources/read");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct ReadResourceRequestParam {
+pub struct ReadResourceRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The URI of the resource to read
     pub uri: String,
 }
+
+impl RequestParamsMeta for ReadResourceRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`ReadResourceRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use ReadResourceRequestParams instead")]
+pub type ReadResourceRequestParam = ReadResourceRequestParams;
 
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -944,7 +993,7 @@ pub struct ReadResourceResult {
 }
 
 /// Request to read a specific resource
-pub type ReadResourceRequest = Request<ReadResourceRequestMethod, ReadResourceRequestParam>;
+pub type ReadResourceRequest = Request<ReadResourceRequestMethod, ReadResourceRequestParams>;
 
 const_string!(ResourceListChangedNotificationMethod = "notifications/resources/list_changed");
 /// Notification sent when the list of available resources changes
@@ -956,24 +1005,58 @@ const_string!(SubscribeRequestMethod = "resources/subscribe");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SubscribeRequestParam {
+pub struct SubscribeRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The URI of the resource to subscribe to
     pub uri: String,
 }
+
+impl RequestParamsMeta for SubscribeRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`SubscribeRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use SubscribeRequestParams instead")]
+pub type SubscribeRequestParam = SubscribeRequestParams;
+
 /// Request to subscribe to resource updates
-pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestParam>;
+pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestParams>;
 
 const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
 /// Parameters for unsubscribing from resource updates
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct UnsubscribeRequestParam {
+pub struct UnsubscribeRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The URI of the resource to unsubscribe from
     pub uri: String,
 }
+
+impl RequestParamsMeta for UnsubscribeRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`UnsubscribeRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use UnsubscribeRequestParams instead")]
+pub type UnsubscribeRequestParam = UnsubscribeRequestParams;
+
 /// Request to unsubscribe from resource updates
-pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeRequestParam>;
+pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeRequestParams>;
 
 const_string!(ResourceUpdatedNotificationMethod = "notifications/resources/updated");
 /// Parameters for a resource update notification
@@ -994,7 +1077,8 @@ pub type ResourceUpdatedNotification =
 
 const_string!(ListPromptsRequestMethod = "prompts/list");
 /// Request to list all available prompts from a server
-pub type ListPromptsRequest = RequestOptionalParam<ListPromptsRequestMethod, PaginatedRequestParam>;
+pub type ListPromptsRequest =
+    RequestOptionalParam<ListPromptsRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(ListPromptsResult {
     prompts: Vec<Prompt>
@@ -1005,13 +1089,30 @@ const_string!(GetPromptRequestMethod = "prompts/get");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetPromptRequestParam {
+pub struct GetPromptRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
 }
+
+impl RequestParamsMeta for GetPromptRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`GetPromptRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use GetPromptRequestParams instead")]
+pub type GetPromptRequestParam = GetPromptRequestParams;
+
 /// Request to get a specific prompt
-pub type GetPromptRequest = Request<GetPromptRequestMethod, GetPromptRequestParam>;
+pub type GetPromptRequest = Request<GetPromptRequestMethod, GetPromptRequestParams>;
 
 const_string!(PromptListChangedNotificationMethod = "notifications/prompts/list_changed");
 /// Notification sent when the list of available prompts changes
@@ -1045,12 +1146,29 @@ const_string!(SetLevelRequestMethod = "logging/setLevel");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SetLevelRequestParam {
+pub struct SetLevelRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The desired logging level
     pub level: LoggingLevel,
 }
+
+impl RequestParamsMeta for SetLevelRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`SetLevelRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use SetLevelRequestParams instead")]
+pub type SetLevelRequestParam = SetLevelRequestParams;
+
 /// Request to set the logging level
-pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParam>;
+pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParams>;
 
 const_string!(LoggingMessageNotificationMethod = "notifications/message");
 /// Parameters for a logging message notification
@@ -1075,7 +1193,7 @@ pub type LoggingMessageNotification =
 // =============================================================================
 
 const_string!(CreateMessageRequestMethod = "sampling/createMessage");
-pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParam>;
+pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParams>;
 
 /// Represents the role of a participant in a conversation or message exchange.
 ///
@@ -1128,10 +1246,19 @@ pub enum ContextInclusion {
 /// This structure contains all the necessary information for a client to
 /// generate an LLM response, including conversation history, model preferences,
 /// and generation parameters.
+///
+/// This implements `TaskAugmentedRequestParamsMeta` as sampling requests can be
+/// long-running and may benefit from task-based execution.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CreateMessageRequestParam {
+pub struct CreateMessageRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    /// Task metadata for async task management (SEP-1319)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<JsonObject>,
     /// The conversation history and current messages
     pub messages: Vec<SamplingMessage>,
     /// Preferences for model selection and behavior
@@ -1155,6 +1282,28 @@ pub struct CreateMessageRequestParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
 }
+
+impl RequestParamsMeta for CreateMessageRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
+    fn task(&self) -> Option<&JsonObject> {
+        self.task.as_ref()
+    }
+    fn task_mut(&mut self) -> &mut Option<JsonObject> {
+        &mut self.task
+    }
+}
+
+/// Deprecated: Use [`CreateMessageRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CreateMessageRequestParams instead")]
+pub type CreateMessageRequestParam = CreateMessageRequestParams;
 
 /// Preferences for model selection and behavior in sampling requests.
 ///
@@ -1244,7 +1393,10 @@ impl CompletionContext {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CompleteRequestParam {
+pub struct CompleteRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub r#ref: Reference,
     pub argument: ArgumentInfo,
     /// Optional context containing previously resolved argument values
@@ -1252,7 +1404,20 @@ pub struct CompleteRequestParam {
     pub context: Option<CompletionContext>,
 }
 
-pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParam>;
+impl RequestParamsMeta for CompleteRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`CompleteRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CompleteRequestParams instead")]
+pub type CompleteRequestParam = CompleteRequestParams;
+
+pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1477,7 +1642,8 @@ pub enum ElicitationAction {
 /// ```rust
 /// use rmcp::model::*;
 ///
-/// let params = CreateElicitationRequestParam {
+/// let params = CreateElicitationRequestParams {
+///     meta: None,
 ///     message: "Please provide your email".to_string(),
 ///     requested_schema: ElicitationSchema::builder()
 ///         .required_email("email")
@@ -1488,7 +1654,11 @@ pub enum ElicitationAction {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CreateElicitationRequestParam {
+pub struct CreateElicitationRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+
     /// Human-readable message explaining what input is needed from the user.
     /// This should be clear and provide sufficient context for the user to understand
     /// what information they need to provide.
@@ -1499,6 +1669,19 @@ pub struct CreateElicitationRequestParam {
     /// with primitive-typed properties.
     pub requested_schema: ElicitationSchema,
 }
+
+impl RequestParamsMeta for CreateElicitationRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`CreateElicitationRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CreateElicitationRequestParams instead")]
+pub type CreateElicitationRequestParam = CreateElicitationRequestParams;
 
 /// The result returned by a client in response to an elicitation request.
 ///
@@ -1520,7 +1703,7 @@ pub struct CreateElicitationResult {
 
 /// Request type for creating an elicitation to gather user input
 pub type CreateElicitationRequest =
-    Request<ElicitationCreateRequestMethod, CreateElicitationRequestParam>;
+    Request<ElicitationCreateRequestMethod, CreateElicitationRequestParams>;
 
 // =============================================================================
 // TOOL EXECUTION RESULTS
@@ -1685,7 +1868,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
 
 const_string!(ListToolsRequestMethod = "tools/list");
 /// Request to list all available tools from a server
-pub type ListToolsRequest = RequestOptionalParam<ListToolsRequestMethod, PaginatedRequestParam>;
+pub type ListToolsRequest = RequestOptionalParam<ListToolsRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(
     ListToolsResult {
@@ -1698,21 +1881,50 @@ const_string!(CallToolRequestMethod = "tools/call");
 ///
 /// Contains the tool name and optional arguments needed to execute
 /// the tool operation.
+///
+/// This implements `TaskAugmentedRequestParamsMeta` as tool calls can be
+/// long-running and may benefit from task-based execution.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CallToolRequestParam {
+pub struct CallToolRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The name of the tool to call
     pub name: Cow<'static, str>,
     /// Arguments to pass to the tool (must match the tool's input schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
+    /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<JsonObject>,
 }
 
+impl RequestParamsMeta for CallToolRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
+    fn task(&self) -> Option<&JsonObject> {
+        self.task.as_ref()
+    }
+    fn task_mut(&mut self) -> &mut Option<JsonObject> {
+        &mut self.task
+    }
+}
+
+/// Deprecated: Use [`CallToolRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CallToolRequestParams instead")]
+pub type CallToolRequestParam = CallToolRequestParams;
+
 /// Request to call a specific tool
-pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParam>;
+pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>;
 
 /// The result of a sampling/createMessage request containing the generated response.
 ///
@@ -1752,37 +1964,85 @@ pub struct GetPromptResult {
 // =============================================================================
 
 const_string!(GetTaskInfoMethod = "tasks/get");
-pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParam>;
+pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetTaskInfoParam {
+pub struct GetTaskInfoParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub task_id: String,
 }
+
+impl RequestParamsMeta for GetTaskInfoParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`GetTaskInfoParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use GetTaskInfoParams instead")]
+pub type GetTaskInfoParam = GetTaskInfoParams;
 
 const_string!(ListTasksMethod = "tasks/list");
-pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParam>;
+pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParams>;
 
 const_string!(GetTaskResultMethod = "tasks/result");
-pub type GetTaskResultRequest = Request<GetTaskResultMethod, GetTaskResultParam>;
+pub type GetTaskResultRequest = Request<GetTaskResultMethod, GetTaskResultParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetTaskResultParam {
+pub struct GetTaskResultParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub task_id: String,
 }
+
+impl RequestParamsMeta for GetTaskResultParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`GetTaskResultParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use GetTaskResultParams instead")]
+pub type GetTaskResultParam = GetTaskResultParams;
 
 const_string!(CancelTaskMethod = "tasks/cancel");
-pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParam>;
+pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CancelTaskParam {
+pub struct CancelTaskParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub task_id: String,
 }
+
+impl RequestParamsMeta for CancelTaskParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
+pub type CancelTaskParam = CancelTaskParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -2201,11 +2461,13 @@ mod tests {
             serde_json::from_value(request.clone()).expect("invalid request");
         let (request, id) = request.into_request().expect("should be a request");
         assert_eq!(id, RequestId::Number(1));
+        #[allow(deprecated)]
         match request {
             ClientRequest::InitializeRequest(Request {
                 method: _,
                 params:
                     InitializeRequestParam {
+                        meta: _,
                         protocol_version: _,
                         capabilities,
                         client_info,

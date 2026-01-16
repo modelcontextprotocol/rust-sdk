@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::{
     RoleClient,
-    model::{CallToolRequestParam, CallToolResult, Tool as McpTool},
+    model::{CallToolRequestParams, CallToolResult, Tool as McpTool},
     service::{RunningService, ServerSink},
 };
 use serde_json::Value;
@@ -59,7 +59,8 @@ impl Tool for McpToolAdapter {
         println!("arguments: {:?}", arguments);
         let call_result = self
             .server
-            .call_tool(CallToolRequestParam {
+            .call_tool(CallToolRequestParams {
+                meta: None,
                 name: self.tool.name.clone(),
                 arguments,
                 task: None,

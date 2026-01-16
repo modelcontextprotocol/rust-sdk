@@ -5,13 +5,13 @@ use thiserror::Error;
 use super::*;
 #[cfg(feature = "elicitation")]
 use crate::model::{
-    CreateElicitationRequest, CreateElicitationRequestParam, CreateElicitationResult,
+    CreateElicitationRequest, CreateElicitationRequestParams, CreateElicitationResult,
 };
 use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParam, CreateMessageResult, ErrorData, ListRootsRequest,
+        CreateMessageRequestParams, CreateMessageResult, ErrorData, ListRootsRequest,
         ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
         ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
         ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
@@ -386,7 +386,7 @@ macro_rules! method {
 impl Peer<RoleServer> {
     pub async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
     ) -> Result<CreateMessageResult, ServiceError> {
         let result = self
             .send_request(ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -402,9 +402,9 @@ impl Peer<RoleServer> {
     }
     method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -690,7 +690,8 @@ impl Peer<RoleServer> {
 
         let response = self
             .create_elicitation_with_timeout(
-                CreateElicitationRequestParam {
+                CreateElicitationRequestParams {
+                    meta: None,
                     message: message.into(),
                     requested_schema: schema,
                 },

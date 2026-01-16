@@ -104,7 +104,7 @@
 //!
 //! ```rust
 //! use anyhow::Result;
-//! use rmcp::{model::CallToolRequestParam, service::ServiceExt};
+//! use rmcp::{model::CallToolRequestParams, service::ServiceExt};
 //! #[cfg(feature = "transport-child-process")]
 //! #[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
 //! use rmcp::transport::{TokioChildProcess, ConfigureCommandExt};
@@ -127,7 +127,8 @@
 //!
 //!     // Call tool 'git_status' with arguments = {"repo_path": "."}
 //!     let tool_result = service
-//!         .call_tool(CallToolRequestParam {
+//!         .call_tool(CallToolRequestParams {
+//!             meta: None,
 //!             name: "git_status".into(),
 //!             arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
 //!             task: None,
