@@ -17,6 +17,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing_subscriber::{self, EnvFilter};
+use url::Url;
 
 /// User information request
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -105,6 +106,48 @@ impl ElicitationServer {
         Ok(CallToolResult::success(vec![Content::text(
             "User name reset. Next greeting will ask for name again.".to_string(),
         )]))
+    }
+
+    #[tool(description = "Example of URL elicitation")]
+    pub async fn secure_tool_call(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let elicit_result = context
+            .peer
+            .elicit_url(
+                "User must visit the following URL to complete tool call",
+                Url::parse("https://example.com/complete_tool").expect("valid URL"),
+                "elicit_123",
+            )
+            .await
+            .map_err(|e| {
+                ErrorData::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Url elicitation has failed: {}", e),
+                    None,
+                )
+            })?;
+        match elicit_result {
+            ElicitationAction::Accept => {
+                // Mock notifying completion
+                let _ = context
+                    .peer
+                    .notify_url_elicitation_completed(ElicitationResponseNotificationParam {
+                        elicitation_id: "elicit_123".to_string(),
+                    })
+                    .await;
+                Ok(CallToolResult::success(vec![Content::text(
+                    "Elicitation via URL successful".to_string(),
+                )]))
+            }
+            ElicitationAction::Cancel => Ok(CallToolResult::success(vec![Content::text(
+                "Elicitation via URL cancelled by user".to_string(),
+            )])),
+            ElicitationAction::Decline => Ok(CallToolResult::error(vec![Content::text(
+                "Elicitation via URL declined by user".to_string(),
+            )])),
+        }
     }
 }
 

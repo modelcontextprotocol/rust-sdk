@@ -61,6 +61,23 @@ pub type TaskRequestMap = BTreeMap<String, bool>;
 
 /// Capability for handling elicitation requests from servers.
 ///
+/// Capability for form mode elicitation.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct FormElicitationCapability {
+    /// Whether the client supports JSON Schema validation for elicitation responses.
+    /// When true, the client will validate user input against the requested_schema
+    /// before sending the response back to the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_validation: Option<bool>,
+}
+
+/// Capability for URL mode elicitation.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct UrlElicitationCapability {}
+
 /// Elicitation allows servers to request interactive input from users during tool execution.
 /// This capability indicates that a client can handle elicitation requests and present
 /// appropriate UI to users for collecting the requested information.
@@ -68,11 +85,12 @@ pub type TaskRequestMap = BTreeMap<String, bool>;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ElicitationCapability {
-    /// Whether the client supports JSON Schema validation for elicitation responses.
-    /// When true, the client will validate user input against the requested_schema
-    /// before sending the response back to the server.
+    /// Whether client supports form-based elicitation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_validation: Option<bool>,
+    pub form: Option<FormElicitationCapability>,
+    /// Whether client supports URL-based elicitation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<UrlElicitationCapability>,
 }
 
 ///
@@ -316,12 +334,14 @@ impl<const E: bool, const S: bool, const EL: bool, const TASKS: bool>
 impl<const E: bool, const R: bool, const S: bool, const TASKS: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, R, S, true, TASKS>>
 {
-    /// Enable JSON Schema validation for elicitation responses.
+    /// Enable JSON Schema validation for elicitation responses in form mode.
     /// When enabled, the client will validate user input against the requested_schema
     /// before sending responses back to the server.
     pub fn enable_elicitation_schema_validation(mut self) -> Self {
         if let Some(c) = self.elicitation.as_mut() {
-            c.schema_validation = Some(true);
+            c.form = Some(FormElicitationCapability {
+                schema_validation: Some(true),
+            });
         }
         self
     }
