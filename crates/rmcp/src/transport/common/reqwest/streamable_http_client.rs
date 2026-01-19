@@ -121,7 +121,6 @@ impl StreamableHttpClient for reqwest::Client {
             }
         }
         let status = response.status();
-        let response = response.error_for_status()?;
         if matches!(
             status,
             reqwest::StatusCode::ACCEPTED | reqwest::StatusCode::NO_CONTENT
