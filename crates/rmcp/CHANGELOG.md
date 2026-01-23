@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.13.0...rmcp-v0.14.0) - 2026-01-23
+
+### Fixed
+
+- *(tasks)* #626 model task capabilities correctly ([#627](https://github.com/modelcontextprotocol/rust-sdk/pull/627))
+- don't treat non-success HTTP codes as transport errors ([#618](https://github.com/modelcontextprotocol/rust-sdk/pull/618))
+
+### Other
+
+- show README content on docs.rs ([#583](https://github.com/modelcontextprotocol/rust-sdk/pull/583))
+- added hyper-mcp to the list of built with rmcp ([#621](https://github.com/modelcontextprotocol/rust-sdk/pull/621))
+- Implement SEP-1319: Decouple Request Payload from RPC Methods ([#617](https://github.com/modelcontextprotocol/rust-sdk/pull/617))
+
 ## [0.13.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.12.0...rmcp-v0.13.0) - 2026-01-15
 
 ### Added
