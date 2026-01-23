@@ -763,6 +763,18 @@
         "properties"
       ]
     },
+    "ElicitationTaskCapability": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object",
@@ -2322,6 +2334,18 @@
         "content"
       ]
     },
+    "SamplingTaskCapability": {
+      "type": "object",
+      "properties": {
+        "createMessage": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "ServerCapabilities": {
       "title": "Builder",
       "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_logging()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
@@ -2605,6 +2629,42 @@
         "createdAt"
       ]
     },
+    "TaskRequestsCapability": {
+      "description": "Request types that support task-augmented execution.",
+      "type": "object",
+      "properties": {
+        "elicitation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "TaskResult": {
       "description": "Final result for a succeeded task (returned from `tasks/result`).",
       "type": "object",
@@ -2660,32 +2720,32 @@
       ]
     },
     "TasksCapability": {
-      "description": "Task capability negotiation for SEP-1686.",
+      "description": "Task capabilities shared by client and server.",
       "type": "object",
       "properties": {
         "cancel": {
-          "description": "Whether the receiver supports `tasks/cancel`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "list": {
-          "description": "Whether the receiver supports `tasks/list`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "requests": {
-          "description": "Map of request category (e.g. \"tools.call\") to a boolean indicating support.",
           "type": [
             "object",
             "null"
           ],
-          "additionalProperties": {
-            "type": "boolean"
-          }
+          "additionalProperties": true
+        },
+        "list": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskRequestsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -2918,6 +2978,18 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ToolsTaskCapability": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       }
     },
