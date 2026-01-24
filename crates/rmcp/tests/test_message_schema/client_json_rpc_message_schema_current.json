@@ -318,11 +318,15 @@
           ]
         },
         "sampling": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "description": "Capability for LLM sampling requests (SEP-1577)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "tasks": {
           "anyOf": [
@@ -431,14 +435,21 @@
       ]
     },
     "CreateMessageResult": {
-      "description": "The result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about\nhow the generation was performed and why it stopped.",
+      "description": "Result of sampling/createMessage (SEP-1577).\nThe result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about\nhow the generation was performed and why it stopped.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
-          "description": "The actual content of the message (text, image, etc.)",
+          "description": "The actual content of the message (text, image, audio, tool use, or tool result)",
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated"
+              "$ref": "#/definitions/SamplingContent"
             }
           ]
         },
@@ -1741,6 +1752,134 @@
       "format": "const",
       "const": "notifications/roots/list_changed"
     },
+    "SamplingCapability": {
+      "description": "Sampling capability with optional sub-capabilities (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "context": {
+          "description": "Support for `includeContext` (soft-deprecated)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "tools": {
+          "description": "Support for `tools` and `toolChoice` parameters",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "SamplingContent": {
+      "description": "Single or array content wrapper (SEP-1577).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SamplingMessageContent"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessageContent"
+          }
+        }
+      ]
+    },
+    "SamplingMessageContent": {
+      "description": "Content types for sampling messages (SEP-1577).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Assistant only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolUseContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "User only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolResultContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
     "SamplingTaskCapability": {
       "type": "object",
       "properties": {
@@ -1874,6 +2013,81 @@
           ]
         }
       }
+    },
+    "ToolResultContent": {
+      "description": "Tool execution result in user message (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "content": {
+          "description": "Content blocks returned by the tool",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated"
+          }
+        },
+        "isError": {
+          "description": "Whether tool execution failed",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": {
+          "description": "Optional structured result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "toolUseId": {
+          "description": "ID of the corresponding tool use",
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolUseId"
+      ]
+    },
+    "ToolUseContent": {
+      "description": "Tool call request from assistant (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata (preserved for caching)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "id": {
+          "description": "Unique identifier for this tool call",
+          "type": "string"
+        },
+        "input": {
+          "description": "Input arguments for the tool",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "Name of the tool to call",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "input"
+      ]
     },
     "ToolsTaskCapability": {
       "type": "object",

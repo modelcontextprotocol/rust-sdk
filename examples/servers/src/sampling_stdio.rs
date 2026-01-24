@@ -51,10 +51,7 @@ impl ServerHandler for SamplingDemoServer {
                     .create_message(CreateMessageRequestParams {
                         meta: None,
                         task: None,
-                        messages: vec![SamplingMessage {
-                            role: Role::User,
-                            content: Content::text(question),
-                        }],
+                        messages: vec![SamplingMessage::user_text(question)],
                         model_preferences: Some(ModelPreferences {
                             hints: Some(vec![ModelHint {
                                 name: Some("claude".to_string()),
@@ -69,6 +66,8 @@ impl ServerHandler for SamplingDemoServer {
                         max_tokens: 150,
                         stop_sequences: None,
                         metadata: None,
+                        tools: None,
+                        tool_choice: None,
                     })
                     .await
                     .map_err(|e| {
@@ -85,7 +84,8 @@ impl ServerHandler for SamplingDemoServer {
                     response
                         .message
                         .content
-                        .as_text()
+                        .first()
+                        .and_then(|c| c.as_text())
                         .map(|t| &t.text)
                         .unwrap_or(&"No text response".to_string())
                 ))]))
