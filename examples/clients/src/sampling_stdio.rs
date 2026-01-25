@@ -41,10 +41,7 @@ impl ClientHandler for SamplingDemoClient {
             self.mock_llm_response(&params.messages, params.system_prompt.as_deref());
 
         Ok(CreateMessageResult {
-            message: SamplingMessage {
-                role: Role::Assistant,
-                content: Content::text(response_text),
-            },
+            message: SamplingMessage::assistant_text(response_text),
             model: "mock_llm".to_string(),
             stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
         })

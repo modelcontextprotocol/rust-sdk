@@ -72,10 +72,7 @@ impl ClientHandler for TestClientHandler {
         };
 
         Ok(CreateMessageResult {
-            message: SamplingMessage {
-                role: Role::Assistant,
-                content: Content::text(response.to_string()),
-            },
+            message: SamplingMessage::assistant_text(response.to_string()),
             model: "test-model".to_string(),
             stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
         })
