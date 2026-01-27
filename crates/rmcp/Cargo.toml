@@ -88,6 +88,8 @@ reqwest = ["__reqwest", "reqwest?/rustls-tls"]
 
 reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
 
+reqwest-native-tls = ["__reqwest", "reqwest?/native-tls"]
+
 server-side-http = [
   "uuid",
   "dep:rand",
