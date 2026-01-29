@@ -857,7 +857,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Icon": {
       "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
@@ -2453,9 +2454,6 @@
           "$ref": "#/definitions/EmptyObject"
         },
         {
-          "$ref": "#/definitions/CustomResult"
-        },
-        {
           "$ref": "#/definitions/CreateTaskResult"
         },
         {
@@ -2466,6 +2464,9 @@
         },
         {
           "$ref": "#/definitions/TaskResult"
+        },
+        {
+          "$ref": "#/definitions/CustomResult"
         }
       ]
     },

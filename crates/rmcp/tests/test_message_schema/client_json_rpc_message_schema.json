@@ -863,9 +863,6 @@
           "$ref": "#/definitions/RequestOptionalParam4"
         },
         {
-          "$ref": "#/definitions/CustomRequest"
-        },
-        {
           "$ref": "#/definitions/Request9"
         },
         {
@@ -876,6 +873,9 @@
         },
         {
           "$ref": "#/definitions/Request11"
+        },
+        {
+          "$ref": "#/definitions/CustomRequest"
         }
       ],
       "required": [
