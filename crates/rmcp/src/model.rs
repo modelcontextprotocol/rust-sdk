@@ -2045,6 +2045,7 @@ impl RequestParamsMeta for CancelTaskParams {
 pub type CancelTaskParam = CancelTaskParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GetTaskInfoResult {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2130,11 +2131,11 @@ ts_union!(
     | UnsubscribeRequest
     | CallToolRequest
     | ListToolsRequest
-    | CustomRequest
     | GetTaskInfoRequest
     | ListTasksRequest
     | GetTaskResultRequest
-    | CancelTaskRequest;
+    | CancelTaskRequest
+    | CustomRequest;
 );
 
 impl ClientRequest {
@@ -2153,11 +2154,11 @@ impl ClientRequest {
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
-            ClientRequest::CustomRequest(r) => r.method.as_str(),
             ClientRequest::GetTaskInfoRequest(r) => r.method.as_str(),
             ClientRequest::ListTasksRequest(r) => r.method.as_str(),
             ClientRequest::GetTaskResultRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
+            ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -2222,11 +2223,11 @@ ts_union!(
     | ListToolsResult
     | CreateElicitationResult
     | EmptyResult
-    | CustomResult
     | CreateTaskResult
     | ListTasksResult
     | GetTaskInfoResult
     | TaskResult
+    | CustomResult
     ;
 );
 
