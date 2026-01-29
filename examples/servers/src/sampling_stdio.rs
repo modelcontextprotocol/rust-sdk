@@ -124,6 +124,7 @@ impl ServerHandler for SamplingDemoServer {
                 ),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             }],
