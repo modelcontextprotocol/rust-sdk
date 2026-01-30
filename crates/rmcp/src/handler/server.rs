@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     error::ErrorData as McpError,
-    model::*,
+    model::{TaskSupport, *},
     service::{NotificationContext, RequestContext, RoleServer, Service, ServiceRole},
 };
 
@@ -65,7 +65,32 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::empty),
             ClientRequest::CallToolRequest(request) => {
-                if request.params.task.is_some() {
+                let is_task = request.params.task.is_some();
+
+                // Validate task support mode per MCP specification
+                if let Some(tool) = self.get_tool(&request.params.name) {
+                    match (tool.task_support(), is_task) {
+                        // If taskSupport is "required", clients MUST invoke the tool as a task.
+                        // Servers MUST return a -32601 (Method not found) error if they don't.
+                        (TaskSupport::Required, false) => {
+                            return Err(McpError::new(
+                                ErrorCode::METHOD_NOT_FOUND,
+                                "Tool requires task-based invocation",
+                                None,
+                            ));
+                        }
+                        // If taskSupport is "forbidden" (default), clients MUST NOT invoke as a task.
+                        (TaskSupport::Forbidden, true) => {
+                            return Err(McpError::invalid_params(
+                                "Tool does not support task-based invocation",
+                                None,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+
+                if is_task {
                     tracing::info!("Enqueueing task for tool call: {}", request.params.name);
                     self.enqueue_task(request.params, context.clone())
                         .await
@@ -240,6 +265,13 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         std::future::ready(Ok(ListToolsResult::default()))
+    }
+    /// Get a tool definition by name.
+    ///
+    /// The default implementation returns `None`, which bypasses validation.
+    /// When using `#[tool_handler]`, this method is automatically implemented.
+    fn get_tool(&self, _name: &str) -> Option<Tool> {
+        None
     }
     fn on_custom_request(
         &self,
@@ -443,6 +475,10 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
                 (**self).list_tools(request, context)
+            }
+
+            fn get_tool(&self, name: &str) -> Option<Tool> {
+                (**self).get_tool(name)
             }
 
             fn on_custom_request(
