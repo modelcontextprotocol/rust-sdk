@@ -89,10 +89,19 @@ pub struct ToolAttribute {
     pub output_schema: Option<Expr>,
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotationsAttribute>,
+    /// Execution-related configuration including task support.
+    pub execution: Option<ToolExecutionAttribute>,
     /// Optional icons for the tool
     pub icons: Option<Expr>,
     /// Optional metadata for the tool
     pub meta: Option<Expr>,
+}
+
+#[derive(FromMeta, Debug, Default)]
+#[darling(default)]
+pub struct ToolExecutionAttribute {
+    /// Task support mode: "forbidden", "optional", or "required"
+    pub task_support: Option<String>,
 }
 
 pub struct ResolvedToolAttribute {
@@ -102,6 +111,7 @@ pub struct ResolvedToolAttribute {
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
     pub annotations: Expr,
+    pub execution: Expr,
     pub icons: Option<Expr>,
     pub meta: Option<Expr>,
 }
@@ -115,6 +125,7 @@ impl ResolvedToolAttribute {
             input_schema,
             output_schema,
             annotations,
+            execution,
             icons,
             meta,
         } = self;
@@ -155,6 +166,7 @@ impl ResolvedToolAttribute {
                     input_schema: #input_schema,
                     output_schema: #output_schema,
                     annotations: #annotations,
+                    execution: #execution,
                     icons: #icons,
                     meta: #meta,
                 }
@@ -263,6 +275,38 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     } else {
         none_expr()?
     };
+    let execution_expr = if let Some(execution) = attribute.execution {
+        let ToolExecutionAttribute { task_support } = execution;
+
+        let task_support_expr = if let Some(ts) = task_support {
+            let ts_ident = match ts.as_str() {
+                "forbidden" => quote! { rmcp::model::TaskSupport::Forbidden },
+                "optional" => quote! { rmcp::model::TaskSupport::Optional },
+                "required" => quote! { rmcp::model::TaskSupport::Required },
+                _ => {
+                    return Err(syn::Error::new(
+                        Span::call_site(),
+                        format!(
+                            "Invalid task_support value '{}'. Expected 'forbidden', 'optional', or 'required'",
+                            ts
+                        ),
+                    ));
+                }
+            };
+            quote! { Some(#ts_ident) }
+        } else {
+            quote! { None }
+        };
+
+        let token_stream = quote! {
+            Some(rmcp::model::ToolExecution {
+                task_support: #task_support_expr,
+            })
+        };
+        syn::parse2::<Expr>(token_stream)?
+    } else {
+        none_expr()?
+    };
     // Handle output_schema - either explicit or generated from return type
     let output_schema_expr = attribute.output_schema.or_else(|| {
         // Try to generate schema from return type
@@ -286,6 +330,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         input_schema: input_schema_expr,
         output_schema: output_schema_expr,
         annotations: annotations_expr,
+        execution: execution_expr,
         title: attribute.title,
         icons: attribute.icons,
         meta: attribute.meta,
