@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.14.0...rmcp-v0.14.1) - 2026-01-30
+
+### Fixed
+
+- *(tasks)* correct enum variant ordering for deserialization ([#634](https://github.com/modelcontextprotocol/rust-sdk/pull/634))
+
 ## [0.14.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.13.0...rmcp-v0.14.0) - 2026-01-23
 
 ### Fixed
