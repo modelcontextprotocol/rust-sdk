@@ -107,6 +107,10 @@ variant_extension! {
         CallToolRequest
         ListToolsRequest
         CustomRequest
+        GetTaskInfoRequest
+        ListTasksRequest
+        GetTaskResultRequest
+        CancelTaskRequest
     }
 }
 

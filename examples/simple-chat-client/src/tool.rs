@@ -62,6 +62,7 @@ impl Tool for McpToolAdapter {
             .call_tool(CallToolRequestParam {
                 name: self.tool.name.clone(),
                 arguments,
+                task: None,
             })
             .await?;
 

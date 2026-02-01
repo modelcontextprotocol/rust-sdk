@@ -404,6 +404,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 "process initialized notification response",
             ))?;
         let _ = initialized_notification.responder.send(Ok(()));
+        #[allow(clippy::large_enum_variant)]
         enum Event<W: Worker, E: std::error::Error + Send + Sync + 'static> {
             ClientMessage(WorkerSendRequest<W>),
             ServerMessage(ServerJsonRpcMessage),

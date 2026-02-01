@@ -12,8 +12,8 @@ An official Rust Model Context Protocol SDK implementation with tokio async runt
 
 This repository contains the following crates:
 
-- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation (If you want to get more information, please visit [rmcp](crates/rmcp/README.md))
-- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations (If you want to get more information, please visit [rmcp-macros](crates/rmcp-macros/README.md))
+- [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation - see [rmcp](crates/rmcp/README.md)
+- [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations - see [rmcp-macros](crates/rmcp-macros/README.md)
 
 ## Usage
 
@@ -25,14 +25,15 @@ rmcp = { version = "0.8.0", features = ["server"] }
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
 ### Third Dependencies
-Basic dependencies:
-- [tokio required](https://github.com/tokio-rs/tokio)
-- [serde required](https://github.com/serde-rs/serde)
-Json Schema generation(Must follow the 2020-12 version):
-- [shemars required](https://github.com/GREsau/schemars)
 
+Basic dependencies:
+- [tokio](https://github.com/tokio-rs/tokio)
+- [serde](https://github.com/serde-rs/serde)
+Json Schema generation (version 2020-12):
+- [schemars](https://github.com/GREsau/schemars)
 
 ### Build a Client
+
 <details>
 <summary>Start a client</summary>
 
@@ -108,16 +109,16 @@ let quit_reason = server.cancel().await?;
 
 ## Examples
 
-See [examples](examples/README.md)
+See [examples](examples/README.md).
 
 ## OAuth Support
 
-See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
+See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
-- [MCP Specification](https://spec.modelcontextprotocol.io/specification/2024-11-05/)
-- [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2024-11-05/schema.ts)
+- [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2025-11-25/schema.ts)
 
 ## Related Projects
 
@@ -136,6 +137,7 @@ See [oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [stakpak-agent](https://github.com/stakpak/agent) - Security-hardened terminal agent for DevOps with MCP over mTLS, streaming, secret tokenization, and async task management
 - [video-transcriber-mcp-rs](https://github.com/nhatvu148/video-transcriber-mcp-rs) - High-performance MCP server for transcribing videos from 1000+ platforms using whisper.cpp
 - [NexusCore MCP](https://github.com/sjkim1127/Nexuscore_MCP) - Advanced malware analysis & dynamic instrumentation MCP server with Frida integration and stealth unpacking capabilities
+- [spreadsheet-mcp](https://github.com/PSU3D0/spreadsheet-mcp) - Token-efficient MCP server for spreadsheet analysis with automatic region detection, recalculation, screenshot, and editing support for LLM agents
 
 
 ## Development

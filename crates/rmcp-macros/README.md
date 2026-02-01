@@ -6,7 +6,10 @@
 
 This library primarily provides the following macros:
 
-- `#[tool]`: Used to mark functions as RMCP tools, automatically generating necessary metadata and invocation mechanisms
+- `#[tool]`: Mark an async/sync function as an RMCP tool and generate metadata + schema glue
+- `#[tool_router]`: Collect all `#[tool]` functions in an impl block into a router value
+- `#[tool_handler]`: Implement the `call_tool` and `list_tools` entry points by delegating to a router expression
+- `#[task_handler]`: Wire up the task lifecycle (list/enqueue/get/cancel) on top of an `OperationProcessor`
 
 ## Usage
 
@@ -16,7 +19,7 @@ This macro is used to mark a function as a tool handler.
 
 This will generate a function that return the attribute of this tool, with type `rmcp::model::Tool`.
 
-#### Usage
+#### Tool attributes
 
 | field             | type                       | usage |
 | :-                | :-                         | :-    |
@@ -25,7 +28,7 @@ This will generate a function that return the attribute of this tool, with type 
 | `input_schema`    | `Expr`                     | A JSON Schema object defining the expected parameters for the tool. If not provide, if will use the json schema of its argument with type `Parameters<T>` |
 | `annotations`     | `ToolAnnotationsAttribute` | Additional tool information. Defaults to `None`. |
 
-#### Example
+#### Tool example
 
 ```rust
 #[tool(name = "my_tool", description = "This is my tool", annotations(title = "我的工具", read_only_hint = true))]
@@ -42,14 +45,14 @@ It creates a function that returns a `ToolRouter` instance.
 
 In most case, you need to add a field for handler to store the router information and initialize it when creating handler, or store it with a static variable.
 
-#### Usage
+#### Router attributes
 
 | field     | type          | usage |
 | :-        | :-            | :-    |
 | `router`  | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
 | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
 
-#### Example
+#### Router example
 
 ```rust
 #[tool_router]
@@ -104,13 +107,14 @@ impl MyToolHandler {
 
 This macro will generate the handler for `tool_call` and `list_tools` methods in the implementation block, by using an existing `ToolRouter` instance.
 
-#### Usage
+#### Handler attributes
 
 | field     | type          | usage |
 | :-        | :-            | :-    |
 | `router`  | `Expr`        | The expression to access the `ToolRouter` instance. Defaults to `self.tool_router`. |
 
-#### Example
+#### Handler example
+
 ```rust
 #[tool_handler]
 impl ServerHandler for MyToolHandler {
@@ -119,6 +123,7 @@ impl ServerHandler for MyToolHandler {
 ```
 
 or using a custom router expression:
+
 ```rust
 #[tool_handler(router = self.get_router().await)]
 impl ServerHandler for MyToolHandler {
@@ -126,8 +131,10 @@ impl ServerHandler for MyToolHandler {
 }
 ```
 
-#### Explained
+#### Handler expansion
+
 This macro will be expended to something like this:
+
 ```rust
 impl ServerHandler for MyToolHandler {
        async fn call_tool(
@@ -150,6 +157,46 @@ impl ServerHandler for MyToolHandler {
 }
 ```
 
+### task_handler
+
+This macro wires the task lifecycle endpoints (`list_tasks`, `enqueue_task`, `get_task`, `cancel_task`) to an implementation of `OperationProcessor`. It keeps the handler lean by delegating scheduling, status tracking, and cancellation semantics to the processor.
+
+#### Task handler attributes
+
+| field        | type   | usage |
+| :-           | :-     | :-    |
+| `processor`  | `Expr` | Expression that yields an `Arc<dyn OperationProcessor>` (or compatible trait object). Defaults to `self.processor.clone()`. |
+
+#### Task handler example
+
+```rust
+#[derive(Clone)]
+pub struct TaskHandler {
+    processor: Arc<dyn OperationProcessor<RoleServer> + Send + Sync>,
+}
+
+#[task_handler(processor = self.processor.clone())]
+impl ServerHandler for TaskHandler {}
+```
+
+#### Task handler expansion
+
+At expansion time the macro implements the task-specific handler methods by forwarding to the processor expression, roughly equivalent to:
+
+```rust
+impl ServerHandler for TaskHandler {
+    async fn list_tasks(&self, request: TaskListRequest, ctx: RequestContext<RoleServer>) -> Result<TaskListResult, rmcp::ErrorData> {
+        self.processor.list_tasks(request, ctx).await
+    }
+
+    async fn enqueue_task(&self, request: TaskEnqueueRequest, ctx: RequestContext<RoleServer>) -> Result<TaskEnqueueResult, rmcp::ErrorData> {
+        self.processor.enqueue_task(request, ctx).await
+    }
+
+    // get_task and cancel_task are generated in the same manner.
+}
+```
+
 
 ## Advanced Features
 
@@ -159,4 +206,4 @@ impl ServerHandler for MyToolHandler {
 
 ## License
 
-Please refer to the LICENSE file in the project root directory. 
+Please refer to the LICENSE file in the project root directory.

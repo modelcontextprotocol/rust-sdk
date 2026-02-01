@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
         .call_tool(CallToolRequestParam {
             name: "echo".into(),
             arguments: Some(object!({ "message": "hi from rmcp" })),
+            task: None,
         })
         .await?;
     tracing::info!("Tool result for echo: {tool_result:#?}");
@@ -49,6 +50,7 @@ async fn main() -> Result<()> {
         .call_tool(CallToolRequestParam {
             name: "longRunningOperation".into(),
             arguments: Some(object!({ "duration": 3, "steps": 1 })),
+            task: None,
         })
         .await?;
     tracing::info!("Tool result for longRunningOperation: {tool_result:#?}");

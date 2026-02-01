@@ -45,6 +45,13 @@ A working MCP server demonstrating elicitation for user name collection.
 - JSON Schema validation with schemars
 - Tools: `greet_user` (collects name), `reset_name` (clears stored name)
 
+### Elicitation with Enum Inference config (`elicitation_enum_inference.rs`)
+
+A demonstration of elicitation using enum inference configuration for MCP server.
+- Runs on HTTP with streaming capabilities
+- Uses schemars for elicitation schema generation
+- Shows how to configure enum inference for elicitation prompts
+
 ### Prompt Standard I/O Server (`prompt_stdio.rs`)
 
 A server demonstrating the prompt framework capabilities.

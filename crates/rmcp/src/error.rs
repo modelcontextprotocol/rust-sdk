@@ -41,6 +41,10 @@ pub enum RmcpError {
         error: Box<dyn std::error::Error + Send + Sync>,
     },
     // and cancellation shouldn't be an error?
+
+    // TODO: add more error variants as needed
+    #[error("Task error: {0}")]
+    TaskError(String),
 }
 
 impl RmcpError {

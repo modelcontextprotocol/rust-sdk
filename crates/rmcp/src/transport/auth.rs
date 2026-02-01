@@ -805,13 +805,16 @@ impl AuthorizationManager {
         let credentials = stored.and_then(|s| s.token_response);
 
         if let Some(creds) = credentials.as_ref() {
-            let expires_in = creds.expires_in().unwrap_or(Duration::from_secs(0));
-            if expires_in <= Duration::from_secs(0) {
-                tracing::info!("Access token expired, refreshing.");
+            // check token expiry if we have a refresh token or an expiry time
+            if creds.refresh_token().is_some() || creds.expires_in().is_some() {
+                let expires_in = creds.expires_in().unwrap_or(Duration::from_secs(0));
+                if expires_in <= Duration::from_secs(0) {
+                    tracing::info!("Access token expired, refreshing.");
 
-                let new_creds = self.refresh_token().await?;
-                tracing::info!("Refreshed access token.");
-                return Ok(new_creds.access_token().secret().to_string());
+                    let new_creds = self.refresh_token().await?;
+                    tracing::info!("Refreshed access token.");
+                    return Ok(new_creds.access_token().secret().to_string());
+                }
             }
 
             Ok(creds.access_token().secret().to_string())

@@ -42,6 +42,7 @@ async fn main() -> Result<(), RmcpError> {
         .call_tool(CallToolRequestParam {
             name: "git_status".into(),
             arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
+            task: None,
         })
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
