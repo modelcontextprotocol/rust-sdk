@@ -49,7 +49,7 @@ impl TestClientHandler {
 impl ClientHandler for TestClientHandler {
     async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<CreateMessageResult, McpError> {
         // First validate that there's at least one User message
@@ -117,7 +117,7 @@ impl ServerHandler for TestServer {
 
     fn set_level(
         &self,
-        request: SetLevelRequestParam,
+        request: SetLevelRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
         let peer = context.peer;

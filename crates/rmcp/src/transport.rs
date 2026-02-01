@@ -40,10 +40,15 @@
 //!
 //! ```rust
 //! # use rmcp::{
-//! #     ServiceExt, serve_client, serve_server,
+//! #     ServiceExt, serve_server,
 //! # };
+//! #[cfg(feature = "client")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
+//! # use rmcp::serve_client;
 //!
 //! // create transport from tcp stream
+//! #[cfg(feature = "client")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! async fn client() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stream = tokio::net::TcpSocket::new_v4()?
 //!         .connect("127.0.0.1:8001".parse()?)
@@ -55,6 +60,8 @@
 //! }
 //!
 //! // create transport from std io
+//! #[cfg(feature = "client")]
+//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! async fn io()  -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
 //!     let tools = client.peer().list_tools(Default::default()).await?;
@@ -102,6 +109,9 @@ pub mod auth;
 pub use auth::{
     AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
     ScopeUpgradeConfig, StoredCredentials, WWWAuthenticateParams,
+    AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient, CredentialStore,
+    InMemoryCredentialStore, InMemoryStateStore, StateStore, StoredAuthorizationState,
+    StoredCredentials,
 };
 
 // #[cfg(feature = "transport-ws")]
@@ -176,7 +186,7 @@ where
 {
     message: Option<RxJsonRpcMessage<R>>,
     sender: tokio::sync::mpsc::Sender<TxJsonRpcMessage<R>>,
-    finished_signal: Arc<tokio::sync::Notify>,
+    termination: Arc<tokio::sync::Semaphore>,
 }
 
 impl<R> OneshotTransport<R>
@@ -191,7 +201,7 @@ where
             Self {
                 message: Some(message),
                 sender,
-                finished_signal: Arc::new(tokio::sync::Notify::new()),
+                termination: Arc::new(tokio::sync::Semaphore::new(0)),
             },
             receiver,
         )
@@ -211,21 +221,22 @@ where
         let sender = self.sender.clone();
         let terminate = matches!(item, TxJsonRpcMessage::<R>::Response(_))
             || matches!(item, TxJsonRpcMessage::<R>::Error(_));
-        let signal = self.finished_signal.clone();
+        let termination = self.termination.clone();
         async move {
             sender.send(item).await?;
             if terminate {
-                signal.notify_waiters();
+                termination.add_permits(1);
             }
             Ok(())
         }
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<R>> {
-        if self.message.is_none() {
-            self.finished_signal.notified().await;
+        if let Some(msg) = self.message.take() {
+            return Some(msg);
         }
-        self.message.take()
+        let _ = self.termination.acquire().await;
+        None
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {

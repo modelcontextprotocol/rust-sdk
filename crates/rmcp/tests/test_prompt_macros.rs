@@ -6,8 +6,8 @@ use rmcp::{
     ClientHandler, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::prompt::PromptRouter, wrapper::Parameters},
     model::{
-        ClientInfo, GetPromptRequestParam, GetPromptResult, ListPromptsResult,
-        PaginatedRequestParam, PromptMessage, PromptMessageRole,
+        ClientInfo, GetPromptRequestParams, GetPromptResult, ListPromptsResult,
+        PaginatedRequestParams, PromptMessage, PromptMessageRole,
     },
     prompt, prompt_handler, prompt_router,
     service::RequestContext,
@@ -327,7 +327,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test null case
     let result = client
-        .get_prompt(GetPromptRequestParam {
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
             name: "test_optional_i64".into(),
             arguments: Some(
                 serde_json::json!({
@@ -353,7 +354,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test Some case
     let some_result = client
-        .get_prompt(GetPromptRequestParam {
+        .get_prompt(GetPromptRequestParams {
+            meta: None,
             name: "test_optional_i64".into(),
             arguments: Some(
                 serde_json::json!({

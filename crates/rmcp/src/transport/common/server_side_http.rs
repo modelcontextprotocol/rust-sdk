@@ -59,8 +59,15 @@ impl sse_stream::Timer for TokioTimer {
 
 #[derive(Debug, Clone)]
 pub struct ServerSseMessage {
+    /// The event ID for this message. When set, clients can use this ID
+    /// with the `Last-Event-ID` header to resume the stream from this point.
     pub event_id: Option<String>,
-    pub message: Arc<ServerJsonRpcMessage>,
+    /// The JSON-RPC message content. Set to `None` for priming events.
+    /// See [SEP-1699](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1699)
+    pub message: Option<Arc<ServerJsonRpcMessage>>,
+    /// The retry interval hint for clients. Clients should wait this duration
+    /// before attempting to reconnect. This maps to the SSE `retry:` field.
+    pub retry: Option<Duration>,
 }
 
 pub(crate) fn sse_stream_response(
@@ -71,9 +78,20 @@ pub(crate) fn sse_stream_response(
     use futures::StreamExt;
     let stream = stream
         .map(|message| {
-            let data = serde_json::to_string(&message.message).expect("valid message");
-            let mut sse = Sse::default().data(data);
+            let mut sse = if let Some(ref msg) = message.message {
+                let data = serde_json::to_string(msg.as_ref()).expect("valid message");
+                Sse::default().data(data)
+            } else {
+                // Priming event: empty data per SEP-1699 (just "data:\n")
+                Sse::default().data("")
+            };
+
             sse.id = message.event_id;
+
+            if let Some(retry) = message.retry {
+                sse.retry = Some(retry.as_millis() as u64);
+            }
+
             Result::<Sse, Infallible>::Ok(sse)
         })
         .take_until(async move { ct.cancelled().await });

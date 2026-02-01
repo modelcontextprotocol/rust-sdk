@@ -1,0 +1,50 @@
+#!/bin/sh
+# Verify commit message follows conventional commit format
+# https://www.conventionalcommits.org/
+#
+# Uses npx commitlint if Node.js is available (same as CI),
+# otherwise falls back to basic shell regex validation.
+
+commit_msg_file="$1"
+commit_msg=$(cat "$commit_msg_file")
+
+# Skip merge commits
+if echo "$commit_msg" | grep -qE "^Merge "; then
+    exit 0
+fi
+
+# Try to use commitlint via npx if Node.js is available
+if command -v npx >/dev/null 2>&1; then
+    # Run commitlint with config-conventional rules (same as CI)
+    echo "$commit_msg" | npx --yes @commitlint/cli@latest --extends @commitlint/config-conventional
+    exit $?
+fi
+
+# Fallback: basic shell regex validation if Node.js is not available
+echo "Note: Node.js not found, using basic commit message validation."
+echo "      Install Node.js for full commitlint validation (same as CI)."
+echo ""
+
+# Conventional commit types from @commitlint/config-conventional
+types="build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test"
+
+# Pattern: type(optional-scope): description
+# The description must start with lowercase and not end with period
+pattern="^($types)(\(.+\))?(!)?: .+"
+
+if ! echo "$commit_msg" | head -1 | grep -qE "$pattern"; then
+    echo "ERROR: Commit message does not follow conventional commit format."
+    echo ""
+    echo "Expected format: <type>(<scope>): <description>"
+    echo ""
+    echo "Valid types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test"
+    echo ""
+    echo "Examples:"
+    echo "  feat: add new feature"
+    echo "  fix(parser): resolve parsing issue"
+    echo "  docs: update README"
+    echo ""
+    echo "Your commit message:"
+    echo "  $(head -1 "$commit_msg_file")"
+    exit 1
+fi

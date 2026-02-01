@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     // Get server URL and client metadata URL from CLI (with defaults)
     //
     // Usage:
-    //   cargo run --example clients_oauth_client -- <server_url> <client_metadata_url>
+    //   cargo run -p mcp-client-examples --example clients_oauth_client -- <server_url> <client_metadata_url>
     let args: Vec<String> = env::args().collect();
     let server_url = args
         .get(1)
@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
     let client = AuthClient::new(reqwest::Client::default(), am);
     let transport = StreamableHttpClientTransport::with_client(
         client,
-        StreamableHttpClientTransportConfig::with_uri(MCP_SERVER_URL),
+        StreamableHttpClientTransportConfig::with_uri(server_url.as_str()),
     );
 
     // Create client and connect to MCP server

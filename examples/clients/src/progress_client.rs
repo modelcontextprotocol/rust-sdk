@@ -8,7 +8,7 @@ use clap::{Parser, ValueEnum};
 use rmcp::{
     ClientHandler, ServiceExt,
     model::{
-        CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation,
+        CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
         ProgressNotificationParam,
     },
     service::{NotificationContext, RoleClient},
@@ -123,6 +123,7 @@ impl ClientHandler for ProgressAwareClient {
 
     fn get_info(&self) -> ClientInfo {
         ClientInfo {
+            meta: None,
             protocol_version: Default::default(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation {
@@ -181,7 +182,8 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     // Call stream processor tool
     tracing::info!("Starting to process {} records...", records);
     let tool_result = service
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "stream_processor".into(),
             arguments: None,
             task: None,
@@ -200,7 +202,7 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     Ok(())
 }
 
-// Test HTTP transport, must run the server with `cargo run --example servers_progress_demo -- http` in the servers directory
+// Test HTTP transport, must run the server with `cargo run -p mcp-client-examples --example servers_progress_demo -- http` in the servers directory
 async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     tracing::info!("Testing HTTP Streaming Transport");
     tracing::info!("=====================================");
@@ -236,7 +238,8 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     // Call stream processor tool
     tracing::info!("Starting to process {} records...", records);
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "stream_processor".into(),
             arguments: None,
             task: None,

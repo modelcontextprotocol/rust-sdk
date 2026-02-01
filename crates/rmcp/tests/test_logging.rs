@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use common::handlers::{TestClientHandler, TestServer};
 use rmcp::{
     ServiceExt,
-    model::{LoggingLevel, LoggingMessageNotificationParam, SetLevelRequestParam},
+    model::{LoggingLevel, LoggingMessageNotificationParam, SetLevelRequestParams},
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -63,7 +63,7 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
     ] {
         client
             .peer()
-            .set_level(SetLevelRequestParam { level })
+            .set_level(SetLevelRequestParams { meta: None, level })
             .await?;
 
         // Wait for each message response
@@ -121,7 +121,8 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 1: Error reporting scenario
     client
         .peer()
-        .set_level(SetLevelRequestParam {
+        .set_level(SetLevelRequestParams {
+            meta: None,
             level: LoggingLevel::Error,
         })
         .await?;
@@ -147,7 +148,8 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 2: Debug scenario
     client
         .peer()
-        .set_level(SetLevelRequestParam {
+        .set_level(SetLevelRequestParams {
+            meta: None,
             level: LoggingLevel::Debug,
         })
         .await?;
@@ -170,7 +172,8 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 3: Production monitoring scenario
     client
         .peer()
-        .set_level(SetLevelRequestParam {
+        .set_level(SetLevelRequestParams {
+            meta: None,
             level: LoggingLevel::Info,
         })
         .await?;
@@ -256,7 +259,7 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
     ] {
         client
             .peer()
-            .set_level(SetLevelRequestParam { level })
+            .set_level(SetLevelRequestParams { meta: None, level })
             .await?;
         receive_signal.notified().await;
 
@@ -316,7 +319,7 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
     for level in [LoggingLevel::Info, LoggingLevel::Debug] {
         client
             .peer()
-            .set_level(SetLevelRequestParam { level })
+            .set_level(SetLevelRequestParams { meta: None, level })
             .await?;
 
         // Wait for each message response

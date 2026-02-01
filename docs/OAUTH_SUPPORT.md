@@ -84,10 +84,10 @@ rmcp = { version = "0.1", features = ["auth", "transport-streamable-http-client-
 
 ```bash
 # Run the OAuth server
-cargo run --example servers_complex_auth_streamhttp
+cargo run -p mcp-server-examples --example servers_complex_auth_streamhttp
 
 # Run the OAuth client (in another terminal)
-cargo run --example clients_oauth_client
+cargo run -p mcp-client-examples --example clients_oauth_client
 ```
 
 ## Authorization Flow Description

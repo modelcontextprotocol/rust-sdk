@@ -12,7 +12,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 ///
 /// This client demonstrates how to handle sampling requests from servers.
 /// It includes a mock LLM that generates simple responses.
-/// Run with: cargo run --example clients_sampling_stdio
+/// Run with: cargo run -p mcp-client-examples --example clients_sampling_stdio
 #[derive(Clone, Debug, Default)]
 pub struct SamplingDemoClient;
 
@@ -31,7 +31,7 @@ impl SamplingDemoClient {
 impl ClientHandler for SamplingDemoClient {
     async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<CreateMessageResult, ErrorData> {
         tracing::info!("Received sampling request with {:?}", params);
@@ -101,7 +101,8 @@ async fn main() -> Result<()> {
             // Test the ask_llm tool
             tracing::info!("Testing ask_llm tool...");
             match client
-                .call_tool(CallToolRequestParam {
+                .call_tool(CallToolRequestParams {
+                    meta: None,
                     name: "ask_llm".into(),
                     arguments: Some(object!({
                         "question": "Hello world"

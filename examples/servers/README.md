@@ -68,7 +68,7 @@ A server that demonstrates progress notifications during long-running operations
 
 - Provides a stream_processor tool that generates progress notifications
 - Demonstrates progress notifications during long-running operations
-- Can be run with `cargo run --example servers_progress_demo -- {stdio|http|all}`
+- Can be run with `cargo run -p mcp-server-examples --example servers_progress_demo -- {stdio|http|all}`
 
 ### Simple Auth Streamable HTTP Server (`simple_auth_streamhttp.rs`)
 
@@ -95,25 +95,25 @@ Each example can be run using Cargo:
 
 ```bash
 # Run the counter standard I/O server
-cargo run --example servers_counter_stdio
+cargo run -p mcp-server-examples --example servers_counter_stdio
 
 # Run the memory standard I/O server
-cargo run --example servers_memory_stdio
+cargo run -p mcp-server-examples --example servers_memory_stdio
 
 # Run the counter streamable HTTP server
-cargo run --example servers_counter_streamhttp
+cargo run -p mcp-server-examples --example servers_counter_streamhttp
 
 # Run the elicitation standard I/O server
-cargo run --example servers_elicitation_stdio
+cargo run -p mcp-server-examples --example servers_elicitation_stdio
 
 # Run the prompt standard I/O server
-cargo run --example servers_prompt_stdio
+cargo run -p mcp-server-examples --example servers_prompt_stdio
 
 # Run the simple auth streamable HTTP server
-cargo run --example servers_simple_auth_streamhttp
+cargo run -p mcp-server-examples --example servers_simple_auth_streamhttp
 
 # Run the complex auth streamable HTTP server
-cargo run --example servers_complex_auth_streamhttp
+cargo run -p mcp-server-examples --example servers_complex_auth_streamhttp
 ```
 
 ## Testing with MCP Inspector

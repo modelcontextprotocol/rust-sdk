@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.13.0...rmcp-v0.14.0) - 2026-01-23
+
+### Fixed
+
+- *(tasks)* #626 model task capabilities correctly ([#627](https://github.com/modelcontextprotocol/rust-sdk/pull/627))
+- don't treat non-success HTTP codes as transport errors ([#618](https://github.com/modelcontextprotocol/rust-sdk/pull/618))
+
+### Other
+
+- show README content on docs.rs ([#583](https://github.com/modelcontextprotocol/rust-sdk/pull/583))
+- added hyper-mcp to the list of built with rmcp ([#621](https://github.com/modelcontextprotocol/rust-sdk/pull/621))
+- Implement SEP-1319: Decouple Request Payload from RPC Methods ([#617](https://github.com/modelcontextprotocol/rust-sdk/pull/617))
+
+## [0.13.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.12.0...rmcp-v0.13.0) - 2026-01-15
+
+### Added
+
+- provide blanket implementations for ClientHandler and ServerHandler traits ([#609](https://github.com/modelcontextprotocol/rust-sdk/pull/609))
+- *(service)* add close() method for graceful connection shutdown ([#588](https://github.com/modelcontextprotocol/rust-sdk/pull/588))
+- *(auth)* add StateStore trait for pluggable OAuth state storage ([#614](https://github.com/modelcontextprotocol/rust-sdk/pull/614))
+- *(elicitation)* implement SEP-1330 Elicitation Enum Schema Improvements ([#539](https://github.com/modelcontextprotocol/rust-sdk/pull/539))
+- *(task)* add task support (SEP-1686) ([#536](https://github.com/modelcontextprotocol/rust-sdk/pull/536))
+
+### Fixed
+
+- use the json rpc error from the initialize response and bubble it up to the client ([#569](https://github.com/modelcontextprotocol/rust-sdk/pull/569))
+- *(build)* fix build of the project when no features are selected ([#606](https://github.com/modelcontextprotocol/rust-sdk/pull/606))
+- use Semaphore instead of Notify in OneshotTransport to prevent race condition ([#611](https://github.com/modelcontextprotocol/rust-sdk/pull/611))
+- add OpenID Connect discovery support per spec-2025-11-25 4.3 ([#598](https://github.com/modelcontextprotocol/rust-sdk/pull/598))
+- only try to refresh access tokens if we have a refresh token or an expiry time ([#594](https://github.com/modelcontextprotocol/rust-sdk/pull/594))
+- *(docs)* add spreadsheet-mcp to Built with rmcp ([#582](https://github.com/modelcontextprotocol/rust-sdk/pull/582))
+
+### Other
+
+- *(elicitation)* improve enum schema builder, small changes of elicitation builder ([#608](https://github.com/modelcontextprotocol/rust-sdk/pull/608))
+- add pre-commit hook for conventional commit verification ([#619](https://github.com/modelcontextprotocol/rust-sdk/pull/619))
+- clean up optional dependencies ([#546](https://github.com/modelcontextprotocol/rust-sdk/pull/546))
+- re-export ServerSseMessage from session module ([#612](https://github.com/modelcontextprotocol/rust-sdk/pull/612))
+- Implement SEP-1699: Support SSE Polling via Server-Side Disconnect ([#604](https://github.com/modelcontextprotocol/rust-sdk/pull/604))
+- update README external links ([#603](https://github.com/modelcontextprotocol/rust-sdk/pull/603))
+- clarity and formatting ([#602](https://github.com/modelcontextprotocol/rust-sdk/pull/602))
+- Add optional icons field to RawResourceTemplate ([#589](https://github.com/modelcontextprotocol/rust-sdk/pull/589))
+
 ## [0.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.11.0...rmcp-v0.12.0) - 2025-12-18
 
 ### Added

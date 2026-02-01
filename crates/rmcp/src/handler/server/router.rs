@@ -133,6 +133,6 @@ where
     }
 
     fn get_info(&self) -> <RoleServer as crate::service::ServiceRole>::Info {
-        self.service.get_info()
+        ServerHandler::get_info(&self.service)
     }
 }

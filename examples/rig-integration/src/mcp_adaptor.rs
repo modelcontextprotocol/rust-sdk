@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rig::tool::{ToolDyn as RigTool, ToolEmbeddingDyn, ToolSet};
 use rmcp::{
     RoleClient,
-    model::{CallToolRequestParam, CallToolResult, Tool as McpTool},
+    model::{CallToolRequestParams, CallToolResult, Tool as McpTool},
     service::{RunningService, ServerSink},
 };
 
@@ -20,8 +20,7 @@ impl RigTool for McpToolAdaptor {
     fn definition(
         &self,
         _prompt: String,
-    ) -> std::pin::Pin<Box<dyn Future<Output = rig::completion::ToolDefinition> + Send + Sync + '_>>
-    {
+    ) -> std::pin::Pin<Box<dyn Future<Output = rig::completion::ToolDefinition> + Send + '_>> {
         Box::pin(std::future::ready(rig::completion::ToolDefinition {
             name: self.name(),
             description: self
@@ -37,13 +36,13 @@ impl RigTool for McpToolAdaptor {
     fn call(
         &self,
         args: String,
-    ) -> std::pin::Pin<
-        Box<dyn Future<Output = Result<String, rig::tool::ToolError>> + Send + Sync + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, rig::tool::ToolError>> + Send + '_>>
+    {
         let server = self.server.clone();
         Box::pin(async move {
             let call_mcp_tool_result = server
-                .call_tool(CallToolRequestParam {
+                .call_tool(CallToolRequestParams {
+                    meta: None,
                     name: self.tool.name.clone(),
                     arguments: serde_json::from_str(&args)
                         .map_err(rig::tool::ToolError::JsonError)?,

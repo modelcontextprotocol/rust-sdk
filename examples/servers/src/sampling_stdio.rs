@@ -12,7 +12,7 @@ use tracing_subscriber::{self, EnvFilter};
 /// Simple Sampling Demo Server
 ///
 /// This server demonstrates how to request LLM sampling from clients.
-/// Run with: cargo run --example servers_sampling_stdio
+/// Run with: cargo run -p mcp-server-examples --example servers_sampling_stdio
 #[derive(Clone, Debug, Default)]
 pub struct SamplingDemoServer;
 
@@ -33,7 +33,7 @@ impl ServerHandler for SamplingDemoServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         match request.name.as_ref() {
@@ -48,7 +48,9 @@ impl ServerHandler for SamplingDemoServer {
 
                 let response = context
                     .peer
-                    .create_message(CreateMessageRequestParam {
+                    .create_message(CreateMessageRequestParams {
+                        meta: None,
+                        task: None,
                         messages: vec![SamplingMessage {
                             role: Role::User,
                             content: Content::text(question),
@@ -99,7 +101,7 @@ impl ServerHandler for SamplingDemoServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {

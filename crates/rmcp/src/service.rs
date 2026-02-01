@@ -434,7 +434,7 @@ impl<R: ServiceRole> Peer<R> {
 pub struct RunningService<R: ServiceRole, S: Service<R>> {
     service: Arc<S>,
     peer: Peer<R>,
-    handle: tokio::task::JoinHandle<QuitReason>,
+    handle: Option<tokio::task::JoinHandle<QuitReason>>,
     cancellation_token: CancellationToken,
     dg: DropGuard,
 }
@@ -459,14 +459,104 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     pub fn cancellation_token(&self) -> RunningServiceCancellationToken {
         RunningServiceCancellationToken(self.cancellation_token.clone())
     }
+
+    /// Returns true if the service has been closed or cancelled.
     #[inline]
-    pub async fn waiting(self) -> Result<QuitReason, tokio::task::JoinError> {
-        self.handle.await
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_none() || self.cancellation_token.is_cancelled()
     }
-    pub async fn cancel(self) -> Result<QuitReason, tokio::task::JoinError> {
-        let RunningService { dg, handle, .. } = self;
-        dg.disarm().cancel();
-        handle.await
+
+    /// Wait for the service to complete.
+    ///
+    /// This will block until the service loop terminates (either due to
+    /// cancellation, transport closure, or an error).
+    #[inline]
+    pub async fn waiting(mut self) -> Result<QuitReason, tokio::task::JoinError> {
+        match self.handle.take() {
+            Some(handle) => handle.await,
+            None => Ok(QuitReason::Closed),
+        }
+    }
+
+    /// Gracefully close the connection and wait for cleanup to complete.
+    ///
+    /// This method cancels the service, waits for the background task to finish
+    /// (which includes calling `transport.close()`), and ensures all cleanup
+    /// operations complete before returning.
+    ///
+    /// Unlike [`cancel`](Self::cancel), this method takes `&mut self` and can be
+    /// called without consuming the `RunningService`. After calling this method,
+    /// the service is considered closed and subsequent operations will fail.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut client = ().serve(transport).await?;
+    /// // ... use the client ...
+    /// client.close().await?;
+    /// ```
+    pub async fn close(&mut self) -> Result<QuitReason, tokio::task::JoinError> {
+        if let Some(handle) = self.handle.take() {
+            // Disarm the drop guard so it doesn't try to cancel again
+            // We need to cancel manually and wait for completion
+            self.cancellation_token.cancel();
+            handle.await
+        } else {
+            // Already closed
+            Ok(QuitReason::Closed)
+        }
+    }
+
+    /// Gracefully close the connection with a timeout.
+    ///
+    /// Similar to [`close`](Self::close), but returns after the specified timeout
+    /// if the cleanup doesn't complete in time. This is useful for ensuring
+    /// a bounded shutdown time.
+    ///
+    /// Returns `Ok(Some(reason))` if shutdown completed within the timeout,
+    /// `Ok(None)` if the timeout was reached, or `Err` if there was a join error.
+    pub async fn close_with_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<QuitReason>, tokio::task::JoinError> {
+        if let Some(handle) = self.handle.take() {
+            self.cancellation_token.cancel();
+            match tokio::time::timeout(timeout, handle).await {
+                Ok(result) => result.map(Some),
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        "close_with_timeout: cleanup did not complete within {:?}",
+                        timeout
+                    );
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(Some(QuitReason::Closed))
+        }
+    }
+
+    /// Cancel the service and wait for cleanup to complete.
+    ///
+    /// This consumes the `RunningService` and ensures the connection is properly
+    /// closed. For a non-consuming alternative, see [`close`](Self::close).
+    pub async fn cancel(mut self) -> Result<QuitReason, tokio::task::JoinError> {
+        // Disarm the drop guard since we're handling cancellation explicitly
+        let _ = std::mem::replace(&mut self.dg, self.cancellation_token.clone().drop_guard());
+        self.close().await
+    }
+}
+
+impl<R: ServiceRole, S: Service<R>> Drop for RunningService<R, S> {
+    fn drop(&mut self) {
+        if self.handle.is_some() && !self.cancellation_token.is_cancelled() {
+            tracing::debug!(
+                "RunningService dropped without explicit close(). \
+                 The connection will be closed asynchronously. \
+                 For guaranteed cleanup, call close() or cancel() before dropping."
+            );
+        }
+        // The DropGuard will handle cancellation
     }
 }
 
@@ -847,7 +937,7 @@ where
     RunningService {
         service,
         peer: peer_return,
-        handle,
+        handle: Some(handle),
         cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
     }

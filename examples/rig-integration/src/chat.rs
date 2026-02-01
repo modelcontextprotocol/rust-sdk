@@ -1,15 +1,16 @@
 use futures::StreamExt;
 use rig::{
-    agent::Agent,
-    completion::{AssistantContent, CompletionModel},
-    message::Message,
-    streaming::StreamingChat,
+    agent::{Agent, MultiTurnStreamItem},
+    completion::CompletionModel,
+    message::{Message, Text},
+    streaming::{StreamedAssistantContent, StreamingChat},
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 
 pub async fn cli_chatbot<M>(chatbot: Agent<M>) -> anyhow::Result<()>
 where
-    M: CompletionModel,
+    M: CompletionModel + 'static,
+    M::StreamingResponse: Send,
 {
     let mut chat_log = vec![];
 
@@ -28,49 +29,52 @@ where
         if input == ":q" {
             break;
         }
-        match chatbot.stream_chat(input, chat_log.clone()).await {
-            Ok(mut response) => {
-                tracing::info!(%input);
-                chat_log.push(Message::user(input));
-                stream_output_agent_start(&mut output).await?;
-                let mut message_buf = String::new();
-                while let Some(message) = response.next().await {
-                    match message {
-                        Ok(AssistantContent::Text(text)) => {
-                            message_buf.push_str(&text.text);
-                            output_agent(text.text, &mut output).await?;
-                        }
-                        Ok(AssistantContent::ToolCall(tool_call)) => {
-                            let name = tool_call.function.name;
-                            let arguments = tool_call.function.arguments;
-                            chat_log.push(Message::assistant(format!(
-                                "Calling tool: {name} with args: {arguments}"
-                            )));
-                            let result = chatbot.tools.call(&name, arguments.to_string()).await;
-                            match result {
-                                Ok(tool_call_result) => {
-                                    stream_output_agent_finished(&mut output).await?;
-                                    stream_output_toolcall(&tool_call_result, &mut output).await?;
-                                    stream_output_agent_start(&mut output).await?;
-                                    chat_log.push(Message::user(tool_call_result));
-                                }
-                                Err(e) => {
-                                    output_error(e, &mut output).await?;
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            output_error(error, &mut output).await?;
-                        }
-                    }
+
+        tracing::info!(%input);
+        chat_log.push(Message::user(input));
+
+        let mut response = chatbot.stream_chat(input, chat_log.clone()).await;
+        stream_output_agent_start(&mut output).await?;
+        let mut message_buf = String::new();
+
+        while let Some(message) = response.next().await {
+            match message {
+                Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
+                    Text { text },
+                ))) => {
+                    message_buf.push_str(&text);
+                    output_agent(&text, &mut output).await?;
                 }
-                chat_log.push(Message::assistant(message_buf));
-                stream_output_agent_finished(&mut output).await?;
-            }
-            Err(error) => {
-                output_error(error, &mut output).await?;
+                Ok(MultiTurnStreamItem::StreamAssistantItem(
+                    StreamedAssistantContent::ToolCall(tool_call),
+                )) => {
+                    let name = &tool_call.function.name;
+                    let arguments = &tool_call.function.arguments;
+                    stream_output_toolcall(
+                        format!("Calling tool: {name} with args: {arguments}"),
+                        &mut output,
+                    )
+                    .await?;
+                }
+                Ok(MultiTurnStreamItem::StreamUserItem(user_content)) => {
+                    // Tool results are streamed back as user items
+                    stream_output_toolcall(format!("Tool result: {:?}", user_content), &mut output)
+                        .await?;
+                }
+                Ok(MultiTurnStreamItem::FinalResponse(final_response)) => {
+                    tracing::info!("Final response received: {:?}", final_response);
+                }
+                Ok(_) => {
+                    // Handle other stream items (reasoning, deltas, etc.)
+                }
+                Err(error) => {
+                    output_error(error, &mut output).await?;
+                }
             }
         }
+
+        chat_log.push(Message::assistant(message_buf));
+        stream_output_agent_finished(&mut output).await?;
     }
 
     Ok(())

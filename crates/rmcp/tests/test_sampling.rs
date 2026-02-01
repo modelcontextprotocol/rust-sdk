@@ -31,7 +31,9 @@ async fn test_basic_sampling_message_creation() -> Result<()> {
 #[tokio::test]
 async fn test_sampling_request_params() -> Result<()> {
     // Test sampling request parameters structure
-    let params = CreateMessageRequestParam {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
         messages: vec![SamplingMessage {
             role: Role::User,
             content: Content::text("Hello, world!"),
@@ -54,7 +56,7 @@ async fn test_sampling_request_params() -> Result<()> {
 
     // Verify serialization/deserialization
     let json = serde_json::to_string(&params)?;
-    let deserialized: CreateMessageRequestParam = serde_json::from_str(&json)?;
+    let deserialized: CreateMessageRequestParams = serde_json::from_str(&json)?;
     assert_eq!(params, deserialized);
 
     // Verify specific fields
@@ -134,7 +136,9 @@ async fn test_sampling_integration_with_test_handlers() -> Result<()> {
     // Test sampling with context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("What is the capital of France?"),
@@ -214,7 +218,9 @@ async fn test_sampling_no_context_inclusion() -> Result<()> {
     // Test sampling without context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::User,
                 content: Content::text("Hello"),
@@ -283,7 +289,9 @@ async fn test_sampling_error_invalid_message_sequence() -> Result<()> {
     // Test sampling with no user messages (should fail)
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![SamplingMessage {
                 role: Role::Assistant,
                 content: Content::text("I'm an assistant message without a user message"),

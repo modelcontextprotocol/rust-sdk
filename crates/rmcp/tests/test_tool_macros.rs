@@ -9,7 +9,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolRequestParam, ClientInfo},
+    model::{CallToolRequestParams, ClientInfo},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -309,7 +309,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test null case
     let result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "test_optional_i64".into(),
             arguments: Some(
                 serde_json::json!({
@@ -338,7 +339,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test Some case
     let some_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "test_optional_i64".into(),
             arguments: Some(
                 serde_json::json!({

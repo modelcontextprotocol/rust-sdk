@@ -504,10 +504,18 @@
         }
       ]
     },
-    "CreateElicitationRequestParam": {
-      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParam {\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```",
+    "CreateElicitationRequestParams": {
+      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParams {\n    meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "message": {
           "description": "Human-readable message explaining what input is needed from the user.\nThis should be clear and provide sufficient context for the user to understand\nwhat information they need to provide.",
           "type": "string"
@@ -551,10 +559,18 @@
       "format": "const",
       "const": "sampling/createMessage"
     },
-    "CreateMessageRequestParam": {
-      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.",
+    "CreateMessageRequestParams": {
+      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.\n\nThis implements `TaskAugmentedRequestParamsMeta` as sampling requests can be\nlong-running and may benefit from task-based execution.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "includeContext": {
           "description": "How much context to include from MCP servers",
           "anyOf": [
@@ -609,6 +625,14 @@
             "string",
             "null"
           ]
+        },
+        "task": {
+          "description": "Task metadata for async task management (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         },
         "temperature": {
           "description": "Temperature for controlling randomness (0.0 to 1.0)",
@@ -739,6 +763,18 @@
         "properties"
       ]
     },
+    "ElicitationTaskCapability": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
       "type": "object",
@@ -821,7 +857,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Icon": {
       "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
@@ -2111,7 +2148,7 @@
           "$ref": "#/definitions/CreateMessageRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CreateMessageRequestParam"
+          "$ref": "#/definitions/CreateMessageRequestParams"
         }
       },
       "required": [
@@ -2127,7 +2164,7 @@
           "$ref": "#/definitions/ElicitationCreateRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CreateElicitationRequestParam"
+          "$ref": "#/definitions/CreateElicitationRequestParams"
         }
       },
       "required": [
@@ -2298,6 +2335,18 @@
         "content"
       ]
     },
+    "SamplingTaskCapability": {
+      "type": "object",
+      "properties": {
+        "createMessage": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "ServerCapabilities": {
       "title": "Builder",
       "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_logging()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
@@ -2405,9 +2454,6 @@
           "$ref": "#/definitions/EmptyObject"
         },
         {
-          "$ref": "#/definitions/CustomResult"
-        },
-        {
           "$ref": "#/definitions/CreateTaskResult"
         },
         {
@@ -2418,6 +2464,9 @@
         },
         {
           "$ref": "#/definitions/TaskResult"
+        },
+        {
+          "$ref": "#/definitions/CustomResult"
         }
       ]
     },
@@ -2581,6 +2630,42 @@
         "createdAt"
       ]
     },
+    "TaskRequestsCapability": {
+      "description": "Request types that support task-augmented execution.",
+      "type": "object",
+      "properties": {
+        "elicitation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "TaskResult": {
       "description": "Final result for a succeeded task (returned from `tasks/result`).",
       "type": "object",
@@ -2636,32 +2721,32 @@
       ]
     },
     "TasksCapability": {
-      "description": "Task capability negotiation for SEP-1686.",
+      "description": "Task capabilities shared by client and server.",
       "type": "object",
       "properties": {
         "cancel": {
-          "description": "Whether the receiver supports `tasks/cancel`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "list": {
-          "description": "Whether the receiver supports `tasks/list`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "requests": {
-          "description": "Map of request category (e.g. \"tools.call\") to a boolean indicating support.",
           "type": [
             "object",
             "null"
           ],
-          "additionalProperties": {
-            "type": "boolean"
-          }
+          "additionalProperties": true
+        },
+        "list": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskRequestsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -2894,6 +2979,18 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ToolsTaskCapability": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       }
     },
