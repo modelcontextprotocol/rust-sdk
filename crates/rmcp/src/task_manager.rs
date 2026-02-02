@@ -195,14 +195,13 @@ impl OperationProcessor {
     }
 
     /// Collect completed results from running tasks and remove them from the running tasks map.
-    pub fn collect_completed_results(&mut self) -> Vec<TaskResult> {
+    pub fn collect_completed_results(&mut self) {
         if let Some(receiver) = &mut self.task_result_receiver {
             while let Ok(result) = receiver.try_recv() {
                 self.running_tasks.remove(&result.descriptor.operation_id);
                 self.completed_results.push(result);
             }
         }
-        std::mem::take(&mut self.completed_results)
     }
 
     /// Check for tasks that have exceeded their timeout and handle them appropriately.
