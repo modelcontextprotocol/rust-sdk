@@ -97,7 +97,6 @@ server-side-http = [
   "dep:http-body-util",
   "dep:bytes",
   "dep:sse-stream",
-  "dep:axum",
   "tower",
 ]
 
