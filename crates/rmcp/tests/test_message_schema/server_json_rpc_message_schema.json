@@ -2369,6 +2369,17 @@
             "additionalProperties": true
           }
         },
+        "extensions": {
+          "description": "Optional MCP extensions that the server supports (SEP-1724).\nKeys are extension identifiers (e.g., `\"io.modelcontextprotocol/apps\"`),\nvalues are per-extension settings objects. An empty object indicates\nsupport with no settings.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
         "logging": {
           "type": [
             "object",
