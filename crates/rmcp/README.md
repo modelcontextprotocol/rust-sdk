@@ -270,6 +270,10 @@ RMCP uses feature flags to control which components are included:
     - `transport-streamable-http-client-reqwest`: a default `reqwest` implementation of the streamable http client
 - `auth`: OAuth2 authentication support
 - `schemars`: JSON Schema generation (for tool definitions)
+- TLS backend options (for HTTP transports):
+  - `reqwest`: Uses rustls (pure Rust TLS, recommended default)
+  - `reqwest-native-tls`: Uses platform native TLS (OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows)
+  - `reqwest-tls-no-provider`: Uses rustls without a default crypto provider (bring your own)
 
 
 ## Transports
