@@ -535,3 +535,105 @@ async fn test_sampling_capability() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_backward_compat_sampling_message_deserialization() -> Result<()> {
+    let old_format_json = r#"{
+        "role": "user",
+        "content": {
+            "type": "text",
+            "text": "Hello, world!"
+        }
+    }"#;
+
+    let message: SamplingMessage = serde_json::from_str(old_format_json)?;
+    assert_eq!(message.role, Role::User);
+    let text = message.content.first().unwrap().as_text().unwrap();
+    assert_eq!(text.text, "Hello, world!");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_backward_compat_sampling_message_with_image() -> Result<()> {
+    let old_format_json = r#"{
+        "role": "user",
+        "content": {
+            "type": "image",
+            "data": "base64data",
+            "mimeType": "image/png"
+        }
+    }"#;
+
+    let message: SamplingMessage = serde_json::from_str(old_format_json)?;
+    assert_eq!(message.role, Role::User);
+    assert_eq!(message.content.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_backward_compat_sampling_capability_empty_object() -> Result<()> {
+    let empty_json = "{}";
+    let cap: SamplingCapability = serde_json::from_str(empty_json)?;
+    assert!(cap.tools.is_none());
+    assert!(cap.context.is_none());
+
+    let client_cap_json = r#"{"sampling": {}}"#;
+    let client_cap: ClientCapabilities = serde_json::from_str(client_cap_json)?;
+    assert!(client_cap.sampling.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_content_to_sampling_message_content_conversion() -> Result<()> {
+    use std::convert::TryInto;
+
+    let content = Content::text("Hello");
+    let sampling_content: SamplingMessageContent =
+        content.try_into().map_err(|e: &str| anyhow::anyhow!(e))?;
+    assert!(sampling_content.as_text().is_some());
+    assert_eq!(sampling_content.as_text().unwrap().text, "Hello");
+
+    let content = Content::image("base64data", "image/png");
+    let sampling_content: SamplingMessageContent =
+        content.try_into().map_err(|e: &str| anyhow::anyhow!(e))?;
+    assert!(matches!(sampling_content, SamplingMessageContent::Image(_)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_content_to_sampling_content_conversion() -> Result<()> {
+    use std::convert::TryInto;
+
+    let content = Content::text("Hello");
+    let sampling_content: SamplingContent<SamplingMessageContent> =
+        content.try_into().map_err(|e: &str| anyhow::anyhow!(e))?;
+    assert_eq!(sampling_content.len(), 1);
+    assert!(sampling_content.first().unwrap().as_text().is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_content_conversion_unsupported_variants() {
+    use std::convert::TryInto;
+
+    use rmcp::model::ResourceContents;
+
+    let resource_content = Content::resource(ResourceContents::TextResourceContents {
+        uri: "file:///test.txt".to_string(),
+        mime_type: Some("text/plain".to_string()),
+        text: "test".to_string(),
+        meta: None,
+    });
+
+    let result: Result<SamplingMessageContent, _> = resource_content.try_into();
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        "Resource content is not supported in sampling messages"
+    );
+}

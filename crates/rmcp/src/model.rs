@@ -1467,6 +1467,35 @@ impl From<&str> for SamplingMessageContent {
     }
 }
 
+// Backward compatibility: Convert Content to SamplingMessageContent
+// Note: Resource and ResourceLink variants are not supported in sampling messages
+impl TryFrom<Content> for SamplingMessageContent {
+    type Error = &'static str;
+
+    fn try_from(content: Content) -> Result<Self, Self::Error> {
+        match content.raw {
+            RawContent::Text(text) => Ok(SamplingMessageContent::Text(text)),
+            RawContent::Image(image) => Ok(SamplingMessageContent::Image(image)),
+            RawContent::Audio(audio) => Ok(SamplingMessageContent::Audio(audio)),
+            RawContent::Resource(_) => {
+                Err("Resource content is not supported in sampling messages")
+            }
+            RawContent::ResourceLink(_) => {
+                Err("ResourceLink content is not supported in sampling messages")
+            }
+        }
+    }
+}
+
+// Backward compatibility: Convert Content to SamplingContent<SamplingMessageContent>
+impl TryFrom<Content> for SamplingContent<SamplingMessageContent> {
+    type Error = &'static str;
+
+    fn try_from(content: Content) -> Result<Self, Self::Error> {
+        Ok(SamplingContent::Single(content.try_into()?))
+    }
+}
+
 /// Specifies how much context should be included in sampling requests.
 ///
 /// This allows clients to control what additional context information
