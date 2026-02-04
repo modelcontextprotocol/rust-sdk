@@ -2731,6 +2731,26 @@
         }
       ]
     },
+    "TaskSupport": {
+      "description": "Per-tool task support mode as defined in the MCP specification.\n\nThis enum indicates whether a tool supports task-based invocation,\nallowing clients to know how to properly call the tool.\n\nSee [Tool-Level Negotiation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks#tool-level-negotiation).",
+      "oneOf": [
+        {
+          "description": "Clients MUST NOT invoke this tool as a task (default behavior).",
+          "type": "string",
+          "const": "forbidden"
+        },
+        {
+          "description": "Clients MAY invoke this tool as either a task or a normal call.",
+          "type": "string",
+          "const": "optional"
+        },
+        {
+          "description": "Clients MUST invoke this tool as a task.",
+          "type": "string",
+          "const": "required"
+        }
+      ]
+    },
     "TasksCapability": {
       "description": "Task capabilities shared by client and server.",
       "type": "object",
@@ -2896,6 +2916,17 @@
             "null"
           ]
         },
+        "execution": {
+          "description": "Execution-related configuration including task support mode.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolExecution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "icons": {
           "description": "Optional list of icons for the tool",
           "type": [
@@ -2973,6 +3004,23 @@
           "type": [
             "string",
             "null"
+          ]
+        }
+      }
+    },
+    "ToolExecution": {
+      "description": "Execution-related configuration for a tool.\n\nThis struct contains settings that control how a tool should be executed,\nincluding task support configuration.",
+      "type": "object",
+      "properties": {
+        "taskSupport": {
+          "description": "Indicates whether this tool supports task-based invocation.\n\nWhen not present or set to `Forbidden`, clients MUST NOT invoke this tool as a task.\nWhen set to `Optional`, clients MAY invoke this tool as a task or normal call.\nWhen set to `Required`, clients MUST invoke this tool as a task.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskSupport"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }

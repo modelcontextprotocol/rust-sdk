@@ -29,12 +29,64 @@ pub struct Tool {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotations>,
+    /// Execution-related configuration including task support mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ToolExecution>,
     /// Optional list of icons for the tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
     /// Optional additional metadata for this tool
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
+}
+
+/// Per-tool task support mode as defined in the MCP specification.
+///
+/// This enum indicates whether a tool supports task-based invocation,
+/// allowing clients to know how to properly call the tool.
+///
+/// See [Tool-Level Negotiation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks#tool-level-negotiation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum TaskSupport {
+    /// Clients MUST NOT invoke this tool as a task (default behavior).
+    #[default]
+    Forbidden,
+    /// Clients MAY invoke this tool as either a task or a normal call.
+    Optional,
+    /// Clients MUST invoke this tool as a task.
+    Required,
+}
+
+/// Execution-related configuration for a tool.
+///
+/// This struct contains settings that control how a tool should be executed,
+/// including task support configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ToolExecution {
+    /// Indicates whether this tool supports task-based invocation.
+    ///
+    /// When not present or set to `Forbidden`, clients MUST NOT invoke this tool as a task.
+    /// When set to `Optional`, clients MAY invoke this tool as a task or normal call.
+    /// When set to `Required`, clients MUST invoke this tool as a task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_support: Option<TaskSupport>,
+}
+
+impl ToolExecution {
+    /// Create a new empty ToolExecution configuration.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the task support mode.
+    pub fn with_task_support(mut self, task_support: TaskSupport) -> Self {
+        self.task_support = Some(task_support);
+        self
+    }
 }
 
 /// Additional properties describing a Tool to clients.
@@ -152,6 +204,7 @@ impl Tool {
             input_schema: input_schema.into(),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -162,6 +215,24 @@ impl Tool {
             annotations: Some(annotations),
             ..self
         }
+    }
+
+    /// Set the execution configuration for this tool.
+    pub fn with_execution(self, execution: ToolExecution) -> Self {
+        Tool {
+            execution: Some(execution),
+            ..self
+        }
+    }
+
+    /// Returns the task support mode for this tool.
+    ///
+    /// Returns `TaskSupport::Forbidden` if not explicitly set.
+    pub fn task_support(&self) -> TaskSupport {
+        self.execution
+            .as_ref()
+            .and_then(|e| e.task_support)
+            .unwrap_or_default()
     }
 
     /// Set the output schema using a type that implements JsonSchema
