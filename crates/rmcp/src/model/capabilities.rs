@@ -6,6 +6,28 @@ use serde::{Deserialize, Serialize};
 use super::JsonObject;
 pub type ExperimentalCapabilities = BTreeMap<String, JsonObject>;
 
+/// MCP extension capabilities map.
+///
+/// Keys are extension identifiers in the format `{vendor-prefix}/{extension-name}`
+/// (e.g., `io.modelcontextprotocol/ui`, `io.modelcontextprotocol/oauth-client-credentials`).
+/// Values are per-extension settings objects. An empty object indicates support with no settings.
+///
+/// # Example
+///
+/// ```rust
+/// use rmcp::model::ExtensionCapabilities;
+/// use serde_json::json;
+///
+/// let mut extensions = ExtensionCapabilities::new();
+/// extensions.insert(
+///     "io.modelcontextprotocol/ui".to_string(),
+///     serde_json::from_value(json!({
+///         "mimeTypes": ["text/html;profile=mcp-app"]
+///     })).unwrap()
+/// );
+/// ```
+pub type ExtensionCapabilities = BTreeMap<String, JsonObject>;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -187,6 +209,12 @@ pub struct ElicitationCapability {
 pub struct ClientCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
+    /// Optional MCP extensions that the client supports (SEP-1724).
+    /// Keys are extension identifiers (e.g., `"io.modelcontextprotocol/ui"`),
+    /// values are per-extension settings objects. An empty object indicates
+    /// support with no settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<ExtensionCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,6 +245,12 @@ pub struct ClientCapabilities {
 pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
+    /// Optional MCP extensions that the server supports (SEP-1724).
+    /// Keys are extension identifiers (e.g., `"io.modelcontextprotocol/apps"`),
+    /// values are per-extension settings objects. An empty object indicates
+    /// support with no settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<ExtensionCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging: Option<JsonObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -339,6 +373,7 @@ macro_rules! builder {
 builder! {
     ServerCapabilities {
         experimental: ExperimentalCapabilities,
+        extensions: ExtensionCapabilities,
         logging: JsonObject,
         completions: JsonObject,
         prompts: PromptsCapability,
@@ -348,8 +383,15 @@ builder! {
     }
 }
 
-impl<const E: bool, const L: bool, const C: bool, const P: bool, const R: bool, const TASKS: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, R, true, TASKS>>
+impl<
+    const E: bool,
+    const EXT: bool,
+    const L: bool,
+    const C: bool,
+    const P: bool,
+    const R: bool,
+    const TASKS: bool,
+> ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, P, R, true, TASKS>>
 {
     pub fn enable_tool_list_changed(mut self) -> Self {
         if let Some(c) = self.tools.as_mut() {
@@ -359,8 +401,15 @@ impl<const E: bool, const L: bool, const C: bool, const P: bool, const R: bool, 
     }
 }
 
-impl<const E: bool, const L: bool, const C: bool, const R: bool, const T: bool, const TASKS: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, true, R, T, TASKS>>
+impl<
+    const E: bool,
+    const EXT: bool,
+    const L: bool,
+    const C: bool,
+    const R: bool,
+    const T: bool,
+    const TASKS: bool,
+> ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, true, R, T, TASKS>>
 {
     pub fn enable_prompts_list_changed(mut self) -> Self {
         if let Some(c) = self.prompts.as_mut() {
@@ -370,8 +419,15 @@ impl<const E: bool, const L: bool, const C: bool, const R: bool, const T: bool, 
     }
 }
 
-impl<const E: bool, const L: bool, const C: bool, const P: bool, const T: bool, const TASKS: bool>
-    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, L, C, P, true, T, TASKS>>
+impl<
+    const E: bool,
+    const EXT: bool,
+    const L: bool,
+    const C: bool,
+    const P: bool,
+    const T: bool,
+    const TASKS: bool,
+> ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, P, true, T, TASKS>>
 {
     pub fn enable_resources_list_changed(mut self) -> Self {
         if let Some(c) = self.resources.as_mut() {
@@ -391,6 +447,7 @@ impl<const E: bool, const L: bool, const C: bool, const P: bool, const T: bool, 
 builder! {
     ClientCapabilities{
         experimental: ExperimentalCapabilities,
+        extensions: ExtensionCapabilities,
         roots: RootsCapabilities,
         sampling: JsonObject,
         elicitation: ElicitationCapability,
@@ -398,8 +455,8 @@ builder! {
     }
 }
 
-impl<const E: bool, const S: bool, const EL: bool, const TASKS: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, true, S, EL, TASKS>>
+impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, true, S, EL, TASKS>>
 {
     pub fn enable_roots_list_changed(mut self) -> Self {
         if let Some(c) = self.roots.as_mut() {
@@ -410,8 +467,8 @@ impl<const E: bool, const S: bool, const EL: bool, const TASKS: bool>
 }
 
 #[cfg(feature = "elicitation")]
-impl<const E: bool, const R: bool, const S: bool, const TASKS: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, R, S, true, TASKS>>
+impl<const E: bool, const EXT: bool, const R: bool, const S: bool, const TASKS: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, S, true, TASKS>>
 {
     /// Enable JSON Schema validation for elicitation responses.
     /// When enabled, the client will validate user input against the requested_schema
@@ -527,5 +584,91 @@ mod test {
         assert_eq!(json["list"], serde_json::json!({}));
         assert_eq!(json["cancel"], serde_json::json!({}));
         assert_eq!(json["requests"]["tools"]["call"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_client_extensions_capability() {
+        // Test building ClientCapabilities with extensions (MCP Apps support)
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            "io.modelcontextprotocol/ui".to_string(),
+            serde_json::from_value(serde_json::json!({
+                "mimeTypes": ["text/html;profile=mcp-app"]
+            }))
+            .unwrap(),
+        );
+
+        let capabilities = ClientCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .enable_sampling()
+            .build();
+
+        // Verify serialization matches MCP Apps spec format
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(
+            json["extensions"]["io.modelcontextprotocol/ui"]["mimeTypes"],
+            serde_json::json!(["text/html;profile=mcp-app"])
+        );
+        assert!(json["sampling"].is_object());
+    }
+
+    #[test]
+    fn test_server_extensions_capability() {
+        // Test building ServerCapabilities with extensions
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            "io.modelcontextprotocol/apps".to_string(),
+            serde_json::from_value(serde_json::json!({})).unwrap(),
+        );
+
+        let capabilities = ServerCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .enable_tools()
+            .build();
+
+        // Verify serialization
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert!(json["extensions"]["io.modelcontextprotocol/apps"].is_object());
+        assert!(json["tools"].is_object());
+    }
+
+    #[test]
+    fn test_extensions_deserialization() {
+        // Test deserializing capabilities with extensions from JSON
+        let json = serde_json::json!({
+            "extensions": {
+                "io.modelcontextprotocol/ui": {
+                    "mimeTypes": ["text/html;profile=mcp-app"]
+                }
+            },
+            "sampling": {}
+        });
+
+        let capabilities: ClientCapabilities = serde_json::from_value(json).unwrap();
+        assert!(capabilities.extensions.is_some());
+        let extensions = capabilities.extensions.unwrap();
+        assert!(extensions.contains_key("io.modelcontextprotocol/ui"));
+        let ui_ext = extensions.get("io.modelcontextprotocol/ui").unwrap();
+        assert!(ui_ext.contains_key("mimeTypes"));
+    }
+
+    #[test]
+    fn test_extensions_empty_settings() {
+        // Test that empty extension settings work (indicates support with no settings)
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            "io.modelcontextprotocol/oauth-client-credentials".to_string(),
+            JsonObject::new(),
+        );
+
+        let capabilities = ClientCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .build();
+
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(
+            json["extensions"]["io.modelcontextprotocol/oauth-client-credentials"],
+            serde_json::json!({})
+        );
     }
 }
