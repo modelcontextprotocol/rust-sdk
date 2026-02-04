@@ -807,6 +807,8 @@ impl AuthorizationManager {
             push_candidate(format!("/.well-known/openid-configuration/{trimmed}"));
             // 3. OpenID Connect with path appending
             push_candidate(format!("/{trimmed}/.well-known/openid-configuration"));
+            // 4. Canonical OAuth fallback (without path suffix)
+            push_candidate("/.well-known/oauth-authorization-server".to_string());
         }
 
         candidates
@@ -1605,7 +1607,7 @@ mod tests {
         // Test URL with single path segment: follow spec priority order
         let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 3);
+        assert_eq!(urls.len(), 4);
         assert_eq!(
             urls[0].as_str(),
             "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
@@ -1618,11 +1620,15 @@ mod tests {
             urls[2].as_str(),
             "https://auth.example.com/tenant1/.well-known/openid-configuration"
         );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
 
         // Test URL with path and trailing slash
         let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 3);
+        assert_eq!(urls.len(), 4);
         assert_eq!(
             urls[0].as_str(),
             "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp"
@@ -1635,11 +1641,15 @@ mod tests {
             urls[2].as_str(),
             "https://auth.example.com/v1/mcp/.well-known/openid-configuration"
         );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
 
         // Test URL with multiple path segments
         let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 3);
+        assert_eq!(urls.len(), 4);
         assert_eq!(
             urls[0].as_str(),
             "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant"
@@ -1651,6 +1661,10 @@ mod tests {
         assert_eq!(
             urls[2].as_str(),
             "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
         );
     }
 
@@ -1784,6 +1798,25 @@ mod tests {
         for handle in handles {
             handle.await.unwrap();
         }
+    }
+
+    #[test]
+    fn test_discovery_urls_with_path_suffix() {
+        // When the base URL has a path suffix (e.g., /mcp), the discovery should
+        // eventually fall back to checking /.well-known/oauth-authorization-server
+        // at the root, not just /.well-known/oauth-authorization-server/{path}.
+        let base_url = Url::parse("https://mcp.example.com/mcp").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+
+        let canonical_oauth_fallback =
+            "https://mcp.example.com/.well-known/oauth-authorization-server";
+
+        assert!(
+            urls.iter().any(|u| u.as_str() == canonical_oauth_fallback),
+            "Expected discovery URLs to include canonical OAuth fallback '{}', but got: {:?}",
+            canonical_oauth_fallback,
+            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
