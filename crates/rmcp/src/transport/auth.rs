@@ -1804,11 +1804,12 @@ mod tests {
     fn test_discovery_urls_with_path_suffix() {
         // When the base URL has a path suffix (e.g., /mcp), the discovery should
         // eventually fall back to checking /.well-known/oauth-authorization-server
-        // at the root, not just /.well-known/oauth-authorization-server/{path}.        
+        // at the root, not just /.well-known/oauth-authorization-server/{path}.
         let base_url = Url::parse("https://mcp.example.com/mcp").unwrap();
         let urls = AuthorizationManager::generate_discovery_urls(&base_url);
 
-        let canonical_oauth_fallback = "https://mcp.example.com/.well-known/oauth-authorization-server";
+        let canonical_oauth_fallback =
+            "https://mcp.example.com/.well-known/oauth-authorization-server";
 
         assert!(
             urls.iter().any(|u| u.as_str() == canonical_oauth_fallback),
