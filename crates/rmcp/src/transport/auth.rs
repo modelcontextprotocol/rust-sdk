@@ -426,13 +426,13 @@ impl AuthorizationManager {
         Ok(())
     }
 
-    /// discover oauth2 metadata
+    /// discover oauth2 metadata (per SEP-985: Protected Resource Metadata first, then direct OAuth)
     pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
-        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
+        if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
             return Ok(metadata);
         }
 
-        if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
+        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
             return Ok(metadata);
         }
 
@@ -1875,5 +1875,14 @@ mod tests {
         // Verify custom store can be set on AuthorizationManager
         let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
         manager.set_state_store(TrackingStateStore::default());
+    }
+
+    #[test]
+    fn test_protected_resource_metadata_paths() {
+        // SEP-985: verify oauth-protected-resource paths are generated correctly
+        let paths =
+            AuthorizationManager::well_known_paths("/mcp/example", "oauth-protected-resource");
+        assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp/example".to_string()));
+        assert!(paths.contains(&"/.well-known/oauth-protected-resource".to_string()));
     }
 }
