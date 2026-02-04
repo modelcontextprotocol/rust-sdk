@@ -41,8 +41,8 @@ pub use pastey::paste;
 #[cfg(all(feature = "macros", feature = "server"))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
 pub use rmcp_macros::*;
-#[cfg(all(feature = "macros", feature = "server"))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "macros", feature = "server"))))]
+#[cfg(any(feature = "macros", feature = "server"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "macros", feature = "server"))))]
 pub use schemars;
 #[cfg(feature = "macros")]
 #[cfg_attr(docsrs, doc(cfg(feature = "macros")))]
