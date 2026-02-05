@@ -195,7 +195,7 @@ impl OperationProcessor {
     }
 
     /// Collect completed results from running tasks and remove them from the running tasks map.
-    pub fn collect_completed_results(&mut self) {
+    fn collect_completed_results(&mut self) {
         while let Ok(result) = self.task_result_receiver.try_recv() {
             self.running_tasks.remove(&result.descriptor.operation_id);
             self.completed_results.push(result);
@@ -204,6 +204,7 @@ impl OperationProcessor {
 
     /// Check for tasks that have exceeded their timeout and handle them appropriately.
     pub fn check_timeouts(&mut self) {
+        self.collect_completed_results();
         let now = std::time::Instant::now();
         let mut timed_out_tasks = Vec::new();
 
@@ -228,7 +229,8 @@ impl OperationProcessor {
     }
 
     /// Get the number of running tasks.
-    pub fn running_task_count(&self) -> usize {
+    pub fn running_task_count(&mut self) -> usize {
+        self.collect_completed_results();
         self.running_tasks.len()
     }
 
@@ -237,15 +239,19 @@ impl OperationProcessor {
         for (_, task) in self.running_tasks.drain() {
             task.task_handle.abort();
         }
+        while self.task_result_receiver.try_recv().is_ok() {}
         self.completed_results.clear();
     }
+
     /// List running task ids.
-    pub fn list_running(&self) -> Vec<String> {
+    pub fn list_running(&mut self) -> Vec<String> {
+        self.collect_completed_results();
         self.running_tasks.keys().cloned().collect()
     }
 
-    /// Note: collectors should call collect_completed_results; this provides a snapshot of queued results.
-    pub fn peek_completed(&self) -> &[TaskResult] {
+    /// Returns a snapshot of completed task results.
+    pub fn peek_completed(&mut self) -> &[TaskResult] {
+        self.collect_completed_results();
         &self.completed_results
     }
 
@@ -263,6 +269,7 @@ impl OperationProcessor {
 
     /// Attempt to cancel a running task.
     pub fn cancel_task(&mut self, task_id: &str) -> bool {
+        self.collect_completed_results();
         if let Some(task) = self.running_tasks.remove(task_id) {
             task.task_handle.abort();
             // Insert a cancelled result so callers can observe the terminal state.
@@ -278,6 +285,7 @@ impl OperationProcessor {
 
     /// Retrieve a completed task result if available.
     pub fn take_completed_result(&mut self, task_id: &str) -> Option<TaskResult> {
+        self.collect_completed_results();
         if let Some(position) = self
             .completed_results
             .iter()

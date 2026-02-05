@@ -132,7 +132,6 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                 use rmcp::task_manager::current_timestamp;
                 let task_id = request.task_id.clone();
                 let mut processor = (#processor).lock().await;
-                processor.collect_completed_results();
 
                 // Check completed results first
                 let completed = processor.peek_completed().iter().rev().find(|r| r.descriptor.operation_id == task_id);
@@ -200,7 +199,6 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                     // Scope the lock so we can await outside if needed
                     {
                         let mut processor = (#processor).lock().await;
-                        processor.collect_completed_results();
 
                         if let Some(task_result) = processor.take_completed_result(&task_id) {
                             match task_result.result {
@@ -256,7 +254,6 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             ) -> Result<(), McpError> {
                 let task_id = request.task_id;
                 let mut processor = (#processor).lock().await;
-                processor.collect_completed_results();
 
                 if processor.cancel_task(&task_id) {
                     return Ok(());
