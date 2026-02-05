@@ -80,7 +80,7 @@ pub struct OperationProcessor {
     running_tasks: HashMap<String, RunningTask>,
     /// Completed results waiting to be collected
     completed_results: Vec<TaskResult>,
-    task_result_receiver: Option<mpsc::UnboundedReceiver<TaskResult>>,
+    task_result_receiver: mpsc::UnboundedReceiver<TaskResult>,
     task_result_sender: mpsc::UnboundedSender<TaskResult>,
 }
 
@@ -138,7 +138,7 @@ impl OperationProcessor {
         Self {
             running_tasks: HashMap::new(),
             completed_results: Vec::new(),
-            task_result_receiver: Some(task_result_receiver),
+            task_result_receiver,
             task_result_sender,
         }
     }
@@ -196,11 +196,9 @@ impl OperationProcessor {
 
     /// Collect completed results from running tasks and remove them from the running tasks map.
     pub fn collect_completed_results(&mut self) {
-        if let Some(receiver) = &mut self.task_result_receiver {
-            while let Ok(result) = receiver.try_recv() {
-                self.running_tasks.remove(&result.descriptor.operation_id);
-                self.completed_results.push(result);
-            }
+        while let Ok(result) = self.task_result_receiver.try_recv() {
+            self.running_tasks.remove(&result.descriptor.operation_id);
+            self.completed_results.push(result);
         }
     }
 
