@@ -614,7 +614,8 @@ impl AuthorizationManager {
         // build authorization request
         let mut auth_request = oauth_client
             .authorize_url(CsrfToken::new_random)
-            .set_pkce_challenge(pkce_challenge);
+            .set_pkce_challenge(pkce_challenge)
+            .add_extra_param("resource", self.base_url.to_string());
 
         // add request scopes
         for scope in scopes {
@@ -666,6 +667,7 @@ impl AuthorizationManager {
         let token_result = match oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
+            .add_extra_param("resource", self.base_url.to_string())
             .request_async(&http_client)
             .await
         {
@@ -1457,8 +1459,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AuthError, AuthorizationManager, InMemoryStateStore, StateStore, StoredAuthorizationState,
-        is_https_url,
+        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore, StateStore,
+        StoredAuthorizationState, is_https_url,
     };
 
     // SEP-991: URL-based Client IDs
@@ -1884,5 +1886,69 @@ mod tests {
             AuthorizationManager::well_known_paths("/mcp/example", "oauth-protected-resource");
         assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp/example".to_string()));
         assert!(paths.contains(&"/.well-known/oauth-protected-resource".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_authorization_url_is_valid() {
+        let base_url = "https://mcp.example.com/api";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager
+            .get_authorization_url(&["read", "write"])
+            .await
+            .unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+
+        // correct endpoint
+        assert!(auth_url.starts_with(auth_endpoint));
+
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        // required oauth parameters
+        assert_eq!(
+            params.get("response_type").map(|v| v.as_ref()),
+            Some("code")
+        );
+        assert_eq!(
+            params.get("client_id").map(|v| v.as_ref()),
+            Some("test-client-id")
+        );
+        assert!(params.contains_key("state"));
+        assert_eq!(
+            params.get("redirect_uri").map(|v| v.as_ref()),
+            Some(base_url)
+        );
+
+        // pkce (s256)
+        assert!(params.contains_key("code_challenge"));
+        assert_eq!(
+            params.get("code_challenge_method").map(|v| v.as_ref()),
+            Some("S256")
+        );
+
+        // rfc 8707 resource parameter
+        assert_eq!(params.get("resource").map(|v| v.as_ref()), Some(base_url));
+
+        // scopes
+        let scope = params
+            .get("scope")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        assert!(scope.contains("read"));
+        assert!(scope.contains("write"));
     }
 }
