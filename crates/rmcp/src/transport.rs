@@ -107,6 +107,8 @@ pub mod auth;
 #[cfg(feature = "auth")]
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub use auth::{
+    AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
+    ScopeUpgradeConfig, StoredCredentials, WWWAuthenticateParams,
     AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient, CredentialStore,
     InMemoryCredentialStore, InMemoryStateStore, StateStore, StoredAuthorizationState,
     StoredCredentials,
