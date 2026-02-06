@@ -250,6 +250,7 @@ pub struct AuthorizationMetadata {
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
     pub response_types_supported: Option<Vec<String>>,
+    pub code_challenge_methods_supported: Option<Vec<String>>,
     // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
@@ -485,15 +486,34 @@ impl AuthorizationManager {
         self.oauth_client = Some(client_builder);
         Ok(())
     }
-    /// validate if the server support the response type
-    fn validate_response_supported(&self, response_type: &str) -> Result<(), AuthError> {
-        if let Some(metadata) = self.metadata.as_ref() {
-            if let Some(response_types_supported) = metadata.response_types_supported.as_ref() {
-                if !response_types_supported.contains(&response_type.to_string()) {
-                    return Err(AuthError::InvalidScope(response_type.to_string()));
-                }
+    /// validate authorization server metadata before starting authorization.
+    fn validate_server_metadata(&self, response_type: &str) -> Result<(), AuthError> {
+        let Some(metadata) = self.metadata.as_ref() else {
+            return Ok(());
+        };
+
+        // RFC 8414 RECOMMENDS response_types_supported in the metadata. This field is optional,
+        // but if present and does not include the flow we use ("code"), bail out early with a clear error.
+        if let Some(response_types_supported) = metadata.response_types_supported.as_ref() {
+            if !response_types_supported.contains(&response_type.to_string()) {
+                return Err(AuthError::InvalidScope(response_type.to_string()));
             }
         }
+
+        // for PKCE, we always send s256 since oauth 2.1 requires servers to support it,
+        // but warn if the server metadata suggests otherwise
+        match &metadata.code_challenge_methods_supported {
+            Some(methods) if !methods.iter().any(|m| m == "S256") => {
+                warn!(
+                    ?methods,
+                    "server does not advertise S256 in code_challenge_methods_supported, \
+                     proceeding with S256 anyway as oauth 2.1 requires it. \
+                     The server is not compliant with the specification!"
+                );
+            }
+            _ => {}
+        }
+
         Ok(())
     }
     /// dynamic register oauth2 client
@@ -512,10 +532,7 @@ impl AuthorizationManager {
                 "Dynamic client registration not supported".to_string(),
             ));
         };
-
-        // RFC 8414 RECOMMENDS response_types_supported in the metadata. This field is optional,
-        // but if present and does not include the flow we use ("code"), bail out early with a clear error.
-        self.validate_response_supported("code")?;
+        self.validate_server_metadata("code")?;
 
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
@@ -604,9 +621,7 @@ impl AuthorizationManager {
             .oauth_client
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
-
-        // ensure the server supports the response type we intend to use when metadata is available
-        self.validate_response_supported("code")?;
+        self.validate_server_metadata("code")?;
 
         // generate pkce challenge
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -1902,6 +1917,7 @@ mod tests {
             jwks_uri: None,
             scopes_supported: None,
             response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
             additional_fields: std::collections::HashMap::new(),
         };
         manager.set_metadata(metadata);
@@ -1950,5 +1966,69 @@ mod tests {
             .unwrap_or_default();
         assert!(scope.contains("read"));
         assert!(scope.contains("write"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_rejects_unsupported_response_type() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            response_types_supported: Some(vec!["token".to_string()]),
+            ..Default::default()
+        };
+        manager.set_metadata(metadata);
+        assert!(manager.validate_server_metadata("code").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_without_pkce_s256() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["plain".to_string()]),
+            ..Default::default()
+        };
+        manager.set_metadata(metadata);
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_without_metadata() {
+        let manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    #[test]
+    fn test_code_challenge_methods_supported_deserialization() {
+        // verify the field deserializes correctly from json metadata
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "code_challenge_methods_supported": ["S256", "plain"]
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        let methods = metadata.code_challenge_methods_supported.unwrap();
+        assert!(methods.contains(&"S256".to_string()));
+        assert!(methods.contains(&"plain".to_string()));
+    }
+
+    #[test]
+    fn test_code_challenge_methods_supported_missing_from_json() {
+        // verify the field is None when absent from json
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        assert!(metadata.code_challenge_methods_supported.is_none());
     }
 }
