@@ -1651,51 +1651,158 @@ mod tests {
         ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
 
-    // SEP-991: URL-based Client IDs
-    // Tests adapted from the TypeScript SDK's isHttpsUrl test suite
+    // -- url and metadata helpers --
+
     #[test]
     fn test_is_https_url_scenarios() {
-        // Returns true for valid https url with path
         assert!(is_https_url("https://example.com/client-metadata.json"));
-        // Returns true for https url with query params
         assert!(is_https_url("https://example.com/metadata?version=1"));
-        // Returns false for https url without path
         assert!(!is_https_url("https://example.com"));
         assert!(!is_https_url("https://example.com/"));
         assert!(!is_https_url("https://"));
-        // Returns false for http url
         assert!(!is_https_url("http://example.com/metadata"));
-        // Returns false for non-url strings
         assert!(!is_https_url("not a url"));
-        // Returns false for empty string
         assert!(!is_https_url(""));
-        // Returns false for javascript scheme
         assert!(!is_https_url("javascript:alert(1)"));
-        // Returns false for data scheme
         assert!(!is_https_url("data:text/html,<script>alert(1)</script>"));
     }
 
     #[test]
-    fn parses_resource_metadata_parameter() {
-        let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
-        let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+    fn well_known_paths_root() {
+        let paths = AuthorizationManager::well_known_paths("/", "oauth-authorization-server");
         assert_eq!(
-            params.resource_metadata_url.unwrap().as_str(),
-            "https://example.com/.well-known/oauth-protected-resource/api"
+            paths,
+            vec!["/.well-known/oauth-authorization-server".to_string()]
         );
     }
 
     #[test]
-    fn parses_relative_resource_metadata_parameter() {
-        let header = r#"Bearer error="invalid_request", resource_metadata="/.well-known/oauth-protected-resource/api""#;
-        let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+    fn well_known_paths_with_suffix() {
+        let paths = AuthorizationManager::well_known_paths("/mcp", "oauth-authorization-server");
         assert_eq!(
-            params.resource_metadata_url.unwrap().as_str(),
-            "https://example.com/.well-known/oauth-protected-resource/api"
+            paths,
+            vec![
+                "/.well-known/oauth-authorization-server/mcp".to_string(),
+                "/mcp/.well-known/oauth-authorization-server".to_string(),
+                "/.well-known/oauth-authorization-server".to_string(),
+            ]
         );
     }
+
+    #[test]
+    fn well_known_paths_trailing_slash() {
+        let paths =
+            AuthorizationManager::well_known_paths("/v1/mcp/", "oauth-authorization-server");
+        assert_eq!(
+            paths,
+            vec![
+                "/.well-known/oauth-authorization-server/v1/mcp".to_string(),
+                "/v1/mcp/.well-known/oauth-authorization-server".to_string(),
+                "/.well-known/oauth-authorization-server".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_protected_resource_metadata_paths() {
+        let paths =
+            AuthorizationManager::well_known_paths("/mcp/example", "oauth-protected-resource");
+        assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp/example".to_string()));
+        assert!(paths.contains(&"/.well-known/oauth-protected-resource".to_string()));
+    }
+
+    #[test]
+    fn generate_discovery_urls() {
+        let base_url = Url::parse("https://auth.example.com").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration"
+        );
+
+        let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/tenant1"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/tenant1/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+
+        let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/v1/mcp"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/v1/mcp/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+
+        let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+    }
+
+    #[test]
+    fn test_discovery_urls_with_path_suffix() {
+        let base_url = Url::parse("https://mcp.example.com/mcp").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+
+        let canonical_oauth_fallback =
+            "https://mcp.example.com/.well-known/oauth-authorization-server";
+
+        assert!(
+            urls.iter().any(|u| u.as_str() == canonical_oauth_fallback),
+            "Expected discovery URLs to include canonical OAuth fallback '{}', but got: {:?}",
+            canonical_oauth_fallback,
+            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    // -- header parsing --
 
     #[test]
     fn parse_auth_param_value_handles_quoted_string() {
@@ -1744,465 +1851,25 @@ mod tests {
     }
 
     #[test]
-    fn well_known_paths_root() {
-        let paths = AuthorizationManager::well_known_paths("/", "oauth-authorization-server");
+    fn parses_resource_metadata_parameter() {
+        let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
         assert_eq!(
-            paths,
-            vec!["/.well-known/oauth-authorization-server".to_string()]
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource/api"
         );
     }
 
     #[test]
-    fn well_known_paths_with_suffix() {
-        let paths = AuthorizationManager::well_known_paths("/mcp", "oauth-authorization-server");
+    fn parses_relative_resource_metadata_parameter() {
+        let header = r#"Bearer error="invalid_request", resource_metadata="/.well-known/oauth-protected-resource/api""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
         assert_eq!(
-            paths,
-            vec![
-                "/.well-known/oauth-authorization-server/mcp".to_string(),
-                "/mcp/.well-known/oauth-authorization-server".to_string(),
-                "/.well-known/oauth-authorization-server".to_string(),
-            ]
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource/api"
         );
-    }
-
-    #[test]
-    fn well_known_paths_trailing_slash() {
-        let paths =
-            AuthorizationManager::well_known_paths("/v1/mcp/", "oauth-authorization-server");
-        assert_eq!(
-            paths,
-            vec![
-                "/.well-known/oauth-authorization-server/v1/mcp".to_string(),
-                "/v1/mcp/.well-known/oauth-authorization-server".to_string(),
-                "/.well-known/oauth-authorization-server".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn generate_discovery_urls() {
-        // Test root URL (no path components): OAuth first, then OpenID Connect
-        let base_url = Url::parse("https://auth.example.com").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 2);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration"
-        );
-
-        // Test URL with single path segment: follow spec priority order
-        let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 4);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration/tenant1"
-        );
-        assert_eq!(
-            urls[2].as_str(),
-            "https://auth.example.com/tenant1/.well-known/openid-configuration"
-        );
-        assert_eq!(
-            urls[3].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-
-        // Test URL with path and trailing slash
-        let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 4);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration/v1/mcp"
-        );
-        assert_eq!(
-            urls[2].as_str(),
-            "https://auth.example.com/v1/mcp/.well-known/openid-configuration"
-        );
-        assert_eq!(
-            urls[3].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-
-        // Test URL with multiple path segments
-        let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 4);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant"
-        );
-        assert_eq!(
-            urls[2].as_str(),
-            "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration"
-        );
-        assert_eq!(
-            urls[3].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-    }
-
-    // StateStore and StoredAuthorizationState tests
-
-    #[tokio::test]
-    async fn test_in_memory_state_store_save_and_load() {
-        let store = InMemoryStateStore::new();
-        let pkce = PkceCodeVerifier::new("test-verifier".to_string());
-        let csrf = CsrfToken::new("test-csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        // Save state
-        store.save("test-csrf", state).await.unwrap();
-
-        // Load state
-        let loaded = store.load("test-csrf").await.unwrap();
-        assert!(loaded.is_some());
-        let loaded = loaded.unwrap();
-        assert_eq!(loaded.csrf_token, "test-csrf");
-        assert_eq!(loaded.pkce_verifier, "test-verifier");
-    }
-
-    #[tokio::test]
-    async fn test_in_memory_state_store_load_nonexistent() {
-        let store = InMemoryStateStore::new();
-        let result = store.load("nonexistent").await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_in_memory_state_store_delete() {
-        let store = InMemoryStateStore::new();
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        store.save("csrf", state).await.unwrap();
-        store.delete("csrf").await.unwrap();
-
-        let result = store.load("csrf").await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_stored_authorization_state_serialization() {
-        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
-        let csrf = CsrfToken::new("my-csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        // Serialize to JSON
-        let json = serde_json::to_string(&state).unwrap();
-
-        // Deserialize back
-        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.pkce_verifier, "my-verifier");
-        assert_eq!(deserialized.csrf_token, "my-csrf");
-    }
-
-    #[test]
-    fn test_stored_authorization_state_into_pkce_verifier() {
-        let pkce = PkceCodeVerifier::new("original-verifier".to_string());
-        let csrf = CsrfToken::new("csrf-token".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        let recovered = state.into_pkce_verifier();
-        assert_eq!(recovered.secret(), "original-verifier");
-    }
-
-    #[test]
-    fn test_stored_authorization_state_created_at() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        // created_at should be a reasonable timestamp (after year 2020)
-        assert!(state.created_at > 1577836800); // Jan 1, 2020
-    }
-
-    #[tokio::test]
-    async fn test_in_memory_state_store_overwrite() {
-        let store = InMemoryStateStore::new();
-        let csrf_key = "same-csrf";
-
-        // Save first state
-        let pkce1 = PkceCodeVerifier::new("verifier-1".to_string());
-        let csrf1 = CsrfToken::new(csrf_key.to_string());
-        let state1 = StoredAuthorizationState::new(&pkce1, &csrf1);
-        store.save(csrf_key, state1).await.unwrap();
-
-        // Overwrite with second state
-        let pkce2 = PkceCodeVerifier::new("verifier-2".to_string());
-        let csrf2 = CsrfToken::new(csrf_key.to_string());
-        let state2 = StoredAuthorizationState::new(&pkce2, &csrf2);
-        store.save(csrf_key, state2).await.unwrap();
-
-        // Should get the second state
-        let loaded = store.load(csrf_key).await.unwrap().unwrap();
-        assert_eq!(loaded.pkce_verifier, "verifier-2");
-    }
-
-    #[tokio::test]
-    async fn test_in_memory_state_store_concurrent_access() {
-        let store = Arc::new(InMemoryStateStore::new());
-        let mut handles = vec![];
-
-        // Spawn 10 concurrent tasks that each save and load their own state
-        for i in 0..10 {
-            let store = Arc::clone(&store);
-            let handle = tokio::spawn(async move {
-                let csrf_key = format!("csrf-{}", i);
-                let verifier = format!("verifier-{}", i);
-
-                let pkce = PkceCodeVerifier::new(verifier.clone());
-                let csrf = CsrfToken::new(csrf_key.clone());
-                let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-                store.save(&csrf_key, state).await.unwrap();
-                let loaded = store.load(&csrf_key).await.unwrap().unwrap();
-                assert_eq!(loaded.pkce_verifier, verifier);
-
-                store.delete(&csrf_key).await.unwrap();
-                let deleted = store.load(&csrf_key).await.unwrap();
-                assert!(deleted.is_none());
-            });
-            handles.push(handle);
-        }
-
-        // Wait for all tasks to complete
-        for handle in handles {
-            handle.await.unwrap();
-        }
-    }
-
-    #[test]
-    fn test_discovery_urls_with_path_suffix() {
-        // When the base URL has a path suffix (e.g., /mcp), the discovery should
-        // eventually fall back to checking /.well-known/oauth-authorization-server
-        // at the root, not just /.well-known/oauth-authorization-server/{path}.
-        let base_url = Url::parse("https://mcp.example.com/mcp").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-
-        let canonical_oauth_fallback =
-            "https://mcp.example.com/.well-known/oauth-authorization-server";
-
-        assert!(
-            urls.iter().any(|u| u.as_str() == canonical_oauth_fallback),
-            "Expected discovery URLs to include canonical OAuth fallback '{}', but got: {:?}",
-            canonical_oauth_fallback,
-            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_custom_state_store_with_authorization_manager() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        // Custom state store that tracks calls
-        #[derive(Debug, Default)]
-        struct TrackingStateStore {
-            inner: InMemoryStateStore,
-            save_count: AtomicUsize,
-            load_count: AtomicUsize,
-            delete_count: AtomicUsize,
-        }
-
-        #[async_trait::async_trait]
-        impl StateStore for TrackingStateStore {
-            async fn save(
-                &self,
-                csrf_token: &str,
-                state: StoredAuthorizationState,
-            ) -> Result<(), AuthError> {
-                self.save_count.fetch_add(1, Ordering::SeqCst);
-                self.inner.save(csrf_token, state).await
-            }
-
-            async fn load(
-                &self,
-                csrf_token: &str,
-            ) -> Result<Option<StoredAuthorizationState>, AuthError> {
-                self.load_count.fetch_add(1, Ordering::SeqCst);
-                self.inner.load(csrf_token).await
-            }
-
-            async fn delete(&self, csrf_token: &str) -> Result<(), AuthError> {
-                self.delete_count.fetch_add(1, Ordering::SeqCst);
-                self.inner.delete(csrf_token).await
-            }
-        }
-
-        // Verify custom store works standalone
-        let store = TrackingStateStore::default();
-        let pkce = PkceCodeVerifier::new("test-verifier".to_string());
-        let csrf = CsrfToken::new("test-csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        store.save("test-csrf", state).await.unwrap();
-        assert_eq!(store.save_count.load(Ordering::SeqCst), 1);
-
-        let _ = store.load("test-csrf").await.unwrap();
-        assert_eq!(store.load_count.load(Ordering::SeqCst), 1);
-
-        store.delete("test-csrf").await.unwrap();
-        assert_eq!(store.delete_count.load(Ordering::SeqCst), 1);
-
-        // Verify custom store can be set on AuthorizationManager
-        let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
-        manager.set_state_store(TrackingStateStore::default());
-    }
-
-    #[test]
-    fn test_protected_resource_metadata_paths() {
-        // SEP-985: verify oauth-protected-resource paths are generated correctly
-        let paths =
-            AuthorizationManager::well_known_paths("/mcp/example", "oauth-protected-resource");
-        assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp/example".to_string()));
-        assert!(paths.contains(&"/.well-known/oauth-protected-resource".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_authorization_url_is_valid() {
-        let base_url = "https://mcp.example.com/api";
-        let auth_endpoint = "https://auth.example.com/authorize";
-        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
-
-        let metadata = AuthorizationMetadata {
-            authorization_endpoint: auth_endpoint.to_string(),
-            token_endpoint: "https://auth.example.com/token".to_string(),
-            registration_endpoint: None,
-            issuer: None,
-            jwks_uri: None,
-            scopes_supported: None,
-            response_types_supported: Some(vec!["code".to_string()]),
-            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
-            additional_fields: std::collections::HashMap::new(),
-        };
-        manager.set_metadata(metadata);
-        manager.configure_client_id("test-client-id").unwrap();
-
-        let auth_url = manager
-            .get_authorization_url(&["read", "write"])
-            .await
-            .unwrap();
-        let parsed = Url::parse(&auth_url).unwrap();
-
-        // correct endpoint
-        assert!(auth_url.starts_with(auth_endpoint));
-
-        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
-
-        // required oauth parameters
-        assert_eq!(
-            params.get("response_type").map(|v| v.as_ref()),
-            Some("code")
-        );
-        assert_eq!(
-            params.get("client_id").map(|v| v.as_ref()),
-            Some("test-client-id")
-        );
-        assert!(params.contains_key("state"));
-        assert_eq!(
-            params.get("redirect_uri").map(|v| v.as_ref()),
-            Some(base_url)
-        );
-
-        // pkce (s256)
-        assert!(params.contains_key("code_challenge"));
-        assert_eq!(
-            params.get("code_challenge_method").map(|v| v.as_ref()),
-            Some("S256")
-        );
-
-        // rfc 8707 resource parameter
-        assert_eq!(params.get("resource").map(|v| v.as_ref()), Some(base_url));
-
-        // scopes
-        let scope = params
-            .get("scope")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        assert!(scope.contains("read"));
-        assert!(scope.contains("write"));
-    }
-
-    #[tokio::test]
-    async fn test_validate_as_metadata_rejects_unsupported_response_type() {
-        let mut manager = AuthorizationManager::new("https://example.com")
-            .await
-            .unwrap();
-        let metadata = AuthorizationMetadata {
-            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
-            token_endpoint: "https://auth.example.com/token".to_string(),
-            response_types_supported: Some(vec!["token".to_string()]),
-            ..Default::default()
-        };
-        manager.set_metadata(metadata);
-        assert!(manager.validate_server_metadata("code").is_err());
-    }
-
-    #[tokio::test]
-    async fn test_validate_as_metadata_passes_without_pkce_s256() {
-        let mut manager = AuthorizationManager::new("https://example.com")
-            .await
-            .unwrap();
-        let metadata = AuthorizationMetadata {
-            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
-            token_endpoint: "https://auth.example.com/token".to_string(),
-            response_types_supported: Some(vec!["code".to_string()]),
-            code_challenge_methods_supported: Some(vec!["plain".to_string()]),
-            ..Default::default()
-        };
-        manager.set_metadata(metadata);
-        assert!(manager.validate_server_metadata("code").is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_validate_as_metadata_passes_without_metadata() {
-        let manager = AuthorizationManager::new("https://example.com")
-            .await
-            .unwrap();
-        assert!(manager.validate_server_metadata("code").is_ok());
-    }
-
-    #[test]
-    fn test_code_challenge_methods_supported_deserialization() {
-        // verify the field deserializes correctly from json metadata
-        let json = r#"{
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token",
-            "code_challenge_methods_supported": ["S256", "plain"]
-        }"#;
-        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
-        let methods = metadata.code_challenge_methods_supported.unwrap();
-        assert!(methods.contains(&"S256".to_string()));
-        assert!(methods.contains(&"plain".to_string()));
-    }
-
-    #[test]
-    fn test_code_challenge_methods_supported_missing_from_json() {
-        // verify the field is None when absent from json
-        let json = r#"{
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token"
-        }"#;
-        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
-        assert!(metadata.code_challenge_methods_supported.is_none());
     }
 
     #[test]
@@ -2259,6 +1926,306 @@ mod tests {
 
         assert_eq!(params.scope.unwrap(), "read:data");
     }
+
+    // -- state store --
+
+    #[tokio::test]
+    async fn test_in_memory_state_store_save_and_load() {
+        let store = InMemoryStateStore::new();
+        let pkce = PkceCodeVerifier::new("test-verifier".to_string());
+        let csrf = CsrfToken::new("test-csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        store.save("test-csrf", state).await.unwrap();
+
+        let loaded = store.load("test-csrf").await.unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.csrf_token, "test-csrf");
+        assert_eq!(loaded.pkce_verifier, "test-verifier");
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_state_store_load_nonexistent() {
+        let store = InMemoryStateStore::new();
+        let result = store.load("nonexistent").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_state_store_delete() {
+        let store = InMemoryStateStore::new();
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        store.save("csrf", state).await.unwrap();
+        store.delete("csrf").await.unwrap();
+
+        let result = store.load("csrf").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_state_store_overwrite() {
+        let store = InMemoryStateStore::new();
+        let csrf_key = "same-csrf";
+
+        let pkce1 = PkceCodeVerifier::new("verifier-1".to_string());
+        let csrf1 = CsrfToken::new(csrf_key.to_string());
+        let state1 = StoredAuthorizationState::new(&pkce1, &csrf1);
+        store.save(csrf_key, state1).await.unwrap();
+
+        let pkce2 = PkceCodeVerifier::new("verifier-2".to_string());
+        let csrf2 = CsrfToken::new(csrf_key.to_string());
+        let state2 = StoredAuthorizationState::new(&pkce2, &csrf2);
+        store.save(csrf_key, state2).await.unwrap();
+
+        let loaded = store.load(csrf_key).await.unwrap().unwrap();
+        assert_eq!(loaded.pkce_verifier, "verifier-2");
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_state_store_concurrent_access() {
+        let store = Arc::new(InMemoryStateStore::new());
+        let mut handles = vec![];
+
+        for i in 0..10 {
+            let store = Arc::clone(&store);
+            let handle = tokio::spawn(async move {
+                let csrf_key = format!("csrf-{}", i);
+                let verifier = format!("verifier-{}", i);
+
+                let pkce = PkceCodeVerifier::new(verifier.clone());
+                let csrf = CsrfToken::new(csrf_key.clone());
+                let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+                store.save(&csrf_key, state).await.unwrap();
+                let loaded = store.load(&csrf_key).await.unwrap().unwrap();
+                assert_eq!(loaded.pkce_verifier, verifier);
+
+                store.delete(&csrf_key).await.unwrap();
+                let deleted = store.load(&csrf_key).await.unwrap();
+                assert!(deleted.is_none());
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn test_stored_authorization_state_serialization() {
+        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
+        let csrf = CsrfToken::new("my-csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.pkce_verifier, "my-verifier");
+        assert_eq!(deserialized.csrf_token, "my-csrf");
+    }
+
+    #[test]
+    fn test_stored_authorization_state_into_pkce_verifier() {
+        let pkce = PkceCodeVerifier::new("original-verifier".to_string());
+        let csrf = CsrfToken::new("csrf-token".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        let recovered = state.into_pkce_verifier();
+        assert_eq!(recovered.secret(), "original-verifier");
+    }
+
+    #[test]
+    fn test_stored_authorization_state_created_at() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        assert!(state.created_at > 1577836800); // Jan 1, 2020
+    }
+
+    #[tokio::test]
+    async fn test_custom_state_store_with_authorization_manager() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug, Default)]
+        struct TrackingStateStore {
+            inner: InMemoryStateStore,
+            save_count: AtomicUsize,
+            load_count: AtomicUsize,
+            delete_count: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl StateStore for TrackingStateStore {
+            async fn save(
+                &self,
+                csrf_token: &str,
+                state: StoredAuthorizationState,
+            ) -> Result<(), AuthError> {
+                self.save_count.fetch_add(1, Ordering::SeqCst);
+                self.inner.save(csrf_token, state).await
+            }
+
+            async fn load(
+                &self,
+                csrf_token: &str,
+            ) -> Result<Option<StoredAuthorizationState>, AuthError> {
+                self.load_count.fetch_add(1, Ordering::SeqCst);
+                self.inner.load(csrf_token).await
+            }
+
+            async fn delete(&self, csrf_token: &str) -> Result<(), AuthError> {
+                self.delete_count.fetch_add(1, Ordering::SeqCst);
+                self.inner.delete(csrf_token).await
+            }
+        }
+
+        let store = TrackingStateStore::default();
+        let pkce = PkceCodeVerifier::new("test-verifier".to_string());
+        let csrf = CsrfToken::new("test-csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        store.save("test-csrf", state).await.unwrap();
+        assert_eq!(store.save_count.load(Ordering::SeqCst), 1);
+
+        let _ = store.load("test-csrf").await.unwrap();
+        assert_eq!(store.load_count.load(Ordering::SeqCst), 1);
+
+        store.delete("test-csrf").await.unwrap();
+        assert_eq!(store.delete_count.load(Ordering::SeqCst), 1);
+
+        let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
+        manager.set_state_store(TrackingStateStore::default());
+    }
+
+    // -- server capabilities and authorization --
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_rejects_unsupported_response_type() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            response_types_supported: Some(vec!["token".to_string()]),
+            ..Default::default()
+        };
+        manager.set_metadata(metadata);
+        assert!(manager.validate_server_metadata("code").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_without_pkce_s256() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["plain".to_string()]),
+            ..Default::default()
+        };
+        manager.set_metadata(metadata);
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_without_metadata() {
+        let manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    #[test]
+    fn test_code_challenge_methods_supported_deserialization() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "code_challenge_methods_supported": ["S256", "plain"]
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        let methods = metadata.code_challenge_methods_supported.unwrap();
+        assert!(methods.contains(&"S256".to_string()));
+        assert!(methods.contains(&"plain".to_string()));
+    }
+
+    #[test]
+    fn test_code_challenge_methods_supported_missing_from_json() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        assert!(metadata.code_challenge_methods_supported.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_authorization_url_is_valid() {
+        let base_url = "https://mcp.example.com/api";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager
+            .get_authorization_url(&["read", "write"])
+            .await
+            .unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+
+        assert!(auth_url.starts_with(auth_endpoint));
+
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        assert_eq!(
+            params.get("response_type").map(|v| v.as_ref()),
+            Some("code")
+        );
+        assert_eq!(
+            params.get("client_id").map(|v| v.as_ref()),
+            Some("test-client-id")
+        );
+        assert!(params.contains_key("state"));
+        assert_eq!(
+            params.get("redirect_uri").map(|v| v.as_ref()),
+            Some(base_url)
+        );
+        assert!(params.contains_key("code_challenge"));
+        assert_eq!(
+            params.get("code_challenge_method").map(|v| v.as_ref()),
+            Some("S256")
+        );
+        assert_eq!(params.get("resource").map(|v| v.as_ref()), Some(base_url));
+
+        let scope = params
+            .get("scope")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        assert!(scope.contains("read"));
+        assert!(scope.contains("write"));
+    }
+
+    // -- scope management --
 
     #[test]
     fn compute_scope_union_adds_new_scopes() {
