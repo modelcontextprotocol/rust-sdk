@@ -384,10 +384,37 @@ macro_rules! method {
 }
 
 impl Peer<RoleServer> {
+    /// Check if the client supports sampling tools capability.
+    pub fn supports_sampling_tools(&self) -> bool {
+        if let Some(client_info) = self.peer_info() {
+            client_info
+                .capabilities
+                .sampling
+                .as_ref()
+                .and_then(|s| s.tools.as_ref())
+                .is_some()
+        } else {
+            false
+        }
+    }
+
     pub async fn create_message(
         &self,
         params: CreateMessageRequestParams,
     ) -> Result<CreateMessageResult, ServiceError> {
+        // MUST throw error when tools/toolChoice provided without capability
+        if (params.tools.is_some() || params.tool_choice.is_some())
+            && !self.supports_sampling_tools()
+        {
+            return Err(ServiceError::McpError(ErrorData::invalid_params(
+                "tools or toolChoice provided but client does not support sampling tools capability",
+                None,
+            )));
+        }
+        // Validate message structure
+        params
+            .validate()
+            .map_err(|e| ServiceError::McpError(ErrorData::invalid_params(e, None)))?;
         let result = self
             .send_request(ServerRequest::CreateMessageRequest(CreateMessageRequest {
                 method: Default::default(),

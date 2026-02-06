@@ -1,5 +1,3 @@
-//cargo test --test test_sampling --features "client server"
-
 mod common;
 
 use anyhow::Result;
@@ -103,21 +101,17 @@ async fn test_sampling_context_inclusion_enum() -> Result<()> {
 async fn test_sampling_integration_with_test_handlers() -> Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
-    // Start server
     let server_handle = tokio::spawn(async move {
         let server = TestServer::new().serve(server_transport).await?;
         server.waiting().await?;
         anyhow::Ok(())
     });
 
-    // Start client that honors sampling requests
     let handler = TestClientHandler::new(true, true);
     let client = handler.clone().serve(client_transport).await?;
 
-    // Wait for initialization
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Test sampling with context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
         params: CreateMessageRequestParams {
@@ -157,7 +151,6 @@ async fn test_sampling_integration_with_test_handlers() -> Result<()> {
         )
         .await?;
 
-    // Verify the response
     if let ClientResult::CreateMessageResult(result) = result {
         assert_eq!(result.message.role, Role::Assistant);
         assert_eq!(result.model, "test-model");
@@ -192,21 +185,17 @@ async fn test_sampling_integration_with_test_handlers() -> Result<()> {
 async fn test_sampling_no_context_inclusion() -> Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
-    // Start server
     let server_handle = tokio::spawn(async move {
         let server = TestServer::new().serve(server_transport).await?;
         server.waiting().await?;
         anyhow::Ok(())
     });
 
-    // Start client that honors sampling requests
     let handler = TestClientHandler::new(true, true);
     let client = handler.clone().serve(client_transport).await?;
 
-    // Wait for initialization
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Test sampling without context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
         params: CreateMessageRequestParams {
@@ -239,7 +228,6 @@ async fn test_sampling_no_context_inclusion() -> Result<()> {
         )
         .await?;
 
-    // Verify the response
     if let ClientResult::CreateMessageResult(result) = result {
         assert_eq!(result.message.role, Role::Assistant);
         assert_eq!(result.model, "test-model");
@@ -270,21 +258,17 @@ async fn test_sampling_no_context_inclusion() -> Result<()> {
 async fn test_sampling_error_invalid_message_sequence() -> Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
-    // Start server
     let server_handle = tokio::spawn(async move {
         let server = TestServer::new().serve(server_transport).await?;
         server.waiting().await?;
         anyhow::Ok(())
     });
 
-    // Start client
     let handler = TestClientHandler::new(true, true);
     let client = handler.clone().serve(client_transport).await?;
 
-    // Wait for initialization
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Test sampling with no user messages (should fail)
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
         params: CreateMessageRequestParams {
@@ -319,7 +303,6 @@ async fn test_sampling_error_invalid_message_sequence() -> Result<()> {
         )
         .await;
 
-    // This should result in an error
     assert!(result.is_err());
 
     client.cancel().await?;
@@ -636,4 +619,200 @@ async fn test_content_conversion_unsupported_variants() {
         result.unwrap_err(),
         "Resource content is not supported in sampling messages"
     );
+}
+
+#[tokio::test]
+async fn test_validate_rejects_tool_use_in_user_message() {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
+        messages: vec![SamplingMessage::new(
+            Role::User,
+            SamplingMessageContent::tool_use("call_1", "some_tool", Default::default()),
+        )],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        temperature: None,
+        max_tokens: 100,
+        stop_sequences: None,
+        metadata: None,
+        tools: None,
+        tool_choice: None,
+    };
+
+    let err = params.validate().unwrap_err();
+    assert!(
+        err.contains("ToolUse content is only allowed in assistant messages"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rejects_tool_result_in_assistant_message() {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
+        messages: vec![SamplingMessage::new(
+            Role::Assistant,
+            SamplingMessageContent::tool_result("call_1", vec![Content::text("result")]),
+        )],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        temperature: None,
+        max_tokens: 100,
+        stop_sequences: None,
+        metadata: None,
+        tools: None,
+        tool_choice: None,
+    };
+
+    let err = params.validate().unwrap_err();
+    assert!(
+        err.contains("ToolResult content is only allowed in user messages"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rejects_mixed_content_with_tool_result() {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
+        messages: vec![SamplingMessage::new_multiple(
+            Role::User,
+            vec![
+                SamplingMessageContent::tool_result("call_1", vec![Content::text("result")]),
+                SamplingMessageContent::text("some extra text"),
+            ],
+        )],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        temperature: None,
+        max_tokens: 100,
+        stop_sequences: None,
+        metadata: None,
+        tools: None,
+        tool_choice: None,
+    };
+
+    let err = params.validate().unwrap_err();
+    assert!(
+        err.contains("MUST NOT contain other content types"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rejects_unbalanced_tool_use_result() {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
+        messages: vec![
+            SamplingMessage::user_text("Hello"),
+            SamplingMessage::assistant_tool_use("call_1", "some_tool", Default::default()),
+        ],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        temperature: None,
+        max_tokens: 100,
+        stop_sequences: None,
+        metadata: None,
+        tools: None,
+        tool_choice: None,
+    };
+
+    let err = params.validate().unwrap_err();
+    assert!(
+        err.contains("not balanced with ToolResult"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rejects_tool_result_without_matching_use() {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
+        messages: vec![
+            SamplingMessage::user_text("Hello"),
+            SamplingMessage::user_tool_result("nonexistent_call", vec![Content::text("result")]),
+        ],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        temperature: None,
+        max_tokens: 100,
+        stop_sequences: None,
+        metadata: None,
+        tools: None,
+        tool_choice: None,
+    };
+
+    let err = params.validate().unwrap_err();
+    assert!(
+        err.contains("has no matching ToolUse"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_accepts_valid_tool_conversation() {
+    let params = CreateMessageRequestParams {
+        meta: None,
+        task: None,
+        messages: vec![
+            SamplingMessage::user_text("What's the weather?"),
+            SamplingMessage::assistant_tool_use(
+                "call_1",
+                "get_weather",
+                serde_json::json!({"location": "SF"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            SamplingMessage::user_tool_result("call_1", vec![Content::text("72°F and sunny")]),
+            SamplingMessage::assistant_text("It's 72°F and sunny in SF."),
+        ],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        temperature: None,
+        max_tokens: 100,
+        stop_sequences: None,
+        metadata: None,
+        tools: None,
+        tool_choice: None,
+    };
+
+    assert!(params.validate().is_ok());
+}
+
+#[tokio::test]
+async fn test_create_message_result_validate_rejects_user_role() {
+    let result = CreateMessageResult {
+        message: SamplingMessage::user_text("This should not be a user message"),
+        model: "test-model".to_string(),
+        stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
+    };
+
+    let err = result.validate().unwrap_err();
+    assert!(
+        err.contains("role must be 'assistant'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_create_message_result_validate_accepts_assistant_role() {
+    let result = CreateMessageResult {
+        message: SamplingMessage::assistant_text("Hello!"),
+        model: "test-model".to_string(),
+        stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
+    };
+
+    assert!(result.validate().is_ok());
 }

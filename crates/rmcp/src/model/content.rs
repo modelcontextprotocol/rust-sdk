@@ -129,67 +129,6 @@ impl ToolResultContent {
     }
 }
 
-/// Assistant message content types (SEP-1577).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum AssistantMessageContent {
-    Text(RawTextContent),
-    Image(RawImageContent),
-    Audio(RawAudioContent),
-    ToolUse(ToolUseContent),
-}
-
-/// User message content types (SEP-1577).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum UserMessageContent {
-    Text(RawTextContent),
-    Image(RawImageContent),
-    Audio(RawAudioContent),
-    ToolResult(ToolResultContent),
-}
-
-impl AssistantMessageContent {
-    /// Create a text content
-    pub fn text(text: impl Into<String>) -> Self {
-        Self::Text(RawTextContent {
-            text: text.into(),
-            meta: None,
-        })
-    }
-
-    /// Create a tool use content
-    pub fn tool_use(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        input: super::JsonObject,
-    ) -> Self {
-        Self::ToolUse(ToolUseContent::new(id, name, input))
-    }
-}
-
-impl UserMessageContent {
-    /// Create a text content
-    pub fn text(text: impl Into<String>) -> Self {
-        Self::Text(RawTextContent {
-            text: text.into(),
-            meta: None,
-        })
-    }
-
-    /// Create a tool result content
-    pub fn tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
-        Self::ToolResult(ToolResultContent::new(tool_use_id, content))
-    }
-
-    /// Create an error tool result content
-    pub fn tool_result_error(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
-        Self::ToolResult(ToolResultContent::error(tool_use_id, content))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
