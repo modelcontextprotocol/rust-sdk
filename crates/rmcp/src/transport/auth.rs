@@ -23,6 +23,8 @@ const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 pub struct StoredCredentials {
     pub client_id: String,
     pub token_response: Option<OAuthTokenResponse>,
+    #[serde(default)]
+    pub granted_scopes: Vec<String>,
 }
 
 /// Trait for storing and retrieving OAuth2 credentials
@@ -238,6 +240,12 @@ pub enum AuthError {
 
     #[error("Registration failed: {0}")]
     RegistrationFailed(String),
+
+    #[error("Insufficient scope: {required_scope}")]
+    InsufficientScope {
+        required_scope: String,
+        upgrade_url: Option<String>,
+    },
 }
 
 /// oauth2 metadata
@@ -260,6 +268,13 @@ pub struct AuthorizationMetadata {
 struct ResourceServerMetadata {
     authorization_server: Option<String>,
     authorization_servers: Option<Vec<String>>,
+}
+
+/// Parameters extracted from WWW-Authenticate header
+#[derive(Debug, Clone, Default)]
+pub struct WWWAuthenticateParams {
+    pub resource_metadata_url: Option<Url>,
+    pub scope: Option<String>,
 }
 
 /// oauth2 client config
@@ -292,6 +307,24 @@ type OAuthClient = oauth2::Client<
 >;
 type Credentials = (String, Option<OAuthTokenResponse>);
 
+/// Configuration for scope upgrade behavior
+#[derive(Debug, Clone)]
+pub struct ScopeUpgradeConfig {
+    /// Maximum number of scope upgrade attempts before giving up
+    pub max_upgrade_attempts: u32,
+    /// Whether to automatically attempt scope upgrades on 403
+    pub auto_upgrade: bool,
+}
+
+impl Default for ScopeUpgradeConfig {
+    fn default() -> Self {
+        Self {
+            max_upgrade_attempts: 3,
+            auto_upgrade: true,
+        }
+    }
+}
+
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: HttpClient,
@@ -300,6 +333,9 @@ pub struct AuthorizationManager {
     credential_store: Arc<dyn CredentialStore>,
     state_store: Arc<dyn StateStore>,
     base_url: Url,
+    current_scopes: RwLock<Vec<String>>,
+    scope_upgrade_attempts: RwLock<u32>,
+    scope_upgrade_config: ScopeUpgradeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,9 +410,17 @@ impl AuthorizationManager {
             credential_store: Arc::new(InMemoryCredentialStore::new()),
             state_store: Arc::new(InMemoryStateStore::new()),
             base_url,
+            current_scopes: RwLock::new(Vec::new()),
+            scope_upgrade_attempts: RwLock::new(0),
+            scope_upgrade_config: ScopeUpgradeConfig::default(),
         };
 
         Ok(manager)
+    }
+
+    /// Set the scope upgrade configuration
+    pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
+        self.scope_upgrade_config = config;
     }
 
     /// Set a custom credential store
@@ -648,6 +692,95 @@ impl AuthorizationManager {
         Ok(auth_url.to_string())
     }
 
+    /// get the current granted scopes
+    pub async fn get_current_scopes(&self) -> Vec<String> {
+        self.current_scopes.read().await.clone()
+    }
+
+    /// compute the union of current scopes and required scopes
+    fn compute_scope_union(current: &[String], required: &str) -> Vec<String> {
+        let mut scope_set: std::collections::HashSet<String> = current.iter().cloned().collect();
+        for scope in required.split_whitespace() {
+            scope_set.insert(scope.to_string());
+        }
+        scope_set.into_iter().collect()
+    }
+
+    /// check if a scope upgrade is possible and allowed
+    pub async fn can_attempt_scope_upgrade(&self) -> bool {
+        if !self.scope_upgrade_config.auto_upgrade {
+            return false;
+        }
+        let attempts = *self.scope_upgrade_attempts.read().await;
+        attempts < self.scope_upgrade_config.max_upgrade_attempts
+    }
+
+    /// select scopes based on SEP-835 priority:
+    /// 1. scope from WWW-Authenticate header
+    /// 2. scopes_supported from metadata
+    /// 3. provided default scopes
+    pub fn select_scopes(
+        &self,
+        www_authenticate_scope: Option<&str>,
+        default_scopes: &[&str],
+    ) -> Vec<String> {
+        if let Some(scope) = www_authenticate_scope {
+            return scope.split_whitespace().map(|s| s.to_string()).collect();
+        }
+
+        if let Some(metadata) = &self.metadata {
+            if let Some(scopes_supported) = &metadata.scopes_supported {
+                if !scopes_supported.is_empty() {
+                    return scopes_supported.clone();
+                }
+            }
+        }
+
+        default_scopes.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// attempt to upgrade scopes after receiving a 403 insufficient_scope error.
+    /// returns the authorization URL for re-authorization with upgraded scopes.
+    pub async fn request_scope_upgrade(&self, required_scope: &str) -> Result<String, AuthError> {
+        if !self.scope_upgrade_config.auto_upgrade {
+            return Err(AuthError::InvalidScope(
+                "Scope upgrade is disabled".to_string(),
+            ));
+        }
+
+        let mut attempts = self.scope_upgrade_attempts.write().await;
+        if *attempts >= self.scope_upgrade_config.max_upgrade_attempts {
+            return Err(AuthError::InvalidScope(format!(
+                "Maximum scope upgrade attempts ({}) exceeded",
+                self.scope_upgrade_config.max_upgrade_attempts
+            )));
+        }
+
+        *attempts += 1;
+        drop(attempts);
+
+        let current_scopes = self.current_scopes.read().await.clone();
+        let upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+
+        debug!(
+            "Requesting scope upgrade: current={:?}, required={}, union={:?}",
+            current_scopes, required_scope, upgraded_scopes
+        );
+
+        let scope_refs: Vec<&str> = upgraded_scopes.iter().map(|s| s.as_str()).collect();
+        self.get_authorization_url(&scope_refs).await
+    }
+
+    /// reset scope upgrade attempt counter
+    pub async fn reset_scope_upgrade_attempts(&self) {
+        *self.scope_upgrade_attempts.write().await = 0;
+    }
+
+    /// get the number of scope upgrade attempts made
+    pub async fn get_scope_upgrade_attempts(&self) -> u32 {
+        *self.scope_upgrade_attempts.read().await
+    }
+
     /// exchange authorization code for access token
     pub async fn exchange_code_for_token(
         &self,
@@ -707,11 +840,19 @@ impl AuthorizationManager {
 
         debug!("exchange token result: {:?}", token_result);
 
-        // Store credentials in the credential store
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+        *self.scope_upgrade_attempts.write().await = 0;
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
+            granted_scopes,
         };
         self.credential_store.save(stored).await?;
 
@@ -768,10 +909,18 @@ impl AuthorizationManager {
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_else(|| self.current_scopes.blocking_read().clone());
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
+            granted_scopes,
         };
         self.credential_store.save(stored).await?;
 
@@ -990,9 +1139,11 @@ impl AuthorizationManager {
             let Ok(value_str) = value.to_str() else {
                 continue;
             };
-            if let Some(url) =
-                Self::extract_resource_metadata_url_from_header(value_str, &self.base_url)
-            {
+            let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+            if let Some(url) = params.resource_metadata_url {
+                if let Some(scope) = params.scope {
+                    debug!("WWW-Authenticate header contains scope: {}", scope);
+                }
                 parsed_url = Some(url);
                 break;
             }
@@ -1040,21 +1191,25 @@ impl AuthorizationManager {
         Ok(Some(metadata))
     }
 
-    /// Extracts a url following `resource_metadata=` in a header value
-    fn extract_resource_metadata_url_from_header(header: &str, base_url: &Url) -> Option<Url> {
+    /// extract parameters from WWW-Authenticate header (resource_metadata and scope)
+    fn extract_www_authenticate_params(header: &str, base_url: &Url) -> WWWAuthenticateParams {
+        let mut params = WWWAuthenticateParams::default();
         let header_lowercase = header.to_ascii_lowercase();
-        let fragment_key = "resource_metadata=";
-        let mut search_offset = 0;
 
-        while let Some(pos) = header_lowercase[search_offset..].find(fragment_key) {
-            let global_pos = search_offset + pos + fragment_key.len();
+        // extract resource_metadata
+        let mut search_offset = 0;
+        let resource_key = "resource_metadata=";
+        while let Some(pos) = header_lowercase[search_offset..].find(resource_key) {
+            let global_pos = search_offset + pos + resource_key.len();
             let value_slice = &header[global_pos..];
             if let Some((value, consumed)) = Self::parse_next_header_value(value_slice) {
                 if let Ok(url) = Url::parse(&value) {
-                    return Some(url);
+                    params.resource_metadata_url = Some(url);
+                    break;
                 }
                 if let Ok(url) = base_url.join(&value) {
-                    return Some(url);
+                    params.resource_metadata_url = Some(url);
+                    break;
                 }
                 debug!("failed to parse resource metadata value `{value}` as URL");
                 search_offset = global_pos + consumed;
@@ -1064,7 +1219,17 @@ impl AuthorizationManager {
             }
         }
 
-        None
+        // extract scope
+        let scope_key = "scope=";
+        if let Some(pos) = header_lowercase.find(scope_key) {
+            let global_pos = pos + scope_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.scope = Some(value);
+            }
+        }
+
+        params
     }
 
     /// Parses an authentication parameter value from a `WWW-Authenticate` header fragment.
@@ -1295,9 +1460,17 @@ impl OAuthState {
                 AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?,
             );
 
+            let granted_scopes: Vec<String> = credentials
+                .scopes()
+                .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+
+            *manager.current_scopes.write().await = granted_scopes.clone();
+
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
                 token_response: Some(credentials),
+                granted_scopes,
             };
             manager.credential_store.save(stored).await?;
 
@@ -1474,8 +1647,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore, StateStore,
-        StoredAuthorizationState, is_https_url,
+        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore,
+        ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
 
     // SEP-991: URL-based Client IDs
@@ -1506,9 +1679,9 @@ mod tests {
     fn parses_resource_metadata_parameter() {
         let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let parsed = AuthorizationManager::extract_resource_metadata_url_from_header(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
         assert_eq!(
-            parsed.unwrap().as_str(),
+            params.resource_metadata_url.unwrap().as_str(),
             "https://example.com/.well-known/oauth-protected-resource/api"
         );
     }
@@ -1517,9 +1690,9 @@ mod tests {
     fn parses_relative_resource_metadata_parameter() {
         let header = r#"Bearer error="invalid_request", resource_metadata="/.well-known/oauth-protected-resource/api""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let parsed = AuthorizationManager::extract_resource_metadata_url_from_header(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
         assert_eq!(
-            parsed.unwrap().as_str(),
+            params.resource_metadata_url.unwrap().as_str(),
             "https://example.com/.well-known/oauth-protected-resource/api"
         );
     }
@@ -2030,5 +2203,136 @@ mod tests {
         }"#;
         let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
         assert!(metadata.code_challenge_methods_supported.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_both_parameters() {
+        let header = r#"Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource", scope="read:data write:data""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource"
+        );
+        assert_eq!(params.scope.unwrap(), "read:data write:data");
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_only_scope() {
+        let header = r#"Bearer error="insufficient_scope", scope="admin:write""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert_eq!(params.scope.unwrap(), "admin:write");
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_only_resource_metadata() {
+        let header = r#"Bearer resource_metadata="/.well-known/oauth-protected-resource""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource"
+        );
+        assert!(params.scope.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_no_parameters() {
+        let header = r#"Bearer error="invalid_token""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.scope.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_unquoted_scope() {
+        let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(params.scope.unwrap(), "read:data");
+    }
+
+    #[test]
+    fn compute_scope_union_adds_new_scopes() {
+        let current = vec!["read".to_string(), "write".to_string()];
+        let result = AuthorizationManager::compute_scope_union(&current, "admin delete");
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert!(result.contains(&"admin".to_string()));
+        assert!(result.contains(&"delete".to_string()));
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn compute_scope_union_deduplicates() {
+        let current = vec!["read".to_string(), "write".to_string()];
+        let result = AuthorizationManager::compute_scope_union(&current, "read admin");
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert!(result.contains(&"admin".to_string()));
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn compute_scope_union_handles_empty_current() {
+        let current: Vec<String> = vec![];
+        let result = AuthorizationManager::compute_scope_union(&current, "read write");
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn scope_upgrade_config_default_values() {
+        let config = ScopeUpgradeConfig::default();
+        assert_eq!(config.max_upgrade_attempts, 3);
+        assert!(config.auto_upgrade);
+    }
+
+    #[tokio::test]
+    async fn authorization_manager_tracks_scope_upgrade_attempts() {
+        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 0);
+
+        *manager.scope_upgrade_attempts.write().await = 2;
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 2);
+
+        manager.reset_scope_upgrade_attempts().await;
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 0);
+    }
+
+    #[tokio::test]
+    async fn authorization_manager_can_attempt_scope_upgrade_respects_config() {
+        let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        assert!(manager.can_attempt_scope_upgrade().await);
+
+        manager.set_scope_upgrade_config(ScopeUpgradeConfig {
+            max_upgrade_attempts: 3,
+            auto_upgrade: false,
+        });
+        assert!(!manager.can_attempt_scope_upgrade().await);
+
+        manager.set_scope_upgrade_config(ScopeUpgradeConfig {
+            max_upgrade_attempts: 2,
+            auto_upgrade: true,
+        });
+        *manager.scope_upgrade_attempts.write().await = 2;
+        assert!(!manager.can_attempt_scope_upgrade().await);
+
+        *manager.scope_upgrade_attempts.write().await = 1;
+        assert!(manager.can_attempt_scope_upgrade().await);
     }
 }
