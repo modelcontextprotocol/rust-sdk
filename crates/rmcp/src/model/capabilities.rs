@@ -194,6 +194,19 @@ pub struct ElicitationCapability {
     pub schema_validation: Option<bool>,
 }
 
+/// Sampling capability with optional sub-capabilities (SEP-1577).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SamplingCapability {
+    /// Support for `tools` and `toolChoice` parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<JsonObject>,
+    /// Support for `includeContext` (soft-deprecated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<JsonObject>,
+}
+
 ///
 /// # Builder
 /// ```rust
@@ -217,8 +230,9 @@ pub struct ClientCapabilities {
     pub extensions: Option<ExtensionCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapabilities>,
+    /// Capability for LLM sampling requests (SEP-1577)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sampling: Option<JsonObject>,
+    pub sampling: Option<SamplingCapability>,
     /// Capability to handle elicitation requests from servers for interactive user input
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationCapability>,
@@ -449,7 +463,7 @@ builder! {
         experimental: ExperimentalCapabilities,
         extensions: ExtensionCapabilities,
         roots: RootsCapabilities,
-        sampling: JsonObject,
+        sampling: SamplingCapability,
         elicitation: ElicitationCapability,
         tasks: TasksCapability,
     }
@@ -461,6 +475,26 @@ impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS:
     pub fn enable_roots_list_changed(mut self) -> Self {
         if let Some(c) = self.roots.as_mut() {
             c.list_changed = Some(true);
+        }
+        self
+    }
+}
+
+impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, true, EL, TASKS>>
+{
+    /// Enable tool calling in sampling requests
+    pub fn enable_sampling_tools(mut self) -> Self {
+        if let Some(c) = self.sampling.as_mut() {
+            c.tools = Some(JsonObject::default());
+        }
+        self
+    }
+
+    /// Enable context inclusion in sampling (soft-deprecated)
+    pub fn enable_sampling_context(mut self) -> Self {
+        if let Some(c) = self.sampling.as_mut() {
+            c.context = Some(JsonObject::default());
         }
         self
     }

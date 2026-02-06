@@ -641,6 +641,27 @@
             "null"
           ],
           "format": "float"
+        },
+        "toolChoice": {
+          "description": "Tool selection behavior (SEP-1577)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolChoice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "description": "Tools available for the model to call (SEP-1577)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Tool"
+          }
         }
       },
       "required": [
@@ -2309,15 +2330,36 @@
         }
       ]
     },
+    "SamplingContent": {
+      "description": "Single or array content wrapper (SEP-1577).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SamplingMessageContent"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessageContent"
+          }
+        }
+      ]
+    },
     "SamplingMessage": {
       "description": "A message in a sampling conversation, containing a role and content.\n\nThis represents a single message in a conversation flow, used primarily\nin LLM sampling requests where the conversation history is important\nfor generating appropriate responses.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
-          "description": "The actual content of the message (text, image, etc.)",
+          "description": "The actual content of the message (text, image, audio, tool use, or tool result)",
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated"
+              "$ref": "#/definitions/SamplingContent"
             }
           ]
         },
@@ -2333,6 +2375,98 @@
       "required": [
         "role",
         "content"
+      ]
+    },
+    "SamplingMessageContent": {
+      "description": "Content types for sampling messages (SEP-1577).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Assistant only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolUseContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "User only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolResultContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
       ]
     },
     "SamplingTaskCapability": {
@@ -3008,6 +3142,42 @@
         }
       }
     },
+    "ToolChoice": {
+      "description": "Tool choice configuration (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolChoiceMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ToolChoiceMode": {
+      "description": "Tool selection mode (SEP-1577).",
+      "oneOf": [
+        {
+          "description": "Model decides whether to use tools",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Model must use at least one tool",
+          "type": "string",
+          "const": "required"
+        },
+        {
+          "description": "Model must not use tools",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
     "ToolExecution": {
       "description": "Execution-related configuration for a tool.\n\nThis struct contains settings that control how a tool should be executed,\nincluding task support configuration.",
       "type": "object",
@@ -3029,6 +3199,81 @@
       "type": "string",
       "format": "const",
       "const": "notifications/tools/list_changed"
+    },
+    "ToolResultContent": {
+      "description": "Tool execution result in user message (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "content": {
+          "description": "Content blocks returned by the tool",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated"
+          }
+        },
+        "isError": {
+          "description": "Whether tool execution failed",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": {
+          "description": "Optional structured result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "toolUseId": {
+          "description": "ID of the corresponding tool use",
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolUseId"
+      ]
+    },
+    "ToolUseContent": {
+      "description": "Tool call request from assistant (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata (preserved for caching)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "id": {
+          "description": "Unique identifier for this tool call",
+          "type": "string"
+        },
+        "input": {
+          "description": "Input arguments for the tool",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "Name of the tool to call",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "input"
+      ]
     },
     "ToolsCapability": {
       "type": "object",

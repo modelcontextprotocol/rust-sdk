@@ -1209,6 +1209,152 @@ pub enum Role {
     Assistant,
 }
 
+/// Tool selection mode (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum ToolChoiceMode {
+    /// Model decides whether to use tools
+    Auto,
+    /// Model must use at least one tool
+    Required,
+    /// Model must not use tools
+    None,
+}
+
+impl Default for ToolChoiceMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Tool choice configuration (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ToolChoice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ToolChoiceMode>,
+}
+
+impl ToolChoice {
+    pub fn auto() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::Auto),
+        }
+    }
+
+    pub fn required() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::Required),
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::None),
+        }
+    }
+}
+
+/// Single or array content wrapper (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum SamplingContent<T> {
+    Single(T),
+    Multiple(Vec<T>),
+}
+
+impl<T> SamplingContent<T> {
+    /// Convert to a Vec regardless of whether it's single or multiple
+    pub fn into_vec(self) -> Vec<T> {
+        match self {
+            SamplingContent::Single(item) => vec![item],
+            SamplingContent::Multiple(items) => items,
+        }
+    }
+
+    /// Check if the content is empty
+    pub fn is_empty(&self) -> bool {
+        match self {
+            SamplingContent::Single(_) => false,
+            SamplingContent::Multiple(items) => items.is_empty(),
+        }
+    }
+
+    /// Get the number of content items
+    pub fn len(&self) -> usize {
+        match self {
+            SamplingContent::Single(_) => 1,
+            SamplingContent::Multiple(items) => items.len(),
+        }
+    }
+}
+
+impl<T> Default for SamplingContent<T> {
+    fn default() -> Self {
+        SamplingContent::Multiple(Vec::new())
+    }
+}
+
+impl<T> SamplingContent<T> {
+    /// Get the first item if present
+    pub fn first(&self) -> Option<&T> {
+        match self {
+            SamplingContent::Single(item) => Some(item),
+            SamplingContent::Multiple(items) => items.first(),
+        }
+    }
+
+    /// Iterate over all content items
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        let items: Vec<&T> = match self {
+            SamplingContent::Single(item) => vec![item],
+            SamplingContent::Multiple(items) => items.iter().collect(),
+        };
+        items.into_iter()
+    }
+}
+
+impl SamplingMessageContent {
+    /// Get the text content if this is a Text variant
+    pub fn as_text(&self) -> Option<&RawTextContent> {
+        match self {
+            SamplingMessageContent::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Get the tool use content if this is a ToolUse variant
+    pub fn as_tool_use(&self) -> Option<&ToolUseContent> {
+        match self {
+            SamplingMessageContent::ToolUse(tool_use) => Some(tool_use),
+            _ => None,
+        }
+    }
+
+    /// Get the tool result content if this is a ToolResult variant
+    pub fn as_tool_result(&self) -> Option<&ToolResultContent> {
+        match self {
+            SamplingMessageContent::ToolResult(tool_result) => Some(tool_result),
+            _ => None,
+        }
+    }
+}
+
+impl<T> From<T> for SamplingContent<T> {
+    fn from(item: T) -> Self {
+        SamplingContent::Single(item)
+    }
+}
+
+impl<T> From<Vec<T>> for SamplingContent<T> {
+    fn from(items: Vec<T>) -> Self {
+        SamplingContent::Multiple(items)
+    }
+}
+
 /// A message in a sampling conversation, containing a role and content.
 ///
 /// This represents a single message in a conversation flow, used primarily
@@ -1219,8 +1365,135 @@ pub enum Role {
 pub struct SamplingMessage {
     /// The role of the message sender (User or Assistant)
     pub role: Role,
-    /// The actual content of the message (text, image, etc.)
-    pub content: Content,
+    /// The actual content of the message (text, image, audio, tool use, or tool result)
+    pub content: SamplingContent<SamplingMessageContent>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+/// Content types for sampling messages (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum SamplingMessageContent {
+    Text(RawTextContent),
+    Image(RawImageContent),
+    Audio(RawAudioContent),
+    /// Assistant only
+    ToolUse(ToolUseContent),
+    /// User only
+    ToolResult(ToolResultContent),
+}
+
+impl SamplingMessageContent {
+    /// Create a text content
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(RawTextContent {
+            text: text.into(),
+            meta: None,
+        })
+    }
+
+    pub fn tool_use(id: impl Into<String>, name: impl Into<String>, input: JsonObject) -> Self {
+        Self::ToolUse(ToolUseContent::new(id, name, input))
+    }
+
+    pub fn tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+        Self::ToolResult(ToolResultContent::new(tool_use_id, content))
+    }
+}
+
+impl SamplingMessage {
+    pub fn new(role: Role, content: impl Into<SamplingMessageContent>) -> Self {
+        Self {
+            role,
+            content: SamplingContent::Single(content.into()),
+            meta: None,
+        }
+    }
+
+    pub fn new_multiple(role: Role, contents: Vec<SamplingMessageContent>) -> Self {
+        Self {
+            role,
+            content: SamplingContent::Multiple(contents),
+            meta: None,
+        }
+    }
+
+    pub fn user_text(text: impl Into<String>) -> Self {
+        Self::new(Role::User, SamplingMessageContent::text(text))
+    }
+
+    pub fn assistant_text(text: impl Into<String>) -> Self {
+        Self::new(Role::Assistant, SamplingMessageContent::text(text))
+    }
+
+    pub fn user_tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+        Self::new(
+            Role::User,
+            SamplingMessageContent::tool_result(tool_use_id, content),
+        )
+    }
+
+    pub fn assistant_tool_use(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        input: JsonObject,
+    ) -> Self {
+        Self::new(
+            Role::Assistant,
+            SamplingMessageContent::tool_use(id, name, input),
+        )
+    }
+}
+
+// Conversion from RawTextContent to SamplingMessageContent
+impl From<RawTextContent> for SamplingMessageContent {
+    fn from(text: RawTextContent) -> Self {
+        SamplingMessageContent::Text(text)
+    }
+}
+
+// Conversion from String to SamplingMessageContent (as text)
+impl From<String> for SamplingMessageContent {
+    fn from(text: String) -> Self {
+        SamplingMessageContent::text(text)
+    }
+}
+
+impl From<&str> for SamplingMessageContent {
+    fn from(text: &str) -> Self {
+        SamplingMessageContent::text(text)
+    }
+}
+
+// Backward compatibility: Convert Content to SamplingMessageContent
+// Note: Resource and ResourceLink variants are not supported in sampling messages
+impl TryFrom<Content> for SamplingMessageContent {
+    type Error = &'static str;
+
+    fn try_from(content: Content) -> Result<Self, Self::Error> {
+        match content.raw {
+            RawContent::Text(text) => Ok(SamplingMessageContent::Text(text)),
+            RawContent::Image(image) => Ok(SamplingMessageContent::Image(image)),
+            RawContent::Audio(audio) => Ok(SamplingMessageContent::Audio(audio)),
+            RawContent::Resource(_) => {
+                Err("Resource content is not supported in sampling messages")
+            }
+            RawContent::ResourceLink(_) => {
+                Err("ResourceLink content is not supported in sampling messages")
+            }
+        }
+    }
+}
+
+// Backward compatibility: Convert Content to SamplingContent<SamplingMessageContent>
+impl TryFrom<Content> for SamplingContent<SamplingMessageContent> {
+    type Error = &'static str;
+
+    fn try_from(content: Content) -> Result<Self, Self::Error> {
+        Ok(SamplingContent::Single(content.try_into()?))
+    }
 }
 
 /// Specifies how much context should be included in sampling requests.
@@ -1281,6 +1554,12 @@ pub struct CreateMessageRequestParams {
     /// Additional metadata for the request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    /// Tools available for the model to call (SEP-1577)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    /// Tool selection behavior (SEP-1577)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
 }
 
 impl RequestParamsMeta for CreateMessageRequestParams {
@@ -1926,6 +2205,7 @@ pub type CallToolRequestParam = CallToolRequestParams;
 /// Request to call a specific tool
 pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>;
 
+/// Result of sampling/createMessage (SEP-1577).
 /// The result of a sampling/createMessage request containing the generated response.
 ///
 /// This structure contains the generated message along with metadata about
@@ -1948,6 +2228,7 @@ impl CreateMessageResult {
     pub const STOP_REASON_END_TURN: &str = "endTurn";
     pub const STOP_REASON_END_SEQUENCE: &str = "stopSequence";
     pub const STOP_REASON_END_MAX_TOKEN: &str = "maxTokens";
+    pub const STOP_REASON_TOOL_USE: &str = "toolUse";
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -2477,7 +2758,9 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(capabilities.roots.unwrap().list_changed, Some(true));
-                assert_eq!(capabilities.sampling.unwrap().len(), 0);
+                let sampling = capabilities.sampling.unwrap();
+                assert_eq!(sampling.tools, None);
+                assert_eq!(sampling.context, None);
                 assert_eq!(client_info.name, "ExampleClient");
                 assert_eq!(client_info.version, "1.0.0");
             }
