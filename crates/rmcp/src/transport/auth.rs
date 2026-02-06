@@ -275,6 +275,20 @@ struct ResourceServerMetadata {
 pub struct WWWAuthenticateParams {
     pub resource_metadata_url: Option<Url>,
     pub scope: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
+}
+
+impl WWWAuthenticateParams {
+    /// check if this is an insufficient_scope error
+    pub fn is_insufficient_scope(&self) -> bool {
+        self.error.as_deref() == Some("insufficient_scope")
+    }
+
+    /// check if this is an invalid_token error (expired/revoked)
+    pub fn is_invalid_token(&self) -> bool {
+        self.error.as_deref() == Some("invalid_token")
+    }
 }
 
 /// oauth2 client config
@@ -1229,6 +1243,26 @@ impl AuthorizationManager {
             }
         }
 
+        // extract error
+        let error_key = "error=";
+        if let Some(pos) = header_lowercase.find(error_key) {
+            let global_pos = pos + error_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.error = Some(value);
+            }
+        }
+
+        // extract error_description
+        let desc_key = "error_description=";
+        if let Some(pos) = header_lowercase.find(desc_key) {
+            let global_pos = pos + desc_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.error_description = Some(value);
+            }
+        }
+
         params
     }
 
@@ -1873,8 +1907,8 @@ mod tests {
     }
 
     #[test]
-    fn extract_www_authenticate_params_with_both_parameters() {
-        let header = r#"Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource", scope="read:data write:data""#;
+    fn extract_www_authenticate_params_with_all_fields() {
+        let header = r#"Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource", scope="read:data write:data", error_description="token expired""#;
         let base = Url::parse("https://example.com/api").unwrap();
         let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
 
@@ -1883,16 +1917,24 @@ mod tests {
             "https://example.com/.well-known/oauth-protected-resource"
         );
         assert_eq!(params.scope.unwrap(), "read:data write:data");
+        assert_eq!(params.error.unwrap(), "invalid_token");
+        assert_eq!(params.error_description.unwrap(), "token expired");
     }
 
     #[test]
-    fn extract_www_authenticate_params_with_only_scope() {
-        let header = r#"Bearer error="insufficient_scope", scope="admin:write""#;
+    fn extract_www_authenticate_params_insufficient_scope() {
+        let header = r#"Bearer error="insufficient_scope", scope="admin:write", error_description="Additional file write permission required""#;
         let base = Url::parse("https://example.com/api").unwrap();
         let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
 
         assert!(params.resource_metadata_url.is_none());
+        assert!(params.is_insufficient_scope());
+        assert!(!params.is_invalid_token());
         assert_eq!(params.scope.unwrap(), "admin:write");
+        assert_eq!(
+            params.error_description.unwrap(),
+            "Additional file write permission required"
+        );
     }
 
     #[test]
@@ -1909,13 +1951,28 @@ mod tests {
     }
 
     #[test]
-    fn extract_www_authenticate_params_with_no_parameters() {
+    fn extract_www_authenticate_params_bare_bearer() {
+        let header = "Bearer";
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.scope.is_none());
+        assert!(params.error.is_none());
+        assert!(params.error_description.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_error_only() {
         let header = r#"Bearer error="invalid_token""#;
         let base = Url::parse("https://example.com/api").unwrap();
         let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
 
         assert!(params.resource_metadata_url.is_none());
         assert!(params.scope.is_none());
+        assert!(params.is_invalid_token());
+        assert!(!params.is_insufficient_scope());
+        assert!(params.error_description.is_none());
     }
 
     #[test]
