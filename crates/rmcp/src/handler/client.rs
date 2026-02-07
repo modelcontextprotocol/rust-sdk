@@ -62,6 +62,10 @@ impl<H: ClientHandler> Service<RoleClient> for H {
             ServerNotification::PromptListChangedNotification(_notification_no_param) => {
                 self.on_prompt_list_changed(context).await
             }
+            ServerNotification::ElicitationCompletionNotification(notification) => {
+                self.on_url_elicitation_notification_complete(notification.params, context)
+                    .await
+            }
             ServerNotification::CustomNotification(notification) => {
                 self.on_custom_notification(notification, context).await
             }
@@ -116,6 +120,44 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     /// # Default Behavior
     /// The default implementation automatically declines all elicitation requests.
     /// Real clients should override this to provide user interaction.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use rmcp::model::CreateElicitationRequestParam;
+    /// use rmcp::{
+    ///     model::ErrorData as McpError,
+    ///     model::*,
+    ///     service::{NotificationContext, RequestContext, RoleClient, Service, ServiceRole},
+    /// };
+    /// use rmcp::ClientHandler;
+    ///
+    /// impl ClientHandler for MyClient {
+    ///  async fn create_elicitation(
+    ///     &self,
+    ///     request: CreateElicitationRequestParam,
+    ///     context: RequestContext<RoleClient>,
+    ///  ) -> Result<CreateElicitationResult, McpError> {
+    ///     match request {
+    ///         CreateElicitationRequestParam::FormElicitationParam {meta, message, requested_schema,} => {
+    ///            // Display message to user and collect input according to requested_schema
+    ///           let user_input = get_user_input(message, requested_schema).await?;
+    ///          Ok(CreateElicitationResult {
+    ///             action: ElicitationAction::Accept,
+    ///              content: Some(user_input),
+    ///          })
+    ///         }
+    ///         CreateElicitationRequestParam::UrlElicitationParam {meta, message, url, elicitation_id,} => {
+    ///           // Open URL in browser for user to complete elicitation
+    ///           open_url_in_browser(url).await?;
+    ///          Ok(CreateElicitationResult {
+    ///              action: ElicitationAction::Accept,
+    ///             content: None,
+    ///             })
+    ///         }
+    ///     }
+    ///  }
+    /// }
+    /// ```
     fn create_elicitation(
         &self,
         request: CreateElicitationRequestParams,
@@ -185,6 +227,14 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     }
     fn on_prompt_list_changed(
         &self,
+        context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        std::future::ready(())
+    }
+
+    fn on_url_elicitation_notification_complete(
+        &self,
+        params: ElicitationResponseNotificationParam,
         context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
         std::future::ready(())

@@ -529,14 +529,29 @@
       ]
     },
     "ElicitationCapability": {
-      "description": "Capability for handling elicitation requests from servers.\n\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
+      "description": "Elicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
       "type": "object",
       "properties": {
-        "schemaValidation": {
-          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
-          "type": [
-            "boolean",
-            "null"
+        "form": {
+          "description": "Whether client supports form-based elicitation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FormElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "description": "Whether client supports URL-based elicitation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UrlElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -587,6 +602,19 @@
         "code",
         "message"
       ]
+    },
+    "FormElicitationCapability": {
+      "description": "Capability for handling elicitation requests from servers.\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.\n\nCapability for form mode elicitation.",
+      "type": "object",
+      "properties": {
+        "schemaValidation": {
+          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
     },
     "GetPromptRequestMethod": {
       "type": "string",
@@ -2126,6 +2154,10 @@
       "required": [
         "uri"
       ]
+    },
+    "UrlElicitationCapability": {
+      "description": "Capability for URL mode elicitation.",
+      "type": "object"
     }
   }
 }
