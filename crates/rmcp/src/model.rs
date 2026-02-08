@@ -1580,6 +1580,85 @@ impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
     }
 }
 
+impl CreateMessageRequestParams {
+    /// Validate the sampling request parameters per SEP-1577 spec requirements.
+    ///
+    /// Checks:
+    /// - ToolUse content is only allowed in assistant messages
+    /// - ToolResult content is only allowed in user messages
+    /// - Messages with tool result content MUST NOT contain other content types
+    /// - Every assistant ToolUse must be balanced with a corresponding user ToolResult
+    pub fn validate(&self) -> Result<(), String> {
+        for msg in &self.messages {
+            for content in msg.content.iter() {
+                // ToolUse only in assistant messages, ToolResult only in user messages
+                match content {
+                    SamplingMessageContent::ToolUse(_) if msg.role != Role::Assistant => {
+                        return Err("ToolUse content is only allowed in assistant messages".into());
+                    }
+                    SamplingMessageContent::ToolResult(_) if msg.role != Role::User => {
+                        return Err("ToolResult content is only allowed in user messages".into());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Tool result messages MUST NOT contain other content types
+            let contents: Vec<_> = msg.content.iter().collect();
+            let has_tool_result = contents
+                .iter()
+                .any(|c| matches!(c, SamplingMessageContent::ToolResult(_)));
+            if has_tool_result
+                && contents
+                    .iter()
+                    .any(|c| !matches!(c, SamplingMessageContent::ToolResult(_)))
+            {
+                return Err(
+                    "SamplingMessage with tool result content MUST NOT contain other content types"
+                        .into(),
+                );
+            }
+        }
+
+        // Every assistant ToolUse must be balanced with a user ToolResult
+        self.validate_tool_use_result_balance()?;
+
+        Ok(())
+    }
+
+    fn validate_tool_use_result_balance(&self) -> Result<(), String> {
+        let mut pending_tool_use_ids: Vec<String> = Vec::new();
+        for msg in &self.messages {
+            if msg.role == Role::Assistant {
+                for content in msg.content.iter() {
+                    if let SamplingMessageContent::ToolUse(tu) = content {
+                        pending_tool_use_ids.push(tu.id.clone());
+                    }
+                }
+            } else if msg.role == Role::User {
+                for content in msg.content.iter() {
+                    if let SamplingMessageContent::ToolResult(tr) = content {
+                        if !pending_tool_use_ids.contains(&tr.tool_use_id) {
+                            return Err(format!(
+                                "ToolResult with toolUseId '{}' has no matching ToolUse",
+                                tr.tool_use_id
+                            ));
+                        }
+                        pending_tool_use_ids.retain(|id| id != &tr.tool_use_id);
+                    }
+                }
+            }
+        }
+        if !pending_tool_use_ids.is_empty() {
+            return Err(format!(
+                "ToolUse with id(s) {:?} not balanced with ToolResult",
+                pending_tool_use_ids
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Deprecated: Use [`CreateMessageRequestParams`] instead (SEP-1319 compliance).
 #[deprecated(since = "0.13.0", note = "Use CreateMessageRequestParams instead")]
 pub type CreateMessageRequestParam = CreateMessageRequestParams;
@@ -2229,6 +2308,14 @@ impl CreateMessageResult {
     pub const STOP_REASON_END_SEQUENCE: &str = "stopSequence";
     pub const STOP_REASON_END_MAX_TOKEN: &str = "maxTokens";
     pub const STOP_REASON_TOOL_USE: &str = "toolUse";
+
+    /// Validate the result per SEP-1577: role must be "assistant".
+    pub fn validate(&self) -> Result<(), String> {
+        if self.message.role != Role::Assistant {
+            return Err("CreateMessageResult role must be 'assistant'".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
