@@ -505,33 +505,88 @@
       ]
     },
     "CreateElicitationRequestParams": {
-      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParams {\n    meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "message": {
-          "description": "Human-readable message explaining what input is needed from the user.\nThis should be clear and provide sufficient context for the user to understand\nwhat information they need to provide.",
-          "type": "string"
-        },
-        "requestedSchema": {
-          "description": "Type-safe schema defining the expected structure and validation rules for the user's response.\nThis enforces the MCP 2025-06-18 specification that elicitation schemas must be objects\nwith primitive-typed properties.",
-          "allOf": [
-            {
+      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n1. Form-based elicitation request\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParams::FormElicitationParams {\n   meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```\n2. URL-based elicitation request\n```rust\nuse rmcp::model::*;\nlet params = CreateElicitationRequestParams::UrlElicitationParams {\n    meta: None,\n    message: \"Please provide your feedback at the following URL\".to_string(),\n    url: \"https://example.com/feedback\".to_string(),\n    elicitation_id: \"unique-id-123\".to_string(),\n};\n```",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "form"
+            },
+            "requestedSchema": {
               "$ref": "#/definitions/ElicitationSchema"
             }
+          },
+          "required": [
+            "mode",
+            "message",
+            "requestedSchema"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "elicitationId": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "url"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "message",
+            "url",
+            "elicitationId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "requestedSchema": {
+              "$ref": "#/definitions/ElicitationSchema"
+            }
+          },
+          "required": [
+            "message",
+            "requestedSchema"
           ]
         }
-      },
-      "required": [
-        "message",
-        "requestedSchema"
       ]
     },
     "CreateElicitationResult": {
@@ -730,10 +785,27 @@
         }
       ]
     },
+    "ElicitationCompletionNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/elicitation/complete"
+    },
     "ElicitationCreateRequestMethod": {
       "type": "string",
       "format": "const",
       "const": "elicitation/create"
+    },
+    "ElicitationResponseNotificationParam": {
+      "description": "Notification parameters for an url elicitation completion notification.",
+      "type": "object",
+      "properties": {
+        "elicitationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitationId"
+      ]
     },
     "ElicitationSchema": {
       "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
@@ -1088,6 +1160,9 @@
         },
         {
           "$ref": "#/definitions/NotificationNoParam3"
+        },
+        {
+          "$ref": "#/definitions/Notification5"
         },
         {
           "$ref": "#/definitions/CustomNotification"
@@ -1498,6 +1573,21 @@
         },
         "params": {
           "$ref": "#/definitions/ResourceUpdatedNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification5": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ElicitationCompletionNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ElicitationResponseNotificationParam"
         }
       },
       "required": [
