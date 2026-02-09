@@ -268,6 +268,7 @@ pub struct AuthorizationMetadata {
 struct ResourceServerMetadata {
     authorization_server: Option<String>,
     authorization_servers: Option<Vec<String>>,
+    scopes_supported: Option<Vec<String>>,
 }
 
 /// Parameters extracted from WWW-Authenticate header
@@ -350,6 +351,10 @@ pub struct AuthorizationManager {
     current_scopes: RwLock<Vec<String>>,
     scope_upgrade_attempts: RwLock<u32>,
     scope_upgrade_config: ScopeUpgradeConfig,
+    /// scopes from the initial 401 WWW-Authenticate header, used by select_scopes()
+    www_auth_scopes: RwLock<Vec<String>>,
+    /// scopes_supported from protected resource metadata (RFC 9728)
+    resource_scopes: RwLock<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +432,8 @@ impl AuthorizationManager {
             current_scopes: RwLock::new(Vec::new()),
             scope_upgrade_attempts: RwLock::new(0),
             scope_upgrade_config: ScopeUpgradeConfig::default(),
+            www_auth_scopes: RwLock::new(Vec::new()),
+            resource_scopes: RwLock::new(Vec::new()),
         };
 
         Ok(manager)
@@ -730,9 +737,10 @@ impl AuthorizationManager {
     }
 
     /// select scopes based on SEP-835 priority:
-    /// 1. scope from WWW-Authenticate header
-    /// 2. scopes_supported from metadata
-    /// 3. provided default scopes
+    /// 1. scope from WWW-Authenticate header (argument or stored from initial 401 probe)
+    /// 2. scopes_supported from protected resource metadata (RFC 9728)
+    /// 3. scopes_supported from authorization server metadata
+    /// 4. provided default scopes
     pub fn select_scopes(
         &self,
         www_authenticate_scope: Option<&str>,
@@ -742,6 +750,21 @@ impl AuthorizationManager {
             return scope.split_whitespace().map(|s| s.to_string()).collect();
         }
 
+        // use scopes from initial 401 WWW-Authenticate header
+        if let Ok(guard) = self.www_auth_scopes.try_read() {
+            if !guard.is_empty() {
+                return guard.clone();
+            }
+        }
+
+        // use scopes_supported from protected resource metadata (RFC 9728)
+        if let Ok(guard) = self.resource_scopes.try_read() {
+            if !guard.is_empty() {
+                return guard.clone();
+            }
+        }
+
+        // use scopes_supported from authorization server metadata
         if let Some(metadata) = &self.metadata {
             if let Some(scopes_supported) = &metadata.scopes_supported {
                 if !scopes_supported.is_empty() {
@@ -950,17 +973,31 @@ impl AuthorizationManager {
         Ok(request.header(AUTHORIZATION, format!("Bearer {}", token)))
     }
 
-    /// handle response, check if need to re-authorize
+    /// handle response, check if need to re-authorize or scope upgrade
     pub async fn handle_response(
         &self,
         response: reqwest::Response,
     ) -> Result<reqwest::Response, AuthError> {
         if response.status() == StatusCode::UNAUTHORIZED {
-            // 401 Unauthorized, need to re-authorize
-            Err(AuthError::AuthorizationRequired)
-        } else {
-            Ok(response)
+            return Err(AuthError::AuthorizationRequired);
         }
+        if response.status() == StatusCode::FORBIDDEN {
+            for value in response.headers().get_all(WWW_AUTHENTICATE).iter() {
+                let Ok(value_str) = value.to_str() else {
+                    continue;
+                };
+                let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+                if params.is_insufficient_scope() {
+                    let required_scope = params.scope.unwrap_or_default();
+                    return Err(AuthError::InsufficientScope {
+                        required_scope,
+                        upgrade_url: None,
+                    });
+                }
+            }
+            return Err(AuthError::AuthorizationFailed("Forbidden".to_string()));
+        }
+        Ok(response)
     }
 
     /// Generate discovery endpoint URLs following the priority order in spec-2025-11-25 4.3 "Authorization Server Metadata Discovery".
@@ -1053,6 +1090,13 @@ impl AuthorizationManager {
         else {
             return Ok(None);
         };
+
+        // store scopes_supported from protected resource metadata for select_scopes()
+        if let Some(scopes) = resource_metadata.scopes_supported {
+            if !scopes.is_empty() {
+                *self.resource_scopes.write().await = scopes;
+            }
+        }
 
         let mut candidates = Vec::new();
 
@@ -1155,8 +1199,11 @@ impl AuthorizationManager {
             };
             let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
             if let Some(url) = params.resource_metadata_url {
-                if let Some(scope) = params.scope {
+                if let Some(scope) = &params.scope {
                     debug!("WWW-Authenticate header contains scope: {}", scope);
+                    let scopes: Vec<String> =
+                        scope.split_whitespace().map(|s| s.to_string()).collect();
+                    *self.www_auth_scopes.write().await = scopes;
                 }
                 parsed_url = Some(url);
                 break;
@@ -1380,6 +1427,19 @@ impl AuthorizationSession {
         })
     }
 
+    /// create session for scope upgrade flow (existing manager + pre-computed auth url)
+    pub fn for_scope_upgrade(
+        auth_manager: AuthorizationManager,
+        auth_url: String,
+        redirect_uri: &str,
+    ) -> Self {
+        Self {
+            auth_manager,
+            auth_url,
+            redirect_uri: redirect_uri.to_string(),
+        }
+    }
+
     /// get client_id and credentials
     pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
         self.auth_manager.get_credentials().await
@@ -1548,10 +1608,16 @@ impl OAuthState {
             debug!("start discovery");
             let metadata = manager.discover_metadata().await?;
             manager.metadata = Some(metadata);
+            let selected_scopes: Vec<String> = if scopes.is_empty() {
+                manager.select_scopes(None, &[])
+            } else {
+                scopes.iter().map(|s| s.to_string()).collect()
+            };
+            let scope_refs: Vec<&str> = selected_scopes.iter().map(|s| s.as_str()).collect();
             debug!("start session");
             let session = AuthorizationSession::new(
                 manager,
-                scopes,
+                &scope_refs,
                 redirect_uri,
                 client_name,
                 client_metadata_url,
@@ -1595,6 +1661,35 @@ impl OAuthState {
             ))
         }
     }
+
+    /// request scope upgrade (Authorized -> Session); returns auth URL to open
+    pub async fn request_scope_upgrade(
+        &mut self,
+        required_scope: &str,
+        redirect_uri: &str,
+    ) -> Result<String, AuthError> {
+        let placeholder =
+            OAuthState::Authorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?);
+        let old = std::mem::replace(self, placeholder);
+        let OAuthState::Authorized(manager) = old else {
+            *self = old;
+            return Err(AuthError::InternalError(
+                "Not in authorized state".to_string(),
+            ));
+        };
+        let auth_url = match manager.request_scope_upgrade(required_scope).await {
+            Ok(url) => url,
+            Err(e) => {
+                *self = OAuthState::Authorized(manager);
+                return Err(e);
+            }
+        };
+        let session =
+            AuthorizationSession::for_scope_upgrade(manager, auth_url.clone(), redirect_uri);
+        *self = OAuthState::Session(session);
+        Ok(auth_url)
+    }
+
     /// get current authorization url
     pub async fn get_authorization_url(&self) -> Result<String, AuthError> {
         match self {
