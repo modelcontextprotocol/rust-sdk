@@ -250,6 +250,7 @@ pub struct AuthorizationMetadata {
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
     pub response_types_supported: Option<Vec<String>>,
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
     // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
@@ -268,9 +269,6 @@ pub struct OAuthClientConfig {
     pub client_secret: Option<String>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
-    /// Token endpoint authentication method.
-    /// Supported values: `"client_secret_basic"` (HTTP Basic Auth, default) and `"client_secret_post"` (credentials in POST body).
-    pub token_endpoint_auth_method: Option<String>,
 }
 
 // add type aliases for oauth2 types
@@ -485,16 +483,11 @@ impl AuthorizationManager {
             client_builder = client_builder.set_client_secret(ClientSecret::new(secret));
         }
 
-        if let Some(method) = &config.token_endpoint_auth_method {
-            match method.as_str() {
-                "client_secret_post" => {
-                    client_builder = client_builder.set_auth_type(AuthType::RequestBody);
-                }
-                "client_secret_basic" => {
-                    client_builder = client_builder.set_auth_type(AuthType::BasicAuth);
-                }
-                _ => {}
+        if let Some(methods) = &metadata.token_endpoint_auth_methods_supported {
+            if methods.iter().any(|m| m == "client_secret_post") {
+                client_builder = client_builder.set_auth_type(AuthType::RequestBody);
             }
+            // client_secret_basic is the oauth2 crate default — no action needed
         }
 
         self.oauth_client = Some(client_builder);
@@ -595,7 +588,6 @@ impl AuthorizationManager {
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
             scopes: vec![],
-            token_endpoint_auth_method: None,
         };
 
         self.configure_client(config.clone())?;
@@ -610,7 +602,6 @@ impl AuthorizationManager {
             client_secret: None,
             scopes: vec![],
             redirect_uri: self.base_url.to_string(),
-            token_endpoint_auth_method: None,
         };
         self.configure_client(config)
     }
@@ -1144,7 +1135,6 @@ impl AuthorizationSession {
                     client_secret: None,
                     scopes: scopes.iter().map(|s| s.to_string()).collect(),
                     redirect_uri: redirect_uri.to_string(),
-                    token_endpoint_auth_method: None,
                 }
             } else {
                 // Fallback to dynamic registration
@@ -1897,71 +1887,71 @@ mod tests {
 
     /// Helper: create an AuthorizationManager with minimal metadata so
     /// `configure_client` can be exercised without a live server.
-    async fn manager_with_metadata() -> AuthorizationManager {
+    async fn manager_with_metadata(
+        metadata_override: Option<AuthorizationMetadata>,
+    ) -> AuthorizationManager {
         let mut mgr = AuthorizationManager::new("http://localhost").await.unwrap();
-        mgr.set_metadata(AuthorizationMetadata {
+        mgr.set_metadata(metadata_override.unwrap_or(AuthorizationMetadata {
             authorization_endpoint: "http://localhost/authorize".to_string(),
             token_endpoint: "http://localhost/token".to_string(),
             ..Default::default()
-        });
+        }));
         mgr
     }
 
-    #[tokio::test]
-    async fn test_configure_client_with_client_secret_post() {
-        let mut mgr = manager_with_metadata().await;
-        let config = OAuthClientConfig {
+    fn test_client_config() -> OAuthClientConfig {
+        OAuthClientConfig {
             client_id: "my-client".to_string(),
             client_secret: Some("my-secret".to_string()),
             scopes: vec![],
             redirect_uri: "http://localhost/callback".to_string(),
-            token_endpoint_auth_method: Some("client_secret_post".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_configure_client_uses_client_secret_post_from_metadata() {
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            token_endpoint_auth_methods_supported: Some(vec!["client_secret_post".to_string()]),
+            ..Default::default()
         };
-        // configure_client should succeed and produce an oauth_client
-        mgr.configure_client(config).unwrap();
+        let mut mgr = manager_with_metadata(Some(meta)).await;
+        mgr.configure_client(test_client_config()).unwrap();
         assert!(mgr.oauth_client.is_some());
     }
 
     #[tokio::test]
-    async fn test_configure_client_with_client_secret_basic() {
-        let mut mgr = manager_with_metadata().await;
-        let config = OAuthClientConfig {
-            client_id: "my-client".to_string(),
-            client_secret: Some("my-secret".to_string()),
-            scopes: vec![],
-            redirect_uri: "http://localhost/callback".to_string(),
-            token_endpoint_auth_method: Some("client_secret_basic".to_string()),
-        };
-        mgr.configure_client(config).unwrap();
+    async fn test_configure_client_defaults_to_basic_auth() {
+        let mut mgr = manager_with_metadata(None).await;
+        mgr.configure_client(test_client_config()).unwrap();
         assert!(mgr.oauth_client.is_some());
     }
 
     #[tokio::test]
-    async fn test_configure_client_with_no_auth_method() {
-        let mut mgr = manager_with_metadata().await;
-        let config = OAuthClientConfig {
-            client_id: "my-client".to_string(),
-            client_secret: Some("my-secret".to_string()),
-            scopes: vec![],
-            redirect_uri: "http://localhost/callback".to_string(),
-            token_endpoint_auth_method: None,
+    async fn test_configure_client_with_explicit_basic_in_metadata() {
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            token_endpoint_auth_methods_supported: Some(vec!["client_secret_basic".to_string()]),
+            ..Default::default()
         };
-        mgr.configure_client(config).unwrap();
+        let mut mgr = manager_with_metadata(Some(meta)).await;
+        mgr.configure_client(test_client_config()).unwrap();
         assert!(mgr.oauth_client.is_some());
     }
 
     #[tokio::test]
-    async fn test_configure_client_ignores_unknown_auth_method() {
-        let mut mgr = manager_with_metadata().await;
-        let config = OAuthClientConfig {
-            client_id: "my-client".to_string(),
-            client_secret: Some("my-secret".to_string()),
-            scopes: vec![],
-            redirect_uri: "http://localhost/callback".to_string(),
-            token_endpoint_auth_method: Some("private_key_jwt".to_string()),
+    async fn test_configure_client_ignores_unsupported_auth_methods_in_metadata() {
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            token_endpoint_auth_methods_supported: Some(vec!["private_key_jwt".to_string()]),
+            ..Default::default()
         };
-        // Unknown method should not cause an error; it is silently ignored
-        mgr.configure_client(config).unwrap();
+        let mut mgr = manager_with_metadata(Some(meta)).await;
+        // Unsupported method should fall through to default (basic auth)
+        mgr.configure_client(test_client_config()).unwrap();
         assert!(mgr.oauth_client.is_some());
     }
 }
