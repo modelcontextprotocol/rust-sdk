@@ -834,6 +834,8 @@ pub struct Implementation {
     pub title: Option<String>,
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub website_url: Option<String>,
@@ -851,6 +853,7 @@ impl Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
             title: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            description: None,
             icons: None,
             website_url: None,
         }
@@ -2925,6 +2928,7 @@ mod tests {
             name: "test-server".to_string(),
             title: Some("Test Server".to_string()),
             version: "1.0.0".to_string(),
+            description: Some("A test server for unit testing".to_string()),
             icons: Some(vec![
                 Icon {
                     src: "https://example.com/icon.png".to_string(),
@@ -2942,6 +2946,7 @@ mod tests {
 
         let json = serde_json::to_value(&implementation).unwrap();
         assert_eq!(json["name"], "test-server");
+        assert_eq!(json["description"], "A test server for unit testing");
         assert_eq!(json["websiteUrl"], "https://example.com");
         assert!(json["icons"].is_array());
         assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
@@ -2961,6 +2966,7 @@ mod tests {
         let implementation: Implementation = serde_json::from_value(old_json).unwrap();
         assert_eq!(implementation.name, "legacy-server");
         assert_eq!(implementation.version, "0.9.0");
+        assert_eq!(implementation.description, None);
         assert_eq!(implementation.icons, None);
         assert_eq!(implementation.website_url, None);
     }
@@ -2974,6 +2980,7 @@ mod tests {
                 name: "icon-server".to_string(),
                 title: None,
                 version: "2.0.0".to_string(),
+                description: None,
                 icons: Some(vec![Icon {
                     src: "https://example.com/server.png".to_string(),
                     mime_type: Some("image/png".to_string()),
