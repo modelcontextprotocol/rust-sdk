@@ -250,7 +250,6 @@ pub struct AuthorizationMetadata {
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
     pub response_types_supported: Option<Vec<String>>,
-    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
     // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
@@ -483,11 +482,15 @@ impl AuthorizationManager {
             client_builder = client_builder.set_client_secret(ClientSecret::new(secret));
         }
 
-        if let Some(methods) = &metadata.token_endpoint_auth_methods_supported {
-            if methods.iter().any(|m| m == "client_secret_post") {
-                client_builder = client_builder.set_auth_type(AuthType::RequestBody);
-            }
-            // client_secret_basic is the oauth2 crate default — no action needed
+        let uses_secret_post = metadata
+            .additional_fields
+            .get("token_endpoint_auth_methods_supported")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().any(|m| m.as_str() == Some("client_secret_post")))
+            .unwrap_or(false);
+
+        if uses_secret_post {
+            client_builder = client_builder.set_auth_type(AuthType::RequestBody);
         }
 
         self.oauth_client = Some(client_builder);
@@ -1459,9 +1462,10 @@ impl OAuthState {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use oauth2::{CsrfToken, PkceCodeVerifier};
+    use oauth2::{AuthType, CsrfToken, PkceCodeVerifier};
     use url::Url;
 
     use super::{
@@ -1910,48 +1914,63 @@ mod tests {
 
     #[tokio::test]
     async fn test_configure_client_uses_client_secret_post_from_metadata() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_post"]),
+        );
         let meta = AuthorizationMetadata {
             authorization_endpoint: "http://localhost/authorize".to_string(),
             token_endpoint: "http://localhost/token".to_string(),
-            token_endpoint_auth_methods_supported: Some(vec!["client_secret_post".to_string()]),
+            additional_fields,
             ..Default::default()
         };
         let mut mgr = manager_with_metadata(Some(meta)).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(mgr.oauth_client.is_some());
+        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::RequestBody));
     }
 
     #[tokio::test]
     async fn test_configure_client_defaults_to_basic_auth() {
         let mut mgr = manager_with_metadata(None).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(mgr.oauth_client.is_some());
+        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
     }
 
     #[tokio::test]
     async fn test_configure_client_with_explicit_basic_in_metadata() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_basic"]),
+        );
         let meta = AuthorizationMetadata {
             authorization_endpoint: "http://localhost/authorize".to_string(),
             token_endpoint: "http://localhost/token".to_string(),
-            token_endpoint_auth_methods_supported: Some(vec!["client_secret_basic".to_string()]),
+            additional_fields,
             ..Default::default()
         };
         let mut mgr = manager_with_metadata(Some(meta)).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(mgr.oauth_client.is_some());
+        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
     }
 
     #[tokio::test]
     async fn test_configure_client_ignores_unsupported_auth_methods_in_metadata() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["private_key_jwt"]),
+        );
         let meta = AuthorizationMetadata {
             authorization_endpoint: "http://localhost/authorize".to_string(),
             token_endpoint: "http://localhost/token".to_string(),
-            token_endpoint_auth_methods_supported: Some(vec!["private_key_jwt".to_string()]),
+            additional_fields,
             ..Default::default()
         };
         let mut mgr = manager_with_metadata(Some(meta)).await;
         // Unsupported method should fall through to default (basic auth)
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(mgr.oauth_client.is_some());
+        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
     }
 }
