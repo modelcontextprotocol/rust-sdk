@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
+    AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope,
     StandardTokenResponse, TokenResponse, TokenUrl,
     basic::{BasicClient, BasicTokenType},
@@ -268,6 +268,9 @@ pub struct OAuthClientConfig {
     pub client_secret: Option<String>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
+    /// Token endpoint authentication method.
+    /// Supported values: `"client_secret_basic"` (HTTP Basic Auth, default) and `"client_secret_post"` (credentials in POST body).
+    pub token_endpoint_auth_method: Option<String>,
 }
 
 // add type aliases for oauth2 types
@@ -482,6 +485,18 @@ impl AuthorizationManager {
             client_builder = client_builder.set_client_secret(ClientSecret::new(secret));
         }
 
+        if let Some(method) = &config.token_endpoint_auth_method {
+            match method.as_str() {
+                "client_secret_post" => {
+                    client_builder = client_builder.set_auth_type(AuthType::RequestBody);
+                }
+                "client_secret_basic" => {
+                    client_builder = client_builder.set_auth_type(AuthType::BasicAuth);
+                }
+                _ => {}
+            }
+        }
+
         self.oauth_client = Some(client_builder);
         Ok(())
     }
@@ -580,6 +595,7 @@ impl AuthorizationManager {
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
             scopes: vec![],
+            token_endpoint_auth_method: None,
         };
 
         self.configure_client(config.clone())?;
@@ -594,6 +610,7 @@ impl AuthorizationManager {
             client_secret: None,
             scopes: vec![],
             redirect_uri: self.base_url.to_string(),
+            token_endpoint_auth_method: None,
         };
         self.configure_client(config)
     }
@@ -1127,6 +1144,7 @@ impl AuthorizationSession {
                     client_secret: None,
                     scopes: scopes.iter().map(|s| s.to_string()).collect(),
                     redirect_uri: redirect_uri.to_string(),
+                    token_endpoint_auth_method: None,
                 }
             } else {
                 // Fallback to dynamic registration
@@ -1457,8 +1475,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        AuthError, AuthorizationManager, InMemoryStateStore, StateStore, StoredAuthorizationState,
-        is_https_url,
+        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore,
+        OAuthClientConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
 
     // SEP-991: URL-based Client IDs
@@ -1875,5 +1893,75 @@ mod tests {
         // Verify custom store can be set on AuthorizationManager
         let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
         manager.set_state_store(TrackingStateStore::default());
+    }
+
+    /// Helper: create an AuthorizationManager with minimal metadata so
+    /// `configure_client` can be exercised without a live server.
+    async fn manager_with_metadata() -> AuthorizationManager {
+        let mut mgr = AuthorizationManager::new("http://localhost").await.unwrap();
+        mgr.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            ..Default::default()
+        });
+        mgr
+    }
+
+    #[tokio::test]
+    async fn test_configure_client_with_client_secret_post() {
+        let mut mgr = manager_with_metadata().await;
+        let config = OAuthClientConfig {
+            client_id: "my-client".to_string(),
+            client_secret: Some("my-secret".to_string()),
+            scopes: vec![],
+            redirect_uri: "http://localhost/callback".to_string(),
+            token_endpoint_auth_method: Some("client_secret_post".to_string()),
+        };
+        // configure_client should succeed and produce an oauth_client
+        mgr.configure_client(config).unwrap();
+        assert!(mgr.oauth_client.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_configure_client_with_client_secret_basic() {
+        let mut mgr = manager_with_metadata().await;
+        let config = OAuthClientConfig {
+            client_id: "my-client".to_string(),
+            client_secret: Some("my-secret".to_string()),
+            scopes: vec![],
+            redirect_uri: "http://localhost/callback".to_string(),
+            token_endpoint_auth_method: Some("client_secret_basic".to_string()),
+        };
+        mgr.configure_client(config).unwrap();
+        assert!(mgr.oauth_client.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_configure_client_with_no_auth_method() {
+        let mut mgr = manager_with_metadata().await;
+        let config = OAuthClientConfig {
+            client_id: "my-client".to_string(),
+            client_secret: Some("my-secret".to_string()),
+            scopes: vec![],
+            redirect_uri: "http://localhost/callback".to_string(),
+            token_endpoint_auth_method: None,
+        };
+        mgr.configure_client(config).unwrap();
+        assert!(mgr.oauth_client.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_configure_client_ignores_unknown_auth_method() {
+        let mut mgr = manager_with_metadata().await;
+        let config = OAuthClientConfig {
+            client_id: "my-client".to_string(),
+            client_secret: Some("my-secret".to_string()),
+            scopes: vec![],
+            redirect_uri: "http://localhost/callback".to_string(),
+            token_endpoint_auth_method: Some("private_key_jwt".to_string()),
+        };
+        // Unknown method should not cause an error; it is silently ignored
+        mgr.configure_client(config).unwrap();
+        assert!(mgr.oauth_client.is_some());
     }
 }

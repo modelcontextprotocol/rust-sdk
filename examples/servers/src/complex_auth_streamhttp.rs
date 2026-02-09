@@ -56,6 +56,7 @@ impl McpOAuthStore {
                 client_secret: Some("mcp-client-secret".to_string()),
                 scopes: vec!["profile".to_string(), "email".to_string()],
                 redirect_uri: "http://localhost:8080/callback".to_string(),
+                token_endpoint_auth_method: None,
             },
         );
 
@@ -564,6 +565,7 @@ async fn oauth_register(
         client_secret: Some(client_secret.clone()),
         redirect_uri: req.redirect_uris[0].clone(),
         scopes: vec![],
+        token_endpoint_auth_method: None,
     };
 
     state
