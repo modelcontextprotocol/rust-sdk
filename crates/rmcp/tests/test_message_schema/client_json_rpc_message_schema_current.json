@@ -701,6 +701,12 @@
     "Implementation": {
       "type": "object",
       "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "icons": {
           "type": [
             "array",
