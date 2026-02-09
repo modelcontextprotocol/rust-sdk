@@ -1780,7 +1780,7 @@ mod tests {
         ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
 
-    // -- url and metadata helpers --
+    // -- url helpers --
 
     #[test]
     fn test_is_https_url_scenarios() {
@@ -1795,6 +1795,8 @@ mod tests {
         assert!(!is_https_url("javascript:alert(1)"));
         assert!(!is_https_url("data:text/html,<script>alert(1)</script>"));
     }
+
+    // -- well-known path generation --
 
     #[test]
     fn well_known_paths_root() {
@@ -1839,6 +1841,8 @@ mod tests {
         assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp/example".to_string()));
         assert!(paths.contains(&"/.well-known/oauth-protected-resource".to_string()));
     }
+
+    // -- discovery url generation --
 
     #[test]
     fn generate_discovery_urls() {
@@ -1931,7 +1935,7 @@ mod tests {
         );
     }
 
-    // -- header parsing --
+    // -- header value parsing --
 
     #[test]
     fn parse_auth_param_value_handles_quoted_string() {
@@ -1978,6 +1982,8 @@ mod tests {
         let fragment = r#""unterminated,value"#;
         assert!(AuthorizationManager::parse_next_header_value(fragment).is_none());
     }
+
+    // -- www-authenticate param extraction --
 
     #[test]
     fn parses_resource_metadata_parameter() {
@@ -2079,6 +2085,40 @@ mod tests {
         assert_eq!(params.scope.unwrap(), "read:data");
     }
 
+    // -- stored authorization state --
+
+    #[test]
+    fn test_stored_authorization_state_serialization() {
+        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
+        let csrf = CsrfToken::new("my-csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.pkce_verifier, "my-verifier");
+        assert_eq!(deserialized.csrf_token, "my-csrf");
+    }
+
+    #[test]
+    fn test_stored_authorization_state_into_pkce_verifier() {
+        let pkce = PkceCodeVerifier::new("original-verifier".to_string());
+        let csrf = CsrfToken::new("csrf-token".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        let recovered = state.into_pkce_verifier();
+        assert_eq!(recovered.secret(), "original-verifier");
+    }
+
+    #[test]
+    fn test_stored_authorization_state_created_at() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        assert!(state.created_at > 1577836800); // Jan 1, 2020
+    }
+
     // -- state store --
 
     #[tokio::test]
@@ -2168,38 +2208,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_stored_authorization_state_serialization() {
-        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
-        let csrf = CsrfToken::new("my-csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        let json = serde_json::to_string(&state).unwrap();
-        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.pkce_verifier, "my-verifier");
-        assert_eq!(deserialized.csrf_token, "my-csrf");
-    }
-
-    #[test]
-    fn test_stored_authorization_state_into_pkce_verifier() {
-        let pkce = PkceCodeVerifier::new("original-verifier".to_string());
-        let csrf = CsrfToken::new("csrf-token".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        let recovered = state.into_pkce_verifier();
-        assert_eq!(recovered.secret(), "original-verifier");
-    }
-
-    #[test]
-    fn test_stored_authorization_state_created_at() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        assert!(state.created_at > 1577836800); // Jan 1, 2020
-    }
-
     #[tokio::test]
     async fn test_custom_state_store_with_authorization_manager() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2255,7 +2263,32 @@ mod tests {
         manager.set_state_store(TrackingStateStore::default());
     }
 
-    // -- server capabilities and authorization --
+    // -- metadata deserialization --
+
+    #[test]
+    fn test_code_challenge_methods_supported_deserialization() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "code_challenge_methods_supported": ["S256", "plain"]
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        let methods = metadata.code_challenge_methods_supported.unwrap();
+        assert!(methods.contains(&"S256".to_string()));
+        assert!(methods.contains(&"plain".to_string()));
+    }
+
+    #[test]
+    fn test_code_challenge_methods_supported_missing_from_json() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        assert!(metadata.code_challenge_methods_supported.is_none());
+    }
+
+    // -- server validation --
 
     #[tokio::test]
     async fn test_validate_as_metadata_rejects_unsupported_response_type() {
@@ -2296,28 +2329,7 @@ mod tests {
         assert!(manager.validate_server_metadata("code").is_ok());
     }
 
-    #[test]
-    fn test_code_challenge_methods_supported_deserialization() {
-        let json = r#"{
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token",
-            "code_challenge_methods_supported": ["S256", "plain"]
-        }"#;
-        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
-        let methods = metadata.code_challenge_methods_supported.unwrap();
-        assert!(methods.contains(&"S256".to_string()));
-        assert!(methods.contains(&"plain".to_string()));
-    }
-
-    #[test]
-    fn test_code_challenge_methods_supported_missing_from_json() {
-        let json = r#"{
-            "authorization_endpoint": "https://auth.example.com/authorize",
-            "token_endpoint": "https://auth.example.com/token"
-        }"#;
-        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
-        assert!(metadata.code_challenge_methods_supported.is_none());
-    }
+    // -- authorization flow --
 
     #[tokio::test]
     async fn test_authorization_url_is_valid() {
