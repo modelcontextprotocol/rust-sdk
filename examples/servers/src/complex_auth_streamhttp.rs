@@ -520,16 +520,13 @@ async fn oauth_authorization_server() -> impl IntoResponse {
         "response_types_supported".into(),
         Value::Array(vec![Value::String("code".into())]),
     );
-    additional_fields.insert(
-        "code_challenge_methods_supported".into(),
-        Value::Array(vec![Value::String("S256".into())]),
-    );
     let metadata = AuthorizationMetadata {
         authorization_endpoint: format!("http://{}/oauth/authorize", BIND_ADDRESS),
         token_endpoint: format!("http://{}/oauth/token", BIND_ADDRESS),
         scopes_supported: Some(vec!["profile".to_string(), "email".to_string()]),
         registration_endpoint: Some(format!("http://{}/oauth/register", BIND_ADDRESS)),
         response_types_supported: Some(vec!["code".to_string()]),
+        code_challenge_methods_supported: Some(vec!["S256".to_string()]),
         issuer: Some(BIND_ADDRESS.to_string()),
         jwks_uri: Some(format!("http://{}/oauth/jwks", BIND_ADDRESS)),
         additional_fields,
