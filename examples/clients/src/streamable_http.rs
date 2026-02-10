@@ -25,6 +25,7 @@ async fn main() -> Result<()> {
             name: "test sse client".to_string(),
             title: None,
             version: "0.0.1".to_string(),
+            description: None,
             website_url: None,
             icons: None,
         },
