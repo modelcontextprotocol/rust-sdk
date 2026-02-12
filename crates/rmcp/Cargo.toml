@@ -54,7 +54,7 @@ process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 # tokio-tungstenite ={ version = "0.26", optional = true }
 
 # for http-server transport
-rand = { version = "0.9", optional = true }
+rand = { version = "0.10", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 http-body = { version = "1", optional = true }
