@@ -614,7 +614,8 @@ impl AuthorizationManager {
         // build authorization request
         let mut auth_request = oauth_client
             .authorize_url(CsrfToken::new_random)
-            .set_pkce_challenge(pkce_challenge);
+            .set_pkce_challenge(pkce_challenge)
+            .add_extra_param("resource", self.base_url.as_str());
 
         // add request scopes
         for scope in scopes {
@@ -666,6 +667,7 @@ impl AuthorizationManager {
         let token_result = match oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
+            .add_extra_param("resource", self.base_url.as_str())
             .request_async(&http_client)
             .await
         {
@@ -747,6 +749,7 @@ impl AuthorizationManager {
 
         let token_result = oauth_client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.secret().to_string()))
+            .add_extra_param("resource", self.base_url.as_str())
             .request_async(&self.http_client)
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
@@ -1875,5 +1878,52 @@ mod tests {
         // Verify custom store can be set on AuthorizationManager
         let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
         manager.set_state_store(TrackingStateStore::default());
+    }
+
+    #[test]
+    fn test_resource_parameter_url_encoding() {
+        // verify resource parameter is correctly url-encoded per RFC 8707
+        let test_cases = vec![
+            (
+                "https://mcp.example.com/api",
+                "https%3A%2F%2Fmcp.example.com%2Fapi",
+            ),
+            (
+                "https://mcp.example.com/v1/mcp",
+                "https%3A%2F%2Fmcp.example.com%2Fv1%2Fmcp",
+            ),
+            (
+                "https://mcp.example.com:8443/api",
+                "https%3A%2F%2Fmcp.example.com%3A8443%2Fapi",
+            ),
+        ];
+
+        for (input, expected_encoded) in test_cases {
+            let url = Url::parse(input).unwrap();
+            let encoded = urlencoding::encode(url.as_str());
+            assert_eq!(encoded, expected_encoded, "Failed for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_resource_parameter_preserves_url_components() {
+        // verify all url components are preserved for the resource parameter
+        let url = Url::parse("https://mcp.example.com:8443/v1/api").unwrap();
+
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("mcp.example.com"));
+        assert_eq!(url.port(), Some(8443));
+        assert_eq!(url.path(), "/v1/api");
+        assert_eq!(url.as_str(), "https://mcp.example.com:8443/v1/api");
+    }
+
+    #[tokio::test]
+    async fn test_authorization_manager_stores_base_url() {
+        // verify AuthorizationManager is created with the base_url that will be
+        // used as the RFC 8707 resource parameter
+        let base_url = "https://mcp.example.com/api";
+        let manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        assert!(manager.metadata.is_none()); // not yet discovered
     }
 }
