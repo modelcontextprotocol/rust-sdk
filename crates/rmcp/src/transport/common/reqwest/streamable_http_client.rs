@@ -120,6 +120,22 @@ impl StreamableHttpClient for reqwest::Client {
                 }));
             }
         }
+        if response.status() == reqwest::StatusCode::FORBIDDEN {
+            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
+                let header_str = header.to_str().map_err(|_| {
+                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                        "invalid www-authenticate header value",
+                    ))
+                })?;
+                let scope = extract_scope_from_header(header_str);
+                return Err(StreamableHttpError::InsufficientScope(
+                    InsufficientScopeError {
+                        www_authenticate_header: header_str.to_string(),
+                        required_scope: scope,
+                    },
+                ));
+            }
+        }
         let status = response.status();
         if matches!(
             status,
@@ -195,5 +211,83 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// * `config` - The config to use with this transport
     pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
         StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
+    }
+}
+
+/// extract scope parameter from WWW-Authenticate header
+fn extract_scope_from_header(header: &str) -> Option<String> {
+    let header_lowercase = header.to_ascii_lowercase();
+    let scope_key = "scope=";
+
+    if let Some(pos) = header_lowercase.find(scope_key) {
+        let start = pos + scope_key.len();
+        let value_slice = &header[start..];
+
+        if let Some(stripped) = value_slice.strip_prefix('"') {
+            if let Some(end_quote) = stripped.find('"') {
+                return Some(stripped[..end_quote].to_string());
+            }
+        } else {
+            let end = value_slice
+                .find(|c: char| c == ',' || c == ';' || c.is_whitespace())
+                .unwrap_or(value_slice.len());
+            if end > 0 {
+                return Some(value_slice[..end].to_string());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_scope_from_header;
+    use crate::transport::streamable_http_client::InsufficientScopeError;
+
+    #[test]
+    fn extract_scope_quoted() {
+        let header = r#"Bearer error="insufficient_scope", scope="files:read files:write""#;
+        assert_eq!(
+            extract_scope_from_header(header),
+            Some("files:read files:write".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_scope_unquoted() {
+        let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
+        assert_eq!(
+            extract_scope_from_header(header),
+            Some("read:data".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_scope_missing() {
+        let header = r#"Bearer error="invalid_token""#;
+        assert_eq!(extract_scope_from_header(header), None);
+    }
+
+    #[test]
+    fn extract_scope_empty_header() {
+        assert_eq!(extract_scope_from_header("Bearer"), None);
+    }
+
+    #[test]
+    fn insufficient_scope_error_can_upgrade() {
+        let with_scope = InsufficientScopeError {
+            www_authenticate_header: "Bearer scope=\"admin\"".to_string(),
+            required_scope: Some("admin".to_string()),
+        };
+        assert!(with_scope.can_upgrade());
+        assert_eq!(with_scope.get_required_scope(), Some("admin"));
+
+        let without_scope = InsufficientScopeError {
+            www_authenticate_header: "Bearer error=\"insufficient_scope\"".to_string(),
+            required_scope: None,
+        };
+        assert!(!without_scope.can_upgrade());
+        assert_eq!(without_scope.get_required_scope(), None);
     }
 }
