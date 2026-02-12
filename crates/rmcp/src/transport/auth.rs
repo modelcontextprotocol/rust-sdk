@@ -487,7 +487,9 @@ impl AuthorizationManager {
             .get("token_endpoint_auth_methods_supported")
             .and_then(|v| v.as_array())
             .map(|arr| {
-                let has_basic = arr.iter().any(|m| m.as_str() == Some("client_secret_basic"));
+                let has_basic = arr
+                    .iter()
+                    .any(|m| m.as_str() == Some("client_secret_basic"));
                 let has_post = arr.iter().any(|m| m.as_str() == Some("client_secret_post"));
                 has_post && !has_basic
             })
@@ -1931,14 +1933,20 @@ mod tests {
         };
         let mut mgr = manager_with_metadata(Some(meta)).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::RequestBody));
+        assert!(matches!(
+            mgr.oauth_client.as_ref().unwrap().auth_type(),
+            AuthType::RequestBody
+        ));
     }
 
     #[tokio::test]
     async fn test_configure_client_defaults_to_basic_auth() {
         let mut mgr = manager_with_metadata(None).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
+        assert!(matches!(
+            mgr.oauth_client.as_ref().unwrap().auth_type(),
+            AuthType::BasicAuth
+        ));
     }
 
     #[tokio::test]
@@ -1956,7 +1964,10 @@ mod tests {
         };
         let mut mgr = manager_with_metadata(Some(meta)).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
+        assert!(matches!(
+            mgr.oauth_client.as_ref().unwrap().auth_type(),
+            AuthType::BasicAuth
+        ));
     }
 
     #[tokio::test]
@@ -1975,7 +1986,10 @@ mod tests {
         let mut mgr = manager_with_metadata(Some(meta)).await;
         // Unsupported method should fall through to default (basic auth)
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
+        assert!(matches!(
+            mgr.oauth_client.as_ref().unwrap().auth_type(),
+            AuthType::BasicAuth
+        ));
     }
 
     #[tokio::test]
@@ -1993,6 +2007,9 @@ mod tests {
         };
         let mut mgr = manager_with_metadata(Some(meta)).await;
         mgr.configure_client(test_client_config()).unwrap();
-        assert!(matches!(mgr.oauth_client.as_ref().unwrap().auth_type(), AuthType::BasicAuth));
+        assert!(matches!(
+            mgr.oauth_client.as_ref().unwrap().auth_type(),
+            AuthType::BasicAuth
+        ));
     }
 }
