@@ -107,9 +107,9 @@ pub mod auth;
 #[cfg(feature = "auth")]
 #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub use auth::{
-    AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient, CredentialStore,
-    InMemoryCredentialStore, InMemoryStateStore, StateStore, StoredAuthorizationState,
-    StoredCredentials,
+    AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
+    CredentialStore, InMemoryCredentialStore, InMemoryStateStore, ScopeUpgradeConfig, StateStore,
+    StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
 };
 
 // #[cfg(feature = "transport-ws")]

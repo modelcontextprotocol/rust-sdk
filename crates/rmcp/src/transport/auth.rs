@@ -23,6 +23,8 @@ const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 pub struct StoredCredentials {
     pub client_id: String,
     pub token_response: Option<OAuthTokenResponse>,
+    #[serde(default)]
+    pub granted_scopes: Vec<String>,
 }
 
 /// Trait for storing and retrieving OAuth2 credentials
@@ -238,6 +240,12 @@ pub enum AuthError {
 
     #[error("Registration failed: {0}")]
     RegistrationFailed(String),
+
+    #[error("Insufficient scope: {required_scope}")]
+    InsufficientScope {
+        required_scope: String,
+        upgrade_url: Option<String>,
+    },
 }
 
 /// oauth2 metadata
@@ -250,6 +258,7 @@ pub struct AuthorizationMetadata {
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
     pub response_types_supported: Option<Vec<String>>,
+    pub code_challenge_methods_supported: Option<Vec<String>>,
     // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
@@ -259,6 +268,28 @@ pub struct AuthorizationMetadata {
 struct ResourceServerMetadata {
     authorization_server: Option<String>,
     authorization_servers: Option<Vec<String>>,
+    scopes_supported: Option<Vec<String>>,
+}
+
+/// Parameters extracted from WWW-Authenticate header
+#[derive(Debug, Clone, Default)]
+pub struct WWWAuthenticateParams {
+    pub resource_metadata_url: Option<Url>,
+    pub scope: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
+}
+
+impl WWWAuthenticateParams {
+    /// check if this is an insufficient_scope error
+    pub fn is_insufficient_scope(&self) -> bool {
+        self.error.as_deref() == Some("insufficient_scope")
+    }
+
+    /// check if this is an invalid_token error (expired/revoked)
+    pub fn is_invalid_token(&self) -> bool {
+        self.error.as_deref() == Some("invalid_token")
+    }
 }
 
 /// oauth2 client config
@@ -291,6 +322,24 @@ type OAuthClient = oauth2::Client<
 >;
 type Credentials = (String, Option<OAuthTokenResponse>);
 
+/// Configuration for scope upgrade behavior
+#[derive(Debug, Clone)]
+pub struct ScopeUpgradeConfig {
+    /// Maximum number of scope upgrade attempts before giving up
+    pub max_upgrade_attempts: u32,
+    /// Whether to automatically attempt scope upgrades on 403
+    pub auto_upgrade: bool,
+}
+
+impl Default for ScopeUpgradeConfig {
+    fn default() -> Self {
+        Self {
+            max_upgrade_attempts: 3,
+            auto_upgrade: true,
+        }
+    }
+}
+
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: HttpClient,
@@ -299,6 +348,13 @@ pub struct AuthorizationManager {
     credential_store: Arc<dyn CredentialStore>,
     state_store: Arc<dyn StateStore>,
     base_url: Url,
+    current_scopes: RwLock<Vec<String>>,
+    scope_upgrade_attempts: RwLock<u32>,
+    scope_upgrade_config: ScopeUpgradeConfig,
+    /// scopes from the initial 401 WWW-Authenticate header, used by select_scopes()
+    www_auth_scopes: RwLock<Vec<String>>,
+    /// scopes_supported from protected resource metadata (RFC 9728)
+    resource_scopes: RwLock<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,9 +429,19 @@ impl AuthorizationManager {
             credential_store: Arc::new(InMemoryCredentialStore::new()),
             state_store: Arc::new(InMemoryStateStore::new()),
             base_url,
+            current_scopes: RwLock::new(Vec::new()),
+            scope_upgrade_attempts: RwLock::new(0),
+            scope_upgrade_config: ScopeUpgradeConfig::default(),
+            www_auth_scopes: RwLock::new(Vec::new()),
+            resource_scopes: RwLock::new(Vec::new()),
         };
 
         Ok(manager)
+    }
+
+    /// Set the scope upgrade configuration
+    pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
+        self.scope_upgrade_config = config;
     }
 
     /// Set a custom credential store
@@ -426,13 +492,13 @@ impl AuthorizationManager {
         Ok(())
     }
 
-    /// discover oauth2 metadata
+    /// discover oauth2 metadata (per SEP-985: Protected Resource Metadata first, then direct OAuth)
     pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
-        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
+        if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
             return Ok(metadata);
         }
 
-        if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
+        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
             return Ok(metadata);
         }
 
@@ -502,15 +568,34 @@ impl AuthorizationManager {
         self.oauth_client = Some(client_builder);
         Ok(())
     }
-    /// validate if the server support the response type
-    fn validate_response_supported(&self, response_type: &str) -> Result<(), AuthError> {
-        if let Some(metadata) = self.metadata.as_ref() {
-            if let Some(response_types_supported) = metadata.response_types_supported.as_ref() {
-                if !response_types_supported.contains(&response_type.to_string()) {
-                    return Err(AuthError::InvalidScope(response_type.to_string()));
-                }
+    /// validate authorization server metadata before starting authorization.
+    fn validate_server_metadata(&self, response_type: &str) -> Result<(), AuthError> {
+        let Some(metadata) = self.metadata.as_ref() else {
+            return Ok(());
+        };
+
+        // RFC 8414 RECOMMENDS response_types_supported in the metadata. This field is optional,
+        // but if present and does not include the flow we use ("code"), bail out early with a clear error.
+        if let Some(response_types_supported) = metadata.response_types_supported.as_ref() {
+            if !response_types_supported.contains(&response_type.to_string()) {
+                return Err(AuthError::InvalidScope(response_type.to_string()));
             }
         }
+
+        // for PKCE, we always send s256 since oauth 2.1 requires servers to support it,
+        // but warn if the server metadata suggests otherwise
+        match &metadata.code_challenge_methods_supported {
+            Some(methods) if !methods.iter().any(|m| m == "S256") => {
+                warn!(
+                    ?methods,
+                    "server does not advertise S256 in code_challenge_methods_supported, \
+                     proceeding with S256 anyway as oauth 2.1 requires it. \
+                     The server is not compliant with the specification!"
+                );
+            }
+            _ => {}
+        }
+
         Ok(())
     }
     /// dynamic register oauth2 client
@@ -529,10 +614,7 @@ impl AuthorizationManager {
                 "Dynamic client registration not supported".to_string(),
             ));
         };
-
-        // RFC 8414 RECOMMENDS response_types_supported in the metadata. This field is optional,
-        // but if present and does not include the flow we use ("code"), bail out early with a clear error.
-        self.validate_response_supported("code")?;
+        self.validate_server_metadata("code")?;
 
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
@@ -621,9 +703,7 @@ impl AuthorizationManager {
             .oauth_client
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
-
-        // ensure the server supports the response type we intend to use when metadata is available
-        self.validate_response_supported("code")?;
+        self.validate_server_metadata("code")?;
 
         // generate pkce challenge
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -631,7 +711,8 @@ impl AuthorizationManager {
         // build authorization request
         let mut auth_request = oauth_client
             .authorize_url(CsrfToken::new_random)
-            .set_pkce_challenge(pkce_challenge);
+            .set_pkce_challenge(pkce_challenge)
+            .add_extra_param("resource", self.base_url.to_string());
 
         // add request scopes
         for scope in scopes {
@@ -647,6 +728,111 @@ impl AuthorizationManager {
             .await?;
 
         Ok(auth_url.to_string())
+    }
+
+    /// get the current granted scopes
+    pub async fn get_current_scopes(&self) -> Vec<String> {
+        self.current_scopes.read().await.clone()
+    }
+
+    /// compute the union of current scopes and required scopes
+    fn compute_scope_union(current: &[String], required: &str) -> Vec<String> {
+        let mut scope_set: std::collections::HashSet<String> = current.iter().cloned().collect();
+        for scope in required.split_whitespace() {
+            scope_set.insert(scope.to_string());
+        }
+        scope_set.into_iter().collect()
+    }
+
+    /// check if a scope upgrade is possible and allowed
+    pub async fn can_attempt_scope_upgrade(&self) -> bool {
+        if !self.scope_upgrade_config.auto_upgrade {
+            return false;
+        }
+        let attempts = *self.scope_upgrade_attempts.read().await;
+        attempts < self.scope_upgrade_config.max_upgrade_attempts
+    }
+
+    /// select scopes based on SEP-835 priority:
+    /// 1. scope from WWW-Authenticate header (argument or stored from initial 401 probe)
+    /// 2. scopes_supported from protected resource metadata (RFC 9728)
+    /// 3. scopes_supported from authorization server metadata
+    /// 4. provided default scopes
+    pub fn select_scopes(
+        &self,
+        www_authenticate_scope: Option<&str>,
+        default_scopes: &[&str],
+    ) -> Vec<String> {
+        if let Some(scope) = www_authenticate_scope {
+            return scope.split_whitespace().map(|s| s.to_string()).collect();
+        }
+
+        // use scopes from initial 401 WWW-Authenticate header
+        if let Ok(guard) = self.www_auth_scopes.try_read() {
+            if !guard.is_empty() {
+                return guard.clone();
+            }
+        }
+
+        // use scopes_supported from protected resource metadata (RFC 9728)
+        if let Ok(guard) = self.resource_scopes.try_read() {
+            if !guard.is_empty() {
+                return guard.clone();
+            }
+        }
+
+        // use scopes_supported from authorization server metadata
+        if let Some(metadata) = &self.metadata {
+            if let Some(scopes_supported) = &metadata.scopes_supported {
+                if !scopes_supported.is_empty() {
+                    return scopes_supported.clone();
+                }
+            }
+        }
+
+        default_scopes.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// attempt to upgrade scopes after receiving a 403 insufficient_scope error.
+    /// returns the authorization URL for re-authorization with upgraded scopes.
+    pub async fn request_scope_upgrade(&self, required_scope: &str) -> Result<String, AuthError> {
+        if !self.scope_upgrade_config.auto_upgrade {
+            return Err(AuthError::InvalidScope(
+                "Scope upgrade is disabled".to_string(),
+            ));
+        }
+
+        let mut attempts = self.scope_upgrade_attempts.write().await;
+        if *attempts >= self.scope_upgrade_config.max_upgrade_attempts {
+            return Err(AuthError::InvalidScope(format!(
+                "Maximum scope upgrade attempts ({}) exceeded",
+                self.scope_upgrade_config.max_upgrade_attempts
+            )));
+        }
+
+        *attempts += 1;
+        drop(attempts);
+
+        let current_scopes = self.current_scopes.read().await.clone();
+        let upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+
+        debug!(
+            "Requesting scope upgrade: current={:?}, required={}, union={:?}",
+            current_scopes, required_scope, upgraded_scopes
+        );
+
+        let scope_refs: Vec<&str> = upgraded_scopes.iter().map(|s| s.as_str()).collect();
+        self.get_authorization_url(&scope_refs).await
+    }
+
+    /// reset scope upgrade attempt counter
+    pub async fn reset_scope_upgrade_attempts(&self) {
+        *self.scope_upgrade_attempts.write().await = 0;
+    }
+
+    /// get the number of scope upgrade attempts made
+    pub async fn get_scope_upgrade_attempts(&self) -> u32 {
+        *self.scope_upgrade_attempts.read().await
     }
 
     /// exchange authorization code for access token
@@ -683,6 +869,7 @@ impl AuthorizationManager {
         let token_result = match oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
+            .add_extra_param("resource", self.base_url.to_string())
             .request_async(&http_client)
             .await
         {
@@ -707,11 +894,19 @@ impl AuthorizationManager {
 
         debug!("exchange token result: {:?}", token_result);
 
-        // Store credentials in the credential store
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+        *self.scope_upgrade_attempts.write().await = 0;
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
+            granted_scopes,
         };
         self.credential_store.save(stored).await?;
 
@@ -768,10 +963,18 @@ impl AuthorizationManager {
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_else(|| self.current_scopes.blocking_read().clone());
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
+            granted_scopes,
         };
         self.credential_store.save(stored).await?;
 
@@ -787,17 +990,31 @@ impl AuthorizationManager {
         Ok(request.header(AUTHORIZATION, format!("Bearer {}", token)))
     }
 
-    /// handle response, check if need to re-authorize
+    /// handle response, check if need to re-authorize or scope upgrade
     pub async fn handle_response(
         &self,
         response: reqwest::Response,
     ) -> Result<reqwest::Response, AuthError> {
         if response.status() == StatusCode::UNAUTHORIZED {
-            // 401 Unauthorized, need to re-authorize
-            Err(AuthError::AuthorizationRequired)
-        } else {
-            Ok(response)
+            return Err(AuthError::AuthorizationRequired);
         }
+        if response.status() == StatusCode::FORBIDDEN {
+            for value in response.headers().get_all(WWW_AUTHENTICATE).iter() {
+                let Ok(value_str) = value.to_str() else {
+                    continue;
+                };
+                let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+                if params.is_insufficient_scope() {
+                    let required_scope = params.scope.unwrap_or_default();
+                    return Err(AuthError::InsufficientScope {
+                        required_scope,
+                        upgrade_url: None,
+                    });
+                }
+            }
+            return Err(AuthError::AuthorizationFailed("Forbidden".to_string()));
+        }
+        Ok(response)
     }
 
     /// Generate discovery endpoint URLs following the priority order in spec-2025-11-25 4.3 "Authorization Server Metadata Discovery".
@@ -890,6 +1107,13 @@ impl AuthorizationManager {
         else {
             return Ok(None);
         };
+
+        // store scopes_supported from protected resource metadata for select_scopes()
+        if let Some(scopes) = resource_metadata.scopes_supported {
+            if !scopes.is_empty() {
+                *self.resource_scopes.write().await = scopes;
+            }
+        }
 
         let mut candidates = Vec::new();
 
@@ -990,9 +1214,14 @@ impl AuthorizationManager {
             let Ok(value_str) = value.to_str() else {
                 continue;
             };
-            if let Some(url) =
-                Self::extract_resource_metadata_url_from_header(value_str, &self.base_url)
-            {
+            let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+            if let Some(url) = params.resource_metadata_url {
+                if let Some(scope) = &params.scope {
+                    debug!("WWW-Authenticate header contains scope: {}", scope);
+                    let scopes: Vec<String> =
+                        scope.split_whitespace().map(|s| s.to_string()).collect();
+                    *self.www_auth_scopes.write().await = scopes;
+                }
                 parsed_url = Some(url);
                 break;
             }
@@ -1040,21 +1269,25 @@ impl AuthorizationManager {
         Ok(Some(metadata))
     }
 
-    /// Extracts a url following `resource_metadata=` in a header value
-    fn extract_resource_metadata_url_from_header(header: &str, base_url: &Url) -> Option<Url> {
+    /// extract parameters from WWW-Authenticate header (resource_metadata and scope)
+    fn extract_www_authenticate_params(header: &str, base_url: &Url) -> WWWAuthenticateParams {
+        let mut params = WWWAuthenticateParams::default();
         let header_lowercase = header.to_ascii_lowercase();
-        let fragment_key = "resource_metadata=";
-        let mut search_offset = 0;
 
-        while let Some(pos) = header_lowercase[search_offset..].find(fragment_key) {
-            let global_pos = search_offset + pos + fragment_key.len();
+        // extract resource_metadata
+        let mut search_offset = 0;
+        let resource_key = "resource_metadata=";
+        while let Some(pos) = header_lowercase[search_offset..].find(resource_key) {
+            let global_pos = search_offset + pos + resource_key.len();
             let value_slice = &header[global_pos..];
             if let Some((value, consumed)) = Self::parse_next_header_value(value_slice) {
                 if let Ok(url) = Url::parse(&value) {
-                    return Some(url);
+                    params.resource_metadata_url = Some(url);
+                    break;
                 }
                 if let Ok(url) = base_url.join(&value) {
-                    return Some(url);
+                    params.resource_metadata_url = Some(url);
+                    break;
                 }
                 debug!("failed to parse resource metadata value `{value}` as URL");
                 search_offset = global_pos + consumed;
@@ -1064,7 +1297,37 @@ impl AuthorizationManager {
             }
         }
 
-        None
+        // extract scope
+        let scope_key = "scope=";
+        if let Some(pos) = header_lowercase.find(scope_key) {
+            let global_pos = pos + scope_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.scope = Some(value);
+            }
+        }
+
+        // extract error
+        let error_key = "error=";
+        if let Some(pos) = header_lowercase.find(error_key) {
+            let global_pos = pos + error_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.error = Some(value);
+            }
+        }
+
+        // extract error_description
+        let desc_key = "error_description=";
+        if let Some(pos) = header_lowercase.find(desc_key) {
+            let global_pos = pos + desc_key.len();
+            let value_slice = &header[global_pos..];
+            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
+                params.error_description = Some(value);
+            }
+        }
+
+        params
     }
 
     /// Parses an authentication parameter value from a `WWW-Authenticate` header fragment.
@@ -1181,6 +1444,19 @@ impl AuthorizationSession {
         })
     }
 
+    /// create session for scope upgrade flow (existing manager + pre-computed auth url)
+    pub fn for_scope_upgrade(
+        auth_manager: AuthorizationManager,
+        auth_url: String,
+        redirect_uri: &str,
+    ) -> Self {
+        Self {
+            auth_manager,
+            auth_url,
+            redirect_uri: redirect_uri.to_string(),
+        }
+    }
+
     /// get client_id and credentials
     pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
         self.auth_manager.get_credentials().await
@@ -1295,9 +1571,17 @@ impl OAuthState {
                 AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?,
             );
 
+            let granted_scopes: Vec<String> = credentials
+                .scopes()
+                .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+
+            *manager.current_scopes.write().await = granted_scopes.clone();
+
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
                 token_response: Some(credentials),
+                granted_scopes,
             };
             manager.credential_store.save(stored).await?;
 
@@ -1341,10 +1625,16 @@ impl OAuthState {
             debug!("start discovery");
             let metadata = manager.discover_metadata().await?;
             manager.metadata = Some(metadata);
+            let selected_scopes: Vec<String> = if scopes.is_empty() {
+                manager.select_scopes(None, &[])
+            } else {
+                scopes.iter().map(|s| s.to_string()).collect()
+            };
+            let scope_refs: Vec<&str> = selected_scopes.iter().map(|s| s.as_str()).collect();
             debug!("start session");
             let session = AuthorizationSession::new(
                 manager,
-                scopes,
+                &scope_refs,
                 redirect_uri,
                 client_name,
                 client_metadata_url,
@@ -1388,6 +1678,35 @@ impl OAuthState {
             ))
         }
     }
+
+    /// request scope upgrade (Authorized -> Session); returns auth URL to open
+    pub async fn request_scope_upgrade(
+        &mut self,
+        required_scope: &str,
+        redirect_uri: &str,
+    ) -> Result<String, AuthError> {
+        let placeholder =
+            OAuthState::Authorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?);
+        let old = std::mem::replace(self, placeholder);
+        let OAuthState::Authorized(manager) = old else {
+            *self = old;
+            return Err(AuthError::InternalError(
+                "Not in authorized state".to_string(),
+            ));
+        };
+        let auth_url = match manager.request_scope_upgrade(required_scope).await {
+            Ok(url) => url,
+            Err(e) => {
+                *self = OAuthState::Authorized(manager);
+                return Err(e);
+            }
+        };
+        let session =
+            AuthorizationSession::for_scope_upgrade(manager, auth_url.clone(), redirect_uri);
+        *self = OAuthState::Session(session);
+        Ok(auth_url)
+    }
+
     /// get current authorization url
     pub async fn get_authorization_url(&self) -> Result<String, AuthError> {
         match self {
@@ -1475,54 +1794,165 @@ mod tests {
 
     use super::{
         AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore,
-        OAuthClientConfig, StateStore, StoredAuthorizationState, is_https_url,
+        OAuthClientConfig, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
 
-    // SEP-991: URL-based Client IDs
-    // Tests adapted from the TypeScript SDK's isHttpsUrl test suite
+    // -- url helpers --
+
     #[test]
     fn test_is_https_url_scenarios() {
-        // Returns true for valid https url with path
         assert!(is_https_url("https://example.com/client-metadata.json"));
-        // Returns true for https url with query params
         assert!(is_https_url("https://example.com/metadata?version=1"));
-        // Returns false for https url without path
         assert!(!is_https_url("https://example.com"));
         assert!(!is_https_url("https://example.com/"));
         assert!(!is_https_url("https://"));
-        // Returns false for http url
         assert!(!is_https_url("http://example.com/metadata"));
-        // Returns false for non-url strings
         assert!(!is_https_url("not a url"));
-        // Returns false for empty string
         assert!(!is_https_url(""));
-        // Returns false for javascript scheme
         assert!(!is_https_url("javascript:alert(1)"));
-        // Returns false for data scheme
         assert!(!is_https_url("data:text/html,<script>alert(1)</script>"));
     }
 
+    // -- well-known path generation --
+
     #[test]
-    fn parses_resource_metadata_parameter() {
-        let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
-        let base = Url::parse("https://example.com/api").unwrap();
-        let parsed = AuthorizationManager::extract_resource_metadata_url_from_header(header, &base);
+    fn well_known_paths_root() {
+        let paths = AuthorizationManager::well_known_paths("/", "oauth-authorization-server");
         assert_eq!(
-            parsed.unwrap().as_str(),
-            "https://example.com/.well-known/oauth-protected-resource/api"
+            paths,
+            vec!["/.well-known/oauth-authorization-server".to_string()]
         );
     }
 
     #[test]
-    fn parses_relative_resource_metadata_parameter() {
-        let header = r#"Bearer error="invalid_request", resource_metadata="/.well-known/oauth-protected-resource/api""#;
-        let base = Url::parse("https://example.com/api").unwrap();
-        let parsed = AuthorizationManager::extract_resource_metadata_url_from_header(header, &base);
+    fn well_known_paths_with_suffix() {
+        let paths = AuthorizationManager::well_known_paths("/mcp", "oauth-authorization-server");
         assert_eq!(
-            parsed.unwrap().as_str(),
-            "https://example.com/.well-known/oauth-protected-resource/api"
+            paths,
+            vec![
+                "/.well-known/oauth-authorization-server/mcp".to_string(),
+                "/mcp/.well-known/oauth-authorization-server".to_string(),
+                "/.well-known/oauth-authorization-server".to_string(),
+            ]
         );
     }
+
+    #[test]
+    fn well_known_paths_trailing_slash() {
+        let paths =
+            AuthorizationManager::well_known_paths("/v1/mcp/", "oauth-authorization-server");
+        assert_eq!(
+            paths,
+            vec![
+                "/.well-known/oauth-authorization-server/v1/mcp".to_string(),
+                "/v1/mcp/.well-known/oauth-authorization-server".to_string(),
+                "/.well-known/oauth-authorization-server".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_protected_resource_metadata_paths() {
+        let paths =
+            AuthorizationManager::well_known_paths("/mcp/example", "oauth-protected-resource");
+        assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp/example".to_string()));
+        assert!(paths.contains(&"/.well-known/oauth-protected-resource".to_string()));
+    }
+
+    // -- discovery url generation --
+
+    #[test]
+    fn generate_discovery_urls() {
+        let base_url = Url::parse("https://auth.example.com").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration"
+        );
+
+        let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/tenant1"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/tenant1/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+
+        let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/v1/mcp"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/v1/mcp/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+
+        let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+        assert_eq!(urls.len(), 4);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant"
+        );
+        assert_eq!(
+            urls[2].as_str(),
+            "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration"
+        );
+        assert_eq!(
+            urls[3].as_str(),
+            "https://auth.example.com/.well-known/oauth-authorization-server"
+        );
+    }
+
+    #[test]
+    fn test_discovery_urls_with_path_suffix() {
+        let base_url = Url::parse("https://mcp.example.com/mcp").unwrap();
+        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
+
+        let canonical_oauth_fallback =
+            "https://mcp.example.com/.well-known/oauth-authorization-server";
+
+        assert!(
+            urls.iter().any(|u| u.as_str() == canonical_oauth_fallback),
+            "Expected discovery URLs to include canonical OAuth fallback '{}', but got: {:?}",
+            canonical_oauth_fallback,
+            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    // -- header value parsing --
 
     #[test]
     fn parse_auth_param_value_handles_quoted_string() {
@@ -1570,122 +2000,143 @@ mod tests {
         assert!(AuthorizationManager::parse_next_header_value(fragment).is_none());
     }
 
+    // -- www-authenticate param extraction --
+
     #[test]
-    fn well_known_paths_root() {
-        let paths = AuthorizationManager::well_known_paths("/", "oauth-authorization-server");
+    fn parses_resource_metadata_parameter() {
+        let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
         assert_eq!(
-            paths,
-            vec!["/.well-known/oauth-authorization-server".to_string()]
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource/api"
         );
     }
 
     #[test]
-    fn well_known_paths_with_suffix() {
-        let paths = AuthorizationManager::well_known_paths("/mcp", "oauth-authorization-server");
+    fn parses_relative_resource_metadata_parameter() {
+        let header = r#"Bearer error="invalid_request", resource_metadata="/.well-known/oauth-protected-resource/api""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
         assert_eq!(
-            paths,
-            vec![
-                "/.well-known/oauth-authorization-server/mcp".to_string(),
-                "/mcp/.well-known/oauth-authorization-server".to_string(),
-                "/.well-known/oauth-authorization-server".to_string(),
-            ]
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource/api"
         );
     }
 
     #[test]
-    fn well_known_paths_trailing_slash() {
-        let paths =
-            AuthorizationManager::well_known_paths("/v1/mcp/", "oauth-authorization-server");
+    fn extract_www_authenticate_params_with_all_fields() {
+        let header = r#"Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource", scope="read:data write:data", error_description="token expired""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
         assert_eq!(
-            paths,
-            vec![
-                "/.well-known/oauth-authorization-server/v1/mcp".to_string(),
-                "/v1/mcp/.well-known/oauth-authorization-server".to_string(),
-                "/.well-known/oauth-authorization-server".to_string(),
-            ]
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource"
+        );
+        assert_eq!(params.scope.unwrap(), "read:data write:data");
+        assert_eq!(params.error.unwrap(), "invalid_token");
+        assert_eq!(params.error_description.unwrap(), "token expired");
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_insufficient_scope() {
+        let header = r#"Bearer error="insufficient_scope", scope="admin:write", error_description="Additional file write permission required""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.is_insufficient_scope());
+        assert!(!params.is_invalid_token());
+        assert_eq!(params.scope.unwrap(), "admin:write");
+        assert_eq!(
+            params.error_description.unwrap(),
+            "Additional file write permission required"
         );
     }
 
     #[test]
-    fn generate_discovery_urls() {
-        // Test root URL (no path components): OAuth first, then OpenID Connect
-        let base_url = Url::parse("https://auth.example.com").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 2);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration"
-        );
+    fn extract_www_authenticate_params_with_only_resource_metadata() {
+        let header = r#"Bearer resource_metadata="/.well-known/oauth-protected-resource""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
 
-        // Test URL with single path segment: follow spec priority order
-        let base_url = Url::parse("https://auth.example.com/tenant1").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 4);
         assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1"
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://example.com/.well-known/oauth-protected-resource"
         );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration/tenant1"
-        );
-        assert_eq!(
-            urls[2].as_str(),
-            "https://auth.example.com/tenant1/.well-known/openid-configuration"
-        );
-        assert_eq!(
-            urls[3].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-
-        // Test URL with path and trailing slash
-        let base_url = Url::parse("https://auth.example.com/v1/mcp/").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 4);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server/v1/mcp"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration/v1/mcp"
-        );
-        assert_eq!(
-            urls[2].as_str(),
-            "https://auth.example.com/v1/mcp/.well-known/openid-configuration"
-        );
-        assert_eq!(
-            urls[3].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
-
-        // Test URL with multiple path segments
-        let base_url = Url::parse("https://auth.example.com/tenant1/subtenant").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-        assert_eq!(urls.len(), 4);
-        assert_eq!(
-            urls[0].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server/tenant1/subtenant"
-        );
-        assert_eq!(
-            urls[1].as_str(),
-            "https://auth.example.com/.well-known/openid-configuration/tenant1/subtenant"
-        );
-        assert_eq!(
-            urls[2].as_str(),
-            "https://auth.example.com/tenant1/subtenant/.well-known/openid-configuration"
-        );
-        assert_eq!(
-            urls[3].as_str(),
-            "https://auth.example.com/.well-known/oauth-authorization-server"
-        );
+        assert!(params.scope.is_none());
     }
 
-    // StateStore and StoredAuthorizationState tests
+    #[test]
+    fn extract_www_authenticate_params_bare_bearer() {
+        let header = "Bearer";
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.scope.is_none());
+        assert!(params.error.is_none());
+        assert!(params.error_description.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_error_only() {
+        let header = r#"Bearer error="invalid_token""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.scope.is_none());
+        assert!(params.is_invalid_token());
+        assert!(!params.is_insufficient_scope());
+        assert!(params.error_description.is_none());
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_with_unquoted_scope() {
+        let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert_eq!(params.scope.unwrap(), "read:data");
+    }
+
+    // -- stored authorization state --
+
+    #[test]
+    fn test_stored_authorization_state_serialization() {
+        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
+        let csrf = CsrfToken::new("my-csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.pkce_verifier, "my-verifier");
+        assert_eq!(deserialized.csrf_token, "my-csrf");
+    }
+
+    #[test]
+    fn test_stored_authorization_state_into_pkce_verifier() {
+        let pkce = PkceCodeVerifier::new("original-verifier".to_string());
+        let csrf = CsrfToken::new("csrf-token".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        let recovered = state.into_pkce_verifier();
+        assert_eq!(recovered.secret(), "original-verifier");
+    }
+
+    #[test]
+    fn test_stored_authorization_state_created_at() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+
+        assert!(state.created_at > 1577836800); // Jan 1, 2020
+    }
+
+    // -- state store --
 
     #[tokio::test]
     async fn test_in_memory_state_store_save_and_load() {
@@ -1694,10 +2145,8 @@ mod tests {
         let csrf = CsrfToken::new("test-csrf".to_string());
         let state = StoredAuthorizationState::new(&pkce, &csrf);
 
-        // Save state
         store.save("test-csrf", state).await.unwrap();
 
-        // Load state
         let loaded = store.load("test-csrf").await.unwrap();
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();
@@ -1726,60 +2175,21 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_stored_authorization_state_serialization() {
-        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
-        let csrf = CsrfToken::new("my-csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        // Serialize to JSON
-        let json = serde_json::to_string(&state).unwrap();
-
-        // Deserialize back
-        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.pkce_verifier, "my-verifier");
-        assert_eq!(deserialized.csrf_token, "my-csrf");
-    }
-
-    #[test]
-    fn test_stored_authorization_state_into_pkce_verifier() {
-        let pkce = PkceCodeVerifier::new("original-verifier".to_string());
-        let csrf = CsrfToken::new("csrf-token".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        let recovered = state.into_pkce_verifier();
-        assert_eq!(recovered.secret(), "original-verifier");
-    }
-
-    #[test]
-    fn test_stored_authorization_state_created_at() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
-
-        // created_at should be a reasonable timestamp (after year 2020)
-        assert!(state.created_at > 1577836800); // Jan 1, 2020
-    }
-
     #[tokio::test]
     async fn test_in_memory_state_store_overwrite() {
         let store = InMemoryStateStore::new();
         let csrf_key = "same-csrf";
 
-        // Save first state
         let pkce1 = PkceCodeVerifier::new("verifier-1".to_string());
         let csrf1 = CsrfToken::new(csrf_key.to_string());
         let state1 = StoredAuthorizationState::new(&pkce1, &csrf1);
         store.save(csrf_key, state1).await.unwrap();
 
-        // Overwrite with second state
         let pkce2 = PkceCodeVerifier::new("verifier-2".to_string());
         let csrf2 = CsrfToken::new(csrf_key.to_string());
         let state2 = StoredAuthorizationState::new(&pkce2, &csrf2);
         store.save(csrf_key, state2).await.unwrap();
 
-        // Should get the second state
         let loaded = store.load(csrf_key).await.unwrap().unwrap();
         assert_eq!(loaded.pkce_verifier, "verifier-2");
     }
@@ -1789,7 +2199,6 @@ mod tests {
         let store = Arc::new(InMemoryStateStore::new());
         let mut handles = vec![];
 
-        // Spawn 10 concurrent tasks that each save and load their own state
         for i in 0..10 {
             let store = Arc::clone(&store);
             let handle = tokio::spawn(async move {
@@ -1811,36 +2220,15 @@ mod tests {
             handles.push(handle);
         }
 
-        // Wait for all tasks to complete
         for handle in handles {
             handle.await.unwrap();
         }
-    }
-
-    #[test]
-    fn test_discovery_urls_with_path_suffix() {
-        // When the base URL has a path suffix (e.g., /mcp), the discovery should
-        // eventually fall back to checking /.well-known/oauth-authorization-server
-        // at the root, not just /.well-known/oauth-authorization-server/{path}.
-        let base_url = Url::parse("https://mcp.example.com/mcp").unwrap();
-        let urls = AuthorizationManager::generate_discovery_urls(&base_url);
-
-        let canonical_oauth_fallback =
-            "https://mcp.example.com/.well-known/oauth-authorization-server";
-
-        assert!(
-            urls.iter().any(|u| u.as_str() == canonical_oauth_fallback),
-            "Expected discovery URLs to include canonical OAuth fallback '{}', but got: {:?}",
-            canonical_oauth_fallback,
-            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>()
-        );
     }
 
     #[tokio::test]
     async fn test_custom_state_store_with_authorization_manager() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        // Custom state store that tracks calls
         #[derive(Debug, Default)]
         struct TrackingStateStore {
             inner: InMemoryStateStore,
@@ -1874,7 +2262,6 @@ mod tests {
             }
         }
 
-        // Verify custom store works standalone
         let store = TrackingStateStore::default();
         let pkce = PkceCodeVerifier::new("test-verifier".to_string());
         let csrf = CsrfToken::new("test-csrf".to_string());
@@ -1889,7 +2276,6 @@ mod tests {
         store.delete("test-csrf").await.unwrap();
         assert_eq!(store.delete_count.load(Ordering::SeqCst), 1);
 
-        // Verify custom store can be set on AuthorizationManager
         let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
         manager.set_state_store(TrackingStateStore::default());
     }
@@ -2010,5 +2396,208 @@ mod tests {
             mgr.oauth_client.as_ref().unwrap().auth_type(),
             AuthType::BasicAuth
         ));
+    }
+    // -- metadata deserialization --
+
+    #[test]
+    fn test_code_challenge_methods_supported_deserialization() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "code_challenge_methods_supported": ["S256", "plain"]
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        let methods = metadata.code_challenge_methods_supported.unwrap();
+        assert!(methods.contains(&"S256".to_string()));
+        assert!(methods.contains(&"plain".to_string()));
+    }
+
+    #[test]
+    fn test_code_challenge_methods_supported_missing_from_json() {
+        let json = r#"{
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token"
+        }"#;
+        let metadata: AuthorizationMetadata = serde_json::from_str(json).unwrap();
+        assert!(metadata.code_challenge_methods_supported.is_none());
+    }
+
+    // -- server validation --
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_rejects_unsupported_response_type() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            response_types_supported: Some(vec!["token".to_string()]),
+            ..Default::default()
+        };
+        manager.set_metadata(metadata);
+        assert!(manager.validate_server_metadata("code").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_without_pkce_s256() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["plain".to_string()]),
+            ..Default::default()
+        };
+        manager.set_metadata(metadata);
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_without_metadata() {
+        let manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    // -- authorization flow --
+
+    #[tokio::test]
+    async fn test_authorization_url_is_valid() {
+        let base_url = "https://mcp.example.com/api";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager
+            .get_authorization_url(&["read", "write"])
+            .await
+            .unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+
+        assert!(auth_url.starts_with(auth_endpoint));
+
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        assert_eq!(
+            params.get("response_type").map(|v| v.as_ref()),
+            Some("code")
+        );
+        assert_eq!(
+            params.get("client_id").map(|v| v.as_ref()),
+            Some("test-client-id")
+        );
+        assert!(params.contains_key("state"));
+        assert_eq!(
+            params.get("redirect_uri").map(|v| v.as_ref()),
+            Some(base_url)
+        );
+        assert!(params.contains_key("code_challenge"));
+        assert_eq!(
+            params.get("code_challenge_method").map(|v| v.as_ref()),
+            Some("S256")
+        );
+        assert_eq!(params.get("resource").map(|v| v.as_ref()), Some(base_url));
+
+        let scope = params
+            .get("scope")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        assert!(scope.contains("read"));
+        assert!(scope.contains("write"));
+    }
+
+    // -- scope management --
+
+    #[test]
+    fn compute_scope_union_adds_new_scopes() {
+        let current = vec!["read".to_string(), "write".to_string()];
+        let result = AuthorizationManager::compute_scope_union(&current, "admin delete");
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert!(result.contains(&"admin".to_string()));
+        assert!(result.contains(&"delete".to_string()));
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn compute_scope_union_deduplicates() {
+        let current = vec!["read".to_string(), "write".to_string()];
+        let result = AuthorizationManager::compute_scope_union(&current, "read admin");
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert!(result.contains(&"admin".to_string()));
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn compute_scope_union_handles_empty_current() {
+        let current: Vec<String> = vec![];
+        let result = AuthorizationManager::compute_scope_union(&current, "read write");
+
+        assert!(result.contains(&"read".to_string()));
+        assert!(result.contains(&"write".to_string()));
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn scope_upgrade_config_default_values() {
+        let config = ScopeUpgradeConfig::default();
+        assert_eq!(config.max_upgrade_attempts, 3);
+        assert!(config.auto_upgrade);
+    }
+
+    #[tokio::test]
+    async fn authorization_manager_tracks_scope_upgrade_attempts() {
+        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 0);
+
+        *manager.scope_upgrade_attempts.write().await = 2;
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 2);
+
+        manager.reset_scope_upgrade_attempts().await;
+        assert_eq!(manager.get_scope_upgrade_attempts().await, 0);
+    }
+
+    #[tokio::test]
+    async fn authorization_manager_can_attempt_scope_upgrade_respects_config() {
+        let mut manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        assert!(manager.can_attempt_scope_upgrade().await);
+
+        manager.set_scope_upgrade_config(ScopeUpgradeConfig {
+            max_upgrade_attempts: 3,
+            auto_upgrade: false,
+        });
+        assert!(!manager.can_attempt_scope_upgrade().await);
+
+        manager.set_scope_upgrade_config(ScopeUpgradeConfig {
+            max_upgrade_attempts: 2,
+            auto_upgrade: true,
+        });
+        *manager.scope_upgrade_attempts.write().await = 2;
+        assert!(!manager.can_attempt_scope_upgrade().await);
+
+        *manager.scope_upgrade_attempts.write().await = 1;
+        assert!(manager.can_attempt_scope_upgrade().await);
     }
 }

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.14.0...rmcp-v0.15.0) - 2026-02-10
+
+### Added
+
+- *(elicitation)* add support URL elicitation. SEP-1036 ([#605](https://github.com/modelcontextprotocol/rust-sdk/pull/605))
+- enforce SEP-1577 MUST requirements for sampling with tools ([#646](https://github.com/modelcontextprotocol/rust-sdk/pull/646))
+- add native-tls as an optional TLS backend ([#631](https://github.com/modelcontextprotocol/rust-sdk/pull/631))
+- *(capabilities)* add extensions field for SEP-1724 ([#643](https://github.com/modelcontextprotocol/rust-sdk/pull/643))
+
+### Fixed
+
+- *(tasks)* avoid dropping completed task results during collection ([#639](https://github.com/modelcontextprotocol/rust-sdk/pull/639))
+- *(auth)* oauth metadata discovery ([#641](https://github.com/modelcontextprotocol/rust-sdk/pull/641))
+- compilation with --no-default-features ([#593](https://github.com/modelcontextprotocol/rust-sdk/pull/593))
+- *(tasks)* expose `execution.taskSupport` on tools ([#635](https://github.com/modelcontextprotocol/rust-sdk/pull/635))
+- *(tasks)* correct enum variant ordering for deserialization ([#634](https://github.com/modelcontextprotocol/rust-sdk/pull/634))
+
+### Other
+
+- Add optional description field to Implementation struct ([#649](https://github.com/modelcontextprotocol/rust-sdk/pull/649))
+- Implement SEP-1577: Sampling With Tools ([#628](https://github.com/modelcontextprotocol/rust-sdk/pull/628))
+
 ## [0.14.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.13.0...rmcp-v0.14.0) - 2026-01-23
 
 ### Fixed

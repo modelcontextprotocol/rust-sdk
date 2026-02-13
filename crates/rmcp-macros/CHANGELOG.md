@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.14.0...rmcp-macros-v0.15.0) - 2026-02-10
+
+### Fixed
+
+- *(tasks)* avoid dropping completed task results during collection ([#639](https://github.com/modelcontextprotocol/rust-sdk/pull/639))
+- *(tasks)* expose `execution.taskSupport` on tools ([#635](https://github.com/modelcontextprotocol/rust-sdk/pull/635))
+
 ## [0.14.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.13.0...rmcp-macros-v0.14.0) - 2026-01-23
 
 ### Other
