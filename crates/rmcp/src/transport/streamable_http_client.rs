@@ -1,6 +1,7 @@
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
+use http::{HeaderName, HeaderValue};
 pub use sse_stream::Error as SseError;
 use sse_stream::Sse;
 use thiserror::Error;
@@ -76,6 +77,8 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     AuthRequired(AuthRequiredError),
     #[error("Insufficient scope")]
     InsufficientScope(InsufficientScopeError),
+    #[error("Header name '{0}' is reserved and conflicts with default headers")]
+    ReservedHeaderConflict(String),
 }
 
 #[derive(Debug, Clone, Error)]
@@ -173,6 +176,7 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> impl Future<Output = Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>>>
     + Send
     + '_;
@@ -324,6 +328,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 initialize_request,
                 None,
                 self.config.auth_header,
+                self.config.custom_headers,
             )
             .await
         {
@@ -372,6 +377,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 initialized_notification.message,
                 session_id.clone(),
                 config.auth_header.clone(),
+                config.custom_headers.clone(),
             )
             .await
             .map_err(WorkerQuitReason::fatal_context(
@@ -477,6 +483,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             message,
                             session_id.clone(),
                             config.auth_header.clone(),
+                            config.custom_headers.clone(),
                         )
                         .await;
                     let send_result = match response {
@@ -609,8 +616,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///     StreamableHttpClientTransportConfig
 /// };
 /// use std::sync::Arc;
+/// use std::collections::HashMap;
 /// use futures::stream::BoxStream;
 /// use rmcp::model::ClientJsonRpcMessage;
+/// use http::{HeaderName, HeaderValue};
 /// use sse_stream::{Sse, Error as SseError};
 ///
 /// #[derive(Clone)]
@@ -634,6 +643,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///         _message: ClientJsonRpcMessage,
 ///         _session_id: Option<Arc<str>>,
 ///         _auth_header: Option<String>,
+///         _custom_headers: HashMap<HeaderName, HeaderValue>,
 ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
@@ -690,8 +700,10 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     StreamableHttpClientTransportConfig
     /// };
     /// use std::sync::Arc;
+    /// use std::collections::HashMap;
     /// use futures::stream::BoxStream;
     /// use rmcp::model::ClientJsonRpcMessage;
+    /// use http::{HeaderName, HeaderValue};
     /// use sse_stream::{Sse, Error as SseError};
     ///
     /// // Define your custom client
@@ -716,6 +728,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///         _message: ClientJsonRpcMessage,
     ///         _session_id: Option<Arc<str>>,
     ///         _auth_header: Option<String>,
+    ///         _custom_headers: HashMap<HeaderName, HeaderValue>,
     ///     ) -> Result<rmcp::transport::streamable_http_client::StreamableHttpPostResponse, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
@@ -759,6 +772,8 @@ pub struct StreamableHttpClientTransportConfig {
     pub allow_stateless: bool,
     /// The value to send in the authorization header
     pub auth_header: Option<String>,
+    /// Custom HTTP headers to include with every request
+    pub custom_headers: HashMap<HeaderName, HeaderValue>,
 }
 
 impl StreamableHttpClientTransportConfig {
@@ -779,6 +794,33 @@ impl StreamableHttpClientTransportConfig {
         self.auth_header = Some(value.into());
         self
     }
+
+    /// Set custom HTTP headers to include with every request
+    ///
+    /// # Arguments
+    ///
+    /// * `custom_headers` - A HashMap of header names to header values
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use std::collections::HashMap;
+    /// use http::{HeaderName, HeaderValue};
+    /// use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+    ///
+    /// let mut headers = HashMap::new();
+    /// headers.insert(
+    ///     HeaderName::from_static("x-custom-header"),
+    ///     HeaderValue::from_static("custom-value")
+    /// );
+    ///
+    /// let config = StreamableHttpClientTransportConfig::with_uri("http://localhost:8000")
+    ///     .custom_headers(headers);
+    /// ```
+    pub fn custom_headers(mut self, custom_headers: HashMap<HeaderName, HeaderValue>) -> Self {
+        self.custom_headers = custom_headers;
+        self
+    }
 }
 
 impl Default for StreamableHttpClientTransportConfig {
@@ -789,6 +831,7 @@ impl Default for StreamableHttpClientTransportConfig {
             channel_buffer_capacity: 16,
             allow_stateless: true,
             auth_header: None,
+            custom_headers: HashMap::new(),
         }
     }
 }

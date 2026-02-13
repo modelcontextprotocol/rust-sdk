@@ -16,6 +16,8 @@ use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, warn};
 
+use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
+
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
 /// Stored credentials for OAuth2 authorization
@@ -1068,7 +1070,7 @@ impl AuthorizationManager {
         let response = match self
             .http_client
             .get(discovery_url.clone())
-            .header("MCP-Protocol-Version", "2024-11-05")
+            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
             .send()
             .await
         {
@@ -1188,7 +1190,7 @@ impl AuthorizationManager {
         let response = match self
             .http_client
             .get(url.clone())
-            .header("MCP-Protocol-Version", "2024-11-05")
+            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
             .send()
             .await
         {
@@ -1241,7 +1243,7 @@ impl AuthorizationManager {
         let response = match self
             .http_client
             .get(resource_metadata_url.clone())
-            .header("MCP-Protocol-Version", "2024-11-05")
+            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
             .send()
             .await
         {

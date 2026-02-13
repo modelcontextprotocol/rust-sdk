@@ -1,7 +1,7 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use futures::{StreamExt, stream::BoxStream};
-use http::header::WWW_AUTHENTICATE;
+use http::{HeaderName, HeaderValue, header::WWW_AUTHENTICATE};
 use reqwest::header::ACCEPT;
 use sse_stream::{Sse, SseStream};
 
@@ -9,7 +9,8 @@ use crate::{
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::http_header::{
-            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
+            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_MCP_PROTOCOL_VERSION,
+            HEADER_SESSION_ID, JSON_MIME_TYPE,
         },
         streamable_http_client::*,
     },
@@ -94,12 +95,33 @@ impl StreamableHttpClient for reqwest::Client {
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
         if let Some(auth_header) = auth_token {
             request = request.bearer_auth(auth_header);
+        }
+
+        // Apply custom headers
+        let reserved_headers = [
+            ACCEPT.as_str(),
+            HEADER_SESSION_ID,
+            HEADER_MCP_PROTOCOL_VERSION,
+            HEADER_LAST_EVENT_ID,
+        ];
+        for (name, value) in custom_headers {
+            if reserved_headers
+                .iter()
+                .any(|&r| name.as_str().eq_ignore_ascii_case(r))
+            {
+                return Err(StreamableHttpError::ReservedHeaderConflict(
+                    name.to_string(),
+                ));
+            }
+
+            request = request.header(name, value);
         }
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());

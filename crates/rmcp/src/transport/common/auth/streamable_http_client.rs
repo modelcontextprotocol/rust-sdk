@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use http::{HeaderName, HeaderValue};
+
 use crate::transport::{
     auth::AuthClient,
     streamable_http_client::{StreamableHttpClient, StreamableHttpError},
@@ -47,6 +51,7 @@ where
         message: crate::model::ClientJsonRpcMessage,
         session_id: Option<std::sync::Arc<str>>,
         mut auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<
         crate::transport::streamable_http_client::StreamableHttpPostResponse,
         StreamableHttpError<Self::Error>,
@@ -55,7 +60,7 @@ where
             auth_token = Some(self.get_access_token().await?);
         }
         self.http_client
-            .post_message(uri, message, session_id, auth_token)
+            .post_message(uri, message, session_id, auth_token, custom_headers)
             .await
     }
 }
