@@ -116,15 +116,15 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             ClientRequest::GetTaskInfoRequest(request) => self
                 .get_task_info(request.params, context)
                 .await
-                .map(ServerResult::GetTaskInfoResult),
+                .map(ServerResult::GetTaskResult),
             ClientRequest::GetTaskResultRequest(request) => self
                 .get_task_result(request.params, context)
                 .await
-                .map(ServerResult::TaskResult),
+                .map(ServerResult::GetTaskPayloadResult),
             ClientRequest::CancelTaskRequest(request) => self
                 .cancel_task(request.params, context)
                 .await
-                .map(ServerResult::empty),
+                .map(ServerResult::CancelTaskResult),
         }
     }
 
@@ -339,7 +339,8 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: GetTaskInfoParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<GetTaskResult, McpError>> + Send + '_ {
+        let _ = (request, context);
         std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
     }
 
@@ -347,7 +348,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: GetTaskResultParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<TaskResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + Send + '_ {
         let _ = (request, context);
         std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
     }
@@ -356,7 +357,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: CancelTaskParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + Send + '_ {
         let _ = (request, context);
         std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
     }
@@ -543,7 +544,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: GetTaskInfoParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<GetTaskInfoResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<GetTaskResult, McpError>> + Send + '_ {
                 (**self).get_task_info(request, context)
             }
 
@@ -551,7 +552,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: GetTaskResultParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<TaskResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + Send + '_ {
                 (**self).get_task_result(request, context)
             }
 
@@ -559,7 +560,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CancelTaskParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + Send + '_ {
                 (**self).cancel_task(request, context)
             }
         }
