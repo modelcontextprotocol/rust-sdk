@@ -36,7 +36,7 @@ async fn executes_enqueued_future() {
         .expect("submit operation");
 
     tokio::time::sleep(Duration::from_millis(30)).await;
-    let results = processor.collect_completed_results();
+    let results = processor.peek_completed();
     assert_eq!(results.len(), 1);
     let payload = results[0]
         .result

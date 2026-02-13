@@ -214,7 +214,7 @@ impl ServerHandler for Counter {
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
@@ -229,7 +229,7 @@ impl ServerHandler for Counter {
 
     async fn read_resource(
         &self,
-        ReadResourceRequestParam { uri }: ReadResourceRequestParam,
+        ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         match uri.as_str() {
@@ -256,7 +256,7 @@ impl ServerHandler for Counter {
 
     async fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         Ok(ListResourceTemplatesResult {
@@ -268,7 +268,7 @@ impl ServerHandler for Counter {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         if let Some(http_request_part) = context.extensions.get::<axum::http::request::Parts>() {
@@ -347,7 +347,8 @@ mod tests {
             "source".into(),
             serde_json::Value::String("integration-test".into()),
         );
-        let params = CallToolRequestParam {
+        let params = CallToolRequestParams {
+            meta: None,
             name: "long_task".into(),
             arguments: None,
             task: Some(task_meta),

@@ -13,14 +13,8 @@ use tokio_util::sync::CancellationToken;
 #[tokio::test]
 async fn test_message_roles() {
     let messages = vec![
-        SamplingMessage {
-            role: Role::User,
-            content: Content::text("user message"),
-        },
-        SamplingMessage {
-            role: Role::Assistant,
-            content: Content::text("assistant message"),
-        },
+        SamplingMessage::user_text("user message"),
+        SamplingMessage::assistant_text("assistant message"),
     ];
 
     // Verify all roles can be serialized/deserialized correctly
@@ -47,11 +41,10 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     // Test ThisServer context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test message")],
             include_context: Some(ContextInclusion::ThisServer),
             model_preferences: None,
             system_prompt: None,
@@ -59,6 +52,8 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -77,7 +72,15 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             text.contains("test context"),
             "Response should include context for ThisServer"
@@ -89,11 +92,10 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     // Test AllServers context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test message")],
             include_context: Some(ContextInclusion::AllServers),
             model_preferences: None,
             system_prompt: None,
@@ -101,6 +103,8 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -119,7 +123,15 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             text.contains("test context"),
             "Response should include context for AllServers"
@@ -131,11 +143,10 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     // Test No context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test message")],
             include_context: Some(ContextInclusion::None),
             model_preferences: None,
             system_prompt: None,
@@ -143,6 +154,8 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -161,7 +174,15 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             !text.contains("test context"),
             "Response should not include context for None"
@@ -193,11 +214,10 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
     // Test that context requests are ignored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test message")],
             include_context: Some(ContextInclusion::ThisServer),
             model_preferences: None,
             system_prompt: None,
@@ -205,6 +225,8 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -223,7 +245,15 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             !text.contains("test context"),
             "Context should be ignored when client chooses not to honor requests"
@@ -254,16 +284,12 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
 
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![
-                SamplingMessage {
-                    role: Role::User,
-                    content: Content::text("first message"),
-                },
-                SamplingMessage {
-                    role: Role::Assistant,
-                    content: Content::text("second message"),
-                },
+                SamplingMessage::user_text("first message"),
+                SamplingMessage::assistant_text("second message"),
             ],
             include_context: Some(ContextInclusion::ThisServer),
             model_preferences: None,
@@ -272,6 +298,8 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -290,7 +318,15 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             text.contains("test context"),
             "Response should include context when ThisServer is specified"
@@ -325,20 +361,13 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     // Test valid sequence: User -> Assistant -> User
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
             messages: vec![
-                SamplingMessage {
-                    role: Role::User,
-                    content: Content::text("first user message"),
-                },
-                SamplingMessage {
-                    role: Role::Assistant,
-                    content: Content::text("first assistant response"),
-                },
-                SamplingMessage {
-                    role: Role::User,
-                    content: Content::text("second user message"),
-                },
+                SamplingMessage::user_text("first user message"),
+                SamplingMessage::assistant_text("first assistant response"),
+                SamplingMessage::user_text("second user message"),
             ],
             include_context: None,
             model_preferences: None,
@@ -347,6 +376,8 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -369,11 +400,10 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     // Test invalid: No user message
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::Assistant,
-                content: Content::text("assistant message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::assistant_text("assistant message")],
             include_context: None,
             model_preferences: None,
             system_prompt: None,
@@ -381,6 +411,8 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -422,11 +454,10 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     // Test ThisServer is honored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test message")],
             include_context: Some(ContextInclusion::ThisServer),
             model_preferences: None,
             system_prompt: None,
@@ -434,6 +465,8 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -452,7 +485,15 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             text.contains("test context"),
             "ThisServer context request should be honored"
@@ -462,11 +503,10 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     // Test AllServers is ignored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test message"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test message")],
             include_context: Some(ContextInclusion::AllServers),
             model_preferences: None,
             system_prompt: None,
@@ -474,6 +514,8 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -492,7 +534,15 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(
             !text.contains("test context"),
             "AllServers context request should be ignored"
@@ -519,11 +569,10 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
     // Test context handling
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
-        params: CreateMessageRequestParam {
-            messages: vec![SamplingMessage {
-                role: Role::User,
-                content: Content::text("test"),
-            }],
+        params: CreateMessageRequestParams {
+            meta: None,
+            task: None,
+            messages: vec![SamplingMessage::user_text("test")],
             include_context: Some(ContextInclusion::ThisServer),
             model_preferences: None,
             system_prompt: None,
@@ -531,6 +580,8 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
             max_tokens: 100,
             stop_sequences: None,
             metadata: None,
+            tools: None,
+            tool_choice: None,
         },
         extensions: Default::default(),
     });
@@ -549,7 +600,15 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
         .await?;
 
     if let ClientResult::CreateMessageResult(result) = result {
-        let text = result.message.content.as_text().unwrap().text.as_str();
+        let text = result
+            .message
+            .content
+            .first()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .text
+            .as_str();
         assert!(text.contains("test context"));
     }
 

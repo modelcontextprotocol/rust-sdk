@@ -254,6 +254,13 @@ where
     pub fn list_all(&self) -> Vec<crate::model::Tool> {
         self.map.values().map(|item| item.attr.clone()).collect()
     }
+
+    /// Get a tool definition by name.
+    ///
+    /// Returns the tool if found, or `None` if no tool with the given name exists.
+    pub fn get(&self, name: &str) -> Option<&crate::model::Tool> {
+        self.map.get(name).map(|r| &r.attr)
+    }
 }
 
 impl<S> std::ops::Add<ToolRouter<S>> for ToolRouter<S>

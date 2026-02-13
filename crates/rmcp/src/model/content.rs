@@ -59,6 +59,76 @@ pub struct RawAudioContent {
 
 pub type AudioContent = Annotated<RawAudioContent>;
 
+/// Tool call request from assistant (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ToolUseContent {
+    /// Unique identifier for this tool call
+    pub id: String,
+    /// Name of the tool to call
+    pub name: String,
+    /// Input arguments for the tool
+    pub input: super::JsonObject,
+    /// Optional metadata (preserved for caching)
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
+}
+
+/// Tool execution result in user message (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ToolResultContent {
+    /// Optional metadata
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
+    /// ID of the corresponding tool use
+    pub tool_use_id: String,
+    /// Content blocks returned by the tool
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<Content>,
+    /// Optional structured result
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<super::JsonObject>,
+    /// Whether tool execution failed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
+}
+
+impl ToolUseContent {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, input: super::JsonObject) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            input,
+            meta: None,
+        }
+    }
+}
+
+impl ToolResultContent {
+    pub fn new(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+        Self {
+            meta: None,
+            tool_use_id: tool_use_id.into(),
+            content,
+            structured_content: None,
+            is_error: None,
+        }
+    }
+
+    pub fn error(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+        Self {
+            meta: None,
+            tool_use_id: tool_use_id.into(),
+            content,
+            structured_content: None,
+            is_error: Some(true),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

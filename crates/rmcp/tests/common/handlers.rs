@@ -49,7 +49,7 @@ impl TestClientHandler {
 impl ClientHandler for TestClientHandler {
     async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<CreateMessageResult, McpError> {
         // First validate that there's at least one User message
@@ -72,10 +72,7 @@ impl ClientHandler for TestClientHandler {
         };
 
         Ok(CreateMessageResult {
-            message: SamplingMessage {
-                role: Role::Assistant,
-                content: Content::text(response.to_string()),
-            },
+            message: SamplingMessage::assistant_text(response.to_string()),
             model: "test-model".to_string(),
             stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
         })
@@ -117,7 +114,7 @@ impl ServerHandler for TestServer {
 
     fn set_level(
         &self,
-        request: SetLevelRequestParam,
+        request: SetLevelRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
         let peer = context.peer;

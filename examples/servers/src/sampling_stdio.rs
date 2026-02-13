@@ -12,7 +12,7 @@ use tracing_subscriber::{self, EnvFilter};
 /// Simple Sampling Demo Server
 ///
 /// This server demonstrates how to request LLM sampling from clients.
-/// Run with: cargo run --example servers_sampling_stdio
+/// Run with: cargo run -p mcp-server-examples --example servers_sampling_stdio
 #[derive(Clone, Debug, Default)]
 pub struct SamplingDemoServer;
 
@@ -33,7 +33,7 @@ impl ServerHandler for SamplingDemoServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         match request.name.as_ref() {
@@ -48,11 +48,10 @@ impl ServerHandler for SamplingDemoServer {
 
                 let response = context
                     .peer
-                    .create_message(CreateMessageRequestParam {
-                        messages: vec![SamplingMessage {
-                            role: Role::User,
-                            content: Content::text(question),
-                        }],
+                    .create_message(CreateMessageRequestParams {
+                        meta: None,
+                        task: None,
+                        messages: vec![SamplingMessage::user_text(question)],
                         model_preferences: Some(ModelPreferences {
                             hints: Some(vec![ModelHint {
                                 name: Some("claude".to_string()),
@@ -67,6 +66,8 @@ impl ServerHandler for SamplingDemoServer {
                         max_tokens: 150,
                         stop_sequences: None,
                         metadata: None,
+                        tools: None,
+                        tool_choice: None,
                     })
                     .await
                     .map_err(|e| {
@@ -83,7 +84,8 @@ impl ServerHandler for SamplingDemoServer {
                     response
                         .message
                         .content
-                        .as_text()
+                        .first()
+                        .and_then(|c| c.as_text())
                         .map(|t| &t.text)
                         .unwrap_or(&"No text response".to_string())
                 ))]))
@@ -99,7 +101,7 @@ impl ServerHandler for SamplingDemoServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
@@ -122,6 +124,7 @@ impl ServerHandler for SamplingDemoServer {
                 ),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             }],

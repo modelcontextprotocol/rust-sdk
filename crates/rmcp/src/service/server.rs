@@ -1,17 +1,22 @@
 use std::borrow::Cow;
+#[cfg(feature = "elicitation")]
+use std::collections::HashSet;
 
 use thiserror::Error;
+#[cfg(feature = "elicitation")]
+use url::Url;
 
 use super::*;
 #[cfg(feature = "elicitation")]
 use crate::model::{
-    CreateElicitationRequest, CreateElicitationRequestParam, CreateElicitationResult,
+    CreateElicitationRequest, CreateElicitationRequestParams, CreateElicitationResult,
+    ElicitationAction, ElicitationCompletionNotification, ElicitationResponseNotificationParam,
 };
 use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParam, CreateMessageResult, ErrorData, ListRootsRequest,
+        CreateMessageRequestParams, CreateMessageResult, ErrorData, ListRootsRequest,
         ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
         ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
         ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
@@ -384,10 +389,37 @@ macro_rules! method {
 }
 
 impl Peer<RoleServer> {
+    /// Check if the client supports sampling tools capability.
+    pub fn supports_sampling_tools(&self) -> bool {
+        if let Some(client_info) = self.peer_info() {
+            client_info
+                .capabilities
+                .sampling
+                .as_ref()
+                .and_then(|s| s.tools.as_ref())
+                .is_some()
+        } else {
+            false
+        }
+    }
+
     pub async fn create_message(
         &self,
-        params: CreateMessageRequestParam,
+        params: CreateMessageRequestParams,
     ) -> Result<CreateMessageResult, ServiceError> {
+        // MUST throw error when tools/toolChoice provided without capability
+        if (params.tools.is_some() || params.tool_choice.is_some())
+            && !self.supports_sampling_tools()
+        {
+            return Err(ServiceError::McpError(ErrorData::invalid_params(
+                "tools or toolChoice provided but client does not support sampling tools capability",
+                None,
+            )));
+        }
+        // Validate message structure
+        params
+            .validate()
+            .map_err(|e| ServiceError::McpError(ErrorData::invalid_params(e, None)))?;
         let result = self
             .send_request(ServerRequest::CreateMessageRequest(CreateMessageRequest {
                 method: Default::default(),
@@ -402,9 +434,11 @@ impl Peer<RoleServer> {
     }
     method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParam) => CreateElicitationResult);
+    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
+    #[cfg(feature = "elicitation")]
+    method!(peer_not notify_url_elicitation_completed ElicitationCompletionNotification(ElicitationResponseNotificationParam));
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -509,6 +543,12 @@ macro_rules! elicit_safe {
     };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ElicitationMode {
+    Form,
+    Url,
+}
+
 #[cfg(feature = "elicitation")]
 impl Peer<RoleServer> {
     /// Check if the client supports elicitation capability
@@ -516,11 +556,27 @@ impl Peer<RoleServer> {
     /// Returns true if the client declared elicitation capability during initialization,
     /// false otherwise. According to MCP 2025-06-18 specification, clients that support
     /// elicitation MUST declare the capability during initialization.
-    pub fn supports_elicitation(&self) -> bool {
+    pub fn supported_elicitation_modes(&self) -> HashSet<ElicitationMode> {
         if let Some(client_info) = self.peer_info() {
-            client_info.capabilities.elicitation.is_some()
+            if let Some(elicit_capability) = &client_info.capabilities.elicitation {
+                let mut modes = HashSet::new();
+                // Backward compatibility: if neither form nor url is specified, assume form
+                if elicit_capability.form.is_none() && elicit_capability.url.is_none() {
+                    modes.insert(ElicitationMode::Form);
+                } else {
+                    if elicit_capability.form.is_some() {
+                        modes.insert(ElicitationMode::Form);
+                    }
+                    if elicit_capability.url.is_some() {
+                        modes.insert(ElicitationMode::Url);
+                    }
+                }
+                modes
+            } else {
+                HashSet::new()
+            }
         } else {
-            false
+            HashSet::new()
         }
     }
 
@@ -671,8 +727,11 @@ impl Peer<RoleServer> {
     where
         T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
     {
-        // Check if client supports elicitation capability
-        if !self.supports_elicitation() {
+        // Check if client supports form elicitation capability
+        if !self
+            .supported_elicitation_modes()
+            .contains(&ElicitationMode::Form)
+        {
             return Err(ElicitationError::CapabilityNotSupported);
         }
 
@@ -690,7 +749,8 @@ impl Peer<RoleServer> {
 
         let response = self
             .create_elicitation_with_timeout(
-                CreateElicitationRequestParam {
+                CreateElicitationRequestParams::FormElicitationParams {
+                    meta: None,
                     message: message.into(),
                     requested_schema: schema,
                 },
@@ -712,5 +772,124 @@ impl Peer<RoleServer> {
             crate::model::ElicitationAction::Decline => Err(ElicitationError::UserDeclined),
             crate::model::ElicitationAction::Cancel => Err(ElicitationError::UserCancelled),
         }
+    }
+
+    /// Request the user to visit a URL and confirm completion.
+    ///
+    /// This method sends a URL elicitation request to the client, prompting the user
+    /// to visit the specified URL and confirm completion. It returns the user's action
+    /// (accept/decline/cancel) without any additional data.
+    /// **Requires the `elicitation` feature to be enabled.**
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `url` - The URL the user is requested to visit
+    /// * `elicitation_id` - A unique identifier for this elicitation request
+    /// # Returns
+    /// * `Ok(action)` indicating the user's response action
+    /// * `Err(ElicitationError::CapabilityNotSupported)` if client does not support elicitation via URL
+    /// * `Err(ElicitationError::Service(_))` if the underlying service call failed
+    /// # Example
+    /// ```rust,no_run
+    /// # use rmcp::*;
+    /// # use rmcp::model::ElicitationAction;
+    /// # use url::Url;
+    ///
+    /// async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let elicit_result = peer.elicit_url("Please visit the following URL to complete the action",
+    ///      Url::parse("https://example.com/complete_action")?, "elicit_123").await?;
+    ///  match elicit_result {
+    ///        ElicitationAction::Accept => {
+    ///        println!("User accepted and confirmed completion");
+    ///     }
+    ///     ElicitationAction::Decline => {
+    ///          println!("User declined the request");
+    ///     }
+    ///     ElicitationAction::Cancel => {
+    ///         println!("User cancelled/dismissed the request");
+    ///     }
+    ///  }
+    ///  Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "elicitation")]
+    pub async fn elicit_url(
+        &self,
+        message: impl Into<String>,
+        url: impl Into<Url>,
+        elicitation_id: impl Into<String>,
+    ) -> Result<ElicitationAction, ElicitationError> {
+        self.elicit_url_with_timeout(message, url, elicitation_id, None)
+            .await
+    }
+
+    /// Request the user to visit a URL and confirm completion.
+    ///
+    /// Same as `elicit_url()` but allows specifying a custom timeout for the request.
+    ///
+    /// # Arguments
+    /// * `message` - The prompt message for the user
+    /// * `url` - The URL the user is requested to visit
+    /// * `elicitation_id` - A unique identifier for this elicitation request
+    /// * `timeout` - Optional timeout duration. If None, uses default timeout behavior
+    /// # Returns
+    /// * `Ok(action)` indicating the user's response action
+    /// * `Err(ElicitationError::CapabilityNotSupported)` if client does not support elicitation via URL
+    /// * `Err(ElicitationError::Service(_))` if the underlying service call failed
+    /// # Example
+    /// ```rust,no_run
+    /// # use std::time::Duration;
+    /// use rmcp::*;
+    /// # use rmcp::model::ElicitationAction;
+    /// # use url::Url;
+    ///
+    /// async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let elicit_result = peer.elicit_url_with_timeout("Please visit the following URL to complete the action",
+    ///      Url::parse("https://example.com/complete_action")?,
+    ///     "elicit_123",
+    ///     Some(Duration::from_secs(30))).await?;
+    ///  match elicit_result {
+    ///        ElicitationAction::Accept => {
+    ///        println!("User accepted and confirmed completion");
+    ///     }
+    ///     ElicitationAction::Decline => {
+    ///          println!("User declined the request");
+    ///     }
+    ///     ElicitationAction::Cancel => {
+    ///         println!("User cancelled/dismissed the request");
+    ///     }
+    ///  }
+    ///  Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "elicitation")]
+    pub async fn elicit_url_with_timeout(
+        &self,
+        message: impl Into<String>,
+        url: impl Into<Url>,
+        elicitation_id: impl Into<String>,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<ElicitationAction, ElicitationError> {
+        // Check if client supports url elicitation
+        if !self
+            .supported_elicitation_modes()
+            .contains(&ElicitationMode::Url)
+        {
+            return Err(ElicitationError::CapabilityNotSupported);
+        }
+
+        let action = self
+            .create_elicitation_with_timeout(
+                CreateElicitationRequestParams::UrlElicitationParams {
+                    meta: None,
+                    message: message.into(),
+                    url: url.into().to_string(),
+                    elicitation_id: elicitation_id.into(),
+                },
+                timeout,
+            )
+            .await?
+            .action;
+        Ok(action)
     }
 }

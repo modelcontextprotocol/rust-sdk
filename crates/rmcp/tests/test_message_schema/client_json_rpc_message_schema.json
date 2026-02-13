@@ -187,10 +187,18 @@
       "format": "const",
       "const": "tools/call"
     },
-    "CallToolRequestParam": {
-      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.",
+    "CallToolRequestParams": {
+      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.\n\nThis implements `TaskAugmentedRequestParamsMeta` as tool calls can be\nlong-running and may benefit from task-based execution.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "arguments": {
           "description": "Arguments to pass to the tool (must match the tool's input schema)",
           "type": [
@@ -204,6 +212,7 @@
           "type": "string"
         },
         "task": {
+          "description": "Task metadata for async task management (SEP-1319)",
           "type": [
             "object",
             "null"
@@ -220,9 +229,17 @@
       "format": "const",
       "const": "tasks/cancel"
     },
-    "CancelTaskParam": {
+    "CancelTaskParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "taskId": {
           "type": "string"
         }
@@ -279,6 +296,17 @@
             "additionalProperties": true
           }
         },
+        "extensions": {
+          "description": "Optional MCP extensions that the client supports (SEP-1724).\nKeys are extension identifiers (e.g., `\"io.modelcontextprotocol/ui\"`),\nvalues are per-extension settings objects. An empty object indicates\nsupport with no settings.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
         "roots": {
           "anyOf": [
             {
@@ -290,11 +318,15 @@
           ]
         },
         "sampling": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "description": "Capability for LLM sampling requests (SEP-1577)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "tasks": {
           "anyOf": [
@@ -332,9 +364,17 @@
       "format": "const",
       "const": "completion/complete"
     },
-    "CompleteRequestParam": {
+    "CompleteRequestParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "argument": {
           "$ref": "#/definitions/ArgumentInfo"
         },
@@ -395,14 +435,21 @@
       ]
     },
     "CreateMessageResult": {
-      "description": "The result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about\nhow the generation was performed and why it stopped.",
+      "description": "Result of sampling/createMessage (SEP-1577).\nThe result of a sampling/createMessage request containing the generated response.\n\nThis structure contains the generated message along with metadata about\nhow the generation was performed and why it stopped.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
-          "description": "The actual content of the message (text, image, etc.)",
+          "description": "The actual content of the message (text, image, audio, tool use, or tool result)",
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated"
+              "$ref": "#/definitions/SamplingContent"
             }
           ]
         },
@@ -482,15 +529,42 @@
       ]
     },
     "ElicitationCapability": {
-      "description": "Capability for handling elicitation requests from servers.\n\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
+      "description": "Elicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
       "type": "object",
       "properties": {
-        "schemaValidation": {
-          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
-          "type": [
-            "boolean",
-            "null"
+        "form": {
+          "description": "Whether client supports form-based elicitation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FormElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
           ]
+        },
+        "url": {
+          "description": "Whether client supports URL-based elicitation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UrlElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ElicitationTaskCapability": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       }
     },
@@ -529,15 +603,36 @@
         "message"
       ]
     },
+    "FormElicitationCapability": {
+      "description": "Capability for handling elicitation requests from servers.\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.\n\nCapability for form mode elicitation.",
+      "type": "object",
+      "properties": {
+        "schemaValidation": {
+          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "GetPromptRequestMethod": {
       "type": "string",
       "format": "const",
       "const": "prompts/get"
     },
-    "GetPromptRequestParam": {
+    "GetPromptRequestParams": {
       "description": "Parameters for retrieving a specific prompt",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "arguments": {
           "type": [
             "object",
@@ -558,9 +653,17 @@
       "format": "const",
       "const": "tasks/get"
     },
-    "GetTaskInfoParam": {
+    "GetTaskInfoParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "taskId": {
           "type": "string"
         }
@@ -574,9 +677,17 @@
       "format": "const",
       "const": "tasks/result"
     },
-    "GetTaskResultParam": {
+    "GetTaskResultParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "taskId": {
           "type": "string"
         }
@@ -618,6 +729,12 @@
     "Implementation": {
       "type": "object",
       "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "icons": {
           "type": [
             "array",
@@ -651,10 +768,18 @@
         "version"
       ]
     },
-    "InitializeRequestParam": {
+    "InitializeRequestParams": {
       "description": "Parameters sent by a client when initializing a connection to an MCP server.\n\nThis contains the client's protocol version, capabilities, and implementation\ninformation, allowing the server to understand what the client supports.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "capabilities": {
           "description": "The capabilities this client supports (sampling, roots, etc.)",
           "allOf": [
@@ -794,9 +919,6 @@
           "$ref": "#/definitions/RequestOptionalParam4"
         },
         {
-          "$ref": "#/definitions/CustomRequest"
-        },
-        {
           "$ref": "#/definitions/Request9"
         },
         {
@@ -807,6 +929,9 @@
         },
         {
           "$ref": "#/definitions/Request11"
+        },
+        {
+          "$ref": "#/definitions/CustomRequest"
         }
       ],
       "required": [
@@ -953,9 +1078,17 @@
         }
       ]
     },
-    "PaginatedRequestParam": {
+    "PaginatedRequestParams": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "cursor": {
           "type": [
             "string",
@@ -1183,10 +1316,18 @@
       "format": "const",
       "const": "resources/read"
     },
-    "ReadResourceRequestParam": {
+    "ReadResourceRequestParams": {
       "description": "Parameters for reading a specific resource",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource to read",
           "type": "string"
@@ -1242,7 +1383,7 @@
           "$ref": "#/definitions/InitializeResultMethod"
         },
         "params": {
-          "$ref": "#/definitions/InitializeRequestParam"
+          "$ref": "#/definitions/InitializeRequestParams"
         }
       },
       "required": [
@@ -1258,7 +1399,7 @@
           "$ref": "#/definitions/GetTaskResultMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskResultParam"
+          "$ref": "#/definitions/GetTaskResultParams"
         }
       },
       "required": [
@@ -1274,7 +1415,7 @@
           "$ref": "#/definitions/CancelTaskMethod"
         },
         "params": {
-          "$ref": "#/definitions/CancelTaskParam"
+          "$ref": "#/definitions/CancelTaskParams"
         }
       },
       "required": [
@@ -1290,7 +1431,7 @@
           "$ref": "#/definitions/CompleteRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CompleteRequestParam"
+          "$ref": "#/definitions/CompleteRequestParams"
         }
       },
       "required": [
@@ -1306,7 +1447,7 @@
           "$ref": "#/definitions/SetLevelRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SetLevelRequestParam"
+          "$ref": "#/definitions/SetLevelRequestParams"
         }
       },
       "required": [
@@ -1322,7 +1463,7 @@
           "$ref": "#/definitions/GetPromptRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetPromptRequestParam"
+          "$ref": "#/definitions/GetPromptRequestParams"
         }
       },
       "required": [
@@ -1338,7 +1479,7 @@
           "$ref": "#/definitions/ReadResourceRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/ReadResourceRequestParam"
+          "$ref": "#/definitions/ReadResourceRequestParams"
         }
       },
       "required": [
@@ -1354,7 +1495,7 @@
           "$ref": "#/definitions/SubscribeRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SubscribeRequestParam"
+          "$ref": "#/definitions/SubscribeRequestParams"
         }
       },
       "required": [
@@ -1370,7 +1511,7 @@
           "$ref": "#/definitions/UnsubscribeRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/UnsubscribeRequestParam"
+          "$ref": "#/definitions/UnsubscribeRequestParams"
         }
       },
       "required": [
@@ -1386,7 +1527,7 @@
           "$ref": "#/definitions/CallToolRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CallToolRequestParam"
+          "$ref": "#/definitions/CallToolRequestParams"
         }
       },
       "required": [
@@ -1402,7 +1543,7 @@
           "$ref": "#/definitions/GetTaskInfoMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskInfoParam"
+          "$ref": "#/definitions/GetTaskInfoParams"
         }
       },
       "required": [
@@ -1430,7 +1571,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1451,7 +1592,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1472,7 +1613,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1493,7 +1634,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1514,7 +1655,7 @@
         "params": {
           "anyOf": [
             {
-              "$ref": "#/definitions/PaginatedRequestParam"
+              "$ref": "#/definitions/PaginatedRequestParams"
             },
             {
               "type": "null"
@@ -1645,15 +1786,163 @@
       "format": "const",
       "const": "notifications/roots/list_changed"
     },
+    "SamplingCapability": {
+      "description": "Sampling capability with optional sub-capabilities (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "context": {
+          "description": "Support for `includeContext` (soft-deprecated)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "tools": {
+          "description": "Support for `tools` and `toolChoice` parameters",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
+    "SamplingContent": {
+      "description": "Single or array content wrapper (SEP-1577).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SamplingMessageContent"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessageContent"
+          }
+        }
+      ]
+    },
+    "SamplingMessageContent": {
+      "description": "Content types for sampling messages (SEP-1577).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Assistant only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolUseContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "User only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolResultContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "SamplingTaskCapability": {
+      "type": "object",
+      "properties": {
+        "createMessage": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "SetLevelRequestMethod": {
       "type": "string",
       "format": "const",
       "const": "logging/setLevel"
     },
-    "SetLevelRequestParam": {
+    "SetLevelRequestParams": {
       "description": "Parameters for setting the logging level",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "level": {
           "description": "The desired logging level",
           "allOf": [
@@ -1672,10 +1961,18 @@
       "format": "const",
       "const": "resources/subscribe"
     },
-    "SubscribeRequestParam": {
+    "SubscribeRequestParams": {
       "description": "Parameters for subscribing to resource updates",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource to subscribe to",
           "type": "string"
@@ -1685,33 +1982,156 @@
         "uri"
       ]
     },
+    "TaskRequestsCapability": {
+      "description": "Request types that support task-augmented execution.",
+      "type": "object",
+      "properties": {
+        "elicitation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "TasksCapability": {
-      "description": "Task capability negotiation for SEP-1686.",
+      "description": "Task capabilities shared by client and server.",
       "type": "object",
       "properties": {
         "cancel": {
-          "description": "Whether the receiver supports `tasks/cancel`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "list": {
-          "description": "Whether the receiver supports `tasks/list`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "requests": {
-          "description": "Map of request category (e.g. \"tools.call\") to a boolean indicating support.",
           "type": [
             "object",
             "null"
           ],
-          "additionalProperties": {
-            "type": "boolean"
+          "additionalProperties": true
+        },
+        "list": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskRequestsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ToolResultContent": {
+      "description": "Tool execution result in user message (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "content": {
+          "description": "Content blocks returned by the tool",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated"
           }
+        },
+        "isError": {
+          "description": "Whether tool execution failed",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": {
+          "description": "Optional structured result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "toolUseId": {
+          "description": "ID of the corresponding tool use",
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolUseId"
+      ]
+    },
+    "ToolUseContent": {
+      "description": "Tool call request from assistant (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata (preserved for caching)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "id": {
+          "description": "Unique identifier for this tool call",
+          "type": "string"
+        },
+        "input": {
+          "description": "Input arguments for the tool",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "Name of the tool to call",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "input"
+      ]
+    },
+    "ToolsTaskCapability": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       }
     },
@@ -1720,10 +2140,18 @@
       "format": "const",
       "const": "resources/unsubscribe"
     },
-    "UnsubscribeRequestParam": {
+    "UnsubscribeRequestParams": {
       "description": "Parameters for unsubscribing from resource updates",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource to unsubscribe from",
           "type": "string"
@@ -1732,6 +2160,10 @@
       "required": [
         "uri"
       ]
+    },
+    "UrlElicitationCapability": {
+      "description": "Capability for URL mode elicitation.",
+      "type": "object"
     }
   }
 }

@@ -29,7 +29,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
     let tool_call_fn = quote! {
         async fn call_tool(
             &self,
-            request: rmcp::model::CallToolRequestParam,
+            request: rmcp::model::CallToolRequestParams,
             context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
             let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
@@ -46,7 +46,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
     let tool_list_fn = quote! {
         async fn list_tools(
             &self,
-            _request: Option<rmcp::model::PaginatedRequestParam>,
+            _request: Option<rmcp::model::PaginatedRequestParams>,
             _context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
             Ok(rmcp::model::ListToolsResult{
@@ -56,9 +56,18 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             })
         }
     };
+
+    let get_tool_fn = quote! {
+        fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+            #router.get(name).cloned()
+        }
+    };
+
     let tool_call_fn = syn::parse2::<ImplItem>(tool_call_fn)?;
     let tool_list_fn = syn::parse2::<ImplItem>(tool_list_fn)?;
+    let get_tool_fn = syn::parse2::<ImplItem>(get_tool_fn)?;
     item_impl.items.push(tool_call_fn);
     item_impl.items.push(tool_list_fn);
+    item_impl.items.push(get_tool_fn);
     Ok(item_impl.into_token_stream())
 }

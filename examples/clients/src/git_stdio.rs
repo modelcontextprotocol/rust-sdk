@@ -1,6 +1,6 @@
 use rmcp::{
     RmcpError,
-    model::CallToolRequestParam,
+    model::CallToolRequestParams,
     service::ServiceExt,
     transport::{ConfigureCommandExt, TokioChildProcess},
 };
@@ -39,7 +39,8 @@ async fn main() -> Result<(), RmcpError> {
 
     // Call tool 'git_status' with arguments = {"repo_path": "."}
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "git_status".into(),
             arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
             task: None,

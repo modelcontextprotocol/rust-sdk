@@ -453,6 +453,7 @@ impl ErrorCode {
     pub const INVALID_PARAMS: Self = Self(-32602);
     pub const INTERNAL_ERROR: Self = Self(-32603);
     pub const PARSE_ERROR: Self = Self(-32700);
+    pub const URL_ELICITATION_REQUIRED: Self = Self(-32042);
 }
 
 /// Error information for JSON-RPC error responses.
@@ -503,6 +504,12 @@ impl ErrorData {
     }
     pub fn internal_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
+    }
+    pub fn url_elicitation_required(
+        message: impl Into<Cow<'static, str>>,
+        data: Option<Value>,
+    ) -> Self {
+        Self::new(ErrorCode::URL_ELICITATION_REQUIRED, message, data)
     }
 }
 
@@ -718,7 +725,7 @@ impl CustomRequest {
 const_string!(InitializeResultMethod = "initialize");
 /// # Initialization
 /// This request is sent from the client to the server when it first connects, asking it to begin initialization.
-pub type InitializeRequest = Request<InitializeResultMethod, InitializeRequestParam>;
+pub type InitializeRequest = Request<InitializeResultMethod, InitializeRequestParams>;
 
 const_string!(InitializedNotificationMethod = "notifications/initialized");
 /// This notification is sent from the client to the server after initialization has finished.
@@ -731,7 +738,10 @@ pub type InitializedNotification = NotificationNoParam<InitializedNotificationMe
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct InitializeRequestParam {
+pub struct InitializeRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The MCP protocol version this client supports
     pub protocol_version: ProtocolVersion,
     /// The capabilities this client supports (sampling, roots, etc.)
@@ -739,6 +749,19 @@ pub struct InitializeRequestParam {
     /// Information about the client implementation
     pub client_info: Implementation,
 }
+
+impl RequestParamsMeta for InitializeRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`InitializeRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use InitializeRequestParams instead")]
+pub type InitializeRequestParam = InitializeRequestParams;
 
 /// The server's response to an initialization request.
 ///
@@ -760,7 +783,7 @@ pub struct InitializeResult {
 }
 
 pub type ServerInfo = InitializeResult;
-pub type ClientInfo = InitializeRequestParam;
+pub type ClientInfo = InitializeRequestParams;
 
 #[allow(clippy::derivable_impls)]
 impl Default for ServerInfo {
@@ -778,6 +801,7 @@ impl Default for ServerInfo {
 impl Default for ClientInfo {
     fn default() -> Self {
         ClientInfo {
+            meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation::from_build_env(),
@@ -817,6 +841,8 @@ pub struct Implementation {
     pub title: Option<String>,
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub website_url: Option<String>,
@@ -834,6 +860,7 @@ impl Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
             title: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            description: None,
             icons: None,
             website_url: None,
         }
@@ -843,10 +870,26 @@ impl Implementation {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct PaginatedRequestParam {
+pub struct PaginatedRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
+
+impl RequestParamsMeta for PaginatedRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`PaginatedRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use PaginatedRequestParams instead")]
+pub type PaginatedRequestParam = PaginatedRequestParams;
 // =============================================================================
 // PROGRESS AND PAGINATION
 // =============================================================================
@@ -910,7 +953,7 @@ macro_rules! paginated_result {
 const_string!(ListResourcesRequestMethod = "resources/list");
 /// Request to list all available resources from a server
 pub type ListResourcesRequest =
-    RequestOptionalParam<ListResourcesRequestMethod, PaginatedRequestParam>;
+    RequestOptionalParam<ListResourcesRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(ListResourcesResult {
     resources: Vec<Resource>
@@ -919,7 +962,7 @@ paginated_result!(ListResourcesResult {
 const_string!(ListResourceTemplatesRequestMethod = "resources/templates/list");
 /// Request to list all available resource templates from a server
 pub type ListResourceTemplatesRequest =
-    RequestOptionalParam<ListResourceTemplatesRequestMethod, PaginatedRequestParam>;
+    RequestOptionalParam<ListResourceTemplatesRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(ListResourceTemplatesResult {
     resource_templates: Vec<ResourceTemplate>
@@ -930,10 +973,26 @@ const_string!(ReadResourceRequestMethod = "resources/read");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct ReadResourceRequestParam {
+pub struct ReadResourceRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The URI of the resource to read
     pub uri: String,
 }
+
+impl RequestParamsMeta for ReadResourceRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`ReadResourceRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use ReadResourceRequestParams instead")]
+pub type ReadResourceRequestParam = ReadResourceRequestParams;
 
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -944,7 +1003,7 @@ pub struct ReadResourceResult {
 }
 
 /// Request to read a specific resource
-pub type ReadResourceRequest = Request<ReadResourceRequestMethod, ReadResourceRequestParam>;
+pub type ReadResourceRequest = Request<ReadResourceRequestMethod, ReadResourceRequestParams>;
 
 const_string!(ResourceListChangedNotificationMethod = "notifications/resources/list_changed");
 /// Notification sent when the list of available resources changes
@@ -956,24 +1015,58 @@ const_string!(SubscribeRequestMethod = "resources/subscribe");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SubscribeRequestParam {
+pub struct SubscribeRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The URI of the resource to subscribe to
     pub uri: String,
 }
+
+impl RequestParamsMeta for SubscribeRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`SubscribeRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use SubscribeRequestParams instead")]
+pub type SubscribeRequestParam = SubscribeRequestParams;
+
 /// Request to subscribe to resource updates
-pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestParam>;
+pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestParams>;
 
 const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
 /// Parameters for unsubscribing from resource updates
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct UnsubscribeRequestParam {
+pub struct UnsubscribeRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The URI of the resource to unsubscribe from
     pub uri: String,
 }
+
+impl RequestParamsMeta for UnsubscribeRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`UnsubscribeRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use UnsubscribeRequestParams instead")]
+pub type UnsubscribeRequestParam = UnsubscribeRequestParams;
+
 /// Request to unsubscribe from resource updates
-pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeRequestParam>;
+pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeRequestParams>;
 
 const_string!(ResourceUpdatedNotificationMethod = "notifications/resources/updated");
 /// Parameters for a resource update notification
@@ -994,7 +1087,8 @@ pub type ResourceUpdatedNotification =
 
 const_string!(ListPromptsRequestMethod = "prompts/list");
 /// Request to list all available prompts from a server
-pub type ListPromptsRequest = RequestOptionalParam<ListPromptsRequestMethod, PaginatedRequestParam>;
+pub type ListPromptsRequest =
+    RequestOptionalParam<ListPromptsRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(ListPromptsResult {
     prompts: Vec<Prompt>
@@ -1005,13 +1099,30 @@ const_string!(GetPromptRequestMethod = "prompts/get");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetPromptRequestParam {
+pub struct GetPromptRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
 }
+
+impl RequestParamsMeta for GetPromptRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`GetPromptRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use GetPromptRequestParams instead")]
+pub type GetPromptRequestParam = GetPromptRequestParams;
+
 /// Request to get a specific prompt
-pub type GetPromptRequest = Request<GetPromptRequestMethod, GetPromptRequestParam>;
+pub type GetPromptRequest = Request<GetPromptRequestMethod, GetPromptRequestParams>;
 
 const_string!(PromptListChangedNotificationMethod = "notifications/prompts/list_changed");
 /// Notification sent when the list of available prompts changes
@@ -1045,12 +1156,29 @@ const_string!(SetLevelRequestMethod = "logging/setLevel");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SetLevelRequestParam {
+pub struct SetLevelRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The desired logging level
     pub level: LoggingLevel,
 }
+
+impl RequestParamsMeta for SetLevelRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`SetLevelRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use SetLevelRequestParams instead")]
+pub type SetLevelRequestParam = SetLevelRequestParams;
+
 /// Request to set the logging level
-pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParam>;
+pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParams>;
 
 const_string!(LoggingMessageNotificationMethod = "notifications/message");
 /// Parameters for a logging message notification
@@ -1075,7 +1203,7 @@ pub type LoggingMessageNotification =
 // =============================================================================
 
 const_string!(CreateMessageRequestMethod = "sampling/createMessage");
-pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParam>;
+pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParams>;
 
 /// Represents the role of a participant in a conversation or message exchange.
 ///
@@ -1091,6 +1219,152 @@ pub enum Role {
     Assistant,
 }
 
+/// Tool selection mode (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum ToolChoiceMode {
+    /// Model decides whether to use tools
+    Auto,
+    /// Model must use at least one tool
+    Required,
+    /// Model must not use tools
+    None,
+}
+
+impl Default for ToolChoiceMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Tool choice configuration (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ToolChoice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ToolChoiceMode>,
+}
+
+impl ToolChoice {
+    pub fn auto() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::Auto),
+        }
+    }
+
+    pub fn required() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::Required),
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::None),
+        }
+    }
+}
+
+/// Single or array content wrapper (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum SamplingContent<T> {
+    Single(T),
+    Multiple(Vec<T>),
+}
+
+impl<T> SamplingContent<T> {
+    /// Convert to a Vec regardless of whether it's single or multiple
+    pub fn into_vec(self) -> Vec<T> {
+        match self {
+            SamplingContent::Single(item) => vec![item],
+            SamplingContent::Multiple(items) => items,
+        }
+    }
+
+    /// Check if the content is empty
+    pub fn is_empty(&self) -> bool {
+        match self {
+            SamplingContent::Single(_) => false,
+            SamplingContent::Multiple(items) => items.is_empty(),
+        }
+    }
+
+    /// Get the number of content items
+    pub fn len(&self) -> usize {
+        match self {
+            SamplingContent::Single(_) => 1,
+            SamplingContent::Multiple(items) => items.len(),
+        }
+    }
+}
+
+impl<T> Default for SamplingContent<T> {
+    fn default() -> Self {
+        SamplingContent::Multiple(Vec::new())
+    }
+}
+
+impl<T> SamplingContent<T> {
+    /// Get the first item if present
+    pub fn first(&self) -> Option<&T> {
+        match self {
+            SamplingContent::Single(item) => Some(item),
+            SamplingContent::Multiple(items) => items.first(),
+        }
+    }
+
+    /// Iterate over all content items
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        let items: Vec<&T> = match self {
+            SamplingContent::Single(item) => vec![item],
+            SamplingContent::Multiple(items) => items.iter().collect(),
+        };
+        items.into_iter()
+    }
+}
+
+impl SamplingMessageContent {
+    /// Get the text content if this is a Text variant
+    pub fn as_text(&self) -> Option<&RawTextContent> {
+        match self {
+            SamplingMessageContent::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Get the tool use content if this is a ToolUse variant
+    pub fn as_tool_use(&self) -> Option<&ToolUseContent> {
+        match self {
+            SamplingMessageContent::ToolUse(tool_use) => Some(tool_use),
+            _ => None,
+        }
+    }
+
+    /// Get the tool result content if this is a ToolResult variant
+    pub fn as_tool_result(&self) -> Option<&ToolResultContent> {
+        match self {
+            SamplingMessageContent::ToolResult(tool_result) => Some(tool_result),
+            _ => None,
+        }
+    }
+}
+
+impl<T> From<T> for SamplingContent<T> {
+    fn from(item: T) -> Self {
+        SamplingContent::Single(item)
+    }
+}
+
+impl<T> From<Vec<T>> for SamplingContent<T> {
+    fn from(items: Vec<T>) -> Self {
+        SamplingContent::Multiple(items)
+    }
+}
+
 /// A message in a sampling conversation, containing a role and content.
 ///
 /// This represents a single message in a conversation flow, used primarily
@@ -1101,8 +1375,135 @@ pub enum Role {
 pub struct SamplingMessage {
     /// The role of the message sender (User or Assistant)
     pub role: Role,
-    /// The actual content of the message (text, image, etc.)
-    pub content: Content,
+    /// The actual content of the message (text, image, audio, tool use, or tool result)
+    pub content: SamplingContent<SamplingMessageContent>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+/// Content types for sampling messages (SEP-1577).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum SamplingMessageContent {
+    Text(RawTextContent),
+    Image(RawImageContent),
+    Audio(RawAudioContent),
+    /// Assistant only
+    ToolUse(ToolUseContent),
+    /// User only
+    ToolResult(ToolResultContent),
+}
+
+impl SamplingMessageContent {
+    /// Create a text content
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(RawTextContent {
+            text: text.into(),
+            meta: None,
+        })
+    }
+
+    pub fn tool_use(id: impl Into<String>, name: impl Into<String>, input: JsonObject) -> Self {
+        Self::ToolUse(ToolUseContent::new(id, name, input))
+    }
+
+    pub fn tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+        Self::ToolResult(ToolResultContent::new(tool_use_id, content))
+    }
+}
+
+impl SamplingMessage {
+    pub fn new(role: Role, content: impl Into<SamplingMessageContent>) -> Self {
+        Self {
+            role,
+            content: SamplingContent::Single(content.into()),
+            meta: None,
+        }
+    }
+
+    pub fn new_multiple(role: Role, contents: Vec<SamplingMessageContent>) -> Self {
+        Self {
+            role,
+            content: SamplingContent::Multiple(contents),
+            meta: None,
+        }
+    }
+
+    pub fn user_text(text: impl Into<String>) -> Self {
+        Self::new(Role::User, SamplingMessageContent::text(text))
+    }
+
+    pub fn assistant_text(text: impl Into<String>) -> Self {
+        Self::new(Role::Assistant, SamplingMessageContent::text(text))
+    }
+
+    pub fn user_tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+        Self::new(
+            Role::User,
+            SamplingMessageContent::tool_result(tool_use_id, content),
+        )
+    }
+
+    pub fn assistant_tool_use(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        input: JsonObject,
+    ) -> Self {
+        Self::new(
+            Role::Assistant,
+            SamplingMessageContent::tool_use(id, name, input),
+        )
+    }
+}
+
+// Conversion from RawTextContent to SamplingMessageContent
+impl From<RawTextContent> for SamplingMessageContent {
+    fn from(text: RawTextContent) -> Self {
+        SamplingMessageContent::Text(text)
+    }
+}
+
+// Conversion from String to SamplingMessageContent (as text)
+impl From<String> for SamplingMessageContent {
+    fn from(text: String) -> Self {
+        SamplingMessageContent::text(text)
+    }
+}
+
+impl From<&str> for SamplingMessageContent {
+    fn from(text: &str) -> Self {
+        SamplingMessageContent::text(text)
+    }
+}
+
+// Backward compatibility: Convert Content to SamplingMessageContent
+// Note: Resource and ResourceLink variants are not supported in sampling messages
+impl TryFrom<Content> for SamplingMessageContent {
+    type Error = &'static str;
+
+    fn try_from(content: Content) -> Result<Self, Self::Error> {
+        match content.raw {
+            RawContent::Text(text) => Ok(SamplingMessageContent::Text(text)),
+            RawContent::Image(image) => Ok(SamplingMessageContent::Image(image)),
+            RawContent::Audio(audio) => Ok(SamplingMessageContent::Audio(audio)),
+            RawContent::Resource(_) => {
+                Err("Resource content is not supported in sampling messages")
+            }
+            RawContent::ResourceLink(_) => {
+                Err("ResourceLink content is not supported in sampling messages")
+            }
+        }
+    }
+}
+
+// Backward compatibility: Convert Content to SamplingContent<SamplingMessageContent>
+impl TryFrom<Content> for SamplingContent<SamplingMessageContent> {
+    type Error = &'static str;
+
+    fn try_from(content: Content) -> Result<Self, Self::Error> {
+        Ok(SamplingContent::Single(content.try_into()?))
+    }
 }
 
 /// Specifies how much context should be included in sampling requests.
@@ -1128,10 +1529,19 @@ pub enum ContextInclusion {
 /// This structure contains all the necessary information for a client to
 /// generate an LLM response, including conversation history, model preferences,
 /// and generation parameters.
+///
+/// This implements `TaskAugmentedRequestParamsMeta` as sampling requests can be
+/// long-running and may benefit from task-based execution.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CreateMessageRequestParam {
+pub struct CreateMessageRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    /// Task metadata for async task management (SEP-1319)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<JsonObject>,
     /// The conversation history and current messages
     pub messages: Vec<SamplingMessage>,
     /// Preferences for model selection and behavior
@@ -1154,7 +1564,114 @@ pub struct CreateMessageRequestParam {
     /// Additional metadata for the request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    /// Tools available for the model to call (SEP-1577)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+    /// Tool selection behavior (SEP-1577)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
 }
+
+impl RequestParamsMeta for CreateMessageRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
+    fn task(&self) -> Option<&JsonObject> {
+        self.task.as_ref()
+    }
+    fn task_mut(&mut self) -> &mut Option<JsonObject> {
+        &mut self.task
+    }
+}
+
+impl CreateMessageRequestParams {
+    /// Validate the sampling request parameters per SEP-1577 spec requirements.
+    ///
+    /// Checks:
+    /// - ToolUse content is only allowed in assistant messages
+    /// - ToolResult content is only allowed in user messages
+    /// - Messages with tool result content MUST NOT contain other content types
+    /// - Every assistant ToolUse must be balanced with a corresponding user ToolResult
+    pub fn validate(&self) -> Result<(), String> {
+        for msg in &self.messages {
+            for content in msg.content.iter() {
+                // ToolUse only in assistant messages, ToolResult only in user messages
+                match content {
+                    SamplingMessageContent::ToolUse(_) if msg.role != Role::Assistant => {
+                        return Err("ToolUse content is only allowed in assistant messages".into());
+                    }
+                    SamplingMessageContent::ToolResult(_) if msg.role != Role::User => {
+                        return Err("ToolResult content is only allowed in user messages".into());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Tool result messages MUST NOT contain other content types
+            let contents: Vec<_> = msg.content.iter().collect();
+            let has_tool_result = contents
+                .iter()
+                .any(|c| matches!(c, SamplingMessageContent::ToolResult(_)));
+            if has_tool_result
+                && contents
+                    .iter()
+                    .any(|c| !matches!(c, SamplingMessageContent::ToolResult(_)))
+            {
+                return Err(
+                    "SamplingMessage with tool result content MUST NOT contain other content types"
+                        .into(),
+                );
+            }
+        }
+
+        // Every assistant ToolUse must be balanced with a user ToolResult
+        self.validate_tool_use_result_balance()?;
+
+        Ok(())
+    }
+
+    fn validate_tool_use_result_balance(&self) -> Result<(), String> {
+        let mut pending_tool_use_ids: Vec<String> = Vec::new();
+        for msg in &self.messages {
+            if msg.role == Role::Assistant {
+                for content in msg.content.iter() {
+                    if let SamplingMessageContent::ToolUse(tu) = content {
+                        pending_tool_use_ids.push(tu.id.clone());
+                    }
+                }
+            } else if msg.role == Role::User {
+                for content in msg.content.iter() {
+                    if let SamplingMessageContent::ToolResult(tr) = content {
+                        if !pending_tool_use_ids.contains(&tr.tool_use_id) {
+                            return Err(format!(
+                                "ToolResult with toolUseId '{}' has no matching ToolUse",
+                                tr.tool_use_id
+                            ));
+                        }
+                        pending_tool_use_ids.retain(|id| id != &tr.tool_use_id);
+                    }
+                }
+            }
+        }
+        if !pending_tool_use_ids.is_empty() {
+            return Err(format!(
+                "ToolUse with id(s) {:?} not balanced with ToolResult",
+                pending_tool_use_ids
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Deprecated: Use [`CreateMessageRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CreateMessageRequestParams instead")]
+pub type CreateMessageRequestParam = CreateMessageRequestParams;
 
 /// Preferences for model selection and behavior in sampling requests.
 ///
@@ -1244,7 +1761,10 @@ impl CompletionContext {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CompleteRequestParam {
+pub struct CompleteRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub r#ref: Reference,
     pub argument: ArgumentInfo,
     /// Optional context containing previously resolved argument values
@@ -1252,7 +1772,20 @@ pub struct CompleteRequestParam {
     pub context: Option<CompletionContext>,
 }
 
-pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParam>;
+impl RequestParamsMeta for CompleteRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`CompleteRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CompleteRequestParams instead")]
+pub type CompleteRequestParam = CompleteRequestParams;
+
+pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1447,6 +1980,7 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 // Elicitation allows servers to request interactive input from users during tool execution.
 const_string!(ElicitationCreateRequestMethod = "elicitation/create");
 const_string!(ElicitationResponseNotificationMethod = "notifications/elicitation/response");
+const_string!(ElicitationCompletionNotificationMethod = "notifications/elicitation/complete");
 
 /// Represents the possible actions a user can take in response to an elicitation request.
 ///
@@ -1466,6 +2000,72 @@ pub enum ElicitationAction {
     Cancel,
 }
 
+/// Helper enum for deserializing CreateElicitationRequestParam with backward compatibility.
+/// When mode is missing, it defaults to FormElicitationParam.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "mode")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+enum CreateElicitationRequestParamDeserializeHelper {
+    #[serde(rename = "form", rename_all = "camelCase")]
+    FormElicitationParam {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
+        message: String,
+        requested_schema: ElicitationSchema,
+    },
+    #[serde(rename = "url", rename_all = "camelCase")]
+    UrlElicitationParam {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
+        message: String,
+        url: String,
+        elicitation_id: String,
+    },
+    #[serde(untagged, rename_all = "camelCase")]
+    FormElicitationParamBackwardsCompat {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
+        message: String,
+        requested_schema: ElicitationSchema,
+    },
+}
+
+impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitationRequestParams {
+    type Error = serde_json::Error;
+
+    fn try_from(
+        value: CreateElicitationRequestParamDeserializeHelper,
+    ) -> Result<Self, Self::Error> {
+        match value {
+            CreateElicitationRequestParamDeserializeHelper::FormElicitationParam {
+                meta,
+                message,
+                requested_schema,
+            }
+            | CreateElicitationRequestParamDeserializeHelper::FormElicitationParamBackwardsCompat {
+                meta,
+                message,
+                requested_schema,
+            } => Ok(CreateElicitationRequestParams::FormElicitationParams {
+                meta,
+                message,
+                requested_schema,
+            }),
+            CreateElicitationRequestParamDeserializeHelper::UrlElicitationParam {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            } => Ok(CreateElicitationRequestParams::UrlElicitationParams {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            }),
+        }
+    }
+}
+
 /// Parameters for creating an elicitation request to gather user input.
 ///
 /// This structure contains everything needed to request interactive input from a user:
@@ -1473,11 +2073,12 @@ pub enum ElicitationAction {
 /// - A type-safe schema defining the expected structure of the response
 ///
 /// # Example
-///
+/// 1. Form-based elicitation request
 /// ```rust
 /// use rmcp::model::*;
 ///
-/// let params = CreateElicitationRequestParam {
+/// let params = CreateElicitationRequestParams::FormElicitationParams {
+///    meta: None,
 ///     message: "Please provide your email".to_string(),
 ///     requested_schema: ElicitationSchema::builder()
 ///         .required_email("email")
@@ -1485,20 +2086,74 @@ pub enum ElicitationAction {
 ///         .unwrap(),
 /// };
 /// ```
+/// 2. URL-based elicitation request
+/// ```rust
+/// use rmcp::model::*;
+/// let params = CreateElicitationRequestParams::UrlElicitationParams {
+///     meta: None,
+///     message: "Please provide your feedback at the following URL".to_string(),
+///     url: "https://example.com/feedback".to_string(),
+///     elicitation_id: "unique-id-123".to_string(),
+/// };
+/// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    tag = "mode",
+    try_from = "CreateElicitationRequestParamDeserializeHelper"
+)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CreateElicitationRequestParam {
-    /// Human-readable message explaining what input is needed from the user.
-    /// This should be clear and provide sufficient context for the user to understand
-    /// what information they need to provide.
-    pub message: String,
+pub enum CreateElicitationRequestParams {
+    #[serde(rename = "form", rename_all = "camelCase")]
+    FormElicitationParams {
+        /// Protocol-level metadata for this request (SEP-1319)
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
+        /// Human-readable message explaining what input is needed from the user.
+        /// This should be clear and provide sufficient context for the user to understand
+        /// what information they need to provide.
+        message: String,
 
-    /// Type-safe schema defining the expected structure and validation rules for the user's response.
-    /// This enforces the MCP 2025-06-18 specification that elicitation schemas must be objects
-    /// with primitive-typed properties.
-    pub requested_schema: ElicitationSchema,
+        /// Type-safe schema defining the expected structure and validation rules for the user's response.
+        /// This enforces the MCP 2025-06-18 specification that elicitation schemas must be objects
+        /// with primitive-typed properties.
+        requested_schema: ElicitationSchema,
+    },
+    #[serde(rename = "url", rename_all = "camelCase")]
+    UrlElicitationParams {
+        /// Protocol-level metadata for this request (SEP-1319)
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<Meta>,
+        /// Human-readable message explaining what input is needed from the user.
+        /// This should be clear and provide sufficient context for the user to understand
+        /// what information they need to provide.
+        message: String,
+
+        /// The URL where the user can provide the requested information.
+        /// The client should direct the user to this URL to complete the elicitation.
+        url: String,
+        /// The unique identifier for this elicitation request.
+        elicitation_id: String,
+    },
 }
+
+impl RequestParamsMeta for CreateElicitationRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        match self {
+            CreateElicitationRequestParams::FormElicitationParams { meta, .. } => meta.as_ref(),
+            CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta.as_ref(),
+        }
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        match self {
+            CreateElicitationRequestParams::FormElicitationParams { meta, .. } => meta,
+            CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta,
+        }
+    }
+}
+
+/// Deprecated: Use [`CreateElicitationRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CreateElicitationRequestParams instead")]
+pub type CreateElicitationRequestParam = CreateElicitationRequestParams;
 
 /// The result returned by a client in response to an elicitation request.
 ///
@@ -1520,7 +2175,19 @@ pub struct CreateElicitationResult {
 
 /// Request type for creating an elicitation to gather user input
 pub type CreateElicitationRequest =
-    Request<ElicitationCreateRequestMethod, CreateElicitationRequestParam>;
+    Request<ElicitationCreateRequestMethod, CreateElicitationRequestParams>;
+
+/// Notification parameters for an url elicitation completion notification.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ElicitationResponseNotificationParam {
+    pub elicitation_id: String,
+}
+
+/// Notification sent when an url elicitation process is completed.
+pub type ElicitationCompletionNotification =
+    Notification<ElicitationCompletionNotificationMethod, ElicitationResponseNotificationParam>;
 
 // =============================================================================
 // TOOL EXECUTION RESULTS
@@ -1685,7 +2352,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
 
 const_string!(ListToolsRequestMethod = "tools/list");
 /// Request to list all available tools from a server
-pub type ListToolsRequest = RequestOptionalParam<ListToolsRequestMethod, PaginatedRequestParam>;
+pub type ListToolsRequest = RequestOptionalParam<ListToolsRequestMethod, PaginatedRequestParams>;
 
 paginated_result!(
     ListToolsResult {
@@ -1698,22 +2365,52 @@ const_string!(CallToolRequestMethod = "tools/call");
 ///
 /// Contains the tool name and optional arguments needed to execute
 /// the tool operation.
+///
+/// This implements `TaskAugmentedRequestParamsMeta` as tool calls can be
+/// long-running and may benefit from task-based execution.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CallToolRequestParam {
+pub struct CallToolRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     /// The name of the tool to call
     pub name: Cow<'static, str>,
     /// Arguments to pass to the tool (must match the tool's input schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
+    /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<JsonObject>,
 }
 
-/// Request to call a specific tool
-pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParam>;
+impl RequestParamsMeta for CallToolRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
 
+impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
+    fn task(&self) -> Option<&JsonObject> {
+        self.task.as_ref()
+    }
+    fn task_mut(&mut self) -> &mut Option<JsonObject> {
+        &mut self.task
+    }
+}
+
+/// Deprecated: Use [`CallToolRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CallToolRequestParams instead")]
+pub type CallToolRequestParam = CallToolRequestParams;
+
+/// Request to call a specific tool
+pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>;
+
+/// Result of sampling/createMessage (SEP-1577).
 /// The result of a sampling/createMessage request containing the generated response.
 ///
 /// This structure contains the generated message along with metadata about
@@ -1736,6 +2433,15 @@ impl CreateMessageResult {
     pub const STOP_REASON_END_TURN: &str = "endTurn";
     pub const STOP_REASON_END_SEQUENCE: &str = "stopSequence";
     pub const STOP_REASON_END_MAX_TOKEN: &str = "maxTokens";
+    pub const STOP_REASON_TOOL_USE: &str = "toolUse";
+
+    /// Validate the result per SEP-1577: role must be "assistant".
+    pub fn validate(&self) -> Result<(), String> {
+        if self.message.role != Role::Assistant {
+            return Err("CreateMessageResult role must be 'assistant'".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1752,39 +2458,88 @@ pub struct GetPromptResult {
 // =============================================================================
 
 const_string!(GetTaskInfoMethod = "tasks/get");
-pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParam>;
+pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetTaskInfoParam {
+pub struct GetTaskInfoParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub task_id: String,
 }
+
+impl RequestParamsMeta for GetTaskInfoParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`GetTaskInfoParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use GetTaskInfoParams instead")]
+pub type GetTaskInfoParam = GetTaskInfoParams;
 
 const_string!(ListTasksMethod = "tasks/list");
-pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParam>;
+pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParams>;
 
 const_string!(GetTaskResultMethod = "tasks/result");
-pub type GetTaskResultRequest = Request<GetTaskResultMethod, GetTaskResultParam>;
+pub type GetTaskResultRequest = Request<GetTaskResultMethod, GetTaskResultParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetTaskResultParam {
+pub struct GetTaskResultParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub task_id: String,
 }
+
+impl RequestParamsMeta for GetTaskResultParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`GetTaskResultParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use GetTaskResultParams instead")]
+pub type GetTaskResultParam = GetTaskResultParams;
 
 const_string!(CancelTaskMethod = "tasks/cancel");
-pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParam>;
+pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct CancelTaskParam {
+pub struct CancelTaskParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
     pub task_id: String,
 }
+
+impl RequestParamsMeta for CancelTaskParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+/// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
+pub type CancelTaskParam = CancelTaskParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct GetTaskInfoResult {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1829,6 +2584,7 @@ macro_rules! ts_union {
     (@declare_end $U:ident { $($declared:tt)* }) => {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
+        #[allow(clippy::large_enum_variant)]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub enum $U {
             $($declared)*
@@ -1869,11 +2625,11 @@ ts_union!(
     | UnsubscribeRequest
     | CallToolRequest
     | ListToolsRequest
-    | CustomRequest
     | GetTaskInfoRequest
     | ListTasksRequest
     | GetTaskResultRequest
-    | CancelTaskRequest;
+    | CancelTaskRequest
+    | CustomRequest;
 );
 
 impl ClientRequest {
@@ -1892,11 +2648,11 @@ impl ClientRequest {
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
-            ClientRequest::CustomRequest(r) => r.method.as_str(),
             ClientRequest::GetTaskInfoRequest(r) => r.method.as_str(),
             ClientRequest::ListTasksRequest(r) => r.method.as_str(),
             ClientRequest::GetTaskResultRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
+            ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -1945,6 +2701,7 @@ ts_union!(
     | ResourceListChangedNotification
     | ToolListChangedNotification
     | PromptListChangedNotification
+    | ElicitationCompletionNotification
     | CustomNotification;
 );
 
@@ -1961,11 +2718,11 @@ ts_union!(
     | ListToolsResult
     | CreateElicitationResult
     | EmptyResult
-    | CustomResult
     | CreateTaskResult
     | ListTasksResult
     | GetTaskInfoResult
     | TaskResult
+    | CustomResult
     ;
 );
 
@@ -2201,11 +2958,13 @@ mod tests {
             serde_json::from_value(request.clone()).expect("invalid request");
         let (request, id) = request.into_request().expect("should be a request");
         assert_eq!(id, RequestId::Number(1));
+        #[allow(deprecated)]
         match request {
             ClientRequest::InitializeRequest(Request {
                 method: _,
                 params:
                     InitializeRequestParam {
+                        meta: _,
                         protocol_version: _,
                         capabilities,
                         client_info,
@@ -2213,7 +2972,9 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(capabilities.roots.unwrap().list_changed, Some(true));
-                assert_eq!(capabilities.sampling.unwrap().len(), 0);
+                let sampling = capabilities.sampling.unwrap();
+                assert_eq!(sampling.tools, None);
+                assert_eq!(sampling.context, None);
                 assert_eq!(client_info.name, "ExampleClient");
                 assert_eq!(client_info.version, "1.0.0");
             }
@@ -2378,6 +3139,7 @@ mod tests {
             name: "test-server".to_string(),
             title: Some("Test Server".to_string()),
             version: "1.0.0".to_string(),
+            description: Some("A test server for unit testing".to_string()),
             icons: Some(vec![
                 Icon {
                     src: "https://example.com/icon.png".to_string(),
@@ -2395,6 +3157,7 @@ mod tests {
 
         let json = serde_json::to_value(&implementation).unwrap();
         assert_eq!(json["name"], "test-server");
+        assert_eq!(json["description"], "A test server for unit testing");
         assert_eq!(json["websiteUrl"], "https://example.com");
         assert!(json["icons"].is_array());
         assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
@@ -2414,6 +3177,7 @@ mod tests {
         let implementation: Implementation = serde_json::from_value(old_json).unwrap();
         assert_eq!(implementation.name, "legacy-server");
         assert_eq!(implementation.version, "0.9.0");
+        assert_eq!(implementation.description, None);
         assert_eq!(implementation.icons, None);
         assert_eq!(implementation.website_url, None);
     }
@@ -2427,6 +3191,7 @@ mod tests {
                 name: "icon-server".to_string(),
                 title: None,
                 version: "2.0.0".to_string(),
+                description: None,
                 icons: Some(vec![Icon {
                     src: "https://example.com/server.png".to_string(),
                     mime_type: Some("image/png".to_string()),
@@ -2445,5 +3210,143 @@ mod tests {
         );
         assert_eq!(json["serverInfo"]["icons"][0]["sizes"][0], "48x48");
         assert_eq!(json["serverInfo"]["websiteUrl"], "https://docs.example.com");
+    }
+
+    #[test]
+    fn test_elicitation_deserialization_untagged() {
+        // Test deserialization without the "type" field (should default to FormElicitationParam)
+        let json_data_without_tag = json!({
+            "message": "Please provide more details.",
+            "requestedSchema": {
+                "title": "User Details",
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" }
+                },
+                "required": ["name", "age"]
+            }
+        });
+        let elicitation: CreateElicitationRequestParams =
+            serde_json::from_value(json_data_without_tag).expect("Deserialization failed");
+        if let CreateElicitationRequestParams::FormElicitationParams {
+            meta,
+            message,
+            requested_schema,
+        } = elicitation
+        {
+            assert_eq!(meta, None);
+            assert_eq!(message, "Please provide more details.");
+            assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
+            assert_eq!(requested_schema.type_, ObjectTypeConst);
+        } else {
+            panic!("Expected FormElicitationParam");
+        }
+    }
+
+    #[test]
+    fn test_elicitation_deserialization() {
+        let json_data_form = json!({
+            "_meta": { "meta_form_key_1": "meta form value 1" },
+            "mode": "form",
+            "message": "Please provide more details.",
+            "requestedSchema": {
+                "title": "User Details",
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" }
+                },
+                "required": ["name", "age"]
+            }
+        });
+        let elicitation_form: CreateElicitationRequestParams =
+            serde_json::from_value(json_data_form).expect("Deserialization failed");
+        if let CreateElicitationRequestParams::FormElicitationParams {
+            meta,
+            message,
+            requested_schema,
+        } = elicitation_form
+        {
+            assert_eq!(
+                meta,
+                Some(Meta(object!({ "meta_form_key_1": "meta form value 1" })))
+            );
+            assert_eq!(message, "Please provide more details.");
+            assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
+            assert_eq!(requested_schema.type_, ObjectTypeConst);
+        } else {
+            panic!("Expected FormElicitationParam");
+        }
+
+        let json_data_url = json!({
+                "_meta": { "meta_url_key_1": "meta url value 1" },
+            "mode": "url",
+            "message": "Please fill out the form at the following URL.",
+            "url": "https://example.com/form",
+            "elicitationId": "elicitation-123"
+        });
+        let elicitation_url: CreateElicitationRequestParams =
+            serde_json::from_value(json_data_url).expect("Deserialization failed");
+        if let CreateElicitationRequestParams::UrlElicitationParams {
+            meta,
+            message,
+            url,
+            elicitation_id,
+        } = elicitation_url
+        {
+            assert_eq!(
+                meta,
+                Some(Meta(object!({ "meta_url_key_1": "meta url value 1" })))
+            );
+            assert_eq!(message, "Please fill out the form at the following URL.");
+            assert_eq!(url, "https://example.com/form");
+            assert_eq!(elicitation_id, "elicitation-123");
+        } else {
+            panic!("Expected UrlElicitationParam");
+        }
+    }
+
+    #[test]
+    fn test_elicitation_serialization() {
+        let form_elicitation = CreateElicitationRequestParams::FormElicitationParams {
+            meta: Some(Meta(object!({ "meta_form_key_1": "meta form value 1" }))),
+            message: "Please provide more details.".to_string(),
+            requested_schema: ElicitationSchema::builder()
+                .title("User Details")
+                .string_property("name", |s| s)
+                .build()
+                .expect("Valid schema"),
+        };
+        let json_form = serde_json::to_value(&form_elicitation).expect("Serialization failed");
+        let expected_form_json = json!({
+            "_meta": { "meta_form_key_1": "meta form value 1" },
+            "mode": "form",
+            "message": "Please provide more details.",
+            "requestedSchema": {
+                "title":"User Details",
+                "type":"object",
+                "properties":{
+                    "name": { "type": "string" },
+                },
+            }
+        });
+        assert_eq!(json_form, expected_form_json);
+
+        let url_elicitation = CreateElicitationRequestParams::UrlElicitationParams {
+            meta: Some(Meta(object!({ "meta_url_key_1": "meta url value 1" }))),
+            message: "Please fill out the form at the following URL.".to_string(),
+            url: "https://example.com/form".to_string(),
+            elicitation_id: "elicitation-123".to_string(),
+        };
+        let json_url = serde_json::to_value(&url_elicitation).expect("Serialization failed");
+        let expected_url_json = json!({
+            "_meta": { "meta_url_key_1": "meta url value 1" },
+            "mode": "url",
+            "message": "Please fill out the form at the following URL.",
+            "url": "https://example.com/form",
+            "elicitationId": "elicitation-123"
+        });
+        assert_eq!(json_url, expected_url_json);
     }
 }

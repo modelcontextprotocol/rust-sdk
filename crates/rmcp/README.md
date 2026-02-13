@@ -1,9 +1,17 @@
+<style>
+.rustdoc-hidden { display: none; }
+</style>
+
+<div class="rustdoc-hidden">
+
 # RMCP: Rust Model Context Protocol
 
+[![Crates.io](https://img.shields.io/crates/v/rmcp.svg)](https://crates.io/crates/rmcp)
+[![Documentation](https://docs.rs/rmcp/badge.svg)](https://docs.rs/rmcp)
+
+</div>
+
 `rmcp` is the official Rust implementation of the Model Context Protocol (MCP), a protocol designed for AI assistants to communicate with other services. This library can be used to build both servers that expose capabilities to AI assistants and clients that interact with such servers.
-
-
-
 
 ## Quick Start
 
@@ -11,12 +19,15 @@
 
 Creating a server with tools is simple using the `#[tool]` macro:
 
-```rust, ignore
+```rust,no_run
 use rmcp::{
-    handler::server::router::tool::ToolRouter, model::*, tool, tool_handler, tool_router,
-    transport::stdio, ErrorData as McpError, ServiceExt,
+    ServerHandler, ServiceExt,
+    handler::server::tool::ToolRouter,
+    model::*,
+    tool, tool_handler, tool_router,
+    transport::stdio,
+    ErrorData as McpError,
 };
-use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -55,7 +66,7 @@ impl Counter {
 
 // Implement the server handler
 #[tool_handler]
-impl rmcp::ServerHandler for Counter {
+impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some("A simple counter that tallies the number of times the increment tool has been used".into()),
@@ -73,10 +84,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Error starting server: {}", e);
     })?;
     service.waiting().await?;
-
     Ok(())
 }
 ```
+
+### Structured Output
+
+Tools can return structured JSON data with schemas. Use the [`Json`] wrapper:
+
+```rust
+# use rmcp::{tool, tool_router, handler::server::{tool::ToolRouter, wrapper::Parameters}, Json};
+# use schemars::JsonSchema;
+# use serde::{Serialize, Deserialize};
+#
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct CalculationRequest {
+    a: i32,
+    b: i32,
+    operation: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct CalculationResult {
+    result: i32,
+    operation: String,
+}
+
+# #[derive(Clone)]
+# struct Calculator {
+#     tool_router: ToolRouter<Self>,
+# }
+#
+# #[tool_router]
+# impl Calculator {
+#[tool(name = "calculate", description = "Perform a calculation")]
+async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Json<CalculationResult>, String> {
+    let result = match params.0.operation.as_str() {
+        "add" => params.0.a + params.0.b,
+        "multiply" => params.0.a * params.0.b,
+        _ => return Err("Unknown operation".to_string()),
+    };
+
+    Ok(Json(CalculationResult { result, operation: params.0.operation }))
+}
+# }
+```
+
+The `#[tool]` macro automatically generates an output schema from the `CalculationResult` type.
 
 ## Tasks
 
@@ -93,11 +147,11 @@ To expose task support, enable the `tasks` capability when building `ServerCapab
 
 Creating a client to interact with a server:
 
-```rust, ignore
+```rust,no_run
 use rmcp::{
-    model::CallToolRequestParam,
-    service::ServiceExt,
-    transport::{TokioChildProcess, ConfigureCommandExt}
+    ServiceExt,
+    model::CallToolRequestParams,
+    transport::{ConfigureCommandExt, TokioChildProcess},
 };
 use tokio::process::Command;
 
@@ -105,12 +159,12 @@ use tokio::process::Command;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to a server running as a child process
     let service = ()
-    .serve(TokioChildProcess::new(Command::new("uvx").configure(
-        |cmd| {
-            cmd.arg("mcp-server-git");
-        },
-    ))?)
-    .await?;
+        .serve(TokioChildProcess::new(Command::new("uvx").configure(
+            |cmd| {
+                cmd.arg("mcp-server-git");
+            },
+        ))?)
+        .await?;
 
     // Get server information
     let server_info = service.peer_info();
@@ -122,9 +176,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Call a tool
     let result = service
-        .call_tool(CallToolRequestParam {
-            name: "increment".into(),
-            arguments: None,
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "git_status".into(),
+            arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
             task: None,
         })
         .await?;
@@ -132,10 +187,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Gracefully close the connection
     service.cancel().await?;
-    
     Ok(())
 }
 ```
+
+For more examples, see the [examples directory](https://github.com/anthropics/mcp-rust-sdk/tree/main/examples) in the repository.
 
 ## Transport Options
 
@@ -151,15 +207,13 @@ For working directly with I/O streams (`tokio::io::AsyncRead` and `tokio::io::As
 Run MCP servers as child processes and communicate via standard I/O.
 
 Example:
-```rust
+```rust,ignore
 use rmcp::transport::TokioChildProcess;
 use tokio::process::Command;
 
 let transport = TokioChildProcess::new(Command::new("mcp-server"))?;
 let service = client.serve(transport).await?;
 ```
-
-
 
 ## Access with peer interface when handling message
 
@@ -212,10 +266,14 @@ RMCP uses feature flags to control which components are included:
   - `transport-async-rw`: Async read/write support
   - `transport-io`: I/O stream support
   - `transport-child-process`: Child process support
-  - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming (client agnostic, see [`StreamableHttpClientTransport`] for details)
+  - `transport-streamable-http-client` / `transport-streamable-http-server`: HTTP streaming (client agnostic, see [`StreamableHttpClientTransport`](crate::transport::StreamableHttpClientTransport) for details)
     - `transport-streamable-http-client-reqwest`: a default `reqwest` implementation of the streamable http client
 - `auth`: OAuth2 authentication support
 - `schemars`: JSON Schema generation (for tool definitions)
+- TLS backend options (for HTTP transports):
+  - `reqwest`: Uses rustls (pure Rust TLS, recommended default)
+  - `reqwest-native-tls`: Uses platform native TLS (OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows)
+  - `reqwest-tls-no-provider`: Uses rustls without a default crypto provider (bring your own)
 
 
 ## Transports
@@ -227,25 +285,26 @@ RMCP uses feature flags to control which components are included:
 
 <details>
 <summary>Transport</summary>
-The transport type must implemented [`Transport`] trait, which allow it send message concurrently and receive message sequentially.
+
+The transport type must implement the [`Transport`](crate::transport::Transport) trait, which allows it to send messages concurrently and receive messages sequentially.
 There are 2 pairs of standard transport types:
 
-| transport         | client                                                    | server                                                |
-|:-:                |:-:                                                        |:-:                                                    |
-| std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
-| streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::session::create_session`]   |
+| transport       | client                                                                              | server                                                                        |
+|:---------------:|:-----------------------------------------------------------------------------------:|:-----------------------------------------------------------------------------:|
+| std IO          | [`TokioChildProcess`](crate::transport::TokioChildProcess)                          | [`stdio`](crate::transport::stdio)                                            |
+| streamable http | [`StreamableHttpClientTransport`](crate::transport::StreamableHttpClientTransport)  | [`StreamableHttpService`](crate::transport::StreamableHttpService)            |
 
-#### [IntoTransport](`IntoTransport`) trait
-[`IntoTransport`] is a helper trait that implicitly convert a type into a transport type.
+#### [`IntoTransport`](crate::transport::IntoTransport) trait
+[`IntoTransport`](crate::transport::IntoTransport) is a helper trait that implicitly converts a type into a transport type.
 
-These types is automatically implemented [`IntoTransport`] trait
-1. A type that already implement both [`futures::Sink`] and [`futures::Stream`] trait, or a tuple `(Tx, Rx)`  where `Tx` is [`futures::Sink`] and `Rx` is [`futures::Stream`].
-2. A type that implement both [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`] trait. or a tuple `(R, W)` where `R` is [`tokio::io::AsyncRead`] and `W` is [`tokio::io::AsyncWrite`].
-3. A type that implement [Worker](`worker::Worker`) trait.
-4. A type that implement [`Transport`] trait.
+These types automatically implement [`IntoTransport`](crate::transport::IntoTransport):
+1. A type that implements both `futures::Sink` and `futures::Stream`, or a tuple `(Tx, Rx)` where `Tx` is `futures::Sink` and `Rx` is `futures::Stream`.
+2. A type that implements both `tokio::io::AsyncRead` and `tokio::io::AsyncWrite`, or a tuple `(R, W)` where `R` is `tokio::io::AsyncRead` and `W` is `tokio::io::AsyncWrite`.
+3. A type that implements the [`Worker`](crate::transport::worker::Worker) trait.
+4. A type that implements the [`Transport`](crate::transport::Transport) trait.
 
 </details>
 
 ## License
 
-This project is licensed under the terms specified in the repository's LICENSE file. 
+This project is licensed under the terms specified in the repository's LICENSE file.

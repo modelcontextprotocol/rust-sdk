@@ -1,0 +1,5 @@
+#!/bin/sh
+cargo +nightly fmt --all
+
+# stage any formatting changes
+git add -u

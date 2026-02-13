@@ -337,7 +337,7 @@ impl ServerHandler for SqlQueryServer {
 
     async fn complete(
         &self,
-        request: CompleteRequestParam,
+        request: CompleteRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, McpError> {
         let candidates = match &request.r#ref {

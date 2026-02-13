@@ -24,6 +24,24 @@ pub struct AuthRequiredError {
     pub www_authenticate_header: String,
 }
 
+#[derive(Debug)]
+pub struct InsufficientScopeError {
+    pub www_authenticate_header: String,
+    pub required_scope: Option<String>,
+}
+
+impl InsufficientScopeError {
+    /// check if scope upgrade is possible (i.e., we know what scope is required)
+    pub fn can_upgrade(&self) -> bool {
+        self.required_scope.is_some()
+    }
+
+    /// get the required scope for upgrade
+    pub fn get_required_scope(&self) -> Option<&str> {
+        self.required_scope.as_deref()
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("SSE error: {0}")]
@@ -56,6 +74,8 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Auth(#[from] crate::transport::auth::AuthError),
     #[error("Auth required")]
     AuthRequired(AuthRequiredError),
+    #[error("Insufficient scope")]
+    InsufficientScope(InsufficientScopeError),
 }
 
 #[derive(Debug, Clone, Error)]
@@ -335,7 +355,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         };
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
         let session_cleanup_info = session_id.as_ref().map(|sid| {
-            (self.client.clone(), config.uri.clone(), sid.clone(), config.auth_header.clone())
+            (
+                self.client.clone(),
+                config.uri.clone(),
+                sid.clone(),
+                config.auth_header.clone(),
+            )
         });
 
         context.send_to_handler(message).await?;

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation},
+    model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation},
     transport::StreamableHttpClientTransport,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -18,12 +18,14 @@ async fn main() -> Result<()> {
         .init();
     let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
     let client_info = ClientInfo {
+        meta: None,
         protocol_version: Default::default(),
         capabilities: ClientCapabilities::default(),
         client_info: Implementation {
             name: "test sse client".to_string(),
             title: None,
             version: "0.0.1".to_string(),
+            description: None,
             website_url: None,
             icons: None,
         },
@@ -41,7 +43,8 @@ async fn main() -> Result<()> {
     tracing::info!("Available tools: {tools:#?}");
 
     let tool_result = client
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: "increment".into(),
             arguments: serde_json::json!({}).as_object().cloned(),
             task: None,

@@ -504,26 +504,89 @@
         }
       ]
     },
-    "CreateElicitationRequestParam": {
-      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParam {\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```",
-      "type": "object",
-      "properties": {
-        "message": {
-          "description": "Human-readable message explaining what input is needed from the user.\nThis should be clear and provide sufficient context for the user to understand\nwhat information they need to provide.",
-          "type": "string"
-        },
-        "requestedSchema": {
-          "description": "Type-safe schema defining the expected structure and validation rules for the user's response.\nThis enforces the MCP 2025-06-18 specification that elicitation schemas must be objects\nwith primitive-typed properties.",
-          "allOf": [
-            {
+    "CreateElicitationRequestParams": {
+      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n1. Form-based elicitation request\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParams::FormElicitationParams {\n   meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```\n2. URL-based elicitation request\n```rust\nuse rmcp::model::*;\nlet params = CreateElicitationRequestParams::UrlElicitationParams {\n    meta: None,\n    message: \"Please provide your feedback at the following URL\".to_string(),\n    url: \"https://example.com/feedback\".to_string(),\n    elicitation_id: \"unique-id-123\".to_string(),\n};\n```",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "form"
+            },
+            "requestedSchema": {
               "$ref": "#/definitions/ElicitationSchema"
             }
+          },
+          "required": [
+            "mode",
+            "message",
+            "requestedSchema"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "elicitationId": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "const": "url"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "message",
+            "url",
+            "elicitationId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "message": {
+              "type": "string"
+            },
+            "requestedSchema": {
+              "$ref": "#/definitions/ElicitationSchema"
+            }
+          },
+          "required": [
+            "message",
+            "requestedSchema"
           ]
         }
-      },
-      "required": [
-        "message",
-        "requestedSchema"
       ]
     },
     "CreateElicitationResult": {
@@ -551,10 +614,18 @@
       "format": "const",
       "const": "sampling/createMessage"
     },
-    "CreateMessageRequestParam": {
-      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.",
+    "CreateMessageRequestParams": {
+      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.\n\nThis implements `TaskAugmentedRequestParamsMeta` as sampling requests can be\nlong-running and may benefit from task-based execution.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "includeContext": {
           "description": "How much context to include from MCP servers",
           "anyOf": [
@@ -610,6 +681,14 @@
             "null"
           ]
         },
+        "task": {
+          "description": "Task metadata for async task management (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "temperature": {
           "description": "Temperature for controlling randomness (0.0 to 1.0)",
           "type": [
@@ -617,6 +696,27 @@
             "null"
           ],
           "format": "float"
+        },
+        "toolChoice": {
+          "description": "Tool selection behavior (SEP-1577)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolChoice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "description": "Tools available for the model to call (SEP-1577)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Tool"
+          }
         }
       },
       "required": [
@@ -685,10 +785,27 @@
         }
       ]
     },
+    "ElicitationCompletionNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/elicitation/complete"
+    },
     "ElicitationCreateRequestMethod": {
       "type": "string",
       "format": "const",
       "const": "elicitation/create"
+    },
+    "ElicitationResponseNotificationParam": {
+      "description": "Notification parameters for an url elicitation completion notification.",
+      "type": "object",
+      "properties": {
+        "elicitationId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "elicitationId"
+      ]
     },
     "ElicitationSchema": {
       "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
@@ -738,6 +855,18 @@
         "type",
         "properties"
       ]
+    },
+    "ElicitationTaskCapability": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
@@ -821,7 +950,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Icon": {
       "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
@@ -856,6 +986,12 @@
     "Implementation": {
       "type": "object",
       "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "icons": {
           "type": [
             "array",
@@ -1030,6 +1166,9 @@
         },
         {
           "$ref": "#/definitions/NotificationNoParam3"
+        },
+        {
+          "$ref": "#/definitions/Notification5"
         },
         {
           "$ref": "#/definitions/CustomNotification"
@@ -1440,6 +1579,21 @@
         },
         "params": {
           "$ref": "#/definitions/ResourceUpdatedNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification5": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ElicitationCompletionNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ElicitationResponseNotificationParam"
         }
       },
       "required": [
@@ -2111,7 +2265,7 @@
           "$ref": "#/definitions/CreateMessageRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CreateMessageRequestParam"
+          "$ref": "#/definitions/CreateMessageRequestParams"
         }
       },
       "required": [
@@ -2127,7 +2281,7 @@
           "$ref": "#/definitions/ElicitationCreateRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CreateElicitationRequestParam"
+          "$ref": "#/definitions/CreateElicitationRequestParams"
         }
       },
       "required": [
@@ -2272,15 +2426,36 @@
         }
       ]
     },
+    "SamplingContent": {
+      "description": "Single or array content wrapper (SEP-1577).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SamplingMessageContent"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessageContent"
+          }
+        }
+      ]
+    },
     "SamplingMessage": {
       "description": "A message in a sampling conversation, containing a role and content.\n\nThis represents a single message in a conversation flow, used primarily\nin LLM sampling requests where the conversation history is important\nfor generating appropriate responses.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
-          "description": "The actual content of the message (text, image, etc.)",
+          "description": "The actual content of the message (text, image, audio, tool use, or tool result)",
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated"
+              "$ref": "#/definitions/SamplingContent"
             }
           ]
         },
@@ -2298,6 +2473,110 @@
         "content"
       ]
     },
+    "SamplingMessageContent": {
+      "description": "Content types for sampling messages (SEP-1577).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawTextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Assistant only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolUseContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "User only",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolResultContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "SamplingTaskCapability": {
+      "type": "object",
+      "properties": {
+        "createMessage": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "ServerCapabilities": {
       "title": "Builder",
       "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_logging()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
@@ -2311,6 +2590,17 @@
           "additionalProperties": true
         },
         "experimental": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "extensions": {
+          "description": "Optional MCP extensions that the server supports (SEP-1724).\nKeys are extension identifiers (e.g., `\"io.modelcontextprotocol/apps\"`),\nvalues are per-extension settings objects. An empty object indicates\nsupport with no settings.",
           "type": [
             "object",
             "null"
@@ -2405,9 +2695,6 @@
           "$ref": "#/definitions/EmptyObject"
         },
         {
-          "$ref": "#/definitions/CustomResult"
-        },
-        {
           "$ref": "#/definitions/CreateTaskResult"
         },
         {
@@ -2418,6 +2705,9 @@
         },
         {
           "$ref": "#/definitions/TaskResult"
+        },
+        {
+          "$ref": "#/definitions/CustomResult"
         }
       ]
     },
@@ -2581,6 +2871,42 @@
         "createdAt"
       ]
     },
+    "TaskRequestsCapability": {
+      "description": "Request types that support task-augmented execution.",
+      "type": "object",
+      "properties": {
+        "elicitation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsTaskCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "TaskResult": {
       "description": "Final result for a succeeded task (returned from `tasks/result`).",
       "type": "object",
@@ -2635,33 +2961,53 @@
         }
       ]
     },
+    "TaskSupport": {
+      "description": "Per-tool task support mode as defined in the MCP specification.\n\nThis enum indicates whether a tool supports task-based invocation,\nallowing clients to know how to properly call the tool.\n\nSee [Tool-Level Negotiation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks#tool-level-negotiation).",
+      "oneOf": [
+        {
+          "description": "Clients MUST NOT invoke this tool as a task (default behavior).",
+          "type": "string",
+          "const": "forbidden"
+        },
+        {
+          "description": "Clients MAY invoke this tool as either a task or a normal call.",
+          "type": "string",
+          "const": "optional"
+        },
+        {
+          "description": "Clients MUST invoke this tool as a task.",
+          "type": "string",
+          "const": "required"
+        }
+      ]
+    },
     "TasksCapability": {
-      "description": "Task capability negotiation for SEP-1686.",
+      "description": "Task capabilities shared by client and server.",
       "type": "object",
       "properties": {
         "cancel": {
-          "description": "Whether the receiver supports `tasks/cancel`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "list": {
-          "description": "Whether the receiver supports `tasks/list`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "requests": {
-          "description": "Map of request category (e.g. \"tools.call\") to a boolean indicating support.",
           "type": [
             "object",
             "null"
           ],
-          "additionalProperties": {
-            "type": "boolean"
-          }
+          "additionalProperties": true
+        },
+        "list": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "requests": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskRequestsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -2800,6 +3146,17 @@
             "null"
           ]
         },
+        "execution": {
+          "description": "Execution-related configuration including task support mode.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolExecution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "icons": {
           "description": "Optional list of icons for the tool",
           "type": [
@@ -2881,10 +3238,138 @@
         }
       }
     },
+    "ToolChoice": {
+      "description": "Tool choice configuration (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolChoiceMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ToolChoiceMode": {
+      "description": "Tool selection mode (SEP-1577).",
+      "oneOf": [
+        {
+          "description": "Model decides whether to use tools",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Model must use at least one tool",
+          "type": "string",
+          "const": "required"
+        },
+        {
+          "description": "Model must not use tools",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
+    "ToolExecution": {
+      "description": "Execution-related configuration for a tool.\n\nThis struct contains settings that control how a tool should be executed,\nincluding task support configuration.",
+      "type": "object",
+      "properties": {
+        "taskSupport": {
+          "description": "Indicates whether this tool supports task-based invocation.\n\nWhen not present or set to `Forbidden`, clients MUST NOT invoke this tool as a task.\nWhen set to `Optional`, clients MAY invoke this tool as a task or normal call.\nWhen set to `Required`, clients MUST invoke this tool as a task.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskSupport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "ToolListChangedNotificationMethod": {
       "type": "string",
       "format": "const",
       "const": "notifications/tools/list_changed"
+    },
+    "ToolResultContent": {
+      "description": "Tool execution result in user message (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "content": {
+          "description": "Content blocks returned by the tool",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Annotated"
+          }
+        },
+        "isError": {
+          "description": "Whether tool execution failed",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structuredContent": {
+          "description": "Optional structured result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "toolUseId": {
+          "description": "ID of the corresponding tool use",
+          "type": "string"
+        }
+      },
+      "required": [
+        "toolUseId"
+      ]
+    },
+    "ToolUseContent": {
+      "description": "Tool call request from assistant (SEP-1577).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional metadata (preserved for caching)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "id": {
+          "description": "Unique identifier for this tool call",
+          "type": "string"
+        },
+        "input": {
+          "description": "Input arguments for the tool",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "name": {
+          "description": "Name of the tool to call",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "input"
+      ]
     },
     "ToolsCapability": {
       "type": "object",
@@ -2894,6 +3379,18 @@
             "boolean",
             "null"
           ]
+        }
+      }
+    },
+    "ToolsTaskCapability": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         }
       }
     },

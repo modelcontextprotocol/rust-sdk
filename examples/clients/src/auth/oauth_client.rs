@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     // Get server URL and client metadata URL from CLI (with defaults)
     //
     // Usage:
-    //   cargo run --example clients_oauth_client -- <server_url> <client_metadata_url>
+    //   cargo run -p mcp-client-examples --example clients_oauth_client -- <server_url> <client_metadata_url>
     let args: Vec<String> = env::args().collect();
     let server_url = args
         .get(1)
@@ -114,14 +114,16 @@ async fn main() -> Result<()> {
         client_metadata_url
     );
 
-    // Initialize oauth state machine
+    // initialize oauth state machine
     let mut oauth_state = OAuthState::new(&server_url, None)
         .await
         .context("Failed to initialize oauth state machine")?;
-    // Use CIMD (SEP-991) with client metadata URL
+    // use CIMD (SEP-991) with client metadata URL.
+    // passing empty scopes lets the SDK auto-select from the server's
+    // WWW-Authenticate header, Protected Resource Metadata, or AS metadata.
     oauth_state
         .start_authorization_with_metadata_url(
-            &["mcp", "profile", "email"],
+            &[],
             MCP_REDIRECT_URI,
             Some("Test MCP Client"),
             Some(&client_metadata_url),

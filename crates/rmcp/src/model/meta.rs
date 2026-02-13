@@ -18,6 +18,51 @@ pub trait GetExtensions {
     fn extensions_mut(&mut self) -> &mut Extensions;
 }
 
+/// Trait for request params that contain the `_meta` field.
+///
+/// Per the MCP 2025-11-25 spec, all request params should have an optional `_meta`
+/// field that can contain a `progressToken` for tracking long-running operations.
+pub trait RequestParamsMeta {
+    /// Get a reference to the meta field
+    fn meta(&self) -> Option<&Meta>;
+    /// Get a mutable reference to the meta field
+    fn meta_mut(&mut self) -> &mut Option<Meta>;
+    /// Set the meta field
+    fn set_meta(&mut self, meta: Meta) {
+        *self.meta_mut() = Some(meta);
+    }
+    /// Get the progress token from meta, if present
+    fn progress_token(&self) -> Option<ProgressToken> {
+        self.meta().and_then(|m| m.get_progress_token())
+    }
+    /// Set a progress token in meta
+    fn set_progress_token(&mut self, token: ProgressToken) {
+        match self.meta_mut() {
+            Some(meta) => meta.set_progress_token(token),
+            none => {
+                let mut meta = Meta::new();
+                meta.set_progress_token(token);
+                *none = Some(meta);
+            }
+        }
+    }
+}
+
+/// Trait for task-augmented request params that contain both `_meta` and `task` fields.
+///
+/// Per the MCP 2025-11-25 spec, certain requests (like `tools/call` and `sampling/createMessage`)
+/// can include a `task` field to signal that the caller wants task-augmented execution.
+pub trait TaskAugmentedRequestParamsMeta: RequestParamsMeta {
+    /// Get a reference to the task field
+    fn task(&self) -> Option<&JsonObject>;
+    /// Get a mutable reference to the task field
+    fn task_mut(&mut self) -> &mut Option<JsonObject>;
+    /// Set the task field
+    fn set_task(&mut self, task: JsonObject) {
+        *self.task_mut() = Some(task);
+    }
+}
+
 impl GetExtensions for CustomNotification {
     fn extensions(&self) -> &Extensions {
         &self.extensions
@@ -143,6 +188,7 @@ variant_extension! {
         ResourceListChangedNotification
         ToolListChangedNotification
         PromptListChangedNotification
+        ElicitationCompletionNotification
         CustomNotification
     }
 }
@@ -154,6 +200,13 @@ const PROGRESS_TOKEN_FIELD: &str = "progressToken";
 impl Meta {
     pub fn new() -> Self {
         Self(JsonObject::new())
+    }
+
+    /// Create a new Meta with a progress token set
+    pub fn with_progress_token(token: ProgressToken) -> Self {
+        let mut meta = Self::new();
+        meta.set_progress_token(token);
+        meta
     }
 
     pub(crate) fn static_empty() -> &'static Self {

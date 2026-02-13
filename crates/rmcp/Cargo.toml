@@ -25,7 +25,7 @@ tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
 pastey = { version = "0.2.0", optional = true }
 # oauth2 support
-oauth2 = { version = "5.0", optional = true }
+oauth2 = { version = "5.0", optional = true, default-features = false, features = ["reqwest"] }
 
 # for auto generate schema
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
@@ -54,7 +54,6 @@ process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 # tokio-tungstenite ={ version = "0.26", optional = true }
 
 # for http-server transport
-axum = { version = "0.8", features = [], optional = true }
 rand = { version = "0.9", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
@@ -77,9 +76,9 @@ chrono = { version = "0.4.38", default-features = false, features = [
 [features]
 default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]
-server = ["transport-async-rw", "dep:schemars"]
+server = ["transport-async-rw", "dep:schemars", "dep:pastey"]
 macros = ["dep:rmcp-macros", "dep:pastey"]
-elicitation = []
+elicitation = ["dep:url"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -87,6 +86,8 @@ __reqwest = ["dep:reqwest"]
 reqwest = ["__reqwest", "reqwest?/rustls"]
 
 reqwest-tls-no-provider = ["__reqwest", "reqwest?/__rustls"]
+
+reqwest-native-tls = ["__reqwest", "reqwest?/native-tls"]
 
 server-side-http = [
   "uuid",
@@ -97,7 +98,6 @@ server-side-http = [
   "dep:http-body-util",
   "dep:bytes",
   "dep:sse-stream",
-  "dep:axum",
   "tower",
 ]
 
@@ -108,7 +108,7 @@ client-side-sse = ["dep:sse-stream", "dep:http"]
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
-transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "reqwest"]
+transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "__reqwest"]
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
@@ -134,7 +134,7 @@ schemars = ["dep:schemars"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 schemars = { version = "1.1.0", features = ["chrono04"] }
-
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
@@ -208,3 +208,25 @@ path = "tests/test_task.rs"
 name = "test_streamable_http_priming"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_priming.rs"
+
+
+[[test]]
+name = "test_custom_request"
+required-features = ["server", "client"]
+path = "tests/test_custom_request.rs"
+
+[[test]]
+name = "test_prompt_macros"
+required-features = ["server", "client"]
+path = "tests/test_prompt_macros.rs"
+
+[[test]]
+name = "test_sampling"
+required-features = ["server", "client"]
+path = "tests/test_sampling.rs"
+
+
+[[test]]
+name = "test_close_connection"
+required-features = ["server", "client"]
+path = "tests/test_close_connection.rs"
