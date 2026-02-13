@@ -1,7 +1,7 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use futures::{StreamExt, stream::BoxStream};
-use http::header::WWW_AUTHENTICATE;
+use http::{HeaderName, HeaderValue, header::WWW_AUTHENTICATE};
 use reqwest::header::ACCEPT;
 use sse_stream::{Sse, SseStream};
 
@@ -94,12 +94,17 @@ impl StreamableHttpClient for reqwest::Client {
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
         if let Some(auth_header) = auth_token {
             request = request.bearer_auth(auth_header);
+        }
+        // Apply custom headers
+        for (name, value) in custom_headers {
+            request = request.header(name, value);
         }
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());

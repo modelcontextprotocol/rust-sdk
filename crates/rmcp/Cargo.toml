@@ -230,3 +230,13 @@ path = "tests/test_sampling.rs"
 name = "test_close_connection"
 required-features = ["server", "client"]
 path = "tests/test_close_connection.rs"
+
+[[test]]
+name = "test_custom_headers"
+required-features = [
+  "client",
+  "server",
+  "transport-streamable-http-client-reqwest",
+  "transport-streamable-http-server",
+]
+path = "tests/test_custom_headers.rs"
