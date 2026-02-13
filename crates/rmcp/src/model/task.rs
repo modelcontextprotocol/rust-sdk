@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::Meta;
+
 /// Canonical task lifecycle status as defined by SEP-1686.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -19,21 +21,10 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-/// Final result for a succeeded task (returned from `tasks/result`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct TaskResult {
-    /// MIME type or custom content-type identifier.
-    pub content_type: String,
-    /// The actual result payload, matching the underlying request's schema.
-    pub value: Value,
-    /// Optional short summary for UI surfaces.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-}
-
 /// Primary Task object that surfaces metadata during the task lifecycle.
+///
+/// Per spec, `lastUpdatedAt` and `ttl` are required fields.
+/// `ttl` is nullable (`null` means unlimited retention).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -48,10 +39,9 @@ pub struct Task {
     /// ISO-8601 creation timestamp.
     pub created_at: String,
     /// ISO-8601 timestamp for the most recent status change.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_updated_at: Option<String>,
+    pub last_updated_at: String,
     /// Retention window in milliseconds that the receiver agreed to honor.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// `None` (serialized as `null`) means unlimited retention.
     pub ttl: Option<u64>,
     /// Suggested polling interval (milliseconds).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,6 +53,43 @@ pub struct Task {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CreateTaskResult {
+    pub task: Task,
+}
+
+/// Response to a `tasks/get` request.
+///
+/// Per spec, `GetTaskResult = allOf[Result, Task]` — the Task fields are
+/// flattened at the top level, not nested under a `task` key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskResult {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    #[serde(flatten)]
+    pub task: Task,
+}
+
+/// Response to a `tasks/result` request.
+///
+/// Per spec, the result structure matches the original request type
+/// (e.g., `CallToolResult` for `tools/call`). This is represented as
+/// an open object. The payload is the original request's result
+/// serialized as a JSON value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct GetTaskPayloadResult(pub Value);
+
+/// Response to a `tasks/cancel` request.
+///
+/// Per spec, `CancelTaskResult = allOf[Result, Task]` — same shape as `GetTaskResult`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CancelTaskResult {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    #[serde(flatten)]
     pub task: Task,
 }
 

@@ -2537,14 +2537,9 @@ impl RequestParamsMeta for CancelTaskParams {
 /// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
 #[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
 pub type CancelTaskParam = CancelTaskParams;
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct GetTaskInfoResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<crate::model::Task>,
-}
+/// Deprecated: Use [`GetTaskResult`] instead (spec alignment).
+#[deprecated(since = "0.15.0", note = "Use GetTaskResult instead")]
+pub type GetTaskInfoResult = GetTaskResult;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -2720,9 +2715,10 @@ ts_union!(
     | EmptyResult
     | CreateTaskResult
     | ListTasksResult
-    | GetTaskInfoResult
-    | TaskResult
+    | GetTaskResult
+    | CancelTaskResult
     | CustomResult
+    | GetTaskPayloadResult
     ;
 );
 
