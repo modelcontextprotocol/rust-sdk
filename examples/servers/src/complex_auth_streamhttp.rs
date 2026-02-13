@@ -11,7 +11,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use rmcp::transport::{
     StreamableHttpServerConfig,
     auth::{AuthorizationMetadata, ClientRegistrationResponse, OAuthClientConfig},
