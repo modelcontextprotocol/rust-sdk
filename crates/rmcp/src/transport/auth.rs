@@ -1468,8 +1468,7 @@ impl OAuthState {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use oauth2::{AuthType, CsrfToken, PkceCodeVerifier};
     use url::Url;
