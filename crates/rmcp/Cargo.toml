@@ -34,7 +34,7 @@ schemars = { version = "1.0", optional = true, features = ["chrono04"] }
 base64 = { version = "0.22", optional = true }
 
 # for HTTP client
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13.2", default-features = false, features = [
   "json",
   "stream",
 ], optional = true }
@@ -83,9 +83,9 @@ elicitation = ["dep:url"]
 # reqwest http client
 __reqwest = ["dep:reqwest"]
 
-reqwest = ["__reqwest", "reqwest?/rustls-tls"]
+reqwest = ["__reqwest", "reqwest?/rustls"]
 
-reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-tls-no-provider"]
+reqwest-tls-no-provider = ["__reqwest", "reqwest?/__rustls"]
 
 reqwest-native-tls = ["__reqwest", "reqwest?/native-tls"]
 
