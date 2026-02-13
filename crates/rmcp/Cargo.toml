@@ -1,6 +1,7 @@
 [package]
 name = "rmcp"
 license = { workspace = true }
+license-file = { workspace = true }
 version = { workspace = true }
 edition = { workspace = true }
 repository = { workspace = true }
