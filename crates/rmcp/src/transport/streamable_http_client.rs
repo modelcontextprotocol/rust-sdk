@@ -77,6 +77,8 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     AuthRequired(AuthRequiredError),
     #[error("Insufficient scope")]
     InsufficientScope(InsufficientScopeError),
+    #[error("Header name '{0}' is reserved and conflicts with default headers")]
+    ReservedHeaderConflict(String),
 }
 
 #[derive(Debug, Clone, Error)]

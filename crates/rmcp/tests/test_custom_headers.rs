@@ -100,6 +100,243 @@ fn test_config_auth_header_and_custom_headers_together() {
     );
 }
 
+/// Unit test: post_message should reject reserved header "accept"
+#[tokio::test]
+#[cfg(feature = "transport-streamable-http-client-reqwest")]
+async fn test_post_message_rejects_accept_header() {
+    use std::sync::Arc;
+
+    use rmcp::{
+        model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+        transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError},
+    };
+
+    let client = reqwest::Client::new();
+    let mut custom_headers = HashMap::new();
+    custom_headers.insert(
+        HeaderName::from_static("accept"),
+        HeaderValue::from_static("text/html"),
+    );
+
+    let message = ClientJsonRpcMessage::request(
+        ClientRequest::PingRequest(PingRequest::default()),
+        RequestId::Number(1),
+    );
+
+    let result = client
+        .post_message(
+            Arc::from("http://localhost:9999/mcp"),
+            message,
+            None,
+            None,
+            custom_headers,
+        )
+        .await;
+
+    assert!(result.is_err(), "Should reject 'accept' header");
+    match result {
+        Err(StreamableHttpError::ReservedHeaderConflict(header_name)) => {
+            assert_eq!(
+                header_name, "accept",
+                "Error should indicate 'accept' header"
+            );
+        }
+        other => panic!("Expected ReservedHeaderConflict error, got: {:?}", other),
+    }
+}
+
+/// Unit test: post_message should reject reserved header "mcp-session-id"
+#[tokio::test]
+#[cfg(feature = "transport-streamable-http-client-reqwest")]
+async fn test_post_message_rejects_mcp_session_id() {
+    use std::sync::Arc;
+
+    use rmcp::{
+        model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+        transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError},
+    };
+
+    let client = reqwest::Client::new();
+    let mut custom_headers = HashMap::new();
+    custom_headers.insert(
+        HeaderName::from_static("mcp-session-id"),
+        HeaderValue::from_static("my-session"),
+    );
+
+    let message = ClientJsonRpcMessage::request(
+        ClientRequest::PingRequest(PingRequest::default()),
+        RequestId::Number(1),
+    );
+
+    let result = client
+        .post_message(
+            Arc::from("http://localhost:9999/mcp"),
+            message,
+            None,
+            None,
+            custom_headers,
+        )
+        .await;
+
+    assert!(result.is_err(), "Should reject 'mcp-session-id' header");
+    match result {
+        Err(StreamableHttpError::ReservedHeaderConflict(header_name)) => {
+            assert_eq!(
+                header_name, "mcp-session-id",
+                "Error should indicate 'mcp-session-id' header"
+            );
+        }
+        other => panic!("Expected ReservedHeaderConflict error, got: {:?}", other),
+    }
+}
+
+/// Unit test: post_message should reject reserved header "mcp-protocol-version"
+#[tokio::test]
+#[cfg(feature = "transport-streamable-http-client-reqwest")]
+async fn test_post_message_rejects_mcp_protocol_version() {
+    use std::sync::Arc;
+
+    use rmcp::{
+        model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+        transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError},
+    };
+
+    let client = reqwest::Client::new();
+    let mut custom_headers = HashMap::new();
+    custom_headers.insert(
+        HeaderName::from_static("mcp-protocol-version"),
+        HeaderValue::from_static("1.0"),
+    );
+
+    let message = ClientJsonRpcMessage::request(
+        ClientRequest::PingRequest(PingRequest::default()),
+        RequestId::Number(1),
+    );
+
+    let result = client
+        .post_message(
+            Arc::from("http://localhost:9999/mcp"),
+            message,
+            None,
+            None,
+            custom_headers,
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Should reject 'mcp-protocol-version' header"
+    );
+    match result {
+        Err(StreamableHttpError::ReservedHeaderConflict(header_name)) => {
+            assert_eq!(
+                header_name, "mcp-protocol-version",
+                "Error should indicate 'mcp-protocol-version' header"
+            );
+        }
+        other => panic!("Expected ReservedHeaderConflict error, got: {:?}", other),
+    }
+}
+
+/// Unit test: post_message should reject reserved header "last-event-id"
+#[tokio::test]
+#[cfg(feature = "transport-streamable-http-client-reqwest")]
+async fn test_post_message_rejects_last_event_id() {
+    use std::sync::Arc;
+
+    use rmcp::{
+        model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+        transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError},
+    };
+
+    let client = reqwest::Client::new();
+    let mut custom_headers = HashMap::new();
+    custom_headers.insert(
+        HeaderName::from_static("last-event-id"),
+        HeaderValue::from_static("event-123"),
+    );
+
+    let message = ClientJsonRpcMessage::request(
+        ClientRequest::PingRequest(PingRequest::default()),
+        RequestId::Number(1),
+    );
+
+    let result = client
+        .post_message(
+            Arc::from("http://localhost:9999/mcp"),
+            message,
+            None,
+            None,
+            custom_headers,
+        )
+        .await;
+
+    assert!(result.is_err(), "Should reject 'last-event-id' header");
+    match result {
+        Err(StreamableHttpError::ReservedHeaderConflict(header_name)) => {
+            assert_eq!(
+                header_name, "last-event-id",
+                "Error should indicate 'last-event-id' header"
+            );
+        }
+        other => panic!("Expected ReservedHeaderConflict error, got: {:?}", other),
+    }
+}
+
+/// Unit test: post_message should do case-insensitive matching for reserved headers
+#[tokio::test]
+#[cfg(feature = "transport-streamable-http-client-reqwest")]
+async fn test_post_message_case_insensitive_matching() {
+    use std::sync::Arc;
+
+    use rmcp::{
+        model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+        transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError},
+    };
+
+    let client = reqwest::Client::new();
+    let message = ClientJsonRpcMessage::request(
+        ClientRequest::PingRequest(PingRequest::default()),
+        RequestId::Number(1),
+    );
+
+    // Test different casings
+    let test_cases = vec![
+        ("Accept", "Should reject 'Accept' (capitalized)"),
+        ("ACCEPT", "Should reject 'ACCEPT' (uppercase)"),
+        ("Mcp-Session-Id", "Should reject 'Mcp-Session-Id'"),
+        ("MCP-SESSION-ID", "Should reject 'MCP-SESSION-ID'"),
+    ];
+
+    for (header_name, error_msg) in test_cases {
+        let mut custom_headers = HashMap::new();
+        custom_headers.insert(
+            HeaderName::from_bytes(header_name.as_bytes()).unwrap(),
+            HeaderValue::from_static("value"),
+        );
+
+        let result = client
+            .post_message(
+                Arc::from("http://localhost:9999/mcp"),
+                message.clone(),
+                None,
+                None,
+                custom_headers,
+            )
+            .await;
+
+        assert!(result.is_err(), "{}", error_msg);
+        if let Err(StreamableHttpError::ReservedHeaderConflict(_)) = result {
+            // Success
+        } else {
+            panic!(
+                "{}: Expected ReservedHeaderConflict, got: {:?}",
+                error_msg, result
+            );
+        }
+    }
+}
+
 /// Integration test: Verify that custom headers are actually sent in MCP HTTP requests
 #[tokio::test]
 #[cfg(all(

@@ -9,7 +9,8 @@ use crate::{
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::http_header::{
-            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
+            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_MCP_PROTOCOL_VERSION,
+            HEADER_SESSION_ID, JSON_MIME_TYPE,
         },
         streamable_http_client::*,
     },
@@ -102,8 +103,24 @@ impl StreamableHttpClient for reqwest::Client {
         if let Some(auth_header) = auth_token {
             request = request.bearer_auth(auth_header);
         }
+
         // Apply custom headers
+        let reserved_headers = [
+            ACCEPT.as_str(),
+            HEADER_SESSION_ID,
+            HEADER_MCP_PROTOCOL_VERSION,
+            HEADER_LAST_EVENT_ID,
+        ];
         for (name, value) in custom_headers {
+            if reserved_headers
+                .iter()
+                .any(|&r| name.as_str().eq_ignore_ascii_case(r))
+            {
+                return Err(StreamableHttpError::ReservedHeaderConflict(
+                    name.to_string(),
+                ));
+            }
+
             request = request.header(name, value);
         }
         if let Some(session_id) = session_id {
