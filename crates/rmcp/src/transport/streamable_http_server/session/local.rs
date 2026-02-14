@@ -538,16 +538,22 @@ impl LocalSessionWorker {
                     // Replace the existing common channel sender if active — dropping
                     // the old sender closes the old receiver, terminating that SSE stream
                     // cleanly so the client can reconnect on this new stream.
+                    let was_active = !self.common.tx.is_closed();
                     tracing::debug!(
                         http_request_id,
+                        was_active,
                         "Request-wise channel completed, falling back to common channel"
                     );
                     let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
                     let (tx, rx) = channel;
                     self.common.tx = tx;
-                    // Sync from beginning of common channel cache since the client
-                    // only has events from the completed request-wise channel
-                    self.common.sync(0).await?;
+                    if !was_active {
+                        // Common stream was dead — replay missed events so the
+                        // client catches up on notifications it never received.
+                        self.common.sync(0).await?;
+                    }
+                    // If we replaced a live stream, skip replay: the client
+                    // already received those events on the previous stream.
                     Ok(StreamableHttpMessageReceiver {
                         http_request_id: None,
                         inner: rx,
@@ -559,12 +565,18 @@ impl LocalSessionWorker {
                 // to multiple SSE streams simultaneously."  When a new common-channel
                 // GET arrives we replace the sender; dropping the old sender closes
                 // the old receiver, cleanly terminating the previous SSE stream.
+                let was_active = !self.common.tx.is_closed();
                 let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
                 let (tx, rx) = channel;
                 self.common.tx = tx;
-                let index = last_event_id.index;
-                // sync messages after index
-                self.common.sync(index).await?;
+                if !was_active {
+                    // Stream was dead (network failure, client timeout, etc.) —
+                    // replay cached events so the client catches up.
+                    let index = last_event_id.index;
+                    self.common.sync(index).await?;
+                }
+                // If we replaced a live stream, skip replay: the client
+                // already received those events on the previous stream.
                 Ok(StreamableHttpMessageReceiver {
                     http_request_id: None,
                     inner: rx,
