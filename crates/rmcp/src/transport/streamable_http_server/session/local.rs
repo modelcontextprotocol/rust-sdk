@@ -293,6 +293,12 @@ pub struct LocalSessionWorker {
     tx_router: HashMap<HttpRequestId, HttpRequestWise>,
     resource_router: HashMap<ResourceKey, HttpRequestId>,
     common: CachedTx,
+    /// Shadow senders for secondary SSE streams (e.g. from POST EventSource
+    /// reconnections). These keep the HTTP connections alive via SSE keep-alive
+    /// without receiving notifications, preventing clients like Cursor from
+    /// entering infinite reconnect loops when multiple EventSource connections
+    /// compete to replace the common channel.
+    shadow_txs: Vec<Sender<ServerSseMessage>>,
     event_rx: Receiver<SessionEvent>,
     session_config: SessionConfig,
 }
@@ -515,6 +521,9 @@ impl LocalSessionWorker {
         &mut self,
         last_event_id: EventId,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        // Clean up closed shadow senders before processing
+        self.shadow_txs.retain(|tx| !tx.is_closed());
+
         match last_event_id.http_request_id {
             Some(http_request_id) => {
                 if let Some(request_wise) = self.tx_router.get_mut(&http_request_id) {
@@ -531,58 +540,50 @@ impl LocalSessionWorker {
                     })
                 } else {
                     // Request-wise channel completed (POST response already delivered).
-                    // Per MCP spec, resumption via GET is always valid regardless of how
-                    // the original stream was initiated. Since the request-wise stream is
-                    // complete, fall through to common channel for server notifications.
-                    //
-                    // Replace the existing common channel sender if active — dropping
-                    // the old sender closes the old receiver, terminating that SSE stream
-                    // cleanly so the client can reconnect on this new stream.
-                    let was_active = !self.common.tx.is_closed();
+                    // The client's EventSource is reconnecting after the POST SSE stream
+                    // ended. Fall through to common channel handling below.
                     tracing::debug!(
                         http_request_id,
-                        was_active,
                         "Request-wise channel completed, falling back to common channel"
                     );
-                    let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-                    let (tx, rx) = channel;
-                    self.common.tx = tx;
-                    if !was_active {
-                        // Common stream was dead — replay missed events so the
-                        // client catches up on notifications it never received.
-                        self.common.sync(0).await?;
-                    }
-                    // If we replaced a live stream, skip replay: the client
-                    // already received those events on the previous stream.
-                    Ok(StreamableHttpMessageReceiver {
-                        http_request_id: None,
-                        inner: rx,
-                    })
+                    self.resume_or_shadow_common()
                 }
             }
-            None => {
-                // Per MCP spec §Streamable HTTP, "The client MAY remain connected
-                // to multiple SSE streams simultaneously."  When a new common-channel
-                // GET arrives we replace the sender; dropping the old sender closes
-                // the old receiver, cleanly terminating the previous SSE stream.
-                let was_active = !self.common.tx.is_closed();
-                let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-                let (tx, rx) = channel;
-                self.common.tx = tx;
-                if !was_active {
-                    // Stream was dead (network failure, client timeout, etc.) —
-                    // replay cached events so the client catches up.
-                    let index = last_event_id.index;
-                    self.common.sync(index).await?;
-                }
-                // If we replaced a live stream, skip replay: the client
-                // already received those events on the previous stream.
-                Ok(StreamableHttpMessageReceiver {
-                    http_request_id: None,
-                    inner: rx,
-                })
-            }
+            None => self.resume_or_shadow_common(),
         }
+    }
+
+    /// Resume the common channel, or create a shadow stream if the primary is
+    /// still active.
+    ///
+    /// When the primary common channel is dead (receiver dropped), replace it
+    /// so this stream becomes the new primary notification channel.
+    ///
+    /// When the primary is still active, create a "shadow" stream — an idle SSE
+    /// connection kept alive by keep-alive pings. This prevents multiple
+    /// EventSource connections (e.g. from POST response reconnections) from
+    /// killing each other by repeatedly replacing the common channel sender.
+    fn resume_or_shadow_common(&mut self) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
+        if self.common.tx.is_closed() {
+            // Primary common channel is dead — replace it.
+            tracing::debug!("Replacing dead common channel with new primary");
+            self.common.tx = tx;
+        } else {
+            // Primary common channel is still active. Create a shadow stream
+            // that stays alive via SSE keep-alive but doesn't receive
+            // notifications. This prevents competing EventSource connections
+            // from killing each other's channels.
+            tracing::debug!(
+                shadow_count = self.shadow_txs.len(),
+                "Common channel active, creating shadow stream"
+            );
+            self.shadow_txs.push(tx);
+        }
+        Ok(StreamableHttpMessageReceiver {
+            http_request_id: None,
+            inner: rx,
+        })
     }
 
     async fn close_sse_stream(
@@ -623,6 +624,9 @@ impl LocalSessionWorker {
                 // Close the stream by dropping the sender
                 let (tx, _rx) = tokio::sync::mpsc::channel(1);
                 self.common.tx = tx;
+
+                // Also close all shadow streams
+                self.shadow_txs.clear();
 
                 tracing::debug!("closed standalone SSE stream for server-initiated disconnection");
                 Ok(())
@@ -1076,6 +1080,7 @@ pub fn create_local_session(
         tx_router: HashMap::new(),
         resource_router: HashMap::new(),
         common,
+        shadow_txs: Vec::new(),
         event_rx,
         session_config: config.clone(),
     };
