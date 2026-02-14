@@ -215,11 +215,23 @@ where
             .map(|s| s.to_owned());
         if let Some(last_event_id) = last_event_id {
             // check if session has this event id
-            let stream = self
+            let stream = match self
                 .session_manager
                 .resume(&session_id, last_event_id)
                 .await
-                .map_err(internal_error_response("resume session"))?;
+            {
+                Ok(stream) => stream,
+                Err(e) if e.to_string().contains("Conflict:") => {
+                    return Ok(Response::builder()
+                        .status(http::StatusCode::CONFLICT)
+                        .body(
+                            Full::new(Bytes::from(e.to_string()))
+                                .boxed(),
+                        )
+                        .expect("valid response"));
+                }
+                Err(e) => return Err(internal_error_response("resume session")(e)),
+            };
             // Resume doesn't need priming - client already has the event ID
             Ok(sse_stream_response(
                 stream,
@@ -228,11 +240,25 @@ where
             ))
         } else {
             // create standalone stream
-            let stream = self
+            let stream = match self
                 .session_manager
                 .create_standalone_stream(&session_id)
                 .await
-                .map_err(internal_error_response("create standalone stream"))?;
+            {
+                Ok(stream) => stream,
+                Err(e) if e.to_string().contains("Conflict:") => {
+                    return Ok(Response::builder()
+                        .status(http::StatusCode::CONFLICT)
+                        .body(
+                            Full::new(Bytes::from(e.to_string()))
+                                .boxed(),
+                        )
+                        .expect("valid response"));
+                }
+                Err(e) => {
+                    return Err(internal_error_response("create standalone stream")(e))
+                }
+            };
             // Prepend priming event if sse_retry configured
             let stream = if let Some(retry) = self.config.sse_retry {
                 let priming = ServerSseMessage {
