@@ -43,12 +43,10 @@
 //! #     ServiceExt, serve_server,
 //! # };
 //! #[cfg(feature = "client")]
-//!
 //! # use rmcp::serve_client;
 //!
 //! // create transport from tcp stream
 //! #[cfg(feature = "client")]
-//!
 //! async fn client() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stream = tokio::net::TcpSocket::new_v4()?
 //!         .connect("127.0.0.1:8001".parse()?)
@@ -61,7 +59,6 @@
 //!
 //! // create transport from std io
 //! #[cfg(feature = "client")]
-//!
 //! async fn io()  -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
 //!     let tools = client.peer().list_tools(Default::default()).await?;
@@ -104,7 +101,6 @@ pub use auth::{
 };
 
 // #[cfg(feature = "transport-ws")]
-//
 // pub mod ws;
 #[cfg(feature = "transport-streamable-http-server-session")]
 pub mod streamable_http_server;
