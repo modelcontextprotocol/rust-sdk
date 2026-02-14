@@ -577,9 +577,10 @@ async fn reconnect_after_stream_timeout() {
 
 // ─── Tests: Edge cases ──────────────────────────────────────────────────────
 
-/// GET without a valid session ID should return 401 Unauthorized.
+/// GET with an unknown session ID should return 404 Not Found per MCP spec.
+/// This signals the client to re-initialize (not re-authenticate).
 #[tokio::test]
-async fn get_without_valid_session_returns_401() {
+async fn get_without_valid_session_returns_404() {
     let ct = CancellationToken::new();
     let trigger = Arc::new(Notify::new());
     let url = start_test_server(ct.clone(), trigger).await;
@@ -595,16 +596,16 @@ async fn get_without_valid_session_returns_401() {
 
     assert_eq!(
         resp.status().as_u16(),
-        401,
-        "GET with invalid session ID should return 401"
+        404,
+        "GET with unknown session ID should return 404 Not Found per MCP spec"
     );
 
     ct.cancel();
 }
 
-/// GET without session ID header should return an error (400 or similar).
+/// GET without session ID header should return 400 Bad Request per MCP spec.
 #[tokio::test]
-async fn get_without_session_id_header_returns_error() {
+async fn get_without_session_id_header_returns_400() {
     let ct = CancellationToken::new();
     let trigger = Arc::new(Notify::new());
     let url = start_test_server(ct.clone(), trigger).await;
@@ -617,11 +618,10 @@ async fn get_without_session_id_header_returns_error() {
         .await
         .expect("GET without session ID");
 
-    // Should fail (400 Bad Request or similar)
-    assert!(
-        !resp.status().is_success(),
-        "GET without session ID should fail, got {}",
-        resp.status()
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "GET without session ID should return 400 Bad Request per MCP spec"
     );
 
     ct.cancel();
