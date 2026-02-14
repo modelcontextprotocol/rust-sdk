@@ -43,12 +43,10 @@
 //! #     ServiceExt, serve_server,
 //! # };
 //! #[cfg(feature = "client")]
-//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! # use rmcp::serve_client;
 //!
 //! // create transport from tcp stream
 //! #[cfg(feature = "client")]
-//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! async fn client() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stream = tokio::net::TcpSocket::new_v4()?
 //!         .connect("127.0.0.1:8001".parse()?)
@@ -61,7 +59,6 @@
 //!
 //! // create transport from std io
 //! #[cfg(feature = "client")]
-//! #[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 //! async fn io()  -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
 //!     let tools = client.peer().list_tools(Default::default()).await?;
@@ -77,35 +74,26 @@ use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 pub mod sink_stream;
 
 #[cfg(feature = "transport-async-rw")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-async-rw")))]
 pub mod async_rw;
 
 #[cfg(feature = "transport-worker")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-worker")))]
 pub mod worker;
 #[cfg(feature = "transport-worker")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-worker")))]
 pub use worker::WorkerTransport;
 
 #[cfg(feature = "transport-child-process")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
 pub mod child_process;
 #[cfg(feature = "transport-child-process")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-child-process")))]
 pub use child_process::{ConfigureCommandExt, TokioChildProcess};
 
 #[cfg(feature = "transport-io")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-io")))]
 pub mod io;
 #[cfg(feature = "transport-io")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-io")))]
 pub use io::stdio;
 
 #[cfg(feature = "auth")]
-#[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub mod auth;
 #[cfg(feature = "auth")]
-#[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
 pub use auth::{
     AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
     CredentialStore, InMemoryCredentialStore, InMemoryStateStore, ScopeUpgradeConfig, StateStore,
@@ -113,20 +101,15 @@ pub use auth::{
 };
 
 // #[cfg(feature = "transport-ws")]
-// #[cfg_attr(docsrs, doc(cfg(feature = "transport-ws")))]
 // pub mod ws;
 #[cfg(feature = "transport-streamable-http-server-session")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server-session")))]
 pub mod streamable_http_server;
 #[cfg(feature = "transport-streamable-http-server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-server")))]
 pub use streamable_http_server::tower::{StreamableHttpServerConfig, StreamableHttpService};
 
 #[cfg(feature = "transport-streamable-http-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]
 pub mod streamable_http_client;
 #[cfg(feature = "transport-streamable-http-client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "transport-streamable-http-client")))]
 pub use streamable_http_client::StreamableHttpClientTransport;
 
 /// Common use codes

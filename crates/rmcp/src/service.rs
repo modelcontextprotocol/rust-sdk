@@ -11,23 +11,17 @@ use crate::{
     transport::{DynamicTransportError, IntoTransport, Transport},
 };
 #[cfg(feature = "client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 mod client;
 #[cfg(feature = "client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 pub use client::*;
 #[cfg(feature = "server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 mod server;
 #[cfg(feature = "server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub use server::*;
 #[cfg(feature = "tower")]
-#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 mod tower;
 use tokio_util::sync::{CancellationToken, DropGuard};
 #[cfg(feature = "tower")]
-#[cfg_attr(docsrs, doc(cfg(feature = "tower")))]
 pub use tower::*;
 use tracing::{Instrument as _, instrument};
 #[derive(Error, Debug)]
