@@ -68,7 +68,6 @@ where
 }
 
 #[cfg(feature = "client")]
-#[cfg_attr(docsrs, doc(cfg(feature = "client")))]
 impl<R, W> AsyncRwTransport<crate::RoleClient, R, W>
 where
     R: Send + AsyncRead + Unpin,
@@ -80,7 +79,6 @@ where
 }
 
 #[cfg(feature = "server")]
-#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 impl<R, W> AsyncRwTransport<crate::RoleServer, R, W>
 where
     R: Send + AsyncRead + Unpin,
