@@ -315,6 +315,8 @@ pub enum SessionError {
     SessionServiceTerminated,
     #[error("Invalid event id")]
     InvalidEventId,
+    #[error("Conflict: Only one standalone SSE stream is allowed per session")]
+    Conflict,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -531,6 +533,11 @@ impl LocalSessionWorker {
                 })
             }
             None => {
+                // Reject if there's already an active standalone SSE stream.
+                // Matches TypeScript SDK behavior (409 Conflict).
+                if !self.common.tx.is_closed() {
+                    return Err(SessionError::Conflict);
+                }
                 let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
                 let (tx, rx) = channel;
                 self.common.tx = tx;
