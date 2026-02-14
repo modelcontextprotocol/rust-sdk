@@ -517,20 +517,41 @@ impl LocalSessionWorker {
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
         match last_event_id.http_request_id {
             Some(http_request_id) => {
-                let request_wise = self
-                    .tx_router
-                    .get_mut(&http_request_id)
-                    .ok_or(SessionError::ChannelClosed(Some(http_request_id)))?;
-                let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-                let (tx, rx) = channel;
-                request_wise.tx.tx = tx;
-                let index = last_event_id.index;
-                // sync messages after index
-                request_wise.tx.sync(index).await?;
-                Ok(StreamableHttpMessageReceiver {
-                    http_request_id: Some(http_request_id),
-                    inner: rx,
-                })
+                if let Some(request_wise) = self.tx_router.get_mut(&http_request_id) {
+                    // Resume existing request-wise channel
+                    let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
+                    let (tx, rx) = channel;
+                    request_wise.tx.tx = tx;
+                    let index = last_event_id.index;
+                    // sync messages after index
+                    request_wise.tx.sync(index).await?;
+                    Ok(StreamableHttpMessageReceiver {
+                        http_request_id: Some(http_request_id),
+                        inner: rx,
+                    })
+                } else {
+                    // Request-wise channel completed (POST response already delivered).
+                    // Per MCP spec, resumption via GET is always valid regardless of how
+                    // the original stream was initiated. Since the request-wise stream is
+                    // complete, fall through to common channel for server notifications.
+                    tracing::debug!(
+                        http_request_id,
+                        "Request-wise channel completed, falling back to common channel"
+                    );
+                    if !self.common.tx.is_closed() {
+                        return Err(SessionError::Conflict);
+                    }
+                    let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
+                    let (tx, rx) = channel;
+                    self.common.tx = tx;
+                    // Sync from beginning of common channel cache since the client
+                    // only has events from the completed request-wise channel
+                    self.common.sync(0).await?;
+                    Ok(StreamableHttpMessageReceiver {
+                        http_request_id: None,
+                        inner: rx,
+                    })
+                }
             }
             None => {
                 // Reject if there's already an active standalone SSE stream.

@@ -7,27 +7,21 @@
 /// Actual: Second GET succeeds, replaces channel, orphans first receiver (BUG)
 ///
 /// Root cause: local.rs:536 unconditionally replaces self.common.tx
-
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest;
 use rmcp::{
-    ServerHandler,
-    model::{
-        ServerCapabilities, ServerInfo,
-        ToolsCapability, Implementation, ProtocolVersion,
-    },
+    RoleServer, ServerHandler,
+    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo, ToolsCapability},
     service::NotificationContext,
-    RoleServer,
     transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService,
-        session::local::LocalSessionManager,
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
 };
+use serde_json::json;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use reqwest;
-use serde_json::json;
 
 // Test server that sends notifications on demand
 #[derive(Clone)]
@@ -184,7 +178,10 @@ async fn test_channel_replacement_bug() {
         .expect("First GET request failed");
 
     println!("   Status: {}", _get1_response.status());
-    assert!(_get1_response.status().is_success(), "First GET should succeed");
+    assert!(
+        _get1_response.status().is_success(),
+        "First GET should succeed"
+    );
     println!("   ✅ First SSE stream established (receiver listening on rx1)");
 
     // Give server time to set up the channel

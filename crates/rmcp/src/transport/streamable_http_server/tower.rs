@@ -224,10 +224,7 @@ where
                 Err(e) if e.to_string().contains("Conflict:") => {
                     return Ok(Response::builder()
                         .status(http::StatusCode::CONFLICT)
-                        .body(
-                            Full::new(Bytes::from(e.to_string()))
-                                .boxed(),
-                        )
+                        .body(Full::new(Bytes::from(e.to_string())).boxed())
                         .expect("valid response"));
                 }
                 Err(e) => return Err(internal_error_response("resume session")(e)),
@@ -249,15 +246,10 @@ where
                 Err(e) if e.to_string().contains("Conflict:") => {
                     return Ok(Response::builder()
                         .status(http::StatusCode::CONFLICT)
-                        .body(
-                            Full::new(Bytes::from(e.to_string()))
-                                .boxed(),
-                        )
+                        .body(Full::new(Bytes::from(e.to_string())).boxed())
                         .expect("valid response"));
                 }
-                Err(e) => {
-                    return Err(internal_error_response("create standalone stream")(e))
-                }
+                Err(e) => return Err(internal_error_response("create standalone stream")(e)),
             };
             // Prepend priming event if sse_retry configured
             let stream = if let Some(retry) = self.config.sse_retry {
