@@ -26,7 +26,7 @@ anyhow = "1.0"
 url = "2.4"
 tower = "0.5"
 axum = "0.8"
-reqwest = "0.12"
+reqwest = "0.13.2"
 clap = { version = "4.0", features = ["derive"] }
 
 [[example]]
