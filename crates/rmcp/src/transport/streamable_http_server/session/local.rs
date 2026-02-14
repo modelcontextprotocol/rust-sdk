@@ -534,13 +534,14 @@ impl LocalSessionWorker {
                     // Per MCP spec, resumption via GET is always valid regardless of how
                     // the original stream was initiated. Since the request-wise stream is
                     // complete, fall through to common channel for server notifications.
+                    //
+                    // Replace the existing common channel sender if active — dropping
+                    // the old sender closes the old receiver, terminating that SSE stream
+                    // cleanly so the client can reconnect on this new stream.
                     tracing::debug!(
                         http_request_id,
                         "Request-wise channel completed, falling back to common channel"
                     );
-                    if !self.common.tx.is_closed() {
-                        return Err(SessionError::Conflict);
-                    }
                     let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
                     let (tx, rx) = channel;
                     self.common.tx = tx;
@@ -554,11 +555,10 @@ impl LocalSessionWorker {
                 }
             }
             None => {
-                // Reject if there's already an active standalone SSE stream.
-                // Matches TypeScript SDK behavior (409 Conflict).
-                if !self.common.tx.is_closed() {
-                    return Err(SessionError::Conflict);
-                }
+                // Per MCP spec §Streamable HTTP, "The client MAY remain connected
+                // to multiple SSE streams simultaneously."  When a new common-channel
+                // GET arrives we replace the sender; dropping the old sender closes
+                // the old receiver, cleanly terminating the previous SSE stream.
                 let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
                 let (tx, rx) = channel;
                 self.common.tx = tx;
