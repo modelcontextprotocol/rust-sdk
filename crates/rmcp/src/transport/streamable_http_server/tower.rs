@@ -188,10 +188,10 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
-            // unauthorized
+            // MCP spec: servers that require a session ID SHOULD respond with 400 Bad Request
             return Ok(Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
+                .status(http::StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // check if session exists
@@ -201,10 +201,10 @@ where
             .await
             .map_err(internal_error_response("check session"))?;
         if !has_session {
-            // unauthorized
+            // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
             return Ok(Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
+                .status(http::StatusCode::NOT_FOUND)
+                .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
                 .expect("valid response"));
         }
         // check if last event id is provided
@@ -215,11 +215,20 @@ where
             .map(|s| s.to_owned());
         if let Some(last_event_id) = last_event_id {
             // check if session has this event id
-            let stream = self
+            let stream = match self
                 .session_manager
                 .resume(&session_id, last_event_id)
                 .await
-                .map_err(internal_error_response("resume session"))?;
+            {
+                Ok(stream) => stream,
+                Err(e) if e.to_string().contains("Conflict:") => {
+                    return Ok(Response::builder()
+                        .status(http::StatusCode::CONFLICT)
+                        .body(Full::new(Bytes::from(e.to_string())).boxed())
+                        .expect("valid response"));
+                }
+                Err(e) => return Err(internal_error_response("resume session")(e)),
+            };
             // Resume doesn't need priming - client already has the event ID
             Ok(sse_stream_response(
                 stream,
@@ -228,11 +237,20 @@ where
             ))
         } else {
             // create standalone stream
-            let stream = self
+            let stream = match self
                 .session_manager
                 .create_standalone_stream(&session_id)
                 .await
-                .map_err(internal_error_response("create standalone stream"))?;
+            {
+                Ok(stream) => stream,
+                Err(e) if e.to_string().contains("Conflict:") => {
+                    return Ok(Response::builder()
+                        .status(http::StatusCode::CONFLICT)
+                        .body(Full::new(Bytes::from(e.to_string())).boxed())
+                        .expect("valid response"));
+                }
+                Err(e) => return Err(internal_error_response("create standalone stream")(e)),
+            };
             // Prepend priming event if sse_retry configured
             let stream = if let Some(retry) = self.config.sse_retry {
                 let priming = ServerSseMessage {
@@ -313,10 +331,10 @@ where
                     .await
                     .map_err(internal_error_response("check session"))?;
                 if !has_session {
-                    // unauthorized
+                    // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
                     return Ok(Response::builder()
-                        .status(http::StatusCode::UNAUTHORIZED)
-                        .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
+                        .status(http::StatusCode::NOT_FOUND)
+                        .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
                         .expect("valid response"));
                 }
 
@@ -505,10 +523,10 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
-            // unauthorized
+            // MCP spec: servers that require a session ID SHOULD respond with 400 Bad Request
             return Ok(Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
+                .status(http::StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // close session
