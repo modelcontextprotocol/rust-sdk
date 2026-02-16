@@ -23,8 +23,10 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
         } else {
             // explicitly to align json schema version to official specifications.
             // refer to https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655 for details.
-            let mut settings = SchemaSettings::draft2020_12();
-            settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
+            let settings = SchemaSettings::draft2020_12();
+            // Note: AddNullable is intentionally NOT used here because the `nullable` keyword
+            // is an OpenAPI 3.0 extension, not part of JSON Schema 2020-12. Using it would
+            // cause validation failures with strict JSON Schema validators.
             let generator = settings.into_generator();
             let schema = generator.into_root_schema_for::<T>();
             let object = serde_json::to_value(schema).expect("failed to serialize schema");
