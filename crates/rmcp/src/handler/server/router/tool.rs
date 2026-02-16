@@ -252,7 +252,9 @@ where
     }
 
     pub fn list_all(&self) -> Vec<crate::model::Tool> {
-        self.map.values().map(|item| item.attr.clone()).collect()
+        let mut tools: Vec<_> = self.map.values().map(|item| item.attr.clone()).collect();
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+        tools
     }
 
     /// Get a tool definition by name.
