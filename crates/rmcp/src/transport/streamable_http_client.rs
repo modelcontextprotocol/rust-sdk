@@ -70,7 +70,6 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("Missing session id in HTTP response")]
     MissingSessionIdInResponse,
     #[cfg(feature = "auth")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "auth")))]
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
     #[error("Auth required")]
