@@ -2,9 +2,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use oauth2::{
-    AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope,
-    StandardTokenResponse, TokenResponse, TokenUrl,
+    AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    EmptyExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, StandardTokenResponse,
+    TokenResponse, TokenUrl,
     basic::{BasicClient, BasicTokenType},
 };
 use reqwest::{
@@ -17,6 +18,39 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, warn};
 
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
+
+/// Owned wrapper around [`reqwest::Client`] that implements [`AsyncHttpClient`] for oauth2.
+struct OAuthReqwestClient(HttpClient);
+
+impl<'c> AsyncHttpClient<'c> for OAuthReqwestClient {
+    type Error = HttpClientError<reqwest::Error>;
+
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<HttpResponse, Self::Error>> + Send + Sync + 'c>,
+    >;
+
+    fn call(&'c self, request: HttpRequest) -> Self::Future {
+        Box::pin(async move {
+            let response = self
+                .0
+                .execute(request.try_into().map_err(Box::new)?)
+                .await
+                .map_err(Box::new)?;
+
+            let mut builder = oauth2::http::Response::builder()
+                .status(response.status())
+                .version(response.version());
+
+            for (name, value) in response.headers().iter() {
+                builder = builder.header(name, value);
+            }
+
+            builder
+                .body(response.bytes().await.map_err(Box::new)?.to_vec())
+                .map_err(HttpClientError::Http)
+        })
+    }
+}
 
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
@@ -872,7 +906,7 @@ impl AuthorizationManager {
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
             .add_extra_param("resource", self.base_url.to_string())
-            .request_async(&http_client)
+            .request_async(&OAuthReqwestClient(http_client))
             .await
         {
             Ok(token) => token,
@@ -961,7 +995,7 @@ impl AuthorizationManager {
 
         let token_result = oauth_client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.secret().to_string()))
-            .request_async(&self.http_client)
+            .request_async(&OAuthReqwestClient(self.http_client.clone()))
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
