@@ -103,3 +103,39 @@ fn test_prompt_router() {
     let prompts = test_prompt_router.list_all();
     assert_eq!(prompts.len(), 4);
 }
+
+#[test]
+fn test_prompt_router_list_all_is_sorted() {
+    let router = TestHandler::<()>::test_router()
+        .with_route(rmcp::handler::server::router::prompt::PromptRoute::new_dyn(
+            async_function_prompt_attr(),
+            |mut context| {
+                Box::pin(async move {
+                    use rmcp::handler::server::{
+                        common::FromContextPart, prompt::IntoGetPromptResult,
+                    };
+                    let params = Parameters::<Request>::from_context_part(&mut context)?;
+                    let result = async_function(params).await;
+                    result.into_get_prompt_result()
+                })
+            },
+        ))
+        .with_route(rmcp::handler::server::router::prompt::PromptRoute::new_dyn(
+            async_function2_prompt_attr(),
+            |context| {
+                Box::pin(async move {
+                    use rmcp::handler::server::prompt::IntoGetPromptResult;
+                    let result = async_function2(context.server).await;
+                    result.into_get_prompt_result()
+                })
+            },
+        ));
+    let prompts = router.list_all();
+    let names: Vec<&str> = prompts.iter().map(|p| p.name.as_ref()).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(
+        names, sorted,
+        "list_all() should return prompts sorted alphabetically by name"
+    );
+}

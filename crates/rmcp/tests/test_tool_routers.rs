@@ -66,3 +66,20 @@ where
     H: CallToolHandler<S, A>,
 {
 }
+
+#[test]
+fn test_tool_router_list_all_is_sorted() {
+    let router: ToolRouter<TestHandler<()>> = ToolRouter::<TestHandler<()>>::new()
+        .with_route((async_function_tool_attr(), async_function))
+        .with_route((async_function2_tool_attr(), async_function2))
+        + TestHandler::<()>::test_router_1()
+        + TestHandler::<()>::test_router_2();
+    let tools = router.list_all();
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(
+        names, sorted,
+        "list_all() should return tools sorted alphabetically by name"
+    );
+}

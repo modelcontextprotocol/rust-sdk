@@ -187,7 +187,9 @@ where
     }
 
     pub fn list_all(&self) -> Vec<crate::model::Prompt> {
-        self.map.values().map(|item| item.attr.clone()).collect()
+        let mut prompts: Vec<_> = self.map.values().map(|item| item.attr.clone()).collect();
+        prompts.sort_by(|a, b| a.name.cmp(&b.name));
+        prompts
     }
 }
 
