@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.15.0...rmcp-macros-v0.16.0) - 2026-02-17
+
+### Fixed
+
+- align task response types with MCP spec ([#658](https://github.com/modelcontextprotocol/rust-sdk/pull/658))
+
+### Other
+
+- include LICENSE in final crate tarball ([#657](https://github.com/modelcontextprotocol/rust-sdk/pull/657))
+- add rudof-mcp to MCP servers list ([#645](https://github.com/modelcontextprotocol/rust-sdk/pull/645))
+
 ## [0.15.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.14.0...rmcp-macros-v0.15.0) - 2026-02-10
 
 ### Fixed
