@@ -1,12 +1,12 @@
-/// Tests for SSE channel replacement fix (shadow channels)
+/// Tests for concurrent SSE stream handling (shadow channels)
 ///
 /// These tests verify that multiple GET SSE streams on the same session
 /// don't kill each other by replacing the common channel sender.
 ///
-/// Root cause: When POST SSE responses include `retry`, EventSource reconnects
-/// via GET after the stream ends. Each GET was unconditionally replacing
-/// `self.common.tx`, killing the other stream's receiver — causing an infinite
-/// reconnect loop every `sse_retry` seconds.
+/// Root cause: When POST SSE responses include `retry`, the EventSource API
+/// reconnects via GET after the stream ends. Each GET was unconditionally
+/// replacing `self.common.tx`, killing the other stream's receiver — causing
+/// an infinite reconnect loop every `sse_retry` seconds.
 ///
 /// Fix: `resume_or_shadow_common()` checks if the primary common channel is
 /// still active. If so, it creates a "shadow" stream (idle, keep-alive only)
@@ -696,6 +696,49 @@ async fn dropping_shadows_does_not_affect_primary() {
     assert!(
         wait_for_sse_event(get1, "tools/list_changed", Duration::from_secs(3)).await,
         "Primary should still work after all shadows are dropped"
+    );
+
+    ct.cancel();
+}
+
+// ─── Tests: Cache replay on dead primary replacement ─────────────────────────
+
+/// When a notification is sent while the primary is alive, then the primary
+/// dies and a new GET resumes with Last-Event-ID "0", the replacement primary
+/// should receive the cached notification via sync() replay.
+#[tokio::test]
+async fn dead_primary_replacement_replays_cached_events() {
+    let ct = CancellationToken::new();
+    let trigger = Arc::new(Notify::new());
+    let url = start_test_server(ct.clone(), trigger.clone()).await;
+    let client = reqwest::Client::new();
+
+    let session_id = initialize_session(&client, &url).await;
+    send_initialized_notification(&client, &url, &session_id).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // First GET — becomes primary
+    let get1 = open_standalone_get(&client, &url, &session_id).await;
+    assert_eq!(get1.status(), 200);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Trigger notification while primary is alive (gets cached)
+    trigger.notify_one();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Drop primary — notification was sent and cached
+    drop(get1);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Resume with Last-Event-ID "0" — primary is dead, should replace it
+    // and replay cached events from index 0
+    let get_resume = open_resume_get(&client, &url, &session_id, "0").await;
+    assert_eq!(get_resume.status(), 200);
+
+    // The cached notification should be replayed on the new primary
+    assert!(
+        wait_for_sse_event(get_resume, "tools/list_changed", Duration::from_secs(3)).await,
+        "Replacement primary should receive cached notification via sync() replay"
     );
 
     ct.cancel();

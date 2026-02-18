@@ -295,9 +295,9 @@ pub struct LocalSessionWorker {
     common: CachedTx,
     /// Shadow senders for secondary SSE streams (e.g. from POST EventSource
     /// reconnections). These keep the HTTP connections alive via SSE keep-alive
-    /// without receiving notifications, preventing clients like Cursor from
-    /// entering infinite reconnect loops when multiple EventSource connections
-    /// compete to replace the common channel.
+    /// without receiving notifications, preventing MCP clients from entering
+    /// infinite reconnect loops when multiple EventSource connections compete
+    /// to replace the common channel.
     shadow_txs: Vec<Sender<ServerSseMessage>>,
     event_rx: Receiver<SessionEvent>,
     session_config: SessionConfig,
@@ -321,8 +321,6 @@ pub enum SessionError {
     SessionServiceTerminated,
     #[error("Invalid event id")]
     InvalidEventId,
-    #[error("Conflict: Only one standalone SSE stream is allowed per session")]
-    Conflict,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -546,10 +544,10 @@ impl LocalSessionWorker {
                         http_request_id,
                         "Request-wise channel completed, falling back to common channel"
                     );
-                    self.resume_or_shadow_common()
+                    self.resume_or_shadow_common(last_event_id.index).await
                 }
             }
-            None => self.resume_or_shadow_common(),
+            None => self.resume_or_shadow_common(last_event_id.index).await,
         }
     }
 
@@ -557,18 +555,26 @@ impl LocalSessionWorker {
     /// still active.
     ///
     /// When the primary common channel is dead (receiver dropped), replace it
-    /// so this stream becomes the new primary notification channel.
+    /// so this stream becomes the new primary notification channel. Cached
+    /// messages are replayed from `last_event_index` so the client receives
+    /// any events it missed (including server-initiated requests).
     ///
     /// When the primary is still active, create a "shadow" stream — an idle SSE
     /// connection kept alive by keep-alive pings. This prevents multiple
     /// EventSource connections (e.g. from POST response reconnections) from
     /// killing each other by repeatedly replacing the common channel sender.
-    fn resume_or_shadow_common(&mut self) -> Result<StreamableHttpMessageReceiver, SessionError> {
+    async fn resume_or_shadow_common(
+        &mut self,
+        last_event_index: usize,
+    ) -> Result<StreamableHttpMessageReceiver, SessionError> {
         let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
         if self.common.tx.is_closed() {
             // Primary common channel is dead — replace it.
             tracing::debug!("Replacing dead common channel with new primary");
             self.common.tx = tx;
+            // Replay cached messages from where the client left off so
+            // server-initiated requests and notifications are not lost.
+            self.common.sync(last_event_index).await?;
         } else {
             // Primary common channel is still active. Create a shadow stream
             // that stays alive via SSE keep-alive but doesn't receive
