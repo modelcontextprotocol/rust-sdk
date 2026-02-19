@@ -567,8 +567,14 @@ impl LocalSessionWorker {
         &mut self,
         last_event_index: usize,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
-        let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-        if self.common.tx.is_closed() {
+        let is_replacing_dead_primary = self.common.tx.is_closed();
+        let capacity = if is_replacing_dead_primary {
+            self.session_config.channel_capacity
+        } else {
+            1 // Shadow streams only need keep-alive pings
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(capacity);
+        if is_replacing_dead_primary {
             // Primary common channel is dead — replace it.
             tracing::debug!("Replacing dead common channel with new primary");
             self.common.tx = tx;
@@ -580,6 +586,15 @@ impl LocalSessionWorker {
             // that stays alive via SSE keep-alive but doesn't receive
             // notifications. This prevents competing EventSource connections
             // from killing each other's channels.
+            const MAX_SHADOW_STREAMS: usize = 32;
+
+            if self.shadow_txs.len() >= MAX_SHADOW_STREAMS {
+                tracing::warn!(
+                    shadow_count = self.shadow_txs.len(),
+                    "Shadow stream limit reached, dropping oldest"
+                );
+                self.shadow_txs.remove(0);
+            }
             tracing::debug!(
                 shadow_count = self.shadow_txs.len(),
                 "Common channel active, creating shadow stream"

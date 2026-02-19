@@ -743,3 +743,42 @@ async fn dead_primary_replacement_replays_cached_events() {
 
     ct.cancel();
 }
+
+// ─── Tests: Shadow stream limits ─────────────────────────────────────────────
+
+/// Opening more than 32 shadow streams should not crash or reject — the server
+/// drops the oldest shadow to stay within the limit. Primary still works.
+#[tokio::test]
+async fn shadow_stream_limit_drops_oldest() {
+    let ct = CancellationToken::new();
+    let trigger = Arc::new(Notify::new());
+    let url = start_test_server(ct.clone(), trigger.clone()).await;
+    let client = reqwest::Client::new();
+
+    let session_id = initialize_session(&client, &url).await;
+    send_initialized_notification(&client, &url, &session_id).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // First GET — primary
+    let get1 = open_standalone_get(&client, &url, &session_id).await;
+    assert_eq!(get1.status(), 200);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Open 35 shadow streams (exceeds MAX_SHADOW_STREAMS=32)
+    let mut shadows = Vec::new();
+    for i in 0..35 {
+        let shadow = open_standalone_get(&client, &url, &session_id).await;
+        assert_eq!(shadow.status(), 200, "Shadow #{i} should succeed");
+        shadows.push(shadow);
+    }
+
+    // Primary should still receive notifications despite shadow churn
+    trigger.notify_one();
+
+    assert!(
+        wait_for_sse_event(get1, "tools/list_changed", Duration::from_secs(3)).await,
+        "Primary should still work after exceeding shadow limit"
+    );
+
+    ct.cancel();
+}
