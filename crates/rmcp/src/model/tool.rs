@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
+#[cfg(feature = "server")]
 use schemars::JsonSchema;
 /// Tools represent a routine that a server can execute
 /// Tool calls represent requests from the client to execute one
@@ -240,6 +241,7 @@ impl Tool {
     /// # Panics
     ///
     /// Panics if the generated schema does not have root type "object" as required by MCP specification.
+    #[cfg(feature = "server")]
     pub fn with_output_schema<T: JsonSchema + 'static>(mut self) -> Self {
         let schema = crate::handler::server::tool::schema_for_output::<T>()
             .unwrap_or_else(|e| panic!("Invalid output schema for tool '{}': {}", self.name, e));
@@ -248,6 +250,7 @@ impl Tool {
     }
 
     /// Set the input schema using a type that implements JsonSchema
+    #[cfg(feature = "server")]
     pub fn with_input_schema<T: JsonSchema + 'static>(mut self) -> Self {
         self.input_schema = crate::handler::server::tool::schema_for_type::<T>();
         self
