@@ -80,8 +80,10 @@ fn expected_schema() -> serde_json::Value {
           "type": "array"
         },
         "system": {
-          "nullable": true,
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
