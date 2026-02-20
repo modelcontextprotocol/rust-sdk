@@ -188,10 +188,10 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
-            // unauthorized
+            // MCP spec: servers that require a session ID SHOULD respond with 400 Bad Request
             return Ok(Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
+                .status(http::StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // check if session exists
@@ -201,10 +201,10 @@ where
             .await
             .map_err(internal_error_response("check session"))?;
         if !has_session {
-            // unauthorized
+            // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
             return Ok(Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
+                .status(http::StatusCode::NOT_FOUND)
+                .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
                 .expect("valid response"));
         }
         // check if last event id is provided
@@ -313,10 +313,10 @@ where
                     .await
                     .map_err(internal_error_response("check session"))?;
                 if !has_session {
-                    // unauthorized
+                    // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
                     return Ok(Response::builder()
-                        .status(http::StatusCode::UNAUTHORIZED)
-                        .body(Full::new(Bytes::from("Unauthorized: Session not found")).boxed())
+                        .status(http::StatusCode::NOT_FOUND)
+                        .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
                         .expect("valid response"));
                 }
 
@@ -505,10 +505,10 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
-            // unauthorized
+            // MCP spec: servers that require a session ID SHOULD respond with 400 Bad Request
             return Ok(Response::builder()
-                .status(http::StatusCode::UNAUTHORIZED)
-                .body(Full::new(Bytes::from("Unauthorized: Session ID is required")).boxed())
+                .status(http::StatusCode::BAD_REQUEST)
+                .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
                 .expect("valid response"));
         };
         // close session
