@@ -1,12 +1,14 @@
 use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 
+#[cfg(feature = "server")]
+use crate::model::ServerJsonRpcMessage;
 use crate::{
     error::ErrorData as McpError,
     model::{
         CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
         JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta,
-        NumberOrString, ProgressToken, RequestId, ServerJsonRpcMessage,
+        NumberOrString, ProgressToken, RequestId,
     },
     transport::{DynamicTransportError, IntoTransport, Transport},
 };

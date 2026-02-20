@@ -1,5 +1,8 @@
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::collections::BTreeMap;
+#[cfg(any(feature = "server", feature = "macros"))]
+use std::marker::PhantomData;
 
+#[cfg(any(feature = "server", feature = "macros"))]
 use pastey::paste;
 use serde::{Deserialize, Serialize};
 
@@ -300,6 +303,7 @@ pub struct ServerCapabilities {
     pub tasks: Option<TasksCapability>,
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 macro_rules! builder {
     ($Target: ident {$($f: ident: $T: ty),* $(,)?}) => {
         paste! {
@@ -405,6 +409,7 @@ macro_rules! builder {
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 builder! {
     ServerCapabilities {
         experimental: ExperimentalCapabilities,
@@ -418,6 +423,7 @@ builder! {
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 impl<
     const E: bool,
     const EXT: bool,
@@ -436,6 +442,7 @@ impl<
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 impl<
     const E: bool,
     const EXT: bool,
@@ -454,6 +461,7 @@ impl<
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 impl<
     const E: bool,
     const EXT: bool,
@@ -479,6 +487,7 @@ impl<
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 builder! {
     ClientCapabilities{
         experimental: ExperimentalCapabilities,
@@ -490,6 +499,7 @@ builder! {
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, true, S, EL, TASKS>>
 {
@@ -501,6 +511,7 @@ impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS:
     }
 }
 
+#[cfg(any(feature = "server", feature = "macros"))]
 impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, true, EL, TASKS>>
 {
@@ -521,7 +532,7 @@ impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS:
     }
 }
 
-#[cfg(feature = "elicitation")]
+#[cfg(all(feature = "elicitation", any(feature = "server", feature = "macros")))]
 impl<const E: bool, const EXT: bool, const R: bool, const S: bool, const TASKS: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, S, true, TASKS>>
 {
@@ -539,6 +550,7 @@ impl<const E: bool, const EXT: bool, const R: bool, const S: bool, const TASKS: 
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "server", feature = "macros"))]
 mod test {
     use super::*;
     #[test]

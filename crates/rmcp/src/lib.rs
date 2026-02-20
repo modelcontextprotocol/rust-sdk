@@ -24,7 +24,9 @@ pub use service::{RoleClient, serve_client};
 pub use service::{RoleServer, serve_server};
 
 pub mod handler;
+#[cfg(feature = "server")]
 pub mod task_manager;
+#[cfg(any(feature = "client", feature = "server"))]
 pub mod transport;
 
 // re-export
@@ -32,7 +34,7 @@ pub mod transport;
 pub use pastey::paste;
 #[cfg(all(feature = "macros", feature = "server"))]
 pub use rmcp_macros::*;
-#[cfg(any(feature = "macros", feature = "server"))]
+#[cfg(any(feature = "server", feature = "schemars"))]
 pub use schemars;
 #[cfg(feature = "macros")]
 pub use serde;
