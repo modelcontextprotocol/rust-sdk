@@ -55,17 +55,87 @@ impl Default for StreamableHttpServerConfig {
     }
 }
 
-/// # Streamable Http Server
+/// # Streamable HTTP server
 ///
-/// ## Extract information from raw http request
+/// An HTTP service that implements the
+/// [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http)
+/// for MCP servers.
 ///
-/// The http service will consume the request body, however the rest part will be remain and injected into [`crate::model::Extensions`],
-/// which you can get from [`crate::service::RequestContext`].
+/// ## Session management
+///
+/// When [`StreamableHttpServerConfig::stateful_mode`] is `true` (the default),
+/// the server creates a session for each client that sends an `initialize`
+/// request. The session ID is returned in the `Mcp-Session-Id` response header
+/// and the client must include it on all subsequent requests.
+///
+/// Two tool calls carrying the same `Mcp-Session-Id` come from the same logical
+/// session (typically one conversation in an LLM client). Different session IDs
+/// mean different sessions.
+///
+/// The [`SessionManager`] trait controls how sessions are stored and routed:
+///
+/// * [`LocalSessionManager`](super::session::local::LocalSessionManager) —
+///   in-memory session store (default).
+/// * [`NeverSessionManager`](super::session::never::NeverSessionManager) —
+///   disables sessions entirely (stateless mode).
+///
+/// ## Accessing HTTP request data from tool handlers
+///
+/// The service consumes the request body but injects the remaining
+/// [`http::request::Parts`] into [`crate::model::Extensions`], which is
+/// accessible through [`crate::service::RequestContext`].
+///
+/// ### Reading the raw HTTP parts
+///
 /// ```rust
 /// use rmcp::handler::server::tool::Extension;
 /// use http::request::Parts;
 /// async fn my_tool(Extension(parts): Extension<Parts>) {
 ///     tracing::info!("http parts:{parts:?}")
+/// }
+/// ```
+///
+/// ### Reading the session ID inside a tool handler
+///
+/// ```rust,ignore
+/// use rmcp::handler::server::tool::Extension;
+/// use rmcp::service::RequestContext;
+/// use rmcp::model::RoleServer;
+///
+/// #[tool(description = "session-aware tool")]
+/// async fn my_tool(
+///     &self,
+///     Extension(parts): Extension<http::request::Parts>,
+/// ) -> Result<CallToolResult, rmcp::ErrorData> {
+///     if let Some(session_id) = parts.headers.get("mcp-session-id") {
+///         tracing::info!(?session_id, "called from session");
+///     }
+///     // ...
+///     # todo!()
+/// }
+/// ```
+///
+/// ### Accessing custom axum/tower extension state
+///
+/// State added via axum's `Extension` layer is available inside
+/// `Parts.extensions`:
+///
+/// ```rust,ignore
+/// use rmcp::service::RequestContext;
+/// use rmcp::model::RoleServer;
+///
+/// #[derive(Clone)]
+/// struct AppState { /* ... */ }
+///
+/// #[tool(description = "example")]
+/// async fn my_tool(
+///     &self,
+///     ctx: RequestContext<RoleServer>,
+/// ) -> Result<CallToolResult, rmcp::ErrorData> {
+///     let parts = ctx.extensions.get::<http::request::Parts>().unwrap();
+///     let state = parts.extensions.get::<AppState>().unwrap();
+///     // use state...
+///     # todo!()
 /// }
 /// ```
 pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {

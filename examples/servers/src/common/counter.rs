@@ -136,6 +136,23 @@ impl Counter {
             (a + b).to_string(),
         )]))
     }
+
+    /// Returns the `Mcp-Session-Id` of the current session (streamable HTTP only).
+    #[tool(description = "Get the session ID for this connection")]
+    fn get_session_id(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+        let session_id = ctx
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.headers.get("mcp-session-id"))
+            .map(|v| v.to_str().unwrap_or("(non-ascii)").to_owned());
+
+        match session_id {
+            Some(id) => Ok(CallToolResult::success(vec![Content::text(id)])),
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "no session (not running over streamable HTTP?)",
+            )])),
+        }
+    }
 }
 
 #[prompt_router]
