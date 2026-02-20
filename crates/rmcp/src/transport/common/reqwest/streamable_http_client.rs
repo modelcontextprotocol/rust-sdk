@@ -22,6 +22,43 @@ impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
     }
 }
 
+/// Reserved headers that must not be overridden by user-supplied custom headers.
+/// `MCP-Protocol-Version` is in this list but is allowed through because the worker
+/// injects it after initialization.
+const RESERVED_HEADERS: &[&str] = &[
+    "accept",
+    HEADER_SESSION_ID,
+    HEADER_MCP_PROTOCOL_VERSION,
+    HEADER_LAST_EVENT_ID,
+];
+
+/// Applies custom headers to a request builder, rejecting reserved headers
+/// except `MCP-Protocol-Version` (which the worker injects after init).
+fn apply_custom_headers(
+    mut builder: reqwest::RequestBuilder,
+    custom_headers: HashMap<HeaderName, HeaderValue>,
+) -> Result<reqwest::RequestBuilder, StreamableHttpError<reqwest::Error>> {
+    for (name, value) in custom_headers {
+        if RESERVED_HEADERS
+            .iter()
+            .any(|&r| name.as_str().eq_ignore_ascii_case(r))
+        {
+            if name
+                .as_str()
+                .eq_ignore_ascii_case(HEADER_MCP_PROTOCOL_VERSION)
+            {
+                builder = builder.header(name, value);
+                continue;
+            }
+            return Err(StreamableHttpError::ReservedHeaderConflict(
+                name.to_string(),
+            ));
+        }
+        builder = builder.header(name, value);
+    }
+    Ok(builder)
+}
+
 impl StreamableHttpClient for reqwest::Client {
     type Error = reqwest::Error;
 
@@ -31,6 +68,7 @@ impl StreamableHttpClient for reqwest::Client {
         session_id: Arc<str>,
         last_event_id: Option<String>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
         let mut request_builder = self
             .get(uri.as_ref())
@@ -42,6 +80,7 @@ impl StreamableHttpClient for reqwest::Client {
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
+        request_builder = apply_custom_headers(request_builder, custom_headers)?;
         let response = request_builder.send().await?;
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
@@ -70,15 +109,15 @@ impl StreamableHttpClient for reqwest::Client {
         uri: Arc<str>,
         session: Arc<str>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
         let mut request_builder = self.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
-        let response = request_builder
-            .header(HEADER_SESSION_ID, session.as_ref())
-            .send()
-            .await?;
+        request_builder = request_builder.header(HEADER_SESSION_ID, session.as_ref());
+        request_builder = apply_custom_headers(request_builder, custom_headers)?;
+        let response = request_builder.send().await?;
 
         // if method no allowed
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
@@ -104,25 +143,7 @@ impl StreamableHttpClient for reqwest::Client {
             request = request.bearer_auth(auth_header);
         }
 
-        // Apply custom headers
-        let reserved_headers = [
-            ACCEPT.as_str(),
-            HEADER_SESSION_ID,
-            HEADER_MCP_PROTOCOL_VERSION,
-            HEADER_LAST_EVENT_ID,
-        ];
-        for (name, value) in custom_headers {
-            if reserved_headers
-                .iter()
-                .any(|&r| name.as_str().eq_ignore_ascii_case(r))
-            {
-                return Err(StreamableHttpError::ReservedHeaderConflict(
-                    name.to_string(),
-                ));
-            }
-
-            request = request.header(name, value);
-        }
+        request = apply_custom_headers(request, custom_headers)?;
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());
         }

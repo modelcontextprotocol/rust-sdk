@@ -155,6 +155,15 @@ impl ProtocolVersion {
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
     //  Keep LATEST at 2025-03-26 until full 2025-06-18 compliance and automated testing are in place.
     pub const LATEST: Self = Self::V_2025_03_26;
+
+    /// All protocol versions known to this SDK.
+    pub const KNOWN_VERSIONS: &[Self] =
+        &[Self::V_2024_11_05, Self::V_2025_03_26, Self::V_2025_06_18];
+
+    /// Returns the string representation of this protocol version.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl Serialize for ProtocolVersion {

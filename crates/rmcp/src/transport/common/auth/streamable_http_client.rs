@@ -17,13 +17,14 @@ where
         uri: std::sync::Arc<str>,
         session_id: std::sync::Arc<str>,
         mut auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), crate::transport::streamable_http_client::StreamableHttpError<Self::Error>>
     {
         if auth_token.is_none() {
             auth_token = Some(self.get_access_token().await?);
         }
         self.http_client
-            .delete_session(uri, session_id, auth_token)
+            .delete_session(uri, session_id, auth_token, custom_headers)
             .await
     }
 
@@ -33,6 +34,7 @@ where
         session_id: std::sync::Arc<str>,
         last_event_id: Option<String>,
         mut auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<
         futures::stream::BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
         crate::transport::streamable_http_client::StreamableHttpError<Self::Error>,
@@ -41,7 +43,7 @@ where
             auth_token = Some(self.get_access_token().await?);
         }
         self.http_client
-            .get_stream(uri, session_id, last_event_id, auth_token)
+            .get_stream(uri, session_id, last_event_id, auth_token, custom_headers)
             .await
     }
 

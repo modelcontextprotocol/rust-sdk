@@ -11,7 +11,7 @@ use tracing::debug;
 use super::common::client_side_sse::{ExponentialBackoff, SseRetryPolicy, SseStreamReconnect};
 use crate::{
     RoleClient,
-    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
+    model::{ClientJsonRpcMessage, ServerJsonRpcMessage, ServerResult},
     transport::{
         common::client_side_sse::SseAutoReconnectStream,
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
@@ -184,6 +184,7 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
         uri: Arc<str>,
         session_id: Arc<str>,
         auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> impl Future<Output = Result<(), StreamableHttpError<Self::Error>>> + Send + '_;
     fn get_stream(
         &self,
@@ -191,6 +192,7 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
         session_id: Arc<str>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> impl Future<
         Output = Result<
             BoxStream<'static, Result<Sse, SseError>>,
@@ -210,6 +212,7 @@ struct StreamableHttpClientReconnect<C> {
     pub session_id: Arc<str>,
     pub uri: Arc<str>,
     pub auth_header: Option<String>,
+    pub custom_headers: HashMap<HeaderName, HeaderValue>,
 }
 
 impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconnect<C> {
@@ -220,13 +223,23 @@ impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconne
         let uri = self.uri.clone();
         let session_id = self.session_id.clone();
         let auth_header = self.auth_header.clone();
+        let custom_headers = self.custom_headers.clone();
         let last_event_id = last_event_id.map(|s| s.to_owned());
         Box::pin(async move {
             client
-                .get_stream(uri, session_id, last_event_id, auth_header)
+                .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
                 .await
         })
     }
+}
+
+/// Info retained for cleaning up the session when the worker exits.
+struct SessionCleanupInfo<C> {
+    client: C,
+    uri: Arc<str>,
+    session_id: Arc<str>,
+    auth_header: Option<String>,
+    protocol_headers: HashMap<HeaderName, HeaderValue>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -357,14 +370,29 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             None
         };
+        // Extract the negotiated protocol version from the init response
+        // and build a custom headers map that includes MCP-Protocol-Version
+        // for all subsequent HTTP requests (per MCP 2025-06-18 spec).
+        let protocol_headers = {
+            let mut headers = config.custom_headers.clone();
+            if let ServerJsonRpcMessage::Response(response) = &message {
+                if let ServerResult::InitializeResult(init_result) = &response.result {
+                    if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
+                        // HeaderName::from_static requires lowercase
+                        headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
+                    }
+                }
+            }
+            headers
+        };
+
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
-        let session_cleanup_info = session_id.as_ref().map(|sid| {
-            (
-                self.client.clone(),
-                config.uri.clone(),
-                sid.clone(),
-                config.auth_header.clone(),
-            )
+        let session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
+            client: self.client.clone(),
+            uri: config.uri.clone(),
+            session_id: sid.clone(),
+            auth_header: config.auth_header.clone(),
+            protocol_headers: protocol_headers.clone(),
         });
 
         context.send_to_handler(message).await?;
@@ -376,7 +404,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 initialized_notification.message,
                 session_id.clone(),
                 config.auth_header.clone(),
-                config.custom_headers.clone(),
+                protocol_headers.clone(),
             )
             .await
             .map_err(WorkerQuitReason::fatal_context(
@@ -404,10 +432,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             let transport_task_ct = transport_task_ct.clone();
             let config_uri = config.uri.clone();
             let config_auth_header = config.auth_header.clone();
+            let spawn_headers = protocol_headers.clone();
 
             streams.spawn(async move {
                 match client
-                    .get_stream(uri.clone(), session_id.clone(), None, auth_header.clone())
+                    .get_stream(
+                        uri.clone(),
+                        session_id.clone(),
+                        None,
+                        auth_header.clone(),
+                        spawn_headers.clone(),
+                    )
                     .await
                 {
                     Ok(stream) => {
@@ -418,6 +453,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 session_id: session_id.clone(),
                                 uri: config_uri,
                                 auth_header: config_auth_header,
+                                custom_headers: spawn_headers,
                             },
                             retry_config,
                         );
@@ -482,7 +518,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             message,
                             session_id.clone(),
                             config.auth_header.clone(),
-                            config.custom_headers.clone(),
+                            protocol_headers.clone(),
                         )
                         .await;
                     let send_result = match response {
@@ -504,6 +540,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                         session_id: session_id.clone(),
                                         uri: config.uri.clone(),
                                         auth_header: config.auth_header.clone(),
+                                        custom_headers: protocol_headers.clone(),
                                     },
                                     self.config.retry_config.clone(),
                                 );
@@ -550,32 +587,41 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 
         // Cleanup session before returning (ensures close() waits for session deletion)
         // Use a timeout to prevent indefinite hangs if the server is unresponsive
-        if let Some((client, url, session_id, auth_header)) = session_cleanup_info {
+        if let Some(cleanup) = session_cleanup_info {
             const SESSION_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            let cleanup_session_id = cleanup.session_id.clone();
             match tokio::time::timeout(
                 SESSION_CLEANUP_TIMEOUT,
-                client.delete_session(url, session_id.clone(), auth_header),
+                cleanup.client.delete_session(
+                    cleanup.uri,
+                    cleanup.session_id,
+                    cleanup.auth_header,
+                    cleanup.protocol_headers,
+                ),
             )
             .await
             {
                 Ok(Ok(_)) => {
-                    tracing::info!(session_id = session_id.as_ref(), "delete session success")
+                    tracing::info!(
+                        session_id = cleanup_session_id.as_ref(),
+                        "delete session success"
+                    )
                 }
                 Ok(Err(StreamableHttpError::ServerDoesNotSupportDeleteSession)) => {
                     tracing::info!(
-                        session_id = session_id.as_ref(),
+                        session_id = cleanup_session_id.as_ref(),
                         "server doesn't support delete session"
                     )
                 }
                 Ok(Err(e)) => {
                     tracing::error!(
-                        session_id = session_id.as_ref(),
+                        session_id = cleanup_session_id.as_ref(),
                         "fail to delete session: {e}"
                     );
                 }
                 Err(_elapsed) => {
                     tracing::warn!(
-                        session_id = session_id.as_ref(),
+                        session_id = cleanup_session_id.as_ref(),
                         "session cleanup timed out after {:?}",
                         SESSION_CLEANUP_TIMEOUT
                     );
@@ -652,6 +698,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///         _uri: Arc<str>,
 ///         _session_id: Arc<str>,
 ///         _auth_header: Option<String>,
+///         _custom_headers: HashMap<HeaderName, HeaderValue>,
 ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
@@ -662,6 +709,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///         _session_id: Arc<str>,
 ///         _last_event_id: Option<String>,
 ///         _auth_header: Option<String>,
+///         _custom_headers: HashMap<HeaderName, HeaderValue>,
 ///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
 ///         todo!()
 ///     }
@@ -737,6 +785,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///         _uri: Arc<str>,
     ///         _session_id: Arc<str>,
     ///         _auth_header: Option<String>,
+    ///         _custom_headers: HashMap<HeaderName, HeaderValue>,
     ///     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
@@ -747,6 +796,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///         _session_id: Arc<str>,
     ///         _last_event_id: Option<String>,
     ///         _auth_header: Option<String>,
+    ///         _custom_headers: HashMap<HeaderName, HeaderValue>,
     ///     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
     ///         todo!()
     ///     }
