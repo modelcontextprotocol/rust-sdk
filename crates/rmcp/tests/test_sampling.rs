@@ -498,6 +498,7 @@ async fn test_create_message_result_tool_use_stop_reason() -> Result<()> {
 #[tokio::test]
 async fn test_sampling_capability() -> Result<()> {
     let cap = SamplingCapability {
+        supported_modalities: None,
         tools: Some(JsonObject::default()),
         context: None,
     };

@@ -215,11 +215,40 @@ pub struct ElicitationCapability {
     pub url: Option<UrlElicitationCapability>,
 }
 
+/// Content modalities that a client's LLM provider can return in sampling responses.
+///
+/// When a client advertises `supportedModalities` in its sampling capability,
+/// servers know which content types are safe to request. If omitted, servers
+/// SHOULD assume only `text` is supported.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum SamplingModality {
+    /// Plain text content
+    Text,
+    /// Base64-encoded image content
+    Image,
+    /// Base64-encoded audio content
+    Audio,
+}
+
 /// Sampling capability with optional sub-capabilities (SEP-1577).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SamplingCapability {
+    /// Content modalities the client's LLM provider can return in sampling responses.
+    ///
+    /// When present, servers SHOULD only request content types listed here.
+    /// When absent, servers SHOULD assume only `["text"]` is supported.
+    ///
+    /// # Example
+    ///
+    /// ```json
+    /// { "supportedModalities": ["text", "image"] }
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_modalities: Option<Vec<SamplingModality>>,
     /// Support for `tools` and `toolChoice` parameters
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<JsonObject>,
@@ -519,6 +548,34 @@ impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS:
         }
         self
     }
+
+    /// Advertise which content modalities the client's LLM provider can return
+    /// in sampling responses.
+    ///
+    /// When set, servers SHOULD only request content types listed here.
+    /// When not set, servers SHOULD assume only text is supported.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use rmcp::model::{ClientCapabilities, SamplingModality};
+    /// let cap = ClientCapabilities::builder()
+    ///     .enable_sampling()
+    ///     .enable_sampling_supported_modalities(vec![
+    ///         SamplingModality::Text,
+    ///         SamplingModality::Image,
+    ///     ])
+    ///     .build();
+    /// ```
+    pub fn enable_sampling_supported_modalities(
+        mut self,
+        modalities: Vec<SamplingModality>,
+    ) -> Self {
+        if let Some(c) = self.sampling.as_mut() {
+            c.supported_modalities = Some(modalities);
+        }
+        self
+    }
 }
 
 #[cfg(feature = "elicitation")]
@@ -726,6 +783,124 @@ mod test {
         assert_eq!(
             json["extensions"]["io.modelcontextprotocol/oauth-client-credentials"],
             serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn test_sampling_supported_modalities_builder() {
+        // Test building sampling capability with supportedModalities
+        let capabilities = ClientCapabilities::builder()
+            .enable_sampling()
+            .enable_sampling_supported_modalities(vec![
+                SamplingModality::Text,
+                SamplingModality::Image,
+            ])
+            .build();
+
+        let sampling = capabilities.sampling.unwrap();
+        let modalities = sampling.supported_modalities.unwrap();
+        assert_eq!(modalities.len(), 2);
+        assert_eq!(modalities[0], SamplingModality::Text);
+        assert_eq!(modalities[1], SamplingModality::Image);
+    }
+
+    #[test]
+    fn test_sampling_supported_modalities_serialization() {
+        // Test that supportedModalities serializes to the expected JSON format
+        let capabilities = ClientCapabilities::builder()
+            .enable_sampling()
+            .enable_sampling_supported_modalities(vec![
+                SamplingModality::Text,
+                SamplingModality::Image,
+                SamplingModality::Audio,
+            ])
+            .build();
+
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(
+            json["sampling"]["supportedModalities"],
+            serde_json::json!(["text", "image", "audio"])
+        );
+    }
+
+    #[test]
+    fn test_sampling_supported_modalities_deserialization() {
+        // Test deserializing supportedModalities from JSON
+        let json = serde_json::json!({
+            "sampling": {
+                "supportedModalities": ["text", "image"]
+            }
+        });
+
+        let capabilities: ClientCapabilities = serde_json::from_value(json).unwrap();
+        let sampling = capabilities.sampling.unwrap();
+        let modalities = sampling.supported_modalities.unwrap();
+        assert_eq!(modalities.len(), 2);
+        assert_eq!(modalities[0], SamplingModality::Text);
+        assert_eq!(modalities[1], SamplingModality::Image);
+    }
+
+    #[test]
+    fn test_sampling_without_supported_modalities() {
+        // Test that omitting supportedModalities is valid (backward compatible)
+        let json = serde_json::json!({
+            "sampling": {}
+        });
+
+        let capabilities: ClientCapabilities = serde_json::from_value(json).unwrap();
+        let sampling = capabilities.sampling.unwrap();
+        assert!(sampling.supported_modalities.is_none());
+    }
+
+    #[test]
+    fn test_sampling_supported_modalities_with_tools() {
+        // Test that supportedModalities works alongside tools capability
+        let capabilities = ClientCapabilities::builder()
+            .enable_sampling()
+            .enable_sampling_tools()
+            .enable_sampling_supported_modalities(vec![
+                SamplingModality::Text,
+                SamplingModality::Image,
+            ])
+            .build();
+
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(
+            json["sampling"]["supportedModalities"],
+            serde_json::json!(["text", "image"])
+        );
+        assert_eq!(json["sampling"]["tools"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_sampling_supported_modalities_text_only() {
+        // Test text-only modality (the default assumption when field is absent)
+        let capabilities = ClientCapabilities::builder()
+            .enable_sampling()
+            .enable_sampling_supported_modalities(vec![SamplingModality::Text])
+            .build();
+
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(
+            json["sampling"]["supportedModalities"],
+            serde_json::json!(["text"])
+        );
+    }
+
+    #[test]
+    fn test_sampling_modality_enum_values() {
+        // Verify the enum serializes to the correct lowercase strings
+        assert_eq!(
+            serde_json::to_value(SamplingModality::Text).unwrap(),
+            serde_json::json!("text")
+        );
+        assert_eq!(
+            serde_json::to_value(SamplingModality::Image).unwrap(),
+            serde_json::json!("image")
+        );
+        assert_eq!(
+            serde_json::to_value(SamplingModality::Audio).unwrap(),
+            serde_json::json!("audio")
         );
     }
 }
