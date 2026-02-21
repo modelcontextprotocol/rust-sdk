@@ -16,7 +16,7 @@ use crate::{
 ///
 /// Tools implementing [`SyncTool`] or [`AsyncTool`] must implement this trait first.
 ///
-/// All methods are consistent with fileds of [`Tool`][crate::model::Tool].
+/// All methods are consistent with fields of [`Tool`][crate::model::Tool].
 pub trait ToolBase {
     /// Parameter type, will used in the invoke parameter of [`SyncTool`] or [`AsyncTool`] trait
     type Parameter: for<'de> Deserialize<'de> + JsonSchema + Send + 'static;
