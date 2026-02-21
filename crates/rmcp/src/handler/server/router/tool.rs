@@ -1,7 +1,132 @@
+//! Tools for MCP servers.
+//!
+//! It's straightforward to define tools using [`tool_router`][crate::tool_router] and
+//! [`tool`][crate::tool] macro.
+//!
+//! ```rust
+//! # use rmcp::{
+//! #     tool_router, tool,
+//! #     handler::server::{wrapper::{Parameters, Json}, tool::ToolRouter},
+//! #     schemars
+//! # };
+//! # use serde::{Serialize, Deserialize};
+//! struct Server {
+//!     tool_router: ToolRouter<Self>,
+//! }
+//! #[derive(Deserialize, schemars::JsonSchema)]
+//! struct AddParameter {
+//!     left: usize,
+//!     right: usize
+//! }
+//! #[derive(Serialize, schemars::JsonSchema)]
+//! struct AddOutput {
+//!     sum: usize
+//! }
+//! #[tool_router]
+//! impl Server {
+//!     #[tool(name = "adder", description = "Modular add two integers")]
+//!     fn add(
+//!         &self,
+//!         Parameters(AddParameter { left, right }): Parameters<AddParameter>
+//!     ) -> Json<AddOutput> {
+//!         Json(AddOutput { sum: left.wrapping_add(right) })
+//!     }
+//! }
+//! ```
+//!
+//! Using the macro-based code pattern above is suitable for small MCP servers with simple interfaces.
+//! When the business logic become larger, it is recommended that each tool should reside
+//! in individual file, combined into MCP server using [`SyncTool`] and [`AsyncTool`] traits.
+//!
+//! ```rust
+//! # use rmcp::{
+//! #     handler::server::{
+//! #         tool::ToolRouter,
+//! #         router::tool::{SyncTool, AsyncTool, ToolBase},
+//! #     },
+//! #     schemars, ErrorData
+//! # };
+//! # pub struct MyCustomError;
+//! # impl Into<ErrorData> for MyCustomError {
+//! #     fn into(self) -> ErrorData { unimplemented!() }
+//! # }
+//! # use serde::{Serialize, Deserialize};
+//! # use std::borrow::Cow;
+//! // In tool1.rs
+//! pub struct ComplexTool1;
+//! #[derive(Deserialize, schemars::JsonSchema)]
+//! pub struct ComplexTool1Input { /* ... */ }
+//! #[derive(Serialize, schemars::JsonSchema)]
+//! pub struct ComplexTool1Output { /* ... */ }
+//!
+//! impl ToolBase for ComplexTool1 {
+//!     type Parameter = ComplexTool1Input;
+//!     type Output = ComplexTool1Output;
+//!     type Error = MyCustomError;
+//!     fn name() -> Cow<'static, str> {
+//!         "complex-tool1".into()
+//!     }
+//!
+//!     fn description() -> Option<Cow<'static, str>> {
+//!         Some("...".into())
+//!     }
+//! }
+//! impl SyncTool<MyToolServer> for ComplexTool1 {
+//!     fn invoke(service: &MyToolServer, param: Self::Parameter) -> Result<Self::Output, Self::Error> {
+//!         // ...
+//! #       unimplemented!()
+//!     }
+//! }
+//! // In tool2.rs
+//! pub struct ComplexTool2;
+//! #[derive(Deserialize, schemars::JsonSchema)]
+//! pub struct ComplexTool2Input { /* ... */ }
+//! #[derive(Serialize, schemars::JsonSchema)]
+//! pub struct ComplexTool2Output { /* ... */ }
+//!
+//! impl ToolBase for ComplexTool2 {
+//!     type Parameter = ComplexTool2Input;
+//!     type Output = ComplexTool2Output;
+//!     type Error = MyCustomError;
+//!     fn name() -> Cow<'static, str> {
+//!         "complex-tool2".into()
+//!     }
+//!
+//!     fn description() -> Option<Cow<'static, str>> {
+//!         Some("...".into())
+//!     }
+//! }
+//! impl AsyncTool<MyToolServer> for ComplexTool2 {
+//!     async fn invoke(service: &MyToolServer, param: Self::Parameter) -> Result<Self::Output, Self::Error> {
+//!         // ...
+//! #       unimplemented!()
+//!     }
+//! }
+//!
+//! // In tool_router.rs
+//! struct MyToolServer {
+//!     tool_router: ToolRouter<Self>,
+//! }
+//! impl MyToolServer {
+//!     pub fn tool_router() -> ToolRouter<Self> {
+//!         ToolRouter::new()
+//!             .with_sync_tool::<ComplexTool1>()
+//!             .with_async_tool::<ComplexTool2>()
+//!     }
+//! }
+//! ```
+//!
+//! It's also possible to use macro-based and trait-based tool definition together: Since
+//! [`ToolRouter`] implements [`Add`][std::ops::Add], you can add two tool routers into final
+//! router as showed in [the documentation of `tool_router`][crate::tool_router].
+
+mod tool_traits;
+
 use std::{borrow::Cow, sync::Arc};
 
 use futures::{FutureExt, future::BoxFuture};
 use schemars::JsonSchema;
+pub use tool_traits::{AsyncTool, SyncTool, ToolBase};
 
 use crate::{
     handler::server::{
@@ -217,6 +342,26 @@ where
     {
         self.add_route(route.into_tool_route());
         self
+    }
+
+    pub fn with_sync_tool<T>(self) -> Self
+    where
+        T: SyncTool<S> + 'static,
+    {
+        self.with_route((
+            tool_traits::tool_attribute::<T>(),
+            tool_traits::sync_tool_wrapper::<S, T>,
+        ))
+    }
+
+    pub fn with_async_tool<T>(self) -> Self
+    where
+        T: AsyncTool<S> + 'static,
+    {
+        self.with_route((
+            tool_traits::tool_attribute::<T>(),
+            tool_traits::async_tool_wrapper::<S, T>,
+        ))
     }
 
     pub fn add_route(&mut self, item: ToolRoute<S>) {
