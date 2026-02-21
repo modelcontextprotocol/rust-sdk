@@ -130,7 +130,7 @@ async fn calculate(&self, params: Parameters<CalculationRequest>) -> Result<Json
 # }
 ```
 
-The `#[tool]` macro automatically generates an output schema from the `CalculationResult` type.
+The `#[tool]` macro automatically generates an output schema from the `CalculationResult` type. See the [documentation of `tool` module](crate::handler::server::router::tool) for more instructions.
 
 ## Tasks
 
