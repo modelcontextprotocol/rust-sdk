@@ -999,10 +999,10 @@ impl AuthorizationManager {
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
-        let granted_scopes: Vec<String> = token_result
-            .scopes()
-            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_else(|| self.current_scopes.blocking_read().clone());
+        let granted_scopes: Vec<String> = match token_result.scopes() {
+            Some(scopes) => scopes.iter().map(|s| s.to_string()).collect(),
+            None => self.current_scopes.read().await.clone(),
+        };
 
         *self.current_scopes.write().await = granted_scopes.clone();
 
