@@ -2,7 +2,7 @@
 use rmcp::{
     Json, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
-    model::{CallToolResult, Content, Tool},
+    model::{CallToolResult, Content, ServerResult, Tool},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -279,4 +279,62 @@ async fn test_output_schema_requires_structured_content() {
     // Verify it has structured_content and content
     assert!(call_result.structured_content.is_some());
     assert!(!call_result.content.is_empty());
+}
+
+#[tokio::test]
+async fn test_empty_content_array_deserializes() {
+    let raw = json!({ "content": [] });
+    let result: CallToolResult = serde_json::from_value(raw).unwrap();
+    assert!(result.content.is_empty());
+    assert!(result.structured_content.is_none());
+    assert!(result.is_error.is_none());
+}
+
+#[tokio::test]
+async fn test_empty_content_array_with_is_error() {
+    let raw = json!({ "content": [], "isError": false });
+    let result: CallToolResult = serde_json::from_value(raw).unwrap();
+    assert!(result.content.is_empty());
+    assert_eq!(result.is_error, Some(false));
+}
+
+#[tokio::test]
+async fn test_missing_content_is_rejected() {
+    let raw = json!({ "isError": false });
+    let result: Result<CallToolResult, _> = serde_json::from_value(raw);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_missing_content_with_structured_content_is_rejected() {
+    let raw = json!({ "structuredContent": {"key": "value"}, "isError": false });
+    let result: Result<CallToolResult, _> = serde_json::from_value(raw);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_empty_content_deserializes_as_call_tool_result_variant() {
+    let raw = json!({ "content": [] });
+    let result: ServerResult = serde_json::from_value(raw).unwrap();
+    match result {
+        ServerResult::CallToolResult(call_result) => {
+            assert!(call_result.content.is_empty());
+            assert!(call_result.structured_content.is_none());
+        }
+        other => panic!("Expected CallToolResult, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_empty_content_roundtrip() {
+    let result = CallToolResult {
+        content: vec![],
+        structured_content: None,
+        is_error: Some(false),
+        meta: None,
+    };
+    let v = serde_json::to_value(&result).unwrap();
+    assert_eq!(v["content"], json!([]));
+    let deserialized: CallToolResult = serde_json::from_value(v).unwrap();
+    assert_eq!(deserialized, result);
 }

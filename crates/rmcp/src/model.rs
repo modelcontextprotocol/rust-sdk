@@ -2196,7 +2196,7 @@ pub type ElicitationCompletionNotification =
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CallToolResult {
@@ -2307,45 +2307,6 @@ impl CallToolResult {
             return serde_json::from_str(text);
         }
         serde_json::from_value(serde_json::Value::Null)
-    }
-}
-
-// Custom deserialize implementation to validate mutual exclusivity
-impl<'de> Deserialize<'de> for CallToolResult {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct CallToolResultHelper {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            content: Option<Vec<Content>>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            structured_content: Option<Value>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            is_error: Option<bool>,
-            /// Accept `_meta` during deserialization
-            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-            meta: Option<Meta>,
-        }
-
-        let helper = CallToolResultHelper::deserialize(deserializer)?;
-        let result = CallToolResult {
-            content: helper.content.unwrap_or_default(),
-            structured_content: helper.structured_content,
-            is_error: helper.is_error,
-            meta: helper.meta,
-        };
-
-        // Validate mutual exclusivity
-        if result.content.is_empty() && result.structured_content.is_none() {
-            return Err(serde::de::Error::custom(
-                "CallToolResult must have either content or structured_content",
-            ));
-        }
-
-        Ok(result)
     }
 }
 
