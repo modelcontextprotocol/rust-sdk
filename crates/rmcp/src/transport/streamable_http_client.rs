@@ -154,14 +154,16 @@ impl StreamableHttpPostResponse {
         }
     }
 
-    pub fn expect_accepted<E>(self) -> Result<(), StreamableHttpError<E>>
+    pub fn expect_accepted_or_json<E>(self) -> Result<(), StreamableHttpError<E>>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
         match self {
             Self::Accepted => Ok(()),
+            // Tolerate servers that return 200 with JSON for notifications
+            Self::Json(..) => Ok(()),
             got => Err(StreamableHttpError::UnexpectedServerResponse(
-                format!("expect accepted, got {got:?}").into(),
+                format!("expect accepted or json, got {got:?}").into(),
             )),
         }
     }
@@ -410,7 +412,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             .map_err(WorkerQuitReason::fatal_context(
                 "send initialized notification",
             ))?
-            .expect_accepted::<C::Error>()
+            .expect_accepted_or_json::<C::Error>()
             .map_err(WorkerQuitReason::fatal_context(
                 "process initialized notification response",
             ))?;

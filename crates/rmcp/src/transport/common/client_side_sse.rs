@@ -255,8 +255,23 @@ where
                         }
                     }
                     None => {
-                        tracing::debug!("sse stream terminated");
-                        return Poll::Ready(None);
+                        // Per SEP-1699, a graceful stream close is
+                        // reconnectable.  If the server sent a `retry` field
+                        // we MUST wait that long before reconnecting.
+                        let interval = this
+                            .server_retry_interval
+                            .take()
+                            .or_else(|| this.retry_policy.retry(0));
+                        if let Some(interval) = interval {
+                            tracing::debug!(?interval, "sse stream ended gracefully, reconnecting");
+                            SseAutoReconnectStreamState::WaitingNextRetry {
+                                sleep: tokio::time::sleep(interval),
+                                retry_times: 0,
+                            }
+                        } else {
+                            tracing::debug!("sse stream terminated, no reconnect policy");
+                            return Poll::Ready(None);
+                        }
                     }
                 }
             }
