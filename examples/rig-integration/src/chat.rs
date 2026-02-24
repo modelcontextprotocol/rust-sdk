@@ -46,7 +46,7 @@ where
                     output_agent(&text, &mut output).await?;
                 }
                 Ok(MultiTurnStreamItem::StreamAssistantItem(
-                    StreamedAssistantContent::ToolCall(tool_call),
+                    StreamedAssistantContent::ToolCall { tool_call, .. },
                 )) => {
                     let name = &tool_call.function.name;
                     let arguments = &tool_call.function.arguments;
