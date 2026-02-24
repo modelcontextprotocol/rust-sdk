@@ -992,6 +992,9 @@ impl AuthorizationManager {
             }
         }
 
+        // When expiry info is unavailable (e.g., credentials stored before
+        // token_received_at was tracked), skip the expiry check and return
+        // the token as-is.
         Ok(creds.access_token().secret().to_string())
     }
 
@@ -1005,8 +1008,8 @@ impl AuthorizationManager {
                 tracing::info!("Refreshed access token.");
                 Ok(new_creds.access_token().secret().to_string())
             }
-            Err(AuthError::AuthorizationRequired | AuthError::TokenRefreshFailed(_)) => {
-                tracing::warn!("Token refresh not possible, re-authorization required.");
+            Err(e @ (AuthError::AuthorizationRequired | AuthError::TokenRefreshFailed(_))) => {
+                tracing::warn!(error = %e, "Token refresh not possible, re-authorization required.");
                 Err(AuthError::AuthorizationRequired)
             }
             Err(e) => Err(e),
@@ -1030,7 +1033,7 @@ impl AuthorizationManager {
         let refresh_token = current_credentials.refresh_token().ok_or_else(|| {
             AuthError::TokenRefreshFailed("No refresh token available".to_string())
         })?;
-        debug!("refresh token: {:?}", refresh_token);
+        debug!("refresh token present, attempting refresh");
 
         let token_result = oauth_client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.secret().to_string()))
@@ -2680,6 +2683,8 @@ mod tests {
 
     // -- get_access_token --
 
+    use super::{OAuthTokenResponse, StoredCredentials};
+
     fn make_token_response(access_token: &str, expires_in_secs: Option<u64>) -> OAuthTokenResponse {
         use oauth2::{AccessToken, EmptyExtraTokenFields, basic::BasicTokenType};
         let mut resp = OAuthTokenResponse::new(
@@ -2692,8 +2697,6 @@ mod tests {
         }
         resp
     }
-
-    use super::{OAuthTokenResponse, StoredCredentials};
 
     #[tokio::test]
     async fn get_access_token_returns_error_when_no_credentials() {
