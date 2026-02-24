@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use reqwest;
 use rmcp::{
     RoleServer, ServerHandler,
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo, ToolsCapability},
