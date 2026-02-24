@@ -210,6 +210,11 @@ name = "test_streamable_http_priming"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_priming.rs"
 
+[[test]]
+name = "test_streamable_http_json_response"
+required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+path = "tests/test_streamable_http_json_response.rs"
+
 
 [[test]]
 name = "test_custom_request"
