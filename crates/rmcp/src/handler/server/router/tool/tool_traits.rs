@@ -55,7 +55,7 @@ pub trait ToolBase {
     ///
     /// The default implementation generates schema based on [`Self::Output`] type.
     ///
-    /// If the tool does not have any parameters, you should override this methods to return [`None`].
+    /// If the tool does not have any output, you should override this methods to return [`None`].
     fn output_schema() -> Option<Arc<JsonObject>> {
         Some(schema_for_output::<Self::Output>().unwrap_or_else(|e| {
             panic!(
