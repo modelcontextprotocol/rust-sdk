@@ -113,6 +113,10 @@ pub struct StringSchema {
     /// String format - limited to: "email", "uri", "date", "date-time"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<StringFormat>,
+
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 impl Default for StringSchema {
@@ -124,6 +128,7 @@ impl Default for StringSchema {
             min_length: None,
             max_length: None,
             format: None,
+            default: None,
         }
     }
 }
@@ -213,6 +218,12 @@ impl StringSchema {
         self.format = Some(format);
         self
     }
+
+    /// Set default value
+    pub fn with_default(mut self, default: impl Into<String>) -> Self {
+        self.default = Some(default.into());
+        self
+    }
 }
 
 // =============================================================================
@@ -246,6 +257,10 @@ pub struct NumberSchema {
     /// Maximum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum: Option<f64>,
+
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<f64>,
 }
 
 impl Default for NumberSchema {
@@ -256,6 +271,7 @@ impl Default for NumberSchema {
             description: None,
             minimum: None,
             maximum: None,
+            default: None,
         }
     }
 }
@@ -307,6 +323,12 @@ impl NumberSchema {
         self.description = Some(description.into());
         self
     }
+
+    /// Set default value
+    pub fn with_default(mut self, default: f64) -> Self {
+        self.default = Some(default);
+        self
+    }
 }
 
 // =============================================================================
@@ -340,6 +362,10 @@ pub struct IntegerSchema {
     /// Maximum value (inclusive)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maximum: Option<i64>,
+
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<i64>,
 }
 
 impl Default for IntegerSchema {
@@ -350,6 +376,7 @@ impl Default for IntegerSchema {
             description: None,
             minimum: None,
             maximum: None,
+            default: None,
         }
     }
 }
@@ -399,6 +426,12 @@ impl IntegerSchema {
     /// Set description
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set default value
+    pub fn with_default(mut self, default: i64) -> Self {
+        self.default = Some(default);
         self
     }
 }
