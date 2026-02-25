@@ -238,10 +238,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
             // if not found, use a default empty JSON schema object
             // TODO: should be updated according to the new specifications
             syn::parse2::<Expr>(quote! {
-                std::sync::Arc::new(serde_json::json!({
-                    "type": "object",
-                    "properties": {}
-                }).as_object().unwrap().clone())
+                rmcp::handler::server::common::schema_for_empty_input()
             })?
         }
     };

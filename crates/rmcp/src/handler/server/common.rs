@@ -48,6 +48,20 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     })
 }
 
+// TODO: should be updated according to the new specifications
+/// Schema used when input is empty.
+pub fn schema_for_empty_input() -> Arc<JsonObject> {
+    std::sync::Arc::new(
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    )
+}
+
 /// Generate and validate a JSON schema for outputSchema (must have root type "object").
 pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String> {
     thread_local! {

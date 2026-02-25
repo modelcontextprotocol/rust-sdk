@@ -13,7 +13,7 @@
 //! struct Server {
 //!     tool_router: ToolRouter<Self>,
 //! }
-//! #[derive(Deserialize, schemars::JsonSchema)]
+//! #[derive(Deserialize, schemars::JsonSchema, Default)]
 //! struct AddParameter {
 //!     left: usize,
 //!     right: usize
@@ -47,8 +47,8 @@
 //! #     schemars, ErrorData
 //! # };
 //! # pub struct MyCustomError;
-//! # impl Into<ErrorData> for MyCustomError {
-//! #     fn into(self) -> ErrorData { unimplemented!() }
+//! # impl From<MyCustomError> for ErrorData {
+//! #     fn from(err: MyCustomError) -> ErrorData { unimplemented!() }
 //! # }
 //! # use serde::{Serialize, Deserialize};
 //! # use std::borrow::Cow;
@@ -344,24 +344,40 @@ where
         self
     }
 
+    /// Add a tool that implements [`SyncTool`]
     pub fn with_sync_tool<T>(self) -> Self
     where
         T: SyncTool<S> + 'static,
     {
-        self.with_route((
-            tool_traits::tool_attribute::<T>(),
-            tool_traits::sync_tool_wrapper::<S, T>,
-        ))
+        if T::input_schema().is_some() {
+            self.with_route((
+                tool_traits::tool_attribute::<T>(),
+                tool_traits::sync_tool_wrapper::<S, T>,
+            ))
+        } else {
+            self.with_route((
+                tool_traits::tool_attribute::<T>(),
+                tool_traits::sync_tool_wrapper_with_empty_params::<S, T>,
+            ))
+        }
     }
 
+    /// Add a tool that implements [`AsyncTool`]
     pub fn with_async_tool<T>(self) -> Self
     where
         T: AsyncTool<S> + 'static,
     {
-        self.with_route((
-            tool_traits::tool_attribute::<T>(),
-            tool_traits::async_tool_wrapper::<S, T>,
-        ))
+        if T::input_schema().is_some() {
+            self.with_route((
+                tool_traits::tool_attribute::<T>(),
+                tool_traits::async_tool_wrapper::<S, T>,
+            ))
+        } else {
+            self.with_route((
+                tool_traits::tool_attribute::<T>(),
+                tool_traits::async_tool_wrapper_with_empty_params::<S, T>,
+            ))
+        }
     }
 
     pub fn add_route(&mut self, item: ToolRoute<S>) {
