@@ -54,7 +54,7 @@
 //! # use std::borrow::Cow;
 //! // In tool1.rs
 //! pub struct ComplexTool1;
-//! #[derive(Deserialize, schemars::JsonSchema)]
+//! #[derive(Deserialize, schemars::JsonSchema, Default)]
 //! pub struct ComplexTool1Input { /* ... */ }
 //! #[derive(Serialize, schemars::JsonSchema)]
 //! pub struct ComplexTool1Output { /* ... */ }
@@ -79,7 +79,7 @@
 //! }
 //! // In tool2.rs
 //! pub struct ComplexTool2;
-//! #[derive(Deserialize, schemars::JsonSchema)]
+//! #[derive(Deserialize, schemars::JsonSchema, Default)]
 //! pub struct ComplexTool2Input { /* ... */ }
 //! #[derive(Serialize, schemars::JsonSchema)]
 //! pub struct ComplexTool2Output { /* ... */ }
