@@ -156,10 +156,8 @@ pub(crate) fn async_tool_wrapper_with_empty_params<S: Sync + Send + 'static, T: 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::tool;
-
-    use crate as rmcp; // workaround for macros
+    use crate as rmcp;
+    use crate::tool; // workaround for macros
 
     #[derive(Deserialize, schemars::JsonSchema, Default)]
     struct AddParameter {
