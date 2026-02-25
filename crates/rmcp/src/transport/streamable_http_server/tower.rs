@@ -602,8 +602,13 @@ where
                         // JSON-direct mode: await the single response and return as
                         // application/json, eliminating SSE framing overhead.
                         // Allowed by MCP Streamable HTTP spec (2025-06-18).
-                        match receiver.recv().await {
+                        let cancel = self.config.cancellation_token.child_token();
+                        match tokio::select! {
+                            res = receiver.recv() => res,
+                            _ = cancel.cancelled() => None,
+                        } {
                             Some(message) => {
+                                tracing::info!(?message);
                                 let body = serde_json::to_vec(&message).map_err(|e| {
                                     internal_error_response("serialize json response")(e)
                                 })?;
