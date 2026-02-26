@@ -1,0 +1,73 @@
+name: Auto Triage Issues
+
+on:
+  # Triage newly opened or reopened issues immediately
+  issues:
+    types: [opened, reopened]
+
+  # Daily sweep to catch anything missed (e.g., label removals, edits)
+  schedule:
+    - cron: "0 9 * * *" # 9:00 UTC daily
+
+  # Allow manual runs from the Actions tab
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Triage a specific issue number (leave empty for all untriaged)"
+        required: false
+        type: string
+      dry_run:
+        description: "Dry-run mode (preview only, don't apply labels)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    name: Triage Issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL || 'gpt-4o-mini' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Triage single issue (on issue event)
+        if: github.event_name == 'issues'
+        run: |
+          ./scripts/triage-new-issues.sh \
+            --issue ${{ github.event.issue.number }} \
+            --apply
+
+      - name: Triage specific issue (manual dispatch)
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.issue_number != ''
+        run: |
+          ARGS=(--issue ${{ github.event.inputs.issue_number }})
+          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            ARGS+=(--apply)
+          fi
+          ./scripts/triage-new-issues.sh "${ARGS[@]}"
+
+      - name: Triage all untriaged issues (schedule or manual sweep)
+        if: >-
+          github.event_name == 'schedule'
+          || (github.event_name == 'workflow_dispatch'
+              && github.event.inputs.issue_number == '')
+        run: |
+          ARGS=()
+          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            ARGS+=(--apply)
+          fi
+          ./scripts/triage-new-issues.sh "${ARGS[@]}"
