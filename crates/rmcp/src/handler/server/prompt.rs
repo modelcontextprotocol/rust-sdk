@@ -107,6 +107,7 @@ impl<T: IntoGetPromptResult> IntoGetPromptResult for Result<T, crate::ErrorData>
 // Future wrapper that automatically handles IntoGetPromptResult conversion
 pin_project_lite::pin_project! {
     #[project = IntoGetPromptResultFutProj]
+    #[non_exhaustive]
     pub enum IntoGetPromptResultFut<F, R> {
         Pending {
             #[pin]

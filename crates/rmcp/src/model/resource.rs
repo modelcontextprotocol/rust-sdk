@@ -58,6 +58,7 @@ pub type ResourceTemplate = Annotated<RawResourceTemplate>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum ResourceContents {
     #[serde(rename_all = "camelCase")]
     TextResourceContents {

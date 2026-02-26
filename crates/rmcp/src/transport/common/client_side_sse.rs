@@ -169,6 +169,7 @@ impl<E: std::error::Error + Send> SseAutoReconnectStream<NeverReconnect<E>> {
 
 pin_project_lite::pin_project! {
     #[project = SseAutoReconnectStreamStateProj]
+    #[non_exhaustive]
     pub enum SseAutoReconnectStreamState<F> {
         Connected {
             #[pin]

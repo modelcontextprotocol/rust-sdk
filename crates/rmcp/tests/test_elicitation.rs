@@ -964,6 +964,7 @@ async fn test_elicitation_actions_compliance() {
                 assert_eq!(json["action"], "cancel");
                 assert!(json.get("content").is_none() || json["content"].is_null());
             }
+            _ => panic!("unexpected elicitation action variant"),
         }
     }
 }
@@ -1581,6 +1582,7 @@ async fn test_elicitation_action_error_mapping() {
                 let error = ElicitationError::UserCancelled;
                 assert!(format!("{}", error).contains("cancelled/dismissed"));
             }
+            _ => panic!("unexpected elicitation action variant"),
         }
     }
 }

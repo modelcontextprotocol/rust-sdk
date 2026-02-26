@@ -7,6 +7,7 @@ use super::{IntoTransport, Transport};
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum WorkerQuitReason<E> {
     #[error("Join error {0}")]
     Join(#[from] tokio::task::JoinError),
@@ -78,6 +79,7 @@ impl Default for WorkerConfig {
         }
     }
 }
+#[non_exhaustive]
 pub enum WorkerAdapter {}
 
 impl<W: Worker> IntoTransport<W::Role, W::Error, WorkerAdapter> for W {

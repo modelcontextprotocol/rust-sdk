@@ -38,6 +38,17 @@ pub struct RawEmbeddedResource {
     pub meta: Option<super::Meta>,
     pub resource: ResourceContents,
 }
+
+impl RawEmbeddedResource {
+    /// Create a new RawEmbeddedResource.
+    pub fn new(resource: ResourceContents) -> Self {
+        Self {
+            meta: None,
+            resource,
+        }
+    }
+}
+
 pub type EmbeddedResource = Annotated<RawEmbeddedResource>;
 
 impl EmbeddedResource {
@@ -132,6 +143,7 @@ impl ToolResultContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),

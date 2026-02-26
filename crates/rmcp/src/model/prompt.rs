@@ -7,7 +7,7 @@ use super::{
 };
 
 /// A prompt that can be used to generate text from a model
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Prompt {
@@ -52,7 +52,7 @@ impl Prompt {
 }
 
 /// Represents a prompt argument that can be passed to customize the prompt
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptArgument {
     /// The name of the argument
@@ -72,6 +72,7 @@ pub struct PromptArgument {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum PromptMessageRole {
     User,
     Assistant,
@@ -81,6 +82,7 @@ pub enum PromptMessageRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum PromptMessageContent {
     /// Plain text content
     Text { text: String },

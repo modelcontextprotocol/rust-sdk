@@ -148,6 +148,7 @@ where
     fn into_transport(self) -> impl Transport<R, Error = E> + 'static;
 }
 
+#[non_exhaustive]
 pub enum TransportAdapterIdentity {}
 impl<R, T, E> IntoTransport<R, E, TransportAdapterIdentity> for T
 where

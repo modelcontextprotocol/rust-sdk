@@ -20,6 +20,7 @@ impl std::error::Error for ErrorData {}
 /// This is an unified error type for the errors could be returned by the service.
 #[derive(Debug, thiserror::Error)]
 #[allow(clippy::large_enum_variant)]
+#[non_exhaustive]
 pub enum RmcpError {
     #[cfg(any(feature = "client", feature = "server"))]
     #[error("Service error: {0}")]

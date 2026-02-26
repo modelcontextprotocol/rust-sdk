@@ -49,6 +49,7 @@ const_string!(ArrayTypeConst = "array");
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum PrimitiveSchema {
     /// Enum property (explicit enum schema)
     Enum(EnumSchema),
@@ -70,6 +71,7 @@ pub enum PrimitiveSchema {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum StringFormat {
     /// Email address format
     Email,
@@ -513,6 +515,16 @@ pub struct ConstTitle {
     pub title: String,
 }
 
+impl ConstTitle {
+    /// Create a new ConstTitle.
+    pub fn new(const_: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            const_: const_.into(),
+            title: title.into(),
+        }
+    }
+}
+
 /// Legacy enum schema, keep for backward compatibility
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -563,10 +575,24 @@ pub struct TitledSingleSelectEnumSchema {
     pub default: Option<String>,
 }
 
+impl TitledSingleSelectEnumSchema {
+    /// Create a new TitledSingleSelectEnumSchema.
+    pub fn new(one_of: Vec<ConstTitle>) -> Self {
+        Self {
+            type_: StringTypeConst,
+            title: None,
+            description: None,
+            one_of,
+            default: None,
+        }
+    }
+}
+
 /// Combined single-select
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum SingleSelectEnumSchema {
     Untitled(UntitledSingleSelectEnumSchema),
     Titled(TitledSingleSelectEnumSchema),
@@ -590,6 +616,13 @@ pub struct TitledItems {
     // Alias "oneOf" for compatibility with schemars
     #[serde(rename = "anyOf", alias = "oneOf")]
     pub any_of: Vec<ConstTitle>,
+}
+
+impl TitledItems {
+    /// Create a new TitledItems.
+    pub fn new(any_of: Vec<ConstTitle>) -> Self {
+        Self { any_of }
+    }
 }
 
 /// Multi-select untitled options
@@ -632,10 +665,26 @@ pub struct TitledMultiSelectEnumSchema {
     pub default: Option<Vec<String>>,
 }
 
+impl TitledMultiSelectEnumSchema {
+    /// Create a new TitledMultiSelectEnumSchema.
+    pub fn new(items: TitledItems) -> Self {
+        Self {
+            type_: ArrayTypeConst,
+            title: None,
+            description: None,
+            min_items: None,
+            max_items: None,
+            items,
+            default: None,
+        }
+    }
+}
+
 /// Multi-select enum options
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum MultiSelectEnumSchema {
     Untitled(UntitledMultiSelectEnumSchema),
     Titled(TitledMultiSelectEnumSchema),
@@ -659,6 +708,7 @@ pub enum MultiSelectEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum EnumSchema {
     Single(SingleSelectEnumSchema),
     Multi(MultiSelectEnumSchema),

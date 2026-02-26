@@ -7,6 +7,7 @@ use super::Meta;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum TaskStatus {
     /// The receiver accepted the request and is currently working on it.
     #[default]

@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::{Icon, JsonObject, Meta};
 
 /// A tool that can be used by a model.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Tool {
@@ -50,6 +50,7 @@ pub struct Tool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum TaskSupport {
     /// Clients MUST NOT invoke this tool as a task (default behavior).
     #[default]

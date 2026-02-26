@@ -13,6 +13,7 @@ use crate::{
 pub struct ErrorSessionManagementNotSupported;
 #[derive(Debug, Clone, Default)]
 pub struct NeverSessionManager {}
+#[non_exhaustive]
 pub enum NeverTransport {}
 impl Transport<RoleServer> for NeverTransport {
     type Error = ErrorSessionManagementNotSupported;

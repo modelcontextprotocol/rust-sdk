@@ -240,6 +240,7 @@ impl<C> AuthClient<C> {
 
 /// Auth error
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AuthError {
     #[error("OAuth authorization required")]
     AuthorizationRequired,
@@ -1600,6 +1601,7 @@ impl AuthorizedHttpClient {
 /// OAuth state machine
 /// Use the OAuthState to manage the OAuth client is more recommend
 /// But also you can use the AuthorizationManager,AuthorizationSession,AuthorizedHttpClient directly
+#[non_exhaustive]
 pub enum OAuthState {
     /// the AuthorizationManager
     Unauthorized(AuthorizationManager),

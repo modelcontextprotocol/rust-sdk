@@ -103,6 +103,7 @@ impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
 
 pin_project_lite::pin_project! {
     #[project = IntoCallToolResultFutProj]
+    #[non_exhaustive]
     pub enum IntoCallToolResultFut<F, R> {
         Pending {
             #[pin]
