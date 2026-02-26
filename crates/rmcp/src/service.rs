@@ -566,6 +566,7 @@ impl RunningServiceCancellationToken {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum QuitReason {
     Cancelled,
     Closed,
@@ -582,6 +583,19 @@ pub struct RequestContext<R: ServiceRole> {
     pub extensions: Extensions,
     /// An interface to fetch the remote client or server
     pub peer: Peer<R>,
+}
+
+impl<R: ServiceRole> RequestContext<R> {
+    /// Create a new RequestContext.
+    pub fn new(id: RequestId, peer: Peer<R>) -> Self {
+        Self {
+            ct: CancellationToken::new(),
+            id,
+            meta: Meta::default(),
+            extensions: Extensions::default(),
+            peer,
+        }
+    }
 }
 
 /// Request execution context

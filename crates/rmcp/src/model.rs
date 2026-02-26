@@ -307,6 +307,7 @@ pub struct ProgressToken(pub NumberOrString);
 /// - `extensions`: Additional context data (similar to HTTP headers)
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Request<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
@@ -380,6 +381,7 @@ impl<M> GetExtensions for RequestNoParam<M> {
 }
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Notification<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
@@ -420,6 +422,17 @@ pub struct JsonRpcRequest<R = Request> {
     pub request: R,
 }
 
+impl<R> JsonRpcRequest<R> {
+    /// Create a new JsonRpcRequest.
+    pub fn new(id: RequestId, request: R) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion2_0,
+            id,
+            request,
+        }
+    }
+}
+
 type DefaultResponse = JsonObject;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -435,6 +448,17 @@ pub struct JsonRpcError {
     pub jsonrpc: JsonRpcVersion2_0,
     pub id: RequestId,
     pub error: ErrorData,
+}
+
+impl JsonRpcError {
+    /// Create a new JsonRpcError.
+    pub fn new(id: RequestId, error: ErrorData) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion2_0,
+            id,
+            error,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -468,7 +492,7 @@ impl ErrorCode {
 ///
 /// This structure follows the JSON-RPC 2.0 specification for error reporting,
 /// providing a standardized way to communicate errors between clients and servers.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ErrorData {
     /// The error type that occurred (using standard JSON-RPC error codes)
@@ -746,6 +770,7 @@ pub type InitializedNotification = NotificationNoParam<InitializedNotificationMe
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InitializeRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -756,6 +781,18 @@ pub struct InitializeRequestParams {
     pub capabilities: ClientCapabilities,
     /// Information about the client implementation
     pub client_info: Implementation,
+}
+
+impl InitializeRequestParams {
+    /// Create a new InitializeRequestParams.
+    pub fn new(capabilities: ClientCapabilities, client_info: Implementation) -> Self {
+        Self {
+            meta: None,
+            protocol_version: ProtocolVersion::default(),
+            capabilities,
+            client_info,
+        }
+    }
 }
 
 impl RequestParamsMeta for InitializeRequestParams {
@@ -778,6 +815,7 @@ pub type InitializeRequestParam = InitializeRequestParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InitializeResult {
     /// The MCP protocol version this server supports
     pub protocol_version: ProtocolVersion,
@@ -788,6 +826,36 @@ pub struct InitializeResult {
     /// Optional human-readable instructions about using this server
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+}
+
+impl InitializeResult {
+    /// Create a new `InitializeResult` with default protocol version and the given capabilities.
+    pub fn new(capabilities: ServerCapabilities) -> Self {
+        Self {
+            protocol_version: ProtocolVersion::default(),
+            capabilities,
+            server_info: Implementation::from_build_env(),
+            instructions: None,
+        }
+    }
+
+    /// Set instructions on this result.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    /// Set the server info on this result.
+    pub fn with_server_info(mut self, server_info: Implementation) -> Self {
+        self.server_info = server_info;
+        self
+    }
+
+    /// Set the protocol version on this result.
+    pub fn with_protocol_version(mut self, protocol_version: ProtocolVersion) -> Self {
+        self.protocol_version = protocol_version;
+        self
+    }
 }
 
 pub type ServerInfo = InitializeResult;
@@ -829,6 +897,7 @@ impl Default for ClientInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Icon {
     /// A standard URI pointing to an icon resource
     pub src: String,
@@ -840,9 +909,33 @@ pub struct Icon {
     pub sizes: Option<Vec<String>>,
 }
 
+impl Icon {
+    /// Create a new Icon with the given source URL.
+    pub fn new(src: impl Into<String>) -> Self {
+        Self {
+            src: src.into(),
+            mime_type: None,
+            sizes: None,
+        }
+    }
+
+    /// Set the MIME type.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the sizes.
+    pub fn with_sizes(mut self, sizes: Vec<String>) -> Self {
+        self.sizes = Some(sizes);
+        self
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Implementation {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -863,6 +956,18 @@ impl Default for Implementation {
 }
 
 impl Implementation {
+    /// Create a new Implementation.
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            title: None,
+            version: version.into(),
+            description: None,
+            icons: None,
+            website_url: None,
+        }
+    }
+
     pub fn from_build_env() -> Self {
         Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
@@ -878,6 +983,7 @@ impl Implementation {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct PaginatedRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -919,6 +1025,18 @@ pub struct ProgressNotificationParam {
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+impl ProgressNotificationParam {
+    /// Create a new ProgressNotificationParam with required fields.
+    pub fn new(progress_token: ProgressToken, progress: f64) -> Self {
+        Self {
+            progress_token,
+            progress,
+            total: None,
+            message: None,
+        }
+    }
 }
 
 pub type ProgressNotification = Notification<ProgressNotificationMethod, ProgressNotificationParam>;
@@ -981,12 +1099,23 @@ const_string!(ReadResourceRequestMethod = "resources/read");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ReadResourceRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     /// The URI of the resource to read
     pub uri: String,
+}
+
+impl ReadResourceRequestParams {
+    /// Create a new ReadResourceRequestParams with the given URI.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            uri: uri.into(),
+        }
+    }
 }
 
 impl RequestParamsMeta for ReadResourceRequestParams {
@@ -1005,9 +1134,17 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ReadResourceResult {
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
+}
+
+impl ReadResourceResult {
+    /// Create a new ReadResourceResult with the given contents.
+    pub fn new(contents: Vec<ResourceContents>) -> Self {
+        Self { contents }
+    }
 }
 
 /// Request to read a specific resource
@@ -1023,12 +1160,23 @@ const_string!(SubscribeRequestMethod = "resources/subscribe");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct SubscribeRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     /// The URI of the resource to subscribe to
     pub uri: String,
+}
+
+impl SubscribeRequestParams {
+    /// Create a new SubscribeRequestParams.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            uri: uri.into(),
+        }
+    }
 }
 
 impl RequestParamsMeta for SubscribeRequestParams {
@@ -1052,6 +1200,7 @@ const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct UnsubscribeRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1085,6 +1234,14 @@ pub struct ResourceUpdatedNotificationParam {
     /// The URI of the resource that was updated
     pub uri: String,
 }
+
+impl ResourceUpdatedNotificationParam {
+    /// Create a new ResourceUpdatedNotificationParam.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self { uri: uri.into() }
+    }
+}
+
 /// Notification sent when a subscribed resource is updated
 pub type ResourceUpdatedNotification =
     Notification<ResourceUpdatedNotificationMethod, ResourceUpdatedNotificationParam>;
@@ -1104,9 +1261,10 @@ paginated_result!(ListPromptsResult {
 
 const_string!(GetPromptRequestMethod = "prompts/get");
 /// Parameters for retrieving a specific prompt
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct GetPromptRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1114,6 +1272,23 @@ pub struct GetPromptRequestParams {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
+}
+
+impl GetPromptRequestParams {
+    /// Create a new `GetPromptRequestParams` with the given prompt name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            name: name.into(),
+            arguments: None,
+        }
+    }
+
+    /// Set the arguments for this prompt request.
+    pub fn with_arguments(mut self, arguments: JsonObject) -> Self {
+        self.arguments = Some(arguments);
+        self
+    }
 }
 
 impl RequestParamsMeta for GetPromptRequestParams {
@@ -1164,12 +1339,20 @@ const_string!(SetLevelRequestMethod = "logging/setLevel");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct SetLevelRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     /// The desired logging level
     pub level: LoggingLevel,
+}
+
+impl SetLevelRequestParams {
+    /// Create a new SetLevelRequestParams with the given logging level.
+    pub fn new(level: LoggingLevel) -> Self {
+        Self { meta: None, level }
+    }
 }
 
 impl RequestParamsMeta for SetLevelRequestParams {
@@ -1202,6 +1385,27 @@ pub struct LoggingMessageNotificationParam {
     /// The actual log data
     pub data: Value,
 }
+
+impl LoggingMessageNotificationParam {
+    /// Create a new LoggingMessageNotificationParam.
+    pub fn new(level: LoggingLevel, data: Value) -> Self {
+        Self {
+            level,
+            logger: None,
+            data,
+        }
+    }
+
+    /// Create with a logger name.
+    pub fn with_logger(level: LoggingLevel, logger: impl Into<String>, data: Value) -> Self {
+        Self {
+            level,
+            logger: Some(logger.into()),
+            data,
+        }
+    }
+}
+
 /// Notification containing a log message
 pub type LoggingMessageNotification =
     Notification<LoggingMessageNotificationMethod, LoggingMessageNotificationParam>;
@@ -1250,6 +1454,7 @@ impl Default for ToolChoiceMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ToolChoice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<ToolChoiceMode>,
@@ -1380,6 +1585,7 @@ impl<T> From<Vec<T>> for SamplingContent<T> {
 /// for generating appropriate responses.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct SamplingMessage {
     /// The role of the message sender (User or Assistant)
     pub role: Role,
@@ -1540,9 +1746,10 @@ pub enum ContextInclusion {
 ///
 /// This implements `TaskAugmentedRequestParamsMeta` as sampling requests can be
 /// long-running and may benefit from task-based execution.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CreateMessageRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1599,6 +1806,72 @@ impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
 }
 
 impl CreateMessageRequestParams {
+    /// Create a new CreateMessageRequestParams with required fields.
+    pub fn new(messages: Vec<SamplingMessage>, max_tokens: u32) -> Self {
+        Self {
+            meta: None,
+            task: None,
+            messages,
+            model_preferences: None,
+            system_prompt: None,
+            include_context: None,
+            temperature: None,
+            max_tokens,
+            stop_sequences: None,
+            metadata: None,
+            tools: None,
+            tool_choice: None,
+        }
+    }
+
+    /// Set model preferences.
+    pub fn with_model_preferences(mut self, model_preferences: ModelPreferences) -> Self {
+        self.model_preferences = Some(model_preferences);
+        self
+    }
+
+    /// Set system prompt.
+    pub fn with_system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(system_prompt.into());
+        self
+    }
+
+    /// Set include context.
+    pub fn with_include_context(mut self, include_context: ContextInclusion) -> Self {
+        self.include_context = Some(include_context);
+        self
+    }
+
+    /// Set temperature.
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set stop sequences.
+    pub fn with_stop_sequences(mut self, stop_sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(stop_sequences);
+        self
+    }
+
+    /// Set metadata.
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Set tools.
+    pub fn with_tools(mut self, tools: Vec<Tool>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Set tool choice.
+    pub fn with_tool_choice(mut self, tool_choice: ToolChoice) -> Self {
+        self.tool_choice = Some(tool_choice);
+        self
+    }
+
     /// Validate the sampling request parameters per SEP-1577 spec requirements.
     ///
     /// Checks:
@@ -1689,6 +1962,7 @@ pub type CreateMessageRequestParam = CreateMessageRequestParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ModelPreferences {
     /// Specific model names or families to prefer (e.g., "claude", "gpt")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1704,16 +1978,68 @@ pub struct ModelPreferences {
     pub intelligence_priority: Option<f32>,
 }
 
+impl ModelPreferences {
+    /// Create a new default ModelPreferences.
+    pub fn new() -> Self {
+        Self {
+            hints: None,
+            cost_priority: None,
+            speed_priority: None,
+            intelligence_priority: None,
+        }
+    }
+
+    /// Set hints for model selection.
+    pub fn with_hints(mut self, hints: Vec<ModelHint>) -> Self {
+        self.hints = Some(hints);
+        self
+    }
+
+    /// Set cost priority (0.0 to 1.0).
+    pub fn with_cost_priority(mut self, cost_priority: f32) -> Self {
+        self.cost_priority = Some(cost_priority);
+        self
+    }
+
+    /// Set speed priority (0.0 to 1.0).
+    pub fn with_speed_priority(mut self, speed_priority: f32) -> Self {
+        self.speed_priority = Some(speed_priority);
+        self
+    }
+
+    /// Set intelligence priority (0.0 to 1.0).
+    pub fn with_intelligence_priority(mut self, intelligence_priority: f32) -> Self {
+        self.intelligence_priority = Some(intelligence_priority);
+        self
+    }
+}
+
+impl Default for ModelPreferences {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A hint suggesting a preferred model name or family.
 ///
 /// Model hints are advisory suggestions that help clients choose appropriate
 /// models. They can be specific model names or general families like "claude" or "gpt".
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ModelHint {
     /// The suggested model name or family identifier
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+impl ModelHint {
+    /// Create a new ModelHint with a name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+        }
+    }
 }
 
 // =============================================================================
@@ -1769,6 +2095,7 @@ impl CompletionContext {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CompleteRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1778,6 +2105,24 @@ pub struct CompleteRequestParams {
     /// Optional context containing previously resolved argument values
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<CompletionContext>,
+}
+
+impl CompleteRequestParams {
+    /// Create a new CompleteRequestParams with required fields.
+    pub fn new(r#ref: Reference, argument: ArgumentInfo) -> Self {
+        Self {
+            meta: None,
+            r#ref,
+            argument,
+            context: None,
+        }
+    }
+
+    /// Set the completion context
+    pub fn with_context(mut self, context: CompletionContext) -> Self {
+        self.context = Some(context);
+        self
+    }
 }
 
 impl RequestParamsMeta for CompleteRequestParams {
@@ -1876,8 +2221,16 @@ impl CompletionInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CompleteResult {
     pub completion: CompletionInfo,
+}
+
+impl CompleteResult {
+    /// Create a new CompleteResult with the given completion info.
+    pub fn new(completion: CompletionInfo) -> Self {
+        Self { completion }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -1940,6 +2293,7 @@ pub struct ResourceReference {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct PromptReference {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1961,6 +2315,7 @@ pub struct ArgumentInfo {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Root {
     pub uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1973,6 +2328,7 @@ pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
 }
@@ -2181,16 +2537,43 @@ pub struct CreateElicitationResult {
     pub content: Option<Value>,
 }
 
+impl CreateElicitationResult {
+    /// Create a new CreateElicitationResult.
+    pub fn new(action: ElicitationAction) -> Self {
+        Self {
+            action,
+            content: None,
+        }
+    }
+
+    /// Create with content.
+    pub fn with_content(action: ElicitationAction, content: Value) -> Self {
+        Self {
+            action,
+            content: Some(content),
+        }
+    }
+}
+
 /// Request type for creating an elicitation to gather user input
 pub type CreateElicitationRequest =
     Request<ElicitationCreateRequestMethod, CreateElicitationRequestParams>;
 
 /// Notification parameters for an url elicitation completion notification.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ElicitationResponseNotificationParam {
     pub elicitation_id: String,
+}
+
+impl ElicitationResponseNotificationParam {
+    /// Create a new ElicitationResponseNotificationParam.
+    pub fn new(elicitation_id: impl Into<String>) -> Self {
+        Self {
+            elicitation_id: elicitation_id.into(),
+        }
+    }
 }
 
 /// Notification sent when an url elicitation process is completed.
@@ -2205,9 +2588,10 @@ pub type ElicitationCompletionNotification =
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
     pub content: Vec<Content>,
@@ -2290,6 +2674,12 @@ impl CallToolResult {
         }
     }
 
+    /// Set the metadata on this result
+    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
+        self.meta = meta;
+        self
+    }
+
     /// Convert the `structured_content` part of response into a certain type.
     ///
     /// # About json schema validation
@@ -2337,9 +2727,10 @@ const_string!(CallToolRequestMethod = "tools/call");
 ///
 /// This implements `TaskAugmentedRequestParamsMeta` as tool calls can be
 /// long-running and may benefit from task-based execution.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CallToolRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -2352,6 +2743,30 @@ pub struct CallToolRequestParams {
     /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<JsonObject>,
+}
+
+impl CallToolRequestParams {
+    /// Creates a new `CallToolRequestParams` with the given tool name.
+    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            meta: None,
+            name: name.into(),
+            arguments: None,
+            task: None,
+        }
+    }
+
+    /// Sets the arguments for this tool call.
+    pub fn with_arguments(mut self, arguments: JsonObject) -> Self {
+        self.arguments = Some(arguments);
+        self
+    }
+
+    /// Sets the task metadata for this tool call.
+    pub fn with_task(mut self, task: Option<JsonObject>) -> Self {
+        self.task = task;
+        self
+    }
 }
 
 impl RequestParamsMeta for CallToolRequestParams {
@@ -2387,6 +2802,7 @@ pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CreateMessageResult {
     /// The identifier of the model that generated the response
     pub model: String,
@@ -2399,10 +2815,25 @@ pub struct CreateMessageResult {
 }
 
 impl CreateMessageResult {
+    /// Create a new CreateMessageResult with required fields.
+    pub fn new(message: SamplingMessage, model: String) -> Self {
+        Self {
+            message,
+            model,
+            stop_reason: None,
+        }
+    }
+
     pub const STOP_REASON_END_TURN: &str = "endTurn";
     pub const STOP_REASON_END_SEQUENCE: &str = "stopSequence";
     pub const STOP_REASON_END_MAX_TOKEN: &str = "maxTokens";
     pub const STOP_REASON_TOOL_USE: &str = "toolUse";
+
+    /// Set the stop reason.
+    pub fn with_stop_reason(mut self, stop_reason: Option<String>) -> Self {
+        self.stop_reason = stop_reason;
+        self
+    }
 
     /// Validate the result per SEP-1577: role must be "assistant".
     pub fn validate(&self) -> Result<(), String> {
@@ -2413,13 +2844,30 @@ impl CreateMessageResult {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct GetPromptResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
+}
+
+impl GetPromptResult {
+    /// Create a new GetPromptResult with required fields.
+    pub fn new(messages: Vec<PromptMessage>) -> Self {
+        Self {
+            description: None,
+            messages,
+        }
+    }
+
+    /// Set the description
+    pub fn with_description<D: Into<String>>(mut self, description: D) -> Self {
+        self.description = Some(description.into());
+        self
+    }
 }
 
 // =============================================================================
@@ -2513,12 +2961,24 @@ pub type GetTaskInfoResult = GetTaskResult;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ListTasksResult {
     pub tasks: Vec<crate::model::Task>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<u64>,
+}
+
+impl ListTasksResult {
+    /// Create a new ListTasksResult.
+    pub fn new(tasks: Vec<crate::model::Task>) -> Self {
+        Self {
+            tasks,
+            next_cursor: None,
+            total: None,
+        }
+    }
 }
 
 // =============================================================================

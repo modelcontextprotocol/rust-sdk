@@ -63,7 +63,7 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
     ] {
         client
             .peer()
-            .set_level(SetLevelRequestParams { meta: None, level })
+            .set_level(SetLevelRequestParams::new(level))
             .await?;
 
         // Wait for each message response
@@ -121,10 +121,7 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 1: Error reporting scenario
     client
         .peer()
-        .set_level(SetLevelRequestParams {
-            meta: None,
-            level: LoggingLevel::Error,
-        })
+        .set_level(SetLevelRequestParams::new(LoggingLevel::Error))
         .await?;
     receive_signal.notified().await; // Wait for response
     {
@@ -148,10 +145,7 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 2: Debug scenario
     client
         .peer()
-        .set_level(SetLevelRequestParams {
-            meta: None,
-            level: LoggingLevel::Debug,
-        })
+        .set_level(SetLevelRequestParams::new(LoggingLevel::Debug))
         .await?;
     receive_signal.notified().await; // Wait for response
     {
@@ -172,10 +166,7 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     // Test 3: Production monitoring scenario
     client
         .peer()
-        .set_level(SetLevelRequestParams {
-            meta: None,
-            level: LoggingLevel::Info,
-        })
+        .set_level(SetLevelRequestParams::new(LoggingLevel::Info))
         .await?;
     receive_signal.notified().await; // Wait for response
     {
@@ -259,7 +250,7 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
     ] {
         client
             .peer()
-            .set_level(SetLevelRequestParams { meta: None, level })
+            .set_level(SetLevelRequestParams::new(level))
             .await?;
         receive_signal.notified().await;
 
@@ -319,7 +310,7 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
     for level in [LoggingLevel::Info, LoggingLevel::Debug] {
         client
             .peer()
-            .set_level(SetLevelRequestParams { meta: None, level })
+            .set_level(SetLevelRequestParams::new(level))
             .await?;
 
         // Wait for each message response

@@ -52,15 +52,14 @@ fn test_complete_request_param_serialization() {
     let mut args = HashMap::new();
     args.insert("previous_input".to_string(), "test".to_string());
 
-    let request = CompleteRequestParams {
-        meta: None,
-        r#ref: Reference::for_prompt("weather_prompt"),
-        argument: ArgumentInfo {
+    let request = CompleteRequestParams::new(
+        Reference::for_prompt("weather_prompt"),
+        ArgumentInfo {
             name: "location".to_string(),
             value: "San".to_string(),
         },
-        context: Some(CompletionContext::with_arguments(args)),
-    };
+    )
+    .with_context(CompletionContext::with_arguments(args));
 
     let json = serde_json::to_value(&request).unwrap();
     assert!(json["ref"]["name"].as_str().unwrap() == "weather_prompt");
@@ -196,15 +195,13 @@ fn test_completion_context_empty() {
 #[test]
 fn test_mcp_schema_compliance() {
     // Test that our types serialize correctly according to MCP specification
-    let request = CompleteRequestParams {
-        meta: None,
-        r#ref: Reference::for_resource("file://{path}"),
-        argument: ArgumentInfo {
+    let request = CompleteRequestParams::new(
+        Reference::for_resource("file://{path}"),
+        ArgumentInfo {
             name: "path".to_string(),
             value: "src/".to_string(),
         },
-        context: None,
-    };
+    );
 
     let json_str = serde_json::to_string(&request).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();

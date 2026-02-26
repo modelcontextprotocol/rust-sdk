@@ -40,11 +40,11 @@ impl ClientHandler for SamplingDemoClient {
         let response_text =
             self.mock_llm_response(&params.messages, params.system_prompt.as_deref());
 
-        Ok(CreateMessageResult {
-            message: SamplingMessage::assistant_text(response_text),
-            model: "mock_llm".to_string(),
-            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
-        })
+        Ok(CreateMessageResult::new(
+            SamplingMessage::assistant_text(response_text),
+            "mock_llm".to_string(),
+        )
+        .with_stop_reason(Some(CreateMessageResult::STOP_REASON_END_TURN.to_string())))
     }
 }
 
@@ -98,14 +98,11 @@ async fn main() -> Result<()> {
             // Test the ask_llm tool
             tracing::info!("Testing ask_llm tool...");
             match client
-                .call_tool(CallToolRequestParams {
-                    meta: None,
-                    name: "ask_llm".into(),
-                    arguments: Some(object!({
+                .call_tool(
+                    CallToolRequestParams::new("ask_llm").with_arguments(object!({
                         "question": "Hello world"
                     })),
-                    task: None,
-                })
+                )
                 .await
             {
                 Ok(result) => tracing::info!("Ask LLM result: {result:#?}"),

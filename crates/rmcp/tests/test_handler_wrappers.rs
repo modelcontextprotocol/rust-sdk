@@ -4,8 +4,8 @@ mod common;
 
 use std::sync::Arc;
 
-use common::handlers::{TestClientHandler, TestServer};
-use rmcp::{ClientHandler, ServerHandler};
+use common::handlers::TestServer;
+use rmcp::ServerHandler;
 
 #[test]
 fn test_wrapped_server_handlers() {
@@ -16,8 +16,11 @@ fn test_wrapped_server_handlers() {
     accepts_server_handler(Arc::new(TestServer::new()));
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn test_wrapped_client_handlers() {
+    use common::handlers::TestClientHandler;
+    use rmcp::ClientHandler;
     // This test asserts that, when T: ClientHandler, both Box<T> and Arc<T> also implement ClientHandler.
     fn accepts_client_handler<H: ClientHandler>(_handler: H) {}
 

@@ -292,47 +292,41 @@ impl SqlQueryServer {
             ]
         };
 
-        Ok(GetPromptResult {
-            description: Some(format!(
-                "SQL Query: {} on {}",
-                if args.operation.is_empty() {
-                    "Unknown"
-                } else {
-                    &args.operation
-                },
-                if args.table.is_empty() {
-                    "table"
-                } else {
-                    &args.table
-                }
-            )),
-            messages,
-        })
+        Ok(GetPromptResult::new(messages).with_description(format!(
+            "SQL Query: {} on {}",
+            if args.operation.is_empty() {
+                "Unknown"
+            } else {
+                &args.operation
+            },
+            if args.table.is_empty() {
+                "table"
+            } else {
+                &args.table
+            }
+        )))
     }
 }
 
 #[prompt_handler]
 impl ServerHandler for SqlQueryServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "Smart SQL query builder with progressive completion that adapts based on your choices:\n\n\
-                 Step 1: Choose operation type ('sel' → SELECT, 'ins' → INSERT, 'upd' → UPDATE, 'del' → DELETE)\n\
-                 Step 2: Specify table name ('users', 'orders', 'products')\n\
-                 Step 3: Add relevant fields based on operation type:\n\
-                 • SELECT/UPDATE: columns ('name', 'email', 'id')\n\
-                 • INSERT: values to insert\n\
-                 • All: optional WHERE clause\n\n\
-                 The completion adapts - only relevant fields appear based on your SQL operation!"
-                    .to_string(),
-            ),
-            ..Default::default()
-        }
+        )
+        .with_instructions(
+            "Smart SQL query builder with progressive completion that adapts based on your choices:\n\n\
+             Step 1: Choose operation type ('sel' → SELECT, 'ins' → INSERT, 'upd' → UPDATE, 'del' → DELETE)\n\
+             Step 2: Specify table name ('users', 'orders', 'products')\n\
+             Step 3: Add relevant fields based on operation type:\n\
+             • SELECT/UPDATE: columns ('name', 'email', 'id')\n\
+             • INSERT: values to insert\n\
+             • All: optional WHERE clause\n\n\
+             The completion adapts - only relevant fields appear based on your SQL operation!",
+        )
     }
 
     async fn complete(
@@ -417,7 +411,7 @@ impl ServerHandler for SqlQueryServer {
             has_more: Some(false),
         };
 
-        Ok(CompleteResult { completion })
+        Ok(CompleteResult::new(completion))
     }
 }
 

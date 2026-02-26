@@ -45,20 +45,14 @@ impl TestServer {
 
 impl ServerHandler for TestServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools_with(ToolsCapability {
                     list_changed: Some(true),
                 })
                 .build(),
-            server_info: Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-                ..Default::default()
-            },
-            instructions: None,
-        }
+        )
+        .with_server_info(Implementation::new("test-server", "1.0.0"))
     }
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {

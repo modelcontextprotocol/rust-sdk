@@ -327,12 +327,7 @@ async fn test_empty_content_deserializes_as_call_tool_result_variant() {
 
 #[tokio::test]
 async fn test_empty_content_roundtrip() {
-    let result = CallToolResult {
-        content: vec![],
-        structured_content: None,
-        is_error: Some(false),
-        meta: None,
-    };
+    let result = CallToolResult::success(vec![]);
     let v = serde_json::to_value(&result).unwrap();
     assert_eq!(v["content"], json!([]));
     let deserialized: CallToolResult = serde_json::from_value(v).unwrap();

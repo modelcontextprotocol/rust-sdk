@@ -38,6 +38,17 @@ pub struct RawEmbeddedResource {
     pub meta: Option<super::Meta>,
     pub resource: ResourceContents,
 }
+
+impl RawEmbeddedResource {
+    /// Create a new RawEmbeddedResource.
+    pub fn new(resource: ResourceContents) -> Self {
+        Self {
+            meta: None,
+            resource,
+        }
+    }
+}
+
 pub type EmbeddedResource = Annotated<RawEmbeddedResource>;
 
 impl EmbeddedResource {
@@ -63,6 +74,7 @@ pub type AudioContent = Annotated<RawAudioContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ToolUseContent {
     /// Unique identifier for this tool call
     pub id: String,
@@ -79,6 +91,7 @@ pub struct ToolUseContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ToolResultContent {
     /// Optional metadata
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
