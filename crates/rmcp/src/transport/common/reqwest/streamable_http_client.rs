@@ -186,6 +186,15 @@ impl StreamableHttpClient for reqwest::Client {
         ) {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                format!("HTTP {status}: {body}"),
+            )));
+        }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
         let session_id = response.headers().get(HEADER_SESSION_ID);
         let session_id = session_id
