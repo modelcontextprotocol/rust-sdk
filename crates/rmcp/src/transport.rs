@@ -84,7 +84,10 @@ pub use worker::WorkerTransport;
 #[cfg(feature = "transport-child-process")]
 pub mod child_process;
 #[cfg(feature = "transport-child-process")]
-pub use child_process::{ConfigureCommandExt, TokioChildProcess};
+pub use child_process::{
+    AlwaysApproveHandler, AlwaysDenyHandler, CommandApprovalHandler, CommandInfo,
+    ConfigureCommandExt, StdioApprovalHandler, TokioChildProcess, TokioChildProcessBuilder,
+};
 
 #[cfg(feature = "transport-io")]
 pub mod io;

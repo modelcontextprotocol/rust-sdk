@@ -1,4 +1,4 @@
-use std::process::Stdio;
+use std::{ffi::OsString, path::PathBuf, process::Stdio};
 
 use futures::future::Future;
 use process_wrap::tokio::{ChildWrapper, CommandWrap};
@@ -36,9 +36,259 @@ fn child_process(mut child: Box<dyn ChildWrapper>) -> std::io::Result<ChildProce
     Ok((child, child_stdout, child_stdin, child_stderr))
 }
 
+// ---------------------------------------------------------------------------
+// SEP-1024: Command approval handler
+// ---------------------------------------------------------------------------
+
+/// Information about a command that is about to be executed.
+///
+/// This is presented to a [`CommandApprovalHandler`] so the user (or policy)
+/// can inspect exactly what will be spawned before it happens.
+///
+/// See [SEP-1024](https://modelcontextprotocol.io/community/seps/1024-mcp-client-security-requirements-for-local-server-.md)
+/// for the security rationale.
+#[derive(Debug, Clone)]
+pub struct CommandInfo {
+    /// The program that will be executed (e.g. `"npx"`, `"uvx"`).
+    pub program: OsString,
+    /// The arguments that will be passed to the program.
+    pub args: Vec<OsString>,
+    /// Environment variables that will be set (or cleared) for the child.
+    /// Each entry is `(key, Option<value>)` – `None` means the variable is
+    /// explicitly removed.
+    pub envs: Vec<(OsString, Option<OsString>)>,
+    /// The working directory for the child, if explicitly set.
+    pub working_dir: Option<PathBuf>,
+}
+
+impl CommandInfo {
+    /// Build a `CommandInfo` by inspecting a [`CommandWrap`].
+    fn from_command_wrap(cmd: &CommandWrap) -> Self {
+        let std_cmd = cmd.command().as_std();
+        Self {
+            program: std_cmd.get_program().to_owned(),
+            args: std_cmd.get_args().map(|a| a.to_owned()).collect(),
+            envs: std_cmd
+                .get_envs()
+                .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+                .collect(),
+            working_dir: std_cmd.get_current_dir().map(|p| p.to_owned()),
+        }
+    }
+
+    /// Return a human-readable representation of the full command line,
+    /// suitable for display in a consent dialog.
+    pub fn command_line_display(&self) -> String {
+        let mut parts = Vec::with_capacity(1 + self.args.len());
+        parts.push(self.program.to_string_lossy().into_owned());
+        for arg in &self.args {
+            let s = arg.to_string_lossy().into_owned();
+            if s.contains(' ') || s.contains('"') || s.is_empty() {
+                parts.push(format!("\"{}\"", s.replace('"', "\\\"")));
+            } else {
+                parts.push(s);
+            }
+        }
+        parts.join(" ")
+    }
+}
+
+impl std::fmt::Display for CommandInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.command_line_display())?;
+        if let Some(dir) = &self.working_dir {
+            write!(f, " (in {})", dir.display())?;
+        }
+        Ok(())
+    }
+}
+
+/// A handler that decides whether a command is allowed to execute.
+///
+/// Implementations of this trait are called by [`TokioChildProcessBuilder::spawn`]
+/// **before** the child process is created, giving the caller a chance to
+/// inspect the full command line and either approve or reject it.
+///
+/// # SEP-1024
+///
+/// [SEP-1024](https://modelcontextprotocol.io/community/seps/1024-mcp-client-security-requirements-for-local-server-.md)
+/// requires MCP clients to present a consent dialog before executing local
+/// server installation commands. This trait is the integration point for that
+/// requirement.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use rmcp::transport::child_process::{CommandApprovalHandler, CommandInfo};
+///
+/// struct MyPolicyHandler;
+///
+/// impl CommandApprovalHandler for MyPolicyHandler {
+///     fn approve(
+///         &self,
+///         info: &CommandInfo,
+///     ) -> futures::future::BoxFuture<'_, std::io::Result<bool>> {
+///         // Clone any data needed inside the future.
+///         let display = info.to_string();
+///         Box::pin(async move {
+///             // Check against an allowlist, prompt the user, etc.
+///             println!("Allow `{display}`?");
+///             Ok(true)
+///         })
+///     }
+/// }
+/// ```
+pub trait CommandApprovalHandler: Send + Sync {
+    /// Inspect the command described by `info` and return `Ok(true)` to allow
+    /// execution, `Ok(false)` to deny it, or `Err` on failure.
+    fn approve(&self, info: &CommandInfo) -> futures::future::BoxFuture<'_, std::io::Result<bool>>;
+}
+
+/// An approval handler that always approves execution without prompting.
+///
+/// This is appropriate for trusted/testing contexts where no user interaction
+/// is desired. **Do not** use this in user-facing applications that install
+/// servers from untrusted sources.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlwaysApproveHandler;
+
+impl CommandApprovalHandler for AlwaysApproveHandler {
+    fn approve(
+        &self,
+        _info: &CommandInfo,
+    ) -> futures::future::BoxFuture<'_, std::io::Result<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+}
+
+/// An approval handler that always denies execution.
+///
+/// Useful for testing or for contexts where spawning child processes should
+/// be unconditionally blocked.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlwaysDenyHandler;
+
+impl CommandApprovalHandler for AlwaysDenyHandler {
+    fn approve(
+        &self,
+        _info: &CommandInfo,
+    ) -> futures::future::BoxFuture<'_, std::io::Result<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+}
+
+/// An approval handler that prompts the user on the standard I/O console.
+///
+/// This is the reference implementation of the consent dialog required by
+/// [SEP-1024](https://modelcontextprotocol.io/community/seps/1024-mcp-client-security-requirements-for-local-server-.md).
+///
+/// The handler prints the full command line and waits for the user to type
+/// `y` or `n`. Any other input (including EOF) is treated as denial.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use rmcp::transport::child_process::{StdioApprovalHandler, TokioChildProcess};
+/// use tokio::process::Command;
+///
+/// # async fn example() -> std::io::Result<()> {
+/// let (proc, _stderr) = TokioChildProcess::builder(Command::new("npx"))
+///     .approval_handler(StdioApprovalHandler)
+///     .spawn()
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StdioApprovalHandler;
+
+impl CommandApprovalHandler for StdioApprovalHandler {
+    fn approve(&self, info: &CommandInfo) -> futures::future::BoxFuture<'_, std::io::Result<bool>> {
+        let command_line = info.command_line_display();
+        let working_dir = info.working_dir.clone();
+        Box::pin(async move {
+            // Use blocking I/O via spawn_blocking so we don't block the
+            // async runtime.
+            tokio::task::spawn_blocking(move || {
+                use std::io::Write;
+
+                let mut stderr = std::io::stderr().lock();
+                writeln!(stderr)?;
+                writeln!(
+                    stderr,
+                    "⚠️  An MCP server wants to execute the following command:"
+                )?;
+                writeln!(stderr)?;
+                writeln!(stderr, "    {command_line}")?;
+                if let Some(dir) = &working_dir {
+                    writeln!(stderr, "    (in directory: {})", dir.display())?;
+                }
+                writeln!(stderr)?;
+                writeln!(stderr, "  This will create a new process on your machine.")?;
+                writeln!(
+                    stderr,
+                    "  Only approve if you trust the source of this command."
+                )?;
+                writeln!(stderr)?;
+                write!(stderr, "Allow execution? [y/N] ")?;
+                stderr.flush()?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                let approved = matches!(input.trim(), "y" | "Y" | "yes" | "Yes" | "YES");
+                if !approved {
+                    writeln!(stderr, "  ✗ Command execution denied by user.")?;
+                } else {
+                    writeln!(stderr, "  ✓ Command execution approved.")?;
+                }
+                Ok(approved)
+            })
+            .await
+            .map_err(|e| std::io::Error::other(format!("approval task failed: {e}")))?
+        })
+    }
+}
+
+/// Implement `CommandApprovalHandler` for closures / function pointers.
+///
+/// The closure receives an owned [`CommandInfo`] and returns a boxed future.
+/// This avoids lifetime issues that arise when borrowing both `&self` and
+/// `&CommandInfo` into the returned future.
+///
+/// ```rust,no_run
+/// use rmcp::transport::child_process::{CommandApprovalHandler, CommandInfo};
+///
+/// let handler = |info: CommandInfo| -> futures::future::BoxFuture<'static, std::io::Result<bool>> {
+///     Box::pin(async move {
+///         println!("approve: {info}");
+///         Ok(true)
+///     })
+/// };
+/// ```
+impl<F> CommandApprovalHandler for F
+where
+    F: Fn(CommandInfo) -> futures::future::BoxFuture<'static, std::io::Result<bool>> + Send + Sync,
+{
+    fn approve(&self, info: &CommandInfo) -> futures::future::BoxFuture<'_, std::io::Result<bool>> {
+        (self)(info.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TokioChildProcess
+// ---------------------------------------------------------------------------
+
 pub struct TokioChildProcess {
     child: ChildWithCleanup,
     transport: AsyncRwTransport<RoleClient, ChildStdout, ChildStdin>,
+}
+
+impl std::fmt::Debug for TokioChildProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokioChildProcess")
+            .field("pid", &self.id())
+            .finish()
+    }
 }
 
 pub struct ChildWithCleanup {
@@ -86,13 +336,20 @@ impl AsyncRead for TokioChildProcessOut {
 }
 
 impl TokioChildProcess {
-    /// Convenience: spawn with default `piped` stdio
+    /// Convenience: spawn with default `piped` stdio and **no** approval
+    /// handler.
+    ///
+    /// This is appropriate when the caller has already validated the command
+    /// or is constructing it from a trusted source. For user-facing
+    /// applications, prefer [`TokioChildProcess::builder`] with an
+    /// [`approval_handler`](TokioChildProcessBuilder::approval_handler).
     pub fn new(command: impl Into<CommandWrap>) -> std::io::Result<Self> {
-        let (proc, _ignored) = TokioChildProcessBuilder::new(command).spawn()?;
+        let (proc, _ignored) = TokioChildProcessBuilder::new(command).spawn_sync()?;
         Ok(proc)
     }
 
-    /// Builder entry-point allowing fine-grained stdio control.
+    /// Builder entry-point allowing fine-grained stdio control and an
+    /// optional [`CommandApprovalHandler`].
     pub fn builder(command: impl Into<CommandWrap>) -> TokioChildProcessBuilder {
         TokioChildProcessBuilder::new(command)
     }
@@ -150,12 +407,34 @@ impl TokioChildProcess {
     }
 }
 
-/// Builder for `TokioChildProcess` allowing custom `Stdio` configuration.
+/// Builder for `TokioChildProcess` allowing custom `Stdio` configuration
+/// and an optional [`CommandApprovalHandler`].
+///
+/// # SEP-1024 – Command Approval
+///
+/// When an [`approval_handler`](Self::approval_handler) is set, [`spawn`](Self::spawn)
+/// will present the full command line to the handler **before** the child
+/// process is created. If the handler returns `Ok(false)` the spawn is
+/// aborted with an [`std::io::ErrorKind::PermissionDenied`] error.
+///
+/// ```rust,no_run
+/// use rmcp::transport::child_process::{StdioApprovalHandler, TokioChildProcess};
+/// use tokio::process::Command;
+///
+/// # async fn example() -> std::io::Result<()> {
+/// let (proc, _stderr) = TokioChildProcess::builder(Command::new("npx"))
+///     .approval_handler(StdioApprovalHandler)
+///     .spawn()
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct TokioChildProcessBuilder {
     cmd: CommandWrap,
     stdin: Stdio,
     stdout: Stdio,
     stderr: Stdio,
+    approval_handler: Option<Box<dyn CommandApprovalHandler>>,
 }
 
 impl TokioChildProcessBuilder {
@@ -165,6 +444,7 @@ impl TokioChildProcessBuilder {
             stdin: Stdio::piped(),
             stdout: Stdio::piped(),
             stderr: Stdio::inherit(),
+            approval_handler: None,
         }
     }
 
@@ -184,8 +464,57 @@ impl TokioChildProcessBuilder {
         self
     }
 
-    /// Spawn the child process. Returns the transport plus an optional captured stderr handle.
-    pub fn spawn(mut self) -> std::io::Result<(TokioChildProcess, Option<ChildStderr>)> {
+    /// Set a [`CommandApprovalHandler`] that will be consulted before the
+    /// child process is spawned.
+    ///
+    /// When set, [`spawn`](Self::spawn) becomes an `async` operation that
+    /// calls the handler and only proceeds if it returns `Ok(true)`.
+    pub fn approval_handler(mut self, handler: impl CommandApprovalHandler + 'static) -> Self {
+        self.approval_handler = Some(Box::new(handler));
+        self
+    }
+
+    /// Spawn the child process **after** consulting the approval handler (if
+    /// any). Returns the transport plus an optional captured stderr handle.
+    ///
+    /// If the approval handler denies execution, this returns an
+    /// [`std::io::Error`] with kind [`std::io::ErrorKind::PermissionDenied`].
+    pub async fn spawn(mut self) -> std::io::Result<(TokioChildProcess, Option<ChildStderr>)> {
+        // Configure stdio before extracting CommandInfo so the info reflects
+        // the final state.
+        self.cmd
+            .command_mut()
+            .stdin(self.stdin)
+            .stdout(self.stdout)
+            .stderr(self.stderr);
+
+        // --- SEP-1024: approval gate ---
+        if let Some(handler) = &self.approval_handler {
+            let info = CommandInfo::from_command_wrap(&self.cmd);
+            let approved = handler.approve(&info).await?;
+            if !approved {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("command execution denied: {info}"),
+                ));
+            }
+        }
+
+        let (child, stdout, stdin, stderr_opt) = child_process(self.cmd.spawn()?)?;
+
+        let transport = AsyncRwTransport::new(stdout, stdin);
+        let proc = TokioChildProcess {
+            child: ChildWithCleanup { inner: Some(child) },
+            transport,
+        };
+        Ok((proc, stderr_opt))
+    }
+
+    /// Spawn **synchronously** without consulting any approval handler.
+    ///
+    /// This is used internally by [`TokioChildProcess::new`] for backward
+    /// compatibility. Prefer [`spawn`](Self::spawn) in new code.
+    fn spawn_sync(mut self) -> std::io::Result<(TokioChildProcess, Option<ChildStderr>)> {
         self.cmd
             .command_mut()
             .stdin(self.stdin)
@@ -305,5 +634,109 @@ mod tests {
                 panic!("Failed to check process status: {}", e);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_approval_handler_approve() {
+        let (proc, _stderr) = TokioChildProcess::builder(Command::new("echo").configure(|cmd| {
+            cmd.arg("hello");
+        }))
+        .approval_handler(AlwaysApproveHandler)
+        .spawn()
+        .await
+        .expect("spawn should succeed when approved");
+
+        assert!(proc.id().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_approval_handler_deny() {
+        let result = TokioChildProcess::builder(Command::new("echo").configure(|cmd| {
+            cmd.arg("hello");
+        }))
+        .approval_handler(AlwaysDenyHandler)
+        .spawn()
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("denied"),
+            "error message should mention denial: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_approval_handler_closure() {
+        let (proc, _stderr) = TokioChildProcess::builder(Command::new("echo").configure(|cmd| {
+            cmd.arg("test");
+        }))
+        .approval_handler(
+            |info: CommandInfo| -> futures::future::BoxFuture<'static, std::io::Result<bool>> {
+                assert_eq!(info.program, "echo");
+                assert_eq!(info.args, vec![OsString::from("test")]);
+                Box::pin(async { Ok(true) })
+            },
+        )
+        .spawn()
+        .await
+        .expect("spawn should succeed");
+
+        assert!(proc.id().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_command_info_display() {
+        let info = CommandInfo {
+            program: OsString::from("npx"),
+            args: vec![
+                OsString::from("-y"),
+                OsString::from("@modelcontextprotocol/server-everything"),
+            ],
+            envs: vec![],
+            working_dir: Some(PathBuf::from("/tmp")),
+        };
+        let display = format!("{info}");
+        assert!(display.contains("npx"));
+        assert!(display.contains("-y"));
+        assert!(display.contains("@modelcontextprotocol/server-everything"));
+        assert!(display.contains("/tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_command_info_from_command_wrap() {
+        let cmd = Command::new("npx").configure(|cmd| {
+            cmd.arg("-y")
+                .arg("some-package")
+                .env("FOO", "bar")
+                .current_dir("/tmp");
+        });
+        let wrap: CommandWrap = cmd.into();
+        let info = CommandInfo::from_command_wrap(&wrap);
+        assert_eq!(info.program, "npx");
+        assert_eq!(
+            info.args,
+            vec![OsString::from("-y"), OsString::from("some-package")]
+        );
+        assert!(
+            info.envs
+                .contains(&(OsString::from("FOO"), Some(OsString::from("bar"))))
+        );
+        assert_eq!(info.working_dir, Some(PathBuf::from("/tmp")));
+    }
+
+    #[tokio::test]
+    async fn test_no_approval_handler_spawns_directly() {
+        // Without an approval handler, spawn should still work (backward compat)
+        let (proc, _stderr) = TokioChildProcess::builder(Command::new("echo").configure(|cmd| {
+            cmd.arg("no-handler");
+        }))
+        .spawn()
+        .await
+        .expect("spawn without handler should succeed");
+
+        assert!(proc.id().is_some());
     }
 }
