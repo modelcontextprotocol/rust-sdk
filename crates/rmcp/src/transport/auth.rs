@@ -138,7 +138,7 @@ pub struct StoredAuthorizationState {
 ///
 /// # Accessing extra fields
 ///
-/// Extra fields are available through [`OAuthTokenResponse::extra_fields`], which returns a
+/// Extra fields are available through [`StandardTokenResponse::extra_fields()`], which returns a
 /// reference to this struct. Use the inner map (`.0`) to look up individual fields by name:
 ///
 /// ```rust,ignore
@@ -380,7 +380,7 @@ type OAuthErrorResponse = oauth2::StandardErrorResponse<oauth2::basic::BasicErro
 ///
 /// # Accessing vendor-specific fields
 ///
-/// Call [`extra_fields()`][oauth2::TokenResponse::extra_fields] to obtain a reference to the
+/// Call [`extra_fields()`][OAuthTokenResponse::extra_fields] to obtain a reference to the
 /// [`VendorExtraTokenFields`] wrapper, then index into its inner map.
 pub type OAuthTokenResponse = StandardTokenResponse<VendorExtraTokenFields, BasicTokenType>;
 type OAuthTokenIntrospection =
