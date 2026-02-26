@@ -31,6 +31,52 @@ pub type ExperimentalCapabilities = BTreeMap<String, JsonObject>;
 /// ```
 pub type ExtensionCapabilities = BTreeMap<String, JsonObject>;
 
+// ── Well-known extension identifiers ────────────────────────────────────────
+
+/// Extension identifier for OAuth client credentials flow (SEP-1046).
+///
+/// Both clients and servers advertise this extension to opt into
+/// machine-to-machine authentication via the OAuth 2.0 client credentials
+/// grant.  The associated settings object may contain:
+///
+/// - `grant_types_supported` – list of grant types (e.g. `["client_credentials"]`)
+/// - `token_endpoint_auth_methods_supported` – list of auth methods
+///   (e.g. `["client_secret_basic", "private_key_jwt"]`)
+///
+/// An empty settings object (`{}`) indicates support with default settings.
+pub const EXTENSION_OAUTH_CLIENT_CREDENTIALS: &str =
+    "io.modelcontextprotocol/oauth-client-credentials";
+
+/// Settings for the OAuth client credentials extension (SEP-1046).
+///
+/// This struct provides typed access to the per-extension settings that
+/// accompany the `io.modelcontextprotocol/oauth-client-credentials`
+/// extension key in [`ExtensionCapabilities`].
+///
+/// # Example
+///
+/// ```rust
+/// use rmcp::model::OAuthClientCredentialsSettings;
+///
+/// let settings = OAuthClientCredentialsSettings {
+///     grant_types_supported: Some(vec!["client_credentials".into()]),
+///     token_endpoint_auth_methods_supported: Some(vec![
+///         "client_secret_basic".into(),
+///         "private_key_jwt".into(),
+///     ]),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct OAuthClientCredentialsSettings {
+    /// Supported grant types (e.g. `["client_credentials"]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_types_supported: Option<Vec<String>>,
+    /// Supported token-endpoint authentication methods
+    /// (e.g. `["client_secret_basic", "private_key_jwt"]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -264,6 +310,26 @@ pub struct ClientCapabilities {
     pub tasks: Option<TasksCapability>,
 }
 
+impl ClientCapabilities {
+    /// Returns `true` if the client advertises support for the OAuth client
+    /// credentials extension (SEP-1046).
+    pub fn supports_oauth_client_credentials(&self) -> bool {
+        self.extensions.as_ref().map_or(false, |ext| {
+            ext.contains_key(EXTENSION_OAUTH_CLIENT_CREDENTIALS)
+        })
+    }
+
+    /// Returns the typed [`OAuthClientCredentialsSettings`] advertised by the
+    /// client, or `None` if the extension is not present or cannot be parsed.
+    pub fn oauth_client_credentials_settings(&self) -> Option<OAuthClientCredentialsSettings> {
+        let raw = self
+            .extensions
+            .as_ref()?
+            .get(EXTENSION_OAUTH_CLIENT_CREDENTIALS)?;
+        serde_json::from_value(serde_json::to_value(raw).ok()?).ok()
+    }
+}
+
 ///
 /// ## Builder
 /// ```rust
@@ -301,6 +367,26 @@ pub struct ServerCapabilities {
     pub tools: Option<ToolsCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tasks: Option<TasksCapability>,
+}
+
+impl ServerCapabilities {
+    /// Returns `true` if the server advertises support for the OAuth client
+    /// credentials extension (SEP-1046).
+    pub fn supports_oauth_client_credentials(&self) -> bool {
+        self.extensions.as_ref().map_or(false, |ext| {
+            ext.contains_key(EXTENSION_OAUTH_CLIENT_CREDENTIALS)
+        })
+    }
+
+    /// Returns the typed [`OAuthClientCredentialsSettings`] advertised by the
+    /// server, or `None` if the extension is not present or cannot be parsed.
+    pub fn oauth_client_credentials_settings(&self) -> Option<OAuthClientCredentialsSettings> {
+        let raw = self
+            .extensions
+            .as_ref()?
+            .get(EXTENSION_OAUTH_CLIENT_CREDENTIALS)?;
+        serde_json::from_value(serde_json::to_value(raw).ok()?).ok()
+    }
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
@@ -738,6 +824,156 @@ mod test {
         assert_eq!(
             json["extensions"]["io.modelcontextprotocol/oauth-client-credentials"],
             serde_json::json!({})
+        );
+    }
+
+    // ── OAuth client credentials capability advertisement tests (SEP-1046) ──
+
+    #[test]
+    fn test_client_supports_oauth_client_credentials_false_by_default() {
+        let capabilities = ClientCapabilities::default();
+        assert!(!capabilities.supports_oauth_client_credentials());
+        assert!(capabilities.oauth_client_credentials_settings().is_none());
+    }
+
+    #[test]
+    fn test_client_supports_oauth_client_credentials_empty_settings() {
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            EXTENSION_OAUTH_CLIENT_CREDENTIALS.to_string(),
+            JsonObject::new(),
+        );
+        let capabilities = ClientCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .build();
+
+        assert!(capabilities.supports_oauth_client_credentials());
+        // Empty settings should deserialize to the default
+        let settings = capabilities.oauth_client_credentials_settings().unwrap();
+        assert_eq!(settings, OAuthClientCredentialsSettings::default());
+    }
+
+    #[test]
+    fn test_client_supports_oauth_client_credentials_with_settings() {
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            EXTENSION_OAUTH_CLIENT_CREDENTIALS.to_string(),
+            serde_json::from_value(serde_json::json!({
+                "grant_types_supported": ["client_credentials"],
+                "token_endpoint_auth_methods_supported": ["client_secret_basic", "private_key_jwt"]
+            }))
+            .unwrap(),
+        );
+        let capabilities = ClientCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .build();
+
+        assert!(capabilities.supports_oauth_client_credentials());
+        let settings = capabilities.oauth_client_credentials_settings().unwrap();
+        assert_eq!(
+            settings.grant_types_supported,
+            Some(vec!["client_credentials".to_string()])
+        );
+        assert_eq!(
+            settings.token_endpoint_auth_methods_supported,
+            Some(vec![
+                "client_secret_basic".to_string(),
+                "private_key_jwt".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_server_supports_oauth_client_credentials_false_by_default() {
+        let capabilities = ServerCapabilities::default();
+        assert!(!capabilities.supports_oauth_client_credentials());
+        assert!(capabilities.oauth_client_credentials_settings().is_none());
+    }
+
+    #[test]
+    fn test_server_supports_oauth_client_credentials_empty_settings() {
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            EXTENSION_OAUTH_CLIENT_CREDENTIALS.to_string(),
+            JsonObject::new(),
+        );
+        let capabilities = ServerCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .build();
+
+        assert!(capabilities.supports_oauth_client_credentials());
+        let settings = capabilities.oauth_client_credentials_settings().unwrap();
+        assert_eq!(settings, OAuthClientCredentialsSettings::default());
+    }
+
+    #[test]
+    fn test_server_supports_oauth_client_credentials_with_settings() {
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(
+            EXTENSION_OAUTH_CLIENT_CREDENTIALS.to_string(),
+            serde_json::from_value(serde_json::json!({
+                "grant_types_supported": ["client_credentials"],
+                "token_endpoint_auth_methods_supported": ["private_key_jwt"]
+            }))
+            .unwrap(),
+        );
+        let capabilities = ServerCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .enable_tools()
+            .build();
+
+        assert!(capabilities.supports_oauth_client_credentials());
+        let settings = capabilities.oauth_client_credentials_settings().unwrap();
+        assert_eq!(
+            settings.grant_types_supported,
+            Some(vec!["client_credentials".to_string()])
+        );
+        assert_eq!(
+            settings.token_endpoint_auth_methods_supported,
+            Some(vec!["private_key_jwt".to_string()])
+        );
+        // Other capabilities should still work
+        assert!(capabilities.tools.is_some());
+    }
+
+    #[test]
+    fn test_oauth_client_credentials_settings_roundtrip() {
+        let settings = OAuthClientCredentialsSettings {
+            grant_types_supported: Some(vec!["client_credentials".into()]),
+            token_endpoint_auth_methods_supported: Some(vec![
+                "client_secret_basic".into(),
+                "private_key_jwt".into(),
+            ]),
+        };
+        let json = serde_json::to_value(&settings).unwrap();
+        let deserialized: OAuthClientCredentialsSettings =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(settings, deserialized);
+
+        // Verify JSON shape
+        assert_eq!(
+            json["grant_types_supported"],
+            serde_json::json!(["client_credentials"])
+        );
+        assert_eq!(
+            json["token_endpoint_auth_methods_supported"],
+            serde_json::json!(["client_secret_basic", "private_key_jwt"])
+        );
+    }
+
+    #[test]
+    fn test_oauth_client_credentials_settings_default_omits_none() {
+        let settings = OAuthClientCredentialsSettings::default();
+        let json = serde_json::to_value(&settings).unwrap();
+        // Default settings should serialize to empty object (skip_serializing_if)
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_extension_constant_value() {
+        assert_eq!(
+            EXTENSION_OAUTH_CLIENT_CREDENTIALS,
+            "io.modelcontextprotocol/oauth-client-credentials"
         );
     }
 }

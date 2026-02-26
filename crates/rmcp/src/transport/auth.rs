@@ -1,10 +1,13 @@
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
+use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     EmptyExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
@@ -288,6 +291,9 @@ pub enum AuthError {
         required_scope: String,
         upgrade_url: Option<String>,
     },
+
+    #[error("Capability not advertised: {0}")]
+    CapabilityNotAdvertised(String),
 }
 
 /// oauth2 metadata
@@ -300,8 +306,9 @@ pub struct AuthorizationMetadata {
     pub jwks_uri: Option<String>,
     pub scopes_supported: Option<Vec<String>>,
     pub response_types_supported: Option<Vec<String>>,
+    pub grant_types_supported: Option<Vec<String>>,
+    pub token_endpoint_auth_methods_supported: Option<Vec<String>>,
     pub code_challenge_methods_supported: Option<Vec<String>>,
-    // allow additional fields
     #[serde(flatten)]
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
@@ -364,6 +371,134 @@ type OAuthClient = oauth2::Client<
 >;
 type Credentials = (String, Option<OAuthTokenResponse>);
 
+pub type JwtSigningFn = Box<
+    dyn Fn(&str, &str) -> Pin<Box<dyn Future<Output = Result<String, AuthError>> + Send + 'static>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientCredentialsTokenRequest {
+    grant_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_assertion_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_assertion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientCredentialsTokenResponse {
+    access_token: String,
+    token_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+}
+
+pub enum ClientAuthentication {
+    ClientSecret {
+        client_id: String,
+        client_secret: String,
+    },
+    PrivateKeyJwt {
+        client_id: String,
+        signing_fn: JwtSigningFn,
+    },
+    StaticJwtAssertion {
+        client_id: String,
+        jwt_assertion: String,
+    },
+}
+
+impl std::fmt::Debug for ClientAuthentication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ClientSecret { client_id, .. } => f
+                .debug_struct("ClientSecret")
+                .field("client_id", client_id)
+                .finish(),
+            Self::PrivateKeyJwt { client_id, .. } => f
+                .debug_struct("PrivateKeyJwt")
+                .field("client_id", client_id)
+                .finish(),
+            Self::StaticJwtAssertion { client_id, .. } => f
+                .debug_struct("StaticJwtAssertion")
+                .field("client_id", client_id)
+                .finish(),
+        }
+    }
+}
+
+impl ClientAuthentication {
+    pub fn client_id(&self) -> &str {
+        match self {
+            Self::ClientSecret { client_id, .. }
+            | Self::PrivateKeyJwt { client_id, .. }
+            | Self::StaticJwtAssertion { client_id, .. } => client_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtClaims {
+    pub iss: String,
+    pub sub: String,
+    pub aud: String,
+    pub exp: u64,
+    pub iat: u64,
+    pub jti: String,
+}
+
+pub fn create_private_key_jwt_auth(
+    client_id: String,
+    pem_key: Vec<u8>,
+    algorithm: Algorithm,
+    kid: Option<String>,
+) -> ClientAuthentication {
+    let signing_fn: JwtSigningFn = Box::new(move |client_id: &str, token_endpoint: &str| {
+        let client_id = client_id.to_string();
+        let token_endpoint = token_endpoint.to_string();
+        let pem_key = pem_key.clone();
+        let algorithm = algorithm;
+        let kid = kid.clone();
+        Box::pin(async move {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let jti = format!("{:x}", rand::random::<u128>());
+            let claims = JwtClaims {
+                iss: client_id.clone(),
+                sub: client_id,
+                aud: token_endpoint,
+                exp: now + 300,
+                iat: now,
+                jti,
+            };
+            let encoding_key = EncodingKey::from_rsa_pem(&pem_key)
+                .or_else(|_| EncodingKey::from_ec_pem(&pem_key))
+                .map_err(|e| AuthError::InternalError(format!("Invalid PEM key: {}", e)))?;
+            let mut header = Header::new(algorithm);
+            header.kid = kid;
+            jsonwebtoken::encode(&header, &claims, &encoding_key)
+                .map_err(|e| AuthError::InternalError(format!("JWT signing failed: {}", e)))
+        })
+    });
+    ClientAuthentication::PrivateKeyJwt {
+        client_id,
+        signing_fn,
+    }
+}
+
 /// Configuration for scope upgrade behavior
 #[derive(Debug, Clone)]
 pub struct ScopeUpgradeConfig {
@@ -397,6 +532,11 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// Server capabilities received during MCP `initialize` handshake.
+    /// When set, `client_credentials_grant` will verify that the server
+    /// advertises the `io.modelcontextprotocol/oauth-client-credentials`
+    /// extension before proceeding (SEP-1046 opt-in guard).
+    server_capabilities: Option<crate::model::ServerCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -476,6 +616,7 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            server_capabilities: None,
         };
 
         Ok(manager)
@@ -484,6 +625,15 @@ impl AuthorizationManager {
     /// Set the scope upgrade configuration
     pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
         self.scope_upgrade_config = config;
+    }
+
+    /// Supply the server capabilities received during the MCP `initialize`
+    /// handshake.  When set, [`client_credentials_grant`](Self::client_credentials_grant)
+    /// will verify that the server advertises the
+    /// `io.modelcontextprotocol/oauth-client-credentials` extension before
+    /// proceeding (SEP-1046 opt-in guard).
+    pub fn set_server_capabilities(&mut self, capabilities: crate::model::ServerCapabilities) {
+        self.server_capabilities = Some(capabilities);
     }
 
     /// Set a custom credential store
@@ -954,6 +1104,159 @@ impl AuthorizationManager {
         self.credential_store.save(stored).await?;
 
         Ok(token_result)
+    }
+
+    /// Perform an OAuth 2.0 client credentials grant (SEP-1046).
+    ///
+    /// If [`set_server_capabilities`](Self::set_server_capabilities) was called
+    /// with capabilities that do **not** include the
+    /// `io.modelcontextprotocol/oauth-client-credentials` extension, this
+    /// method returns [`AuthError::CapabilityNotAdvertised`] without making any
+    /// network requests.  When no server capabilities have been set the guard
+    /// is skipped (backwards-compatible with callers that do not participate in
+    /// the MCP `initialize` handshake).
+    pub async fn client_credentials_grant(
+        &self,
+        auth: &ClientAuthentication,
+        scopes: &[&str],
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        // SEP-1046 opt-in guard: when server capabilities are known, require
+        // the oauth-client-credentials extension to be advertised.
+        if let Some(ref caps) = self.server_capabilities {
+            if !caps.supports_oauth_client_credentials() {
+                return Err(AuthError::CapabilityNotAdvertised(
+                    "Server does not advertise the \
+                     io.modelcontextprotocol/oauth-client-credentials extension. \
+                     The client credentials flow requires explicit opt-in from the server \
+                     via capability advertisement (SEP-1046)."
+                        .to_string(),
+                ));
+            }
+        }
+
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(AuthError::NoAuthorizationSupport)?;
+
+        let token_endpoint = &metadata.token_endpoint;
+        let scope = if scopes.is_empty() {
+            None
+        } else {
+            Some(scopes.join(" "))
+        };
+
+        let mut request = self
+            .http_client
+            .post(token_endpoint)
+            .header("Accept", "application/json");
+
+        match auth {
+            ClientAuthentication::ClientSecret {
+                client_id,
+                client_secret,
+            } => {
+                let body = ClientCredentialsTokenRequest {
+                    grant_type: "client_credentials".to_string(),
+                    scope,
+                    resource: Some(self.base_url.to_string()),
+                    client_assertion_type: None,
+                    client_assertion: None,
+                    client_id: Some(client_id.clone()),
+                    client_secret: Some(client_secret.clone()),
+                };
+                request = request.form(&body);
+            }
+            ClientAuthentication::PrivateKeyJwt {
+                client_id,
+                signing_fn,
+            } => {
+                let assertion = signing_fn(client_id, token_endpoint).await?;
+                let body = ClientCredentialsTokenRequest {
+                    grant_type: "client_credentials".to_string(),
+                    scope,
+                    resource: Some(self.base_url.to_string()),
+                    client_assertion_type: Some(
+                        "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".to_string(),
+                    ),
+                    client_assertion: Some(assertion),
+                    client_id: Some(client_id.clone()),
+                    client_secret: None,
+                };
+                request = request.form(&body);
+            }
+            ClientAuthentication::StaticJwtAssertion {
+                client_id,
+                jwt_assertion,
+            } => {
+                let body = ClientCredentialsTokenRequest {
+                    grant_type: "client_credentials".to_string(),
+                    scope,
+                    resource: Some(self.base_url.to_string()),
+                    client_assertion_type: Some(
+                        "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".to_string(),
+                    ),
+                    client_assertion: Some(jwt_assertion.clone()),
+                    client_id: Some(client_id.clone()),
+                    client_secret: None,
+                };
+                request = request.form(&body);
+            }
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| AuthError::TokenExchangeFailed(format!("HTTP request error: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "cannot read response body".to_string());
+            return Err(AuthError::TokenExchangeFailed(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let cc_response: ClientCredentialsTokenResponse = response.json().await.map_err(|e| {
+            AuthError::TokenExchangeFailed(format!("Failed to parse token response: {}", e))
+        })?;
+
+        let mut token_response = OAuthTokenResponse::new(
+            oauth2::AccessToken::new(cc_response.access_token),
+            oauth2::basic::BasicTokenType::Bearer,
+            EmptyExtraTokenFields {},
+        );
+        if let Some(expires_in) = cc_response.expires_in {
+            token_response.set_expires_in(Some(&std::time::Duration::from_secs(expires_in)));
+        }
+        if let Some(scope_str) = cc_response.scope {
+            let scopes: Vec<oauth2::Scope> = scope_str
+                .split_whitespace()
+                .map(|s| oauth2::Scope::new(s.to_string()))
+                .collect();
+            token_response.set_scopes(Some(scopes));
+        }
+
+        let granted_scopes: Vec<String> = token_response
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
+        let stored = StoredCredentials {
+            client_id: auth.client_id().to_string(),
+            token_response: Some(token_response.clone()),
+            granted_scopes,
+            token_received_at: Some(Self::now_epoch_secs()),
+        };
+        self.credential_store.save(stored).await?;
+
+        Ok(token_response)
     }
 
     fn now_epoch_secs() -> u64 {
@@ -1857,6 +2160,27 @@ impl OAuthState {
         }
     }
 
+    pub async fn authorize_with_client_credentials(
+        &mut self,
+        auth: &ClientAuthentication,
+        scopes: &[&str],
+    ) -> Result<(), AuthError> {
+        if let OAuthState::Unauthorized(mut manager) = std::mem::replace(
+            self,
+            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
+        ) {
+            let metadata = manager.discover_metadata().await?;
+            manager.metadata = Some(metadata);
+            manager.client_credentials_grant(auth, scopes).await?;
+            *self = OAuthState::Authorized(manager);
+            Ok(())
+        } else {
+            Err(AuthError::InternalError(
+                "Cannot start client credentials flow from current state".to_string(),
+            ))
+        }
+    }
+
     pub fn into_authorization_manager(self) -> Option<AuthorizationManager> {
         match self {
             OAuthState::Authorized(manager) => Some(manager),
@@ -1869,12 +2193,13 @@ impl OAuthState {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use oauth2::{AuthType, CsrfToken, PkceCodeVerifier};
+    use oauth2::{AuthType, CsrfToken, PkceCodeVerifier, TokenResponse};
     use url::Url;
 
     use super::{
-        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore,
-        OAuthClientConfig, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
+        AuthError, AuthorizationManager, AuthorizationMetadata, ClientAuthentication,
+        InMemoryStateStore, OAuthClientConfig, ScopeUpgradeConfig, StateStore,
+        StoredAuthorizationState, is_https_url,
     };
 
     // -- url helpers --
@@ -2554,13 +2879,9 @@ mod tests {
         let metadata = AuthorizationMetadata {
             authorization_endpoint: auth_endpoint.to_string(),
             token_endpoint: "https://auth.example.com/token".to_string(),
-            registration_endpoint: None,
-            issuer: None,
-            jwks_uri: None,
-            scopes_supported: None,
             response_types_supported: Some(vec!["code".to_string()]),
             code_challenge_methods_supported: Some(vec!["S256".to_string()]),
-            additional_fields: std::collections::HashMap::new(),
+            ..Default::default()
         };
         manager.set_metadata(metadata);
         manager.configure_client_id("test-client-id").unwrap();
@@ -2790,6 +3111,367 @@ mod tests {
         assert!(
             matches!(err, AuthError::InternalError(_)),
             "expected InternalError when OAuth client is not configured, got: {err:?}"
+        );
+    }
+
+    // -- client credentials --
+
+    #[test]
+    fn client_authentication_debug_does_not_leak_secrets() {
+        let secret_auth = ClientAuthentication::ClientSecret {
+            client_id: "my-client".to_string(),
+            client_secret: "super-secret-value".to_string(),
+        };
+        let debug_str = format!("{:?}", secret_auth);
+        assert!(debug_str.contains("my-client"));
+        assert!(!debug_str.contains("super-secret-value"));
+
+        let static_jwt_auth = ClientAuthentication::StaticJwtAssertion {
+            client_id: "jwt-client".to_string(),
+            jwt_assertion: "eyJhbGciOiJSUzI1NiJ9.secret-payload".to_string(),
+        };
+        let debug_str = format!("{:?}", static_jwt_auth);
+        assert!(debug_str.contains("jwt-client"));
+        assert!(!debug_str.contains("eyJhbGciOiJSUzI1NiJ9"));
+    }
+
+    #[tokio::test]
+    async fn create_private_key_jwt_auth_signs_jwt() {
+        let rsa_pem = include_bytes!("../../tests/fixtures/test_rsa_key.pem");
+        let auth = super::create_private_key_jwt_auth(
+            "test-client".to_string(),
+            rsa_pem.to_vec(),
+            jsonwebtoken::Algorithm::RS256,
+            Some("test-kid".to_string()),
+        );
+        if let ClientAuthentication::PrivateKeyJwt {
+            client_id,
+            signing_fn,
+        } = &auth
+        {
+            let jwt = signing_fn(client_id, "https://auth.example.com/token")
+                .await
+                .unwrap();
+            let parts: Vec<&str> = jwt.split('.').collect();
+            assert_eq!(parts.len(), 3, "JWT should have 3 parts");
+
+            let header_json = String::from_utf8(base64_decode_url_safe(parts[0])).unwrap();
+            let header: serde_json::Value = serde_json::from_str(&header_json).unwrap();
+            assert_eq!(header["alg"], "RS256");
+            assert_eq!(header["kid"], "test-kid");
+
+            let payload_json = String::from_utf8(base64_decode_url_safe(parts[1])).unwrap();
+            let payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+            assert_eq!(payload["iss"], "test-client");
+            assert_eq!(payload["sub"], "test-client");
+            assert_eq!(payload["aud"], "https://auth.example.com/token");
+            assert!(payload["exp"].is_number());
+            assert!(payload["iat"].is_number());
+            assert!(payload["jti"].is_string());
+
+            let exp = payload["exp"].as_u64().unwrap();
+            let iat = payload["iat"].as_u64().unwrap();
+            assert_eq!(exp - iat, 300);
+        } else {
+            panic!("expected PrivateKeyJwt");
+        }
+    }
+
+    fn base64_decode_url_safe(input: &str) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(input)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn client_credentials_grant_stores_credentials_on_success() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "cc-token-abc",
+                "token_type": "Bearer",
+                "expires_in": 7200,
+                "scope": "read write"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut manager = AuthorizationManager::new(mock_server.uri()).await.unwrap();
+        manager.metadata = Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", mock_server.uri()),
+            token_endpoint: format!("{}/token", mock_server.uri()),
+            grant_types_supported: Some(vec![
+                "authorization_code".to_string(),
+                "client_credentials".to_string(),
+            ]),
+            ..Default::default()
+        });
+
+        let auth = ClientAuthentication::ClientSecret {
+            client_id: "cc-client".to_string(),
+            client_secret: "cc-secret".to_string(),
+        };
+
+        let token_response = manager
+            .client_credentials_grant(&auth, &["read", "write"])
+            .await
+            .unwrap();
+
+        assert_eq!(token_response.access_token().secret(), "cc-token-abc");
+        assert_eq!(
+            token_response.expires_in(),
+            Some(std::time::Duration::from_secs(7200))
+        );
+
+        let stored = manager.credential_store.load().await.unwrap().unwrap();
+        assert_eq!(stored.client_id, "cc-client");
+        assert_eq!(stored.granted_scopes, vec!["read", "write"]);
+
+        let access_token = manager.get_access_token().await.unwrap();
+        assert_eq!(access_token, "cc-token-abc");
+    }
+
+    #[tokio::test]
+    async fn client_credentials_grant_handles_error_response() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "invalid_client",
+                "error_description": "Client authentication failed"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut manager = AuthorizationManager::new(mock_server.uri()).await.unwrap();
+        manager.metadata = Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", mock_server.uri()),
+            token_endpoint: format!("{}/token", mock_server.uri()),
+            grant_types_supported: Some(vec!["client_credentials".to_string()]),
+            ..Default::default()
+        });
+
+        let auth = ClientAuthentication::ClientSecret {
+            client_id: "bad-client".to_string(),
+            client_secret: "wrong-secret".to_string(),
+        };
+
+        let err = manager
+            .client_credentials_grant(&auth, &[])
+            .await
+            .unwrap_err();
+
+        match err {
+            AuthError::TokenExchangeFailed(msg) => {
+                assert!(
+                    msg.contains("400"),
+                    "error should contain status code: {msg}"
+                );
+                assert!(
+                    msg.contains("invalid_client"),
+                    "error should contain error body: {msg}"
+                );
+            }
+            other => panic!("expected TokenExchangeFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn client_credentials_grant_with_private_key_jwt() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "pk-jwt-token",
+                "token_type": "Bearer",
+                "expires_in": 1800
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut manager = AuthorizationManager::new(mock_server.uri()).await.unwrap();
+        manager.metadata = Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", mock_server.uri()),
+            token_endpoint: format!("{}/token", mock_server.uri()),
+            grant_types_supported: Some(vec!["client_credentials".to_string()]),
+            token_endpoint_auth_methods_supported: Some(vec!["private_key_jwt".to_string()]),
+            ..Default::default()
+        });
+
+        let rsa_pem = include_bytes!("../../tests/fixtures/test_rsa_key.pem");
+        let auth = super::create_private_key_jwt_auth(
+            "pk-client".to_string(),
+            rsa_pem.to_vec(),
+            jsonwebtoken::Algorithm::RS256,
+            Some("my-kid".to_string()),
+        );
+
+        let token_response = manager
+            .client_credentials_grant(&auth, &["admin"])
+            .await
+            .unwrap();
+
+        assert_eq!(token_response.access_token().secret(), "pk-jwt-token");
+
+        let access_token = manager.get_access_token().await.unwrap();
+        assert_eq!(access_token, "pk-jwt-token");
+    }
+
+    // -- capability advertisement guard (SEP-1046) --
+
+    #[tokio::test]
+    async fn client_credentials_grant_rejected_when_server_caps_lack_extension() {
+        // Server capabilities are set but do NOT include the extension.
+        let mut manager = manager_with_metadata(None).await;
+        manager.set_server_capabilities(crate::model::ServerCapabilities::default());
+
+        let auth = ClientAuthentication::ClientSecret {
+            client_id: "c".to_string(),
+            client_secret: "s".to_string(),
+        };
+
+        let err = manager
+            .client_credentials_grant(&auth, &[])
+            .await
+            .unwrap_err();
+
+        match err {
+            AuthError::CapabilityNotAdvertised(msg) => {
+                assert!(
+                    msg.contains("oauth-client-credentials"),
+                    "error message should mention the extension: {msg}"
+                );
+                assert!(
+                    msg.contains("SEP-1046"),
+                    "error message should reference the SEP: {msg}"
+                );
+            }
+            other => panic!("expected CapabilityNotAdvertised, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn client_credentials_grant_allowed_when_server_caps_include_extension() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "cap-token",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut manager = AuthorizationManager::new(mock_server.uri()).await.unwrap();
+        manager.metadata = Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", mock_server.uri()),
+            token_endpoint: format!("{}/token", mock_server.uri()),
+            grant_types_supported: Some(vec!["client_credentials".to_string()]),
+            ..Default::default()
+        });
+
+        // Set server capabilities WITH the extension advertised
+        let mut extensions = crate::model::ExtensionCapabilities::new();
+        extensions.insert(
+            crate::model::EXTENSION_OAUTH_CLIENT_CREDENTIALS.to_string(),
+            serde_json::Map::new(),
+        );
+        let caps = crate::model::ServerCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .build();
+        manager.set_server_capabilities(caps);
+
+        let auth = ClientAuthentication::ClientSecret {
+            client_id: "cc-client".to_string(),
+            client_secret: "cc-secret".to_string(),
+        };
+
+        let token_response = manager
+            .client_credentials_grant(&auth, &["read"])
+            .await
+            .unwrap();
+
+        assert_eq!(token_response.access_token().secret(), "cap-token");
+    }
+
+    #[tokio::test]
+    async fn client_credentials_grant_skips_guard_when_no_server_caps() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "no-caps-token",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut manager = AuthorizationManager::new(mock_server.uri()).await.unwrap();
+        manager.metadata = Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", mock_server.uri()),
+            token_endpoint: format!("{}/token", mock_server.uri()),
+            grant_types_supported: Some(vec!["client_credentials".to_string()]),
+            ..Default::default()
+        });
+        // Deliberately NOT calling set_server_capabilities — backwards compat
+
+        let auth = ClientAuthentication::ClientSecret {
+            client_id: "cc-client".to_string(),
+            client_secret: "cc-secret".to_string(),
+        };
+
+        let token_response = manager.client_credentials_grant(&auth, &[]).await.unwrap();
+
+        assert_eq!(token_response.access_token().secret(), "no-caps-token");
+    }
+
+    #[tokio::test]
+    async fn client_credentials_guard_rejects_with_unrelated_extensions() {
+        // Server advertises some other extension but NOT oauth-client-credentials
+        let mut manager = manager_with_metadata(None).await;
+
+        let mut extensions = crate::model::ExtensionCapabilities::new();
+        extensions.insert(
+            "io.modelcontextprotocol/apps".to_string(),
+            serde_json::Map::new(),
+        );
+        let caps = crate::model::ServerCapabilities::builder()
+            .enable_extensions_with(extensions)
+            .build();
+        manager.set_server_capabilities(caps);
+
+        let auth = ClientAuthentication::ClientSecret {
+            client_id: "c".to_string(),
+            client_secret: "s".to_string(),
+        };
+
+        let err = manager
+            .client_credentials_grant(&auth, &[])
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, AuthError::CapabilityNotAdvertised(_)),
+            "expected CapabilityNotAdvertised when server has unrelated extensions, got: {err:?}"
         );
     }
 }

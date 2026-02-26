@@ -95,9 +95,11 @@ pub use io::stdio;
 pub mod auth;
 #[cfg(feature = "auth")]
 pub use auth::{
-    AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
-    CredentialStore, InMemoryCredentialStore, InMemoryStateStore, ScopeUpgradeConfig, StateStore,
-    StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
+    AuthClient, AuthError, AuthorizationManager, AuthorizationMetadata, AuthorizationSession,
+    AuthorizedHttpClient, ClientAuthentication, ClientCredentialsTokenRequest,
+    ClientCredentialsTokenResponse, CredentialStore, InMemoryCredentialStore, InMemoryStateStore,
+    JwtSigningFn, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, StoredCredentials,
+    WWWAuthenticateParams, create_private_key_jwt_auth,
 };
 
 // #[cfg(feature = "transport-ws")]
