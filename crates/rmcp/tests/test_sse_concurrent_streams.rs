@@ -84,6 +84,7 @@ async fn start_test_server(ct: CancellationToken, trigger: Arc<Notify>) -> Strin
             sse_keep_alive: Some(Duration::from_secs(15)),
             sse_retry: Some(Duration::from_secs(3)),
             cancellation_token: ct.child_token(),
+            ..Default::default()
         },
     );
 
