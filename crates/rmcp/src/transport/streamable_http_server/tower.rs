@@ -608,7 +608,7 @@ where
                             _ = cancel.cancelled() => None,
                         } {
                             Some(message) => {
-                                tracing::info!(?message);
+                                tracing::trace!(?message);
                                 let body = serde_json::to_vec(&message).map_err(|e| {
                                     internal_error_response("serialize json response")(e)
                                 })?;
@@ -628,7 +628,7 @@ where
                     } else {
                         // SSE mode (default): original behaviour preserved unchanged
                         let stream = ReceiverStream::new(receiver).map(|message| {
-                            tracing::info!(?message);
+                            tracing::trace!(?message);
                             ServerSseMessage {
                                 event_id: None,
                                 message: Some(Arc::new(message)),
