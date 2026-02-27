@@ -3,7 +3,7 @@
 1. **Build the Server (Counter Example)**
 
    ```sh
-   cargo build --release --example servers_counter_stdio
+   cargo build --release -p mcp-server-examples --example servers_counter_stdio
    ```
 
    This builds a standard input/output MCP server binary.
