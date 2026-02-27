@@ -1,11 +1,12 @@
 <div align = "right">
-<a href="docs/readme/README.zh-cn.md">简体中文(待更新)</a>
+<a href="docs/readme/README.zh-cn.md">简体中文</a>
 </div>
 
 # RMCP
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
-<!-- ![Release status](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/release.yml/badge.svg) -->
-<!-- [![docs.rs](todo)](todo) -->
+[![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
+[![CI](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates/l/rmcp)](LICENSE)
 
 An official Rust Model Context Protocol SDK implementation with tokio async runtime.
 
