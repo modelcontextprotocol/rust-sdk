@@ -93,10 +93,13 @@ pub use io::stdio;
 
 #[cfg(feature = "auth")]
 pub mod auth;
+#[cfg(feature = "auth-client-credentials-jwt")]
+pub use auth::JwtSigningAlgorithm;
 #[cfg(feature = "auth")]
 pub use auth::{
     AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
-    CredentialStore, InMemoryCredentialStore, InMemoryStateStore, ScopeUpgradeConfig, StateStore,
+    ClientCredentialsConfig, CredentialStore, EXTENSION_OAUTH_CLIENT_CREDENTIALS,
+    InMemoryCredentialStore, InMemoryStateStore, ScopeUpgradeConfig, StateStore,
     StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
 };
 

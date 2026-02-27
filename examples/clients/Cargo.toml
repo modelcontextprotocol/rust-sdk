@@ -57,3 +57,7 @@ path = "src/sampling_stdio.rs"
 [[example]]
 name = "clients_progress_client"
 path = "src/progress_client.rs"
+
+[[example]]
+name = "clients_client_credentials"
+path = "src/auth/client_credentials.rs"
