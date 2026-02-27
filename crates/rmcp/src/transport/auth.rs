@@ -5,11 +5,12 @@ use std::{
 };
 
 use async_trait::async_trait;
+pub use oauth2::TokenResponse;
 use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     EmptyExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, StandardTokenResponse,
-    TokenResponse, TokenUrl,
+    TokenUrl,
     basic::{BasicClient, BasicTokenType},
 };
 use reqwest::{
@@ -406,6 +407,8 @@ pub struct ClientRegistrationRequest {
     pub grant_types: Vec<String>,
     pub token_endpoint_auth_method: String,
     pub response_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -645,6 +648,7 @@ impl AuthorizationManager {
         &mut self,
         name: &str,
         redirect_uri: &str,
+        scopes: &[String],
     ) -> Result<OAuthClientConfig, AuthError> {
         if self.metadata.is_none() {
             return Err(AuthError::NoAuthorizationSupport);
@@ -667,6 +671,11 @@ impl AuthorizationManager {
             ],
             token_endpoint_auth_method: "none".to_string(), // public client
             response_types: vec!["code".to_string()],
+            scope: if scopes.is_empty() {
+                None
+            } else {
+                Some(scopes.join(" "))
+            },
         };
 
         let response = match self
@@ -720,7 +729,7 @@ impl AuthorizationManager {
             // as a password, which is not a goal of the client secret.
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
-            scopes: vec![],
+            scopes: scopes.to_vec(),
         };
 
         self.configure_client(config.clone())?;
@@ -1463,6 +1472,7 @@ impl AuthorizationSession {
         client_name: Option<&str>,
         client_metadata_url: Option<&str>,
     ) -> Result<Self, AuthError> {
+        let scopes_owned: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
         let metadata = auth_manager.metadata.as_ref();
         let supports_url_based_client_id = metadata
             .and_then(|m| {
@@ -1490,7 +1500,11 @@ impl AuthorizationSession {
             } else {
                 // Fallback to dynamic registration
                 auth_manager
-                    .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
+                    .register_client(
+                        client_name.unwrap_or("MCP Client"),
+                        redirect_uri,
+                        &scopes_owned,
+                    )
                     .await
                     .map_err(|e| {
                         AuthError::RegistrationFailed(format!("Dynamic registration failed: {}", e))
@@ -1499,7 +1513,11 @@ impl AuthorizationSession {
         } else {
             // Fallback to dynamic registration
             match auth_manager
-                .register_client(client_name.unwrap_or("MCP Client"), redirect_uri)
+                .register_client(
+                    client_name.unwrap_or("MCP Client"),
+                    redirect_uri,
+                    &scopes_owned,
+                )
                 .await
             {
                 Ok(config) => config,
@@ -2791,5 +2809,35 @@ mod tests {
             matches!(err, AuthError::InternalError(_)),
             "expected InternalError when OAuth client is not configured, got: {err:?}"
         );
+    }
+
+    // -- ClientRegistrationRequest serialization --
+
+    #[test]
+    fn client_registration_request_includes_scope_when_present() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: Some("read write".to_string()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["scope"], "read write");
+    }
+
+    #[test]
+    fn client_registration_request_omits_scope_when_none() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("scope"));
     }
 }
