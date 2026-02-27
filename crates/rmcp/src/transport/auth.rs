@@ -648,7 +648,7 @@ impl AuthorizationManager {
         &mut self,
         name: &str,
         redirect_uri: &str,
-        scopes: &[String],
+        scopes: &[&str],
     ) -> Result<OAuthClientConfig, AuthError> {
         if self.metadata.is_none() {
             return Err(AuthError::NoAuthorizationSupport);
@@ -729,7 +729,7 @@ impl AuthorizationManager {
             // as a password, which is not a goal of the client secret.
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
-            scopes: scopes.to_vec(),
+            scopes: scopes.iter().map(|s| s.to_string()).collect(),
         };
 
         self.configure_client(config.clone())?;
@@ -1472,7 +1472,6 @@ impl AuthorizationSession {
         client_name: Option<&str>,
         client_metadata_url: Option<&str>,
     ) -> Result<Self, AuthError> {
-        let scopes_owned: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
         let metadata = auth_manager.metadata.as_ref();
         let supports_url_based_client_id = metadata
             .and_then(|m| {
@@ -1500,11 +1499,7 @@ impl AuthorizationSession {
             } else {
                 // Fallback to dynamic registration
                 auth_manager
-                    .register_client(
-                        client_name.unwrap_or("MCP Client"),
-                        redirect_uri,
-                        &scopes_owned,
-                    )
+                    .register_client(client_name.unwrap_or("MCP Client"), redirect_uri, scopes)
                     .await
                     .map_err(|e| {
                         AuthError::RegistrationFailed(format!("Dynamic registration failed: {}", e))
@@ -1513,11 +1508,7 @@ impl AuthorizationSession {
         } else {
             // Fallback to dynamic registration
             match auth_manager
-                .register_client(
-                    client_name.unwrap_or("MCP Client"),
-                    redirect_uri,
-                    &scopes_owned,
-                )
+                .register_client(client_name.unwrap_or("MCP Client"), redirect_uri, scopes)
                 .await
             {
                 Ok(config) => config,
