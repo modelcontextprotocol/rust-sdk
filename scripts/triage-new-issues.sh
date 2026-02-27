@@ -287,7 +287,7 @@ has_triage_labels() {
 
   local has_type has_priority
   has_type=$(echo "$labels_json" | jq '[.[] | select(. == "bug" or . == "enhancement" or . == "question")] | length')
-  has_priority=$(echo "$labels_json" | jq '[.[] | select(startswith("P"))] | length')
+  has_priority=$(echo "$labels_json" | jq '[.[] | select(test("^P[0-3]$"))] | length')
 
   [[ "$has_type" -gt 0 && "$has_priority" -gt 0 ]]
 }
