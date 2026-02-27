@@ -191,7 +191,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For more examples, see the [examples directory](https://github.com/anthropics/mcp-rust-sdk/tree/main/examples) in the repository.
+For more examples, see the [examples directory](https://github.com/modelcontextprotocol/rust-sdk/tree/main/examples) in the repository.
+
+For detailed documentation on core MCP features (resources, prompts, sampling, roots, logging, completions, notifications, subscriptions), see [FEATURES.md](https://github.com/modelcontextprotocol/rust-sdk/blob/main/docs/FEATURES.md).
 
 ## Transport Options
 

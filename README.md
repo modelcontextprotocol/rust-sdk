@@ -20,7 +20,7 @@ This repository contains the following crates:
 ### Import the crate
 
 ```toml
-rmcp = { version = "0.8.0", features = ["server"] }
+rmcp = { version = "0.16.0", features = ["server"] }
 ## or dev channel
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
 ```
@@ -111,6 +111,10 @@ let quit_reason = server.cancel().await?;
 
 See [examples](examples/README.md).
 
+## Feature Documentation
+
+See [docs/FEATURES.md](docs/FEATURES.md) for detailed documentation on core MCP features: resources, prompts, sampling, roots, logging, completions, notifications, and subscriptions.
+
 ## OAuth Support
 
 See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
@@ -129,6 +133,8 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ### Built with `rmcp`
 
+- [goose](https://github.com/block/goose) - An open-source, extensible AI agent that goes beyond code suggestions
+- [apollo-mcp-server](https://github.com/apollographql/apollo-mcp-server) - MCP server that connects AI agents to GraphQL APIs via Apollo GraphOS
 - [rustfs-mcp](https://github.com/rustfs/rustfs/tree/main/crates/mcp) - High-performance MCP server providing S3-compatible object storage operations for AI/LLM integration
 - [containerd-mcp-server](https://github.com/jokemanfire/mcp-containerd) - A containerd-based MCP server implementation
 - [rmcp-openapi-server](https://gitlab.com/lx-industries/rmcp-openapi/-/tree/main/crates/rmcp-openapi-server) - High-performance MCP server that exposes OpenAPI definition endpoints as MCP tools
