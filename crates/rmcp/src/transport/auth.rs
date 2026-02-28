@@ -401,7 +401,7 @@ pub struct AuthorizationManager {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientRegistrationRequest {
+pub(crate) struct ClientRegistrationRequest {
     pub client_name: String,
     pub redirect_uris: Vec<String>,
     pub grant_types: Vec<String>,
