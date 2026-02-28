@@ -3,6 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 mod error;
+mod util;
 #[allow(deprecated)]
 pub use error::{Error, ErrorData, RmcpError};
 

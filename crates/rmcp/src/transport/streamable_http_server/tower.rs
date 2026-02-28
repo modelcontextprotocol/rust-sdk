@@ -593,11 +593,8 @@ where
                     request.request.extensions_mut().insert(part);
                     let (transport, mut receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
-                    let service = serve_directly(service, transport, None);
-                    tokio::spawn(async move {
-                        // on service created
-                        let _ = service.waiting().await;
-                    });
+                    let (_, work) = serve_directly(service, transport, None);
+                    tokio::spawn(work);
                     if self.config.json_response {
                         // JSON-direct mode: await the single response and return as
                         // application/json, eliminating SSE framing overhead.
