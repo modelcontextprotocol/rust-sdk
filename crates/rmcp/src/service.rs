@@ -1,4 +1,8 @@
-use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use futures::{
+    FutureExt, Stream, StreamExt,
+    future::{BoxFuture, RemoteHandle},
+    stream::FuturesUnordered,
+};
 use thiserror::Error;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -113,7 +117,9 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn serve<T, E, A>(
         self,
         transport: T,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
+    ) -> impl Future<
+        Output = Result<(RunningService<R, Self>, impl Future<Output = ()>), R::InitializeError>,
+    > + Send
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -125,7 +131,9 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
+    ) -> impl Future<
+        Output = Result<(RunningService<R, Self>, impl Future<Output = ()>), R::InitializeError>,
+    > + Send
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -434,7 +442,7 @@ impl<R: ServiceRole> Peer<R> {
 pub struct RunningService<R: ServiceRole, S: Service<R>> {
     service: Arc<S>,
     peer: Peer<R>,
-    handle: Option<PinnedFuture<'static, QuitReason>>,
+    handle: Option<RemoteHandle<QuitReason>>,
     cancellation_token: CancellationToken,
     dg: DropGuard,
 }
@@ -564,6 +572,9 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
 impl<R: ServiceRole, S: Service<R>> Drop for RunningService<R, S> {
     fn drop(&mut self) {
         if self.handle.is_some() && !self.cancellation_token.is_cancelled() {
+            // Make sure we don't stop the work itself, the work future should
+            // handle that via cancellation token or drop guard
+            self.handle.take().unwrap().forget();
             tracing::debug!(
                 "RunningService dropped without explicit close(). \
                  The connection will be closed asynchronously. \
@@ -703,16 +714,11 @@ where
         .instrument(current_span);
 
     let (work, work_handle) = work.remote_handle();
-    // If the handle is dropped, don't stop the work.
-    // We don't want to force the user to keep the `RunningService`
-    // struct alive just to keep the work running (since the work
-    // future will be explicitly managed by the caller)
-    work_handle.forget();
 
     let running_service = RunningService {
         service,
         peer: peer_return,
-        handle: Some(work_handle.boxed()),
+        handle: Some(work_handle),
         cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
     };

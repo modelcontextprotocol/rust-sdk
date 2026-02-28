@@ -77,7 +77,12 @@ chrono = { version = "0.4.38", default-features = false, features = [
 [features]
 default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]
-server = ["transport-async-rw", "dep:schemars", "dep:pastey"]
+server = [
+  "transport-async-rw",
+  "dep:schemars",
+  "dep:pastey",
+  "dep:tokio-stream",
+]
 macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
 
