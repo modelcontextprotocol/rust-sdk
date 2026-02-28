@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-pub use oauth2::TokenResponse;
+use oauth2::TokenResponse;
 use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     EmptyExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
