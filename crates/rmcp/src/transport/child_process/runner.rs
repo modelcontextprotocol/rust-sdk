@@ -87,6 +87,9 @@ pub enum RunnerSpawnError {
     /// The child process instance failed to spawn.
     #[error("Failed to spawn child process: {0}")]
     SpawnError(#[from] std::io::Error),
+    /// The child process instance did not have a PID assigned (this is unexpected for a spawned process).
+    #[error("Child process did not have a PID assigned after spawning")]
+    NoPidAssigned,
     #[error("Other error: {0}")]
     Other(Box<dyn std::error::Error + Send + Sync>),
 }

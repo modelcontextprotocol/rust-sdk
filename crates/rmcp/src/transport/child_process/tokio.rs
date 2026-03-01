@@ -10,6 +10,8 @@ pub struct TokioChildProcessRunner {}
 /// An implementation for the tokio Child Process
 pub struct TokioChildProcess {
     inner: tokio::process::Child,
+    /// The PID at the time of spawning.
+    pid: u32,
 }
 
 impl ChildProcessInstance for TokioChildProcess {
@@ -41,8 +43,7 @@ impl ChildProcessInstance for TokioChildProcess {
     }
 
     fn pid(&self) -> u32 {
-        // TODO: Consider refactor to return Option<u32> to avoid confusion of 0 as a valid PID.
-        self.inner.id().unwrap_or(0)
+        self.pid
     }
 
     fn wait<'s>(
@@ -79,7 +80,79 @@ impl ChildProcessRunner for TokioChildProcessRunner {
             )
             .kill_on_drop(true)
             .spawn()
-            .map(|child| TokioChildProcess { inner: child })
             .map_err(RunnerSpawnError::SpawnError)
+            .and_then(|child| {
+                let pid = child.id().ok_or_else(|| RunnerSpawnError::NoPidAssigned)?;
+                Ok(TokioChildProcess { inner: child, pid })
+            })
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use crate::transport::CommandBuilder;
+    use tokio::process::Command;
+
+    use super::*;
+
+    async fn check_pid(pid: u32) -> std::io::Result<bool> {
+        // This command will output only process numbers on each line.
+        let output = Command::new("ps")
+            .arg("-o")
+            .arg("pid=")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output()
+            .await?;
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        Ok(output_str
+            .lines()
+            .any(|line| line.trim() == pid.to_string()))
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_kill_on_drop() {
+        let child = CommandBuilder::<TokioChildProcessRunner>::new("sleep")
+            .args(["10"])
+            .spawn_raw()
+            .expect("Failed to spawn child process");
+
+        let pid = child.pid();
+
+        // Drop the child process without waiting for it to exit, which should kill it due to `kill_on_drop(true)`.
+        drop(child);
+
+        // Wait a moment to ensure the process has been killed.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        let pid_found = check_pid(pid).await.expect("Failed to check if PID exists");
+
+        assert!(!pid_found, "Child process was not killed on drop");
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown() {
+        let mut child = CommandBuilder::<TokioChildProcessRunner>::new("sleep")
+            .args(["10"])
+            .spawn_raw()
+            .expect("Failed to spawn child process");
+
+        let pid = child.pid();
+
+        // Sleep a moment to ensure the process is running before we attempt to shut it down.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        child
+            .graceful_shutdown()
+            .await
+            .expect("Failed to gracefully shutdown child process");
+
+        // We should not need to wait here since we await the graceful shutdown above.
+        // Graceful shutdown *should* cover waiting for the process to exit.
+        let pid_found = check_pid(pid).await.expect("Failed to check if PID exists");
+        assert!(!pid_found, "Child process was not shutdown");
     }
 }
