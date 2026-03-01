@@ -1,11 +1,12 @@
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::transport::child_process2::runner::{
-    ChildProcessInstance, ChildProcessRunner, RunnerSpawnError, StdioConfig,
+    ChildProcessInstance, ChildProcessRunner, CommandConfig, RunnerSpawnError,
 };
 
 pub struct TokioChildProcessRunner {}
 
+/// An implementation for the tokio Child Process
 pub struct TokioChildProcess {
     inner: tokio::process::Child,
 }
@@ -63,16 +64,17 @@ impl ChildProcessInstance for TokioChildProcess {
 
 impl ChildProcessRunner for TokioChildProcessRunner {
     type Instance = TokioChildProcess;
-    fn spawn(
-        command: &str,
-        args: &[&str],
-        stdio_configuration: StdioConfig,
-    ) -> Result<Self::Instance, RunnerSpawnError> {
-        tokio::process::Command::new(command)
-            .args(args)
-            .stdin(stdio_configuration.stdin)
-            .stdout(stdio_configuration.stdout)
-            .stderr(stdio_configuration.stderr)
+    fn spawn(command_config: CommandConfig) -> Result<Self::Instance, RunnerSpawnError> {
+        tokio::process::Command::new(command_config.command)
+            .args(command_config.args)
+            .stdin(command_config.stdio_config.stdin)
+            .stdout(command_config.stdio_config.stdout)
+            .stderr(command_config.stdio_config.stderr)
+            .current_dir(
+                command_config
+                    .cwd
+                    .unwrap_or_else(|| std::env::current_dir().unwrap()),
+            )
             .kill_on_drop(true)
             .spawn()
             .map(|child| TokioChildProcess { inner: child })

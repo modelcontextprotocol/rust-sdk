@@ -2,7 +2,7 @@ use rmcp::{
     ServiceExt,
     service::QuitReason,
     transport::{
-        ConfigureCommandExt, StreamableHttpClientTransport, StreamableHttpServerConfig,
+        StreamableHttpClientTransport, StreamableHttpServerConfig,
         child_process2::{
             runner::{ChildProcessControl, CommandBuilder},
             tokio::TokioChildProcessRunner,
@@ -44,7 +44,7 @@ async fn test_with_js_stdio_server() -> anyhow::Result<()> {
     tracing::info!("Spawned child process with PID: {}", node_cmd.pid());
 
     let transport = ChildProcessTransport::new(node_cmd)
-        .map_err(|e| anyhow::anyhow!("Failed to spawn child process: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to wrap child process: {e}"))?;
 
     let (client, work) = ().serve(transport).await?;
 

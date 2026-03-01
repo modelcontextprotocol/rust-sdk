@@ -123,10 +123,11 @@ transport-streamable-http-client-reqwest = [
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec", "tokio-util/compat"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
-transport-child-process = [
+transport-child-process = ["transport-async-rw", "tokio/process"]
+transport-child-process-tokio = [
   "transport-async-rw",
   "tokio/process",
-  "dep:process-wrap",
+  "tokio/rt",
 ]
 transport-streamable-http-server = [
   "transport-streamable-http-server-session",
@@ -163,7 +164,13 @@ path = "tests/test_tool_macros.rs"
 
 [[test]]
 name = "test_with_python"
-required-features = ["reqwest", "server", "client", "transport-child-process"]
+required-features = [
+  "reqwest",
+  "server",
+  "client",
+  "transport-child-process",
+  "transport-child-process-tokio",
+]
 path = "tests/test_with_python.rs"
 
 [[test]]
@@ -172,6 +179,7 @@ required-features = [
   "server",
   "client",
   "transport-child-process",
+  "transport-child-process-tokio",
   "transport-streamable-http-server",
   "transport-streamable-http-client",
   "__reqwest",

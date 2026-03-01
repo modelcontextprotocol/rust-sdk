@@ -1,3 +1,5 @@
 pub mod runner;
-pub mod tokio;
 pub mod transport;
+
+#[cfg(feature = "transport-child-process-tokio")]
+pub mod tokio;

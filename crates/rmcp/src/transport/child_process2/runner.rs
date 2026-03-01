@@ -2,7 +2,7 @@ use futures::{
     FutureExt,
     io::{AsyncRead, AsyncWrite},
 };
-use std::process::Stdio;
+use std::{path::PathBuf, process::Stdio};
 
 use crate::util::PinnedFuture;
 
@@ -104,11 +104,7 @@ pub trait ChildProcessRunner {
     /// The implementation of the child process instance that this runner will spawn.
     type Instance: ChildProcessInstance;
 
-    fn spawn(
-        command: &str,
-        args: &[&str],
-        stdio_config: StdioConfig,
-    ) -> Result<Self::Instance, RunnerSpawnError>;
+    fn spawn(command_config: CommandConfig) -> Result<Self::Instance, RunnerSpawnError>;
 }
 
 /// A containing wrapper around a child process instance. This struct erases the type
@@ -222,10 +218,8 @@ impl ChildProcessInstance for ChildProcess {
 }
 
 pub struct CommandBuilder<R> {
-    command: String,
-    args: Vec<String>,
+    config: CommandConfig,
     _marker: std::marker::PhantomData<R>,
-    stderr: Stdio,
 }
 
 pub enum CommandBuilderError {
@@ -249,41 +243,69 @@ impl<R> CommandBuilder<R> {
 
         let args = iter.map(|s| s.into()).collect();
         Ok(Self {
-            command,
-            args,
+            config: CommandConfig {
+                command,
+                args,
+                cwd: None,
+                stdio_config: StdioConfig {
+                    stdin: Stdio::piped(),
+                    stdout: Stdio::piped(),
+                    stderr: Stdio::inherit(),
+                },
+            },
             _marker: std::marker::PhantomData,
-            stderr: Stdio::inherit(),
         })
     }
 
     /// Create a CommandBuilder from a command and an optional list of args.
     pub fn new(command: impl Into<String>) -> Self {
         Self {
-            command: command.into(),
-            args: Vec::new(),
+            config: CommandConfig {
+                command: command.into(),
+                args: Vec::new(),
+                cwd: None,
+                stdio_config: StdioConfig {
+                    stdin: Stdio::piped(),
+                    stdout: Stdio::piped(),
+                    stderr: Stdio::inherit(),
+                },
+            },
             _marker: std::marker::PhantomData,
-            stderr: Stdio::inherit(),
         }
     }
 
     /// Add a single argument to the command.
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.args.push(arg.into());
+        self.config.args.push(arg.into());
         self
     }
 
     /// Add multiple arguments to the command.
     pub fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.args.extend(args.into_iter().map(|arg| arg.into()));
+        self.config
+            .args
+            .extend(args.into_iter().map(|arg| arg.into()));
         self
     }
 
     /// Sets what happens to stderr for the command.
     /// By default if not set, stderr is inherited from the parent process.
     pub fn stderr(mut self, _stdio: Stdio) -> Self {
-        self.stderr = _stdio;
+        self.config.stdio_config.stderr = _stdio;
         self
     }
+
+    pub fn current_dir(mut self, cwd: impl Into<PathBuf>) -> Self {
+        self.config.cwd = Some(cwd.into());
+        self
+    }
+}
+
+pub struct CommandConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+    pub stdio_config: StdioConfig,
 }
 
 impl<R> CommandBuilder<R>
@@ -292,18 +314,7 @@ where
 {
     /// Spawn the command into its typed child process instance type.
     pub fn spawn_raw(self) -> Result<R::Instance, RunnerSpawnError> {
-        // We should always pipe stdin and stdout.
-        let stdio_config = StdioConfig {
-            stdin: Stdio::piped(),
-            stdout: Stdio::piped(),
-            stderr: self.stderr,
-        };
-
-        R::spawn(
-            &self.command,
-            &self.args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-            stdio_config,
-        )
+        R::spawn(self.config)
     }
 
     /// Spawn a child process struct that erases the specific child process instance type, and only exposes the control methods.
