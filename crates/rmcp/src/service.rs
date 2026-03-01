@@ -598,7 +598,6 @@ impl RunningServiceCancellationToken {
 pub enum QuitReason {
     Cancelled,
     Closed,
-    JoinError(tokio::task::JoinError),
 }
 
 /// Request execution context

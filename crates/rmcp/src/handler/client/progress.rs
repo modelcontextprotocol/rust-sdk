@@ -1,7 +1,5 @@
-use std::{collections::HashMap, sync::Arc};
-
 use futures::{Stream, StreamExt};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{

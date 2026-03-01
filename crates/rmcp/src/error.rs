@@ -30,8 +30,6 @@ pub enum RmcpError {
     #[cfg(feature = "server")]
     #[error("Server initialization error: {0}")]
     ServerInitialize(#[from] crate::service::ServerInitializeError),
-    #[error("Runtime error: {0}")]
-    Runtime(#[from] tokio::task::JoinError),
     #[error("Transport creation error: {error}")]
     // TODO: Maybe we can introduce something like `TryIntoTransport` to auto wrap transport type,
     // but it could be an breaking change, so we could do it in the future.

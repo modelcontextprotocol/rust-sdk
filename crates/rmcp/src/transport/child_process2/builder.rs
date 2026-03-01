@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, path::PathBuf, process::Stdio};
+use std::{collections::HashMap, path::PathBuf, process::Stdio};
 
 use crate::transport::{
     ChildProcess, ChildProcessRunner, child_process2::runner::RunnerSpawnError,

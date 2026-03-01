@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub struct ChildProcessTransport<R: ServiceRole> {
-    child: Box<dyn ChildProcessControl + Send>,
+    _child: Box<dyn ChildProcessControl + Send>,
     framed_transport: AsyncRwTransport<
         R,
         Box<dyn TokioAsyncRead + Unpin + Send>,
@@ -40,7 +40,7 @@ where
         );
 
         Ok(Self {
-            child: control,
+            _child: control,
             framed_transport,
         })
     }
