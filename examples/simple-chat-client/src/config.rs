@@ -6,7 +6,7 @@ use rmcp::{
     service::RunningService,
     transport::{
         CommandBuilder,
-        child_process2::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
     },
 };
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,6 @@
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::transport::child_process2::{
+use crate::transport::child_process::{
     builder::CommandConfig,
     runner::{ChildProcessInstance, ChildProcessRunner, RunnerSpawnError},
 };

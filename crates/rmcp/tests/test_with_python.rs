@@ -5,7 +5,7 @@ use rmcp::{
     ServiceExt,
     transport::{
         ChildProcess, ChildProcessInstance,
-        child_process2::{
+        child_process::{
             builder::CommandBuilder, tokio::TokioChildProcessRunner,
             transport::ChildProcessTransport,
         },

@@ -6,7 +6,7 @@ use crate::{
     transport::{
         Transport,
         async_rw::AsyncRwTransport,
-        child_process2::runner::{ChildProcess, ChildProcessControl},
+        child_process::runner::{ChildProcess, ChildProcessControl},
     },
 };
 

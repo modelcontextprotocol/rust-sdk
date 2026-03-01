@@ -3,7 +3,7 @@ use futures::{
     io::{AsyncRead, AsyncWrite},
 };
 
-use crate::{transport::child_process2::builder::CommandConfig, util::PinnedFuture};
+use crate::{transport::child_process::builder::CommandConfig, util::PinnedFuture};
 
 /// A simple enum for describing if a stream is available, unused, or already taken.
 #[derive(Debug)]

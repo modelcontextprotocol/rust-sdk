@@ -1,8 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, process::Stdio};
 
-use crate::transport::{
-    ChildProcess, ChildProcessRunner, child_process2::runner::RunnerSpawnError,
-};
+use crate::transport::{ChildProcess, ChildProcessRunner, child_process::runner::RunnerSpawnError};
 
 /// A builder for constructing a command to spawn a child process, with typical command
 /// configuration options like `args` and `current_dir`.

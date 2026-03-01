@@ -3,7 +3,7 @@ use rmcp::{
     service::QuitReason,
     transport::{
         StreamableHttpClientTransport, StreamableHttpServerConfig,
-        child_process2::{
+        child_process::{
             runner::{ChildProcessControl, CommandBuilder},
             tokio::TokioChildProcessRunner,
             transport::ChildProcessTransport,
