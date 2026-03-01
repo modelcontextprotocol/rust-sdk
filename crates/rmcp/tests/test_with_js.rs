@@ -2,10 +2,9 @@ use rmcp::{
     ServiceExt,
     service::QuitReason,
     transport::{
-        StreamableHttpClientTransport, StreamableHttpServerConfig,
+        CommandBuilder, StreamableHttpClientTransport, StreamableHttpServerConfig,
         child_process::{
-            runner::{ChildProcessControl, CommandBuilder},
-            tokio::TokioChildProcessRunner,
+            runner::ChildProcessControl, tokio::TokioChildProcessRunner,
             transport::ChildProcessTransport,
         },
         streamable_http_server::{

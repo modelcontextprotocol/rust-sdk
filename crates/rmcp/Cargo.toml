@@ -180,6 +180,7 @@ required-features = [
   "transport-child-process-tokio",
   "transport-streamable-http-server",
   "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
   "__reqwest",
 ]
 path = "tests/test_with_js.rs"
