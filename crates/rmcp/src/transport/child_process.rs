@@ -23,7 +23,7 @@ type ChildProcessParts = (
 /// Returns `(child, stdout, stdin, stderr)` where `stderr` is `Some` only
 /// if the process was spawned with `Stdio::piped()`.
 #[inline]
-fn child_process(mut child: Box<dyn ChildWrapper>) -> std::io::Result<ChildProcessParts> {
+fn split_child_process(mut child: Box<dyn ChildWrapper>) -> std::io::Result<ChildProcessParts> {
     let child_stdin = match child.inner_mut().stdin().take() {
         Some(stdin) => stdin,
         None => return Err(std::io::Error::other("stdin was already taken")),
@@ -192,7 +192,7 @@ impl TokioChildProcessBuilder {
             .stdout(self.stdout)
             .stderr(self.stderr);
 
-        let (child, stdout, stdin, stderr_opt) = child_process(self.cmd.spawn()?)?;
+        let (child, stdout, stdin, stderr_opt) = split_child_process(self.cmd.spawn()?)?;
 
         let transport = AsyncRwTransport::new(stdout, stdin);
         let proc = TokioChildProcess {

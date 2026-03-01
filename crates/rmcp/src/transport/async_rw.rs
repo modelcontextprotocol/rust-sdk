@@ -43,9 +43,13 @@ where
 }
 
 pub type TransportWriter<Role, W> = FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<Role>>>;
+pub type TransportReader<Role, R> = FramedRead<R, JsonRpcMessageCodec<RxJsonRpcMessage<Role>>>;
 
 pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
-    read: FramedRead<R, JsonRpcMessageCodec<RxJsonRpcMessage<Role>>>,
+    read: TransportReader<Role, R>,
+    /// This is behind a mutex so that concurrent writes can happen.
+    /// Naturally, the mutex will block parallel writes, but allow
+    /// multiple futures to be executed at once, even if some are waiting.
     write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
 }
 

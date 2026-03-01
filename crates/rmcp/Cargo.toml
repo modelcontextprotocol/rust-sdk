@@ -119,7 +119,7 @@ transport-streamable-http-client-reqwest = [
   "__reqwest",
 ]
 
-transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
+transport-async-rw = ["tokio/io-util", "tokio-util/codec", "tokio-util/compat"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
 transport-child-process = [
   "transport-async-rw",
