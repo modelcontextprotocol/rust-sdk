@@ -24,7 +24,7 @@ where
     R: ServiceRole,
 {
     pub fn new(child: ChildProcess) -> Result<Self, Box<dyn std::error::Error>> {
-        let (stdout, stdin, stderr, control) = child.split();
+        let (stdout, stdin, _stderr, control) = child.split();
 
         let framed_transport: AsyncRwTransport<R, _, _> = AsyncRwTransport::new(
             Box::new(

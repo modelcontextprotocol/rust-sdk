@@ -3,7 +3,11 @@ use rmcp::{
     service::QuitReason,
     transport::{
         ConfigureCommandExt, StreamableHttpClientTransport, StreamableHttpServerConfig,
-        TokioChildProcess,
+        child_process2::{
+            runner::{ChildProcessControl, CommandBuilder},
+            tokio::TokioChildProcessRunner,
+            transport::ChildProcessTransport,
+        },
         streamable_http_server::{
             session::local::LocalSessionManager, tower::StreamableHttpService,
         },
@@ -32,18 +36,26 @@ async fn test_with_js_stdio_server() -> anyhow::Result<()> {
         .spawn()?
         .wait()
         .await?;
-    let transport =
-        TokioChildProcess::new(tokio::process::Command::new("node").configure(|cmd| {
-            cmd.arg("tests/test_with_js/server.js");
-        }))?;
 
-    let client = ().serve(transport).await?;
+    let node_cmd = CommandBuilder::<TokioChildProcessRunner>::new("node")
+        .args(["tests/test_with_js/server.js"])
+        .spawn_dyn()?;
+
+    tracing::info!("Spawned child process with PID: {}", node_cmd.pid());
+
+    let transport = ChildProcessTransport::new(node_cmd)
+        .map_err(|e| anyhow::anyhow!("Failed to spawn child process: {e}"))?;
+
+    let (client, work) = ().serve(transport).await?;
+
+    tokio::spawn(work);
+
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -124,12 +136,13 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
     // waiting for server up
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-    let client = ().serve(transport).await?;
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
-    let quit_reason = client.cancel().await?;
+    let quit_reason = client.cancel().await;
     server.kill().await?;
     assert!(matches!(quit_reason, QuitReason::Cancelled));
     Ok(())

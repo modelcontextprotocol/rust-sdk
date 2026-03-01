@@ -515,13 +515,15 @@ where
                     let session_manager = self.session_manager.clone();
                     let session_id = session_id.clone();
                     async move {
-                        let service = serve_server::<S, M::Transport, _, TransportAdapterIdentity>(
-                            service, transport,
-                        )
-                        .await;
-                        match service {
-                            Ok(service) => {
+                        let serve_result =
+                            serve_server::<S, M::Transport, _, TransportAdapterIdentity>(
+                                service, transport,
+                            )
+                            .await;
+                        match serve_result {
+                            Ok((service, work)) => {
                                 // on service created
+                                tokio::spawn(work);
                                 let _ = service.waiting().await;
                             }
                             Err(e) => {

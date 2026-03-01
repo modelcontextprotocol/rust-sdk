@@ -52,20 +52,21 @@ pub trait ChildProcessInstance {
     fn take_stderr(&mut self) -> StreamSlot<Self::Stderr>;
 
     fn pid(&self) -> u32;
-    fn wait(
-        &mut self,
-    ) -> impl Future<Output = std::io::Result<std::process::ExitStatus>> + Send + 'static;
-    fn graceful_shutdown(&mut self) -> impl Future<Output = std::io::Result<()>> + Send + 'static;
-    fn kill(&mut self) -> impl Future<Output = std::io::Result<()>> + Send + 'static;
+    fn wait<'s>(
+        &'s mut self,
+    ) -> impl Future<Output = std::io::Result<std::process::ExitStatus>> + Send + 's;
+    fn graceful_shutdown<'s>(&'s mut self)
+    -> impl Future<Output = std::io::Result<()>> + Send + 's;
+    fn kill<'s>(&'s mut self) -> impl Future<Output = std::io::Result<()>> + Send + 's;
 }
 
 /// A subset of functionality of [ChildProcessInstance] that only includes the
 /// functions used to control or wait for the process.
 pub trait ChildProcessControl {
     fn pid(&self) -> u32;
-    fn wait(&mut self) -> PinnedFuture<'static, std::io::Result<std::process::ExitStatus>>;
-    fn graceful_shutdown(&mut self) -> PinnedFuture<'static, std::io::Result<()>>;
-    fn kill(&mut self) -> PinnedFuture<'static, std::io::Result<()>>;
+    fn wait<'s>(&'s mut self) -> PinnedFuture<'s, std::io::Result<std::process::ExitStatus>>;
+    fn graceful_shutdown<'s>(&'s mut self) -> PinnedFuture<'s, std::io::Result<()>>;
+    fn kill<'s>(&'s mut self) -> PinnedFuture<'s, std::io::Result<()>>;
 }
 
 /// Auto-implement ChildProcessControl for any ChildProcessInstance, since it has all the required methods.
@@ -77,23 +78,25 @@ where
         ChildProcessInstance::pid(self)
     }
 
-    fn wait(&mut self) -> PinnedFuture<'static, std::io::Result<std::process::ExitStatus>> {
+    fn wait<'s>(&'s mut self) -> PinnedFuture<'s, std::io::Result<std::process::ExitStatus>> {
         ChildProcessInstance::wait(self).boxed()
     }
 
-    fn graceful_shutdown(&mut self) -> PinnedFuture<'static, std::io::Result<()>> {
+    fn graceful_shutdown<'s>(&'s mut self) -> PinnedFuture<'s, std::io::Result<()>> {
         ChildProcessInstance::graceful_shutdown(self).boxed()
     }
 
-    fn kill(&mut self) -> PinnedFuture<'static, std::io::Result<()>> {
+    fn kill<'s>(&'s mut self) -> PinnedFuture<'s, std::io::Result<()>> {
         ChildProcessInstance::kill(self).boxed()
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RunnerSpawnError {
     /// The child process instance failed to spawn.
-    SpawnError(std::io::Error),
+    #[error("Failed to spawn child process: {0}")]
+    SpawnError(#[from] std::io::Error),
+    #[error("Other error: {0}")]
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -201,17 +204,19 @@ impl ChildProcessInstance for ChildProcess {
         self.inner.pid()
     }
 
-    fn wait(
-        &mut self,
-    ) -> impl Future<Output = std::io::Result<std::process::ExitStatus>> + Send + 'static {
+    fn wait<'s>(
+        &'s mut self,
+    ) -> impl Future<Output = std::io::Result<std::process::ExitStatus>> + Send + 's {
         self.inner.wait()
     }
 
-    fn graceful_shutdown(&mut self) -> impl Future<Output = std::io::Result<()>> + Send + 'static {
+    fn graceful_shutdown<'s>(
+        &'s mut self,
+    ) -> impl Future<Output = std::io::Result<()>> + Send + 's {
         self.inner.graceful_shutdown()
     }
 
-    fn kill(&mut self) -> impl Future<Output = std::io::Result<()>> + Send + 'static {
+    fn kill<'s>(&'s mut self) -> impl Future<Output = std::io::Result<()>> + Send + 's {
         self.inner.kill()
     }
 }

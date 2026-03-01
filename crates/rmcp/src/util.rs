@@ -31,7 +31,7 @@ impl<T> Sink<T> for UnboundedSenderSink<T> {
 
     fn poll_ready(
         self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
         if this.sender.is_closed() {
@@ -51,7 +51,7 @@ impl<T> Sink<T> for UnboundedSenderSink<T> {
 
     fn poll_flush(
         self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         // tokio's unbounded mpsc senders have no flushing required, since the
         // receiver is unbounded and will get all messages we send (unless we run
@@ -61,7 +61,7 @@ impl<T> Sink<T> for UnboundedSenderSink<T> {
 
     fn poll_close(
         self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         // Like `poll_flush`, there is nothing to wait on here. A single
         // call to `mpsc_sender.send(...)` is immediate from the perspective

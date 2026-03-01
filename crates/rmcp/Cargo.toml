@@ -74,6 +74,8 @@ chrono = { version = "0.4.38", default-features = false, features = [
   "oldtime",
 ] }
 
+[target.'cfg(test)']
+
 [features]
 default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]

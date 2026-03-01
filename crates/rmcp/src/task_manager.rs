@@ -173,7 +173,7 @@ impl OperationProcessor {
                         if let Some((descriptor, result)) = operation_result {
                             match task_result_sender.send(TaskResult { descriptor, result }) {
                                 Err(e) => {
-                                    // TODO: Produce an error message here!
+                                    tracing::error!("Failed to send completed task result: {e}");
                                 }
                                 _ => {}
                             }
@@ -251,7 +251,7 @@ impl OperationProcessor {
         match self.spawn_tx.send((descriptor.clone(), work.boxed())) {
             Ok(_) => {}
             Err(e) => {
-                // TODO: Produce an error message!
+                tracing::error!("Failed to spawn task on worker: {e}");
             }
         }
 

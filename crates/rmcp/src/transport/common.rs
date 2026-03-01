@@ -4,7 +4,7 @@ pub mod server_side_http;
 pub mod http_header;
 
 #[cfg(feature = "__reqwest")]
-mod reqwest;
+pub mod reqwest;
 
 // Note: This module provides SSE stream parsing and auto-reconnect utilities.
 // It's used by the streamable HTTP client (which receives SSE-formatted responses),
