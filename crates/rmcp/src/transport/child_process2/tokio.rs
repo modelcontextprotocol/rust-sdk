@@ -1,7 +1,8 @@
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::transport::child_process2::runner::{
-    ChildProcessInstance, ChildProcessRunner, CommandConfig, RunnerSpawnError,
+use crate::transport::child_process2::{
+    builder::CommandConfig,
+    runner::{ChildProcessInstance, ChildProcessRunner, RunnerSpawnError},
 };
 
 pub struct TokioChildProcessRunner {}
@@ -67,6 +68,7 @@ impl ChildProcessRunner for TokioChildProcessRunner {
     fn spawn(command_config: CommandConfig) -> Result<Self::Instance, RunnerSpawnError> {
         tokio::process::Command::new(command_config.command)
             .args(command_config.args)
+            .envs(command_config.env)
             .stdin(command_config.stdio_config.stdin)
             .stdout(command_config.stdio_config.stdout)
             .stderr(command_config.stdio_config.stderr)

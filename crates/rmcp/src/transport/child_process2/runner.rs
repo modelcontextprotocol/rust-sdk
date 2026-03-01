@@ -2,9 +2,8 @@ use futures::{
     FutureExt,
     io::{AsyncRead, AsyncWrite},
 };
-use std::{path::PathBuf, process::Stdio};
 
-use crate::util::PinnedFuture;
+use crate::{transport::child_process2::builder::CommandConfig, util::PinnedFuture};
 
 /// A simple enum for describing if a stream is available, unused, or already taken.
 #[derive(Debug)]
@@ -25,14 +24,6 @@ impl<S> From<StreamSlot<S>> for Option<S> {
             StreamSlot::Taken => None,
         }
     }
-}
-
-/// A structure that requests how the child process streams should
-/// be configured when spawning.
-pub struct StdioConfig {
-    pub stdin: Stdio,
-    pub stdout: Stdio,
-    pub stderr: Stdio,
 }
 
 /// The contract for what an instance of a child process
@@ -214,117 +205,5 @@ impl ChildProcessInstance for ChildProcess {
 
     fn kill<'s>(&'s mut self) -> impl Future<Output = std::io::Result<()>> + Send + 's {
         self.inner.kill()
-    }
-}
-
-pub struct CommandBuilder<R> {
-    config: CommandConfig,
-    _marker: std::marker::PhantomData<R>,
-}
-
-pub enum CommandBuilderError {
-    EmptyCommand,
-}
-
-impl<R> CommandBuilder<R> {
-    /// Create a CommandBuilder from an argv-style list of strings, where the first element is the command, and the rest are the args.
-    pub fn from_argv<I, S>(argv: I) -> Result<Self, CommandBuilderError>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let mut iter = argv.into_iter();
-
-        // Pop the first element as the command, and use the rest as args
-        let command = match iter.next() {
-            Some(cmd) => cmd.into(),
-            None => return Err(CommandBuilderError::EmptyCommand),
-        };
-
-        let args = iter.map(|s| s.into()).collect();
-        Ok(Self {
-            config: CommandConfig {
-                command,
-                args,
-                cwd: None,
-                stdio_config: StdioConfig {
-                    stdin: Stdio::piped(),
-                    stdout: Stdio::piped(),
-                    stderr: Stdio::inherit(),
-                },
-            },
-            _marker: std::marker::PhantomData,
-        })
-    }
-
-    /// Create a CommandBuilder from a command and an optional list of args.
-    pub fn new(command: impl Into<String>) -> Self {
-        Self {
-            config: CommandConfig {
-                command: command.into(),
-                args: Vec::new(),
-                cwd: None,
-                stdio_config: StdioConfig {
-                    stdin: Stdio::piped(),
-                    stdout: Stdio::piped(),
-                    stderr: Stdio::inherit(),
-                },
-            },
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    /// Add a single argument to the command.
-    pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.config.args.push(arg.into());
-        self
-    }
-
-    /// Add multiple arguments to the command.
-    pub fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.config
-            .args
-            .extend(args.into_iter().map(|arg| arg.into()));
-        self
-    }
-
-    /// Sets what happens to stderr for the command.
-    /// By default if not set, stderr is inherited from the parent process.
-    pub fn stderr(mut self, _stdio: Stdio) -> Self {
-        self.config.stdio_config.stderr = _stdio;
-        self
-    }
-
-    pub fn current_dir(mut self, cwd: impl Into<PathBuf>) -> Self {
-        self.config.cwd = Some(cwd.into());
-        self
-    }
-}
-
-pub struct CommandConfig {
-    pub command: String,
-    pub args: Vec<String>,
-    pub cwd: Option<PathBuf>,
-    pub stdio_config: StdioConfig,
-}
-
-impl<R> CommandBuilder<R>
-where
-    R: ChildProcessRunner,
-{
-    /// Spawn the command into its typed child process instance type.
-    pub fn spawn_raw(self) -> Result<R::Instance, RunnerSpawnError> {
-        R::spawn(self.config)
-    }
-
-    /// Spawn a child process struct that erases the specific child process instance type, and only exposes the control methods.
-    ///
-    /// Requires `R::Instance` to be [Send] and `'static`.
-    pub fn spawn_dyn(self) -> Result<ChildProcess, RunnerSpawnError>
-    where
-        R::Instance: Send + 'static,
-    {
-        let instance = self.spawn_raw()?;
-        Ok(ChildProcess::new(instance))
     }
 }

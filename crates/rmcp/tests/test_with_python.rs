@@ -6,7 +6,7 @@ use rmcp::{
     transport::{
         ChildProcess, ChildProcessInstance,
         child_process2::{
-            runner::CommandBuilder, tokio::TokioChildProcessRunner,
+            builder::CommandBuilder, tokio::TokioChildProcessRunner,
             transport::ChildProcessTransport,
         },
     },

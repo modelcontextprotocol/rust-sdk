@@ -84,9 +84,9 @@ pub use worker::WorkerTransport;
 #[cfg(feature = "transport-child-process")]
 pub mod child_process2;
 #[cfg(feature = "transport-child-process")]
-pub use child_process2::runner::{
-    ChildProcess, ChildProcessInstance, ChildProcessRunner, CommandBuilder,
-};
+pub use child_process2::builder::CommandBuilder;
+#[cfg(feature = "transport-child-process")]
+pub use child_process2::runner::{ChildProcess, ChildProcessInstance, ChildProcessRunner};
 
 #[cfg(feature = "transport-io")]
 pub mod io;
