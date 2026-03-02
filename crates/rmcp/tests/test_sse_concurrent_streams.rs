@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use rmcp::{
     RoleServer, ServerHandler,
-    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo, ToolsCapability},
+    model::{Implementation, ServerCapabilities, ServerInfo, ToolsCapability},
     service::NotificationContext,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
