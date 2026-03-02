@@ -28,7 +28,8 @@ permissions:
 jobs:
   triage:
     name: Triage Issues
-    if: ${{ secrets.OPENAI_API_KEY != '' }}
+    # TODO: Re-enable once OPENAI_API_KEY secret is available
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
