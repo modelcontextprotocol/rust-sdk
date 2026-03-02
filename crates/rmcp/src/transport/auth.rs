@@ -5,12 +5,11 @@ use std::{
 };
 
 use async_trait::async_trait;
-use oauth2::TokenResponse;
 use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     EmptyExtraTokenFields, HttpClientError, HttpRequest, HttpResponse, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, StandardTokenResponse,
-    TokenUrl,
+    TokenResponse, TokenUrl,
     basic::{BasicClient, BasicTokenType},
 };
 use reqwest::{
