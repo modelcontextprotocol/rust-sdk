@@ -28,6 +28,7 @@ permissions:
 jobs:
   triage:
     name: Triage Issues
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
