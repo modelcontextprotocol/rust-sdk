@@ -74,12 +74,12 @@ async fn test_stale_session_id_returns_status_aware_error() -> anyhow::Result<()
         .send()
         .await?;
 
-    assert_eq!(raw_response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(raw_response.status(), reqwest::StatusCode::NOT_FOUND);
     match result {
         Err(StreamableHttpError::UnexpectedServerResponse(message)) => {
             let message = message.to_string();
             assert!(
-                message.contains("401"),
+                message.contains("404"),
                 "error should include HTTP status code, got: {message}"
             );
             assert!(
