@@ -197,8 +197,18 @@ impl StreamableHttpClient for reqwest::Client {
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-                let message: ServerJsonRpcMessage = response.json().await?;
-                Ok(StreamableHttpPostResponse::Json(message, session_id))
+                // Try to parse as a valid JSON-RPC message. If the body is
+                // malformed (e.g. a 200 response to a notification that lacks
+                // an `id` field), treat it as accepted rather than failing.
+                match response.json::<ServerJsonRpcMessage>().await {
+                    Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
+                        );
+                        Ok(StreamableHttpPostResponse::Accepted)
+                    }
+                }
             }
             _ => {
                 // unexpected content type

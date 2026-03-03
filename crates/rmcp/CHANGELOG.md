@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.16.0...rmcp-v0.17.0) - 2026-02-27
+
+### Added
+
+- *(streamable-http)* add json_response option for stateless server mode ([#683](https://github.com/modelcontextprotocol/rust-sdk/pull/683))
+- mcp sdk conformance ([#687](https://github.com/modelcontextprotocol/rust-sdk/pull/687))
+- add default value support to string, number, and integer schemas ([#686](https://github.com/modelcontextprotocol/rust-sdk/pull/686))
+- add trait-based tool declaration ([#677](https://github.com/modelcontextprotocol/rust-sdk/pull/677))
+- send and validate MCP-Protocol-Version header ([#675](https://github.com/modelcontextprotocol/rust-sdk/pull/675))
+
+### Fixed
+
+- improve error logging and remove token secret from logs ([#685](https://github.com/modelcontextprotocol/rust-sdk/pull/685))
+- refresh token expiry ([#680](https://github.com/modelcontextprotocol/rust-sdk/pull/680))
+- gate optional dependencies behind feature flags ([#672](https://github.com/modelcontextprotocol/rust-sdk/pull/672))
+- allow empty content in CallToolResult ([#681](https://github.com/modelcontextprotocol/rust-sdk/pull/681))
+- *(schema)* remove AddNullable from draft2020_12 settings ([#664](https://github.com/modelcontextprotocol/rust-sdk/pull/664))
+
+### Other
+
+- add prose documentation for core features to meet conformance ([#702](https://github.com/modelcontextprotocol/rust-sdk/pull/702))
+- Fix/sse channel replacement conflict ([#682](https://github.com/modelcontextprotocol/rust-sdk/pull/682))
+- document session management for streamable HTTP transport ([#674](https://github.com/modelcontextprotocol/rust-sdk/pull/674))
+
 ## [0.16.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.15.0...rmcp-v0.16.0) - 2026-02-17
 
 ### Added
