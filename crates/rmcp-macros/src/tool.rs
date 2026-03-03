@@ -134,42 +134,37 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
-        let output_schema = if let Some(output_schema) = output_schema {
-            quote! { Some(#output_schema) }
-        } else {
-            quote! { None }
-        };
-        let title = if let Some(title) = title {
-            quote! { Some(#title.into()) }
-        } else {
-            quote! { None }
-        };
-        let icons = if let Some(icons) = icons {
-            quote! { Some(#icons) }
-        } else {
-            quote! { None }
-        };
-        let meta = if let Some(meta) = meta {
-            quote! { Some(#meta) }
-        } else {
-            quote! { None }
-        };
+        let title_call = title
+            .map(|t| quote! { .with_title(#t) })
+            .unwrap_or_default();
+        let output_schema_call = output_schema
+            .map(|s| quote! { .with_raw_output_schema(#s) })
+            .unwrap_or_default();
+        let icons_call = icons
+            .map(|i| quote! { .with_icons(#i) })
+            .unwrap_or_default();
+        let meta_call = meta.map(|m| quote! { .with_meta(#m) }).unwrap_or_default();
         let doc_comment = format!("Generated tool metadata function for {name}");
         let doc_attr: syn::Attribute = parse_quote!(#[doc = #doc_comment]);
         let tokens = quote! {
             #doc_attr
             pub fn #fn_ident() -> rmcp::model::Tool {
-                rmcp::model::Tool::new_with_raw(
+                let mut __tool = rmcp::model::Tool::new_with_raw(
                     #name,
                     #description,
                     #input_schema,
                 )
-                .with_title(#title)
-                .with_raw_output_schema(#output_schema)
-                .with_annotations(#annotations)
-                .with_execution(#execution)
-                .with_icons(#icons)
-                .with_meta(#meta)
+                #title_call
+                #output_schema_call
+                #icons_call
+                #meta_call;
+                if let Some(__annotations) = #annotations {
+                    __tool = __tool.with_annotations(__annotations);
+                }
+                if let Some(__execution) = #execution {
+                    __tool = __tool.with_execution(__execution);
+                }
+                __tool
             }
         };
         syn::parse2::<ImplItemFn>(tokens)
