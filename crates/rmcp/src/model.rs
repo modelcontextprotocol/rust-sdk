@@ -1455,13 +1455,10 @@ impl LoggingMessageNotificationParam {
         }
     }
 
-    /// Create with a logger name.
-    pub fn with_logger(level: LoggingLevel, logger: impl Into<String>, data: Value) -> Self {
-        Self {
-            level,
-            logger: Some(logger.into()),
-            data,
-        }
+    /// Set the logger name.
+    pub fn with_logger(mut self, logger: impl Into<String>) -> Self {
+        self.logger = Some(logger.into());
+        self
     }
 }
 
@@ -2605,12 +2602,10 @@ impl CreateElicitationResult {
         }
     }
 
-    /// Create with content.
-    pub fn with_content(action: ElicitationAction, content: Value) -> Self {
-        Self {
-            action,
-            content: Some(content),
-        }
+    /// Set the content on this result.
+    pub fn with_content(mut self, content: Value) -> Self {
+        self.content = Some(content);
+        self
     }
 }
 
@@ -2822,8 +2817,8 @@ impl CallToolRequestParams {
     }
 
     /// Sets the task metadata for this tool call.
-    pub fn with_task(mut self, task: Option<JsonObject>) -> Self {
-        self.task = task;
+    pub fn with_task(mut self, task: JsonObject) -> Self {
+        self.task = Some(task);
         self
     }
 }
@@ -2889,8 +2884,8 @@ impl CreateMessageResult {
     pub const STOP_REASON_TOOL_USE: &str = "toolUse";
 
     /// Set the stop reason.
-    pub fn with_stop_reason(mut self, stop_reason: Option<String>) -> Self {
-        self.stop_reason = stop_reason;
+    pub fn with_stop_reason(mut self, stop_reason: impl Into<String>) -> Self {
+        self.stop_reason = Some(stop_reason.into());
         self
     }
 
