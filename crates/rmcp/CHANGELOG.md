@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.0.0-alpha...rmcp-v1.0.0-alpha.1) - 2026-03-03
+
+### Fixed
+
+- *(auth)* pass WWW-Authenticate scopes to DCR registration request ([#705](https://github.com/modelcontextprotocol/rust-sdk/pull/705))
+- api ergonomics follow-up ([#720](https://github.com/modelcontextprotocol/rust-sdk/pull/720))
+- *(streamable-http)* map stale session 401 to status-aware error ([#709](https://github.com/modelcontextprotocol/rust-sdk/pull/709))
+
 ## [1.0.0-alpha](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.17.0...rmcp-v1.0.0-alpha) - 2026-03-03
 
 ### Added
