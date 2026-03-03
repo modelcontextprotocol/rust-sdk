@@ -3,7 +3,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
 
-use crate::common::{extract_doc_line, none_expr};
+use crate::common::extract_doc_line;
 
 /// Check if a type is Json<T> and extract the inner type T
 fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
@@ -110,8 +110,8 @@ pub struct ResolvedToolAttribute {
     pub description: Option<Expr>,
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
-    pub annotations: Expr,
-    pub execution: Expr,
+    pub annotations: Option<Expr>,
+    pub execution: Option<Expr>,
     pub icons: Option<Expr>,
     pub meta: Option<Expr>,
 }
@@ -134,26 +134,22 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
-        let output_schema = if let Some(output_schema) = output_schema {
-            quote! { Some(#output_schema) }
-        } else {
-            quote! { None }
-        };
-        let title = if let Some(title) = title {
-            quote! { Some(#title.into()) }
-        } else {
-            quote! { None }
-        };
-        let icons = if let Some(icons) = icons {
-            quote! { Some(#icons) }
-        } else {
-            quote! { None }
-        };
-        let meta = if let Some(meta) = meta {
-            quote! { Some(#meta) }
-        } else {
-            quote! { None }
-        };
+        let title_call = title
+            .map(|t| quote! { .with_title(#t) })
+            .unwrap_or_default();
+        let output_schema_call = output_schema
+            .map(|s| quote! { .with_raw_output_schema(#s) })
+            .unwrap_or_default();
+        let annotations_call = annotations
+            .map(|a| quote! { .with_annotations(#a) })
+            .unwrap_or_default();
+        let execution_call = execution
+            .map(|e| quote! { .with_execution(#e) })
+            .unwrap_or_default();
+        let icons_call = icons
+            .map(|i| quote! { .with_icons(#i) })
+            .unwrap_or_default();
+        let meta_call = meta.map(|m| quote! { .with_meta(#m) }).unwrap_or_default();
         let doc_comment = format!("Generated tool metadata function for {name}");
         let doc_attr: syn::Attribute = parse_quote!(#[doc = #doc_comment]);
         let tokens = quote! {
@@ -164,12 +160,12 @@ impl ResolvedToolAttribute {
                     #description,
                     #input_schema,
                 )
-                .with_title(#title)
-                .with_raw_output_schema(#output_schema)
-                .with_annotations(#annotations)
-                .with_execution(#execution)
-                .with_icons(#icons)
-                .with_meta(#meta)
+                #title_call
+                #output_schema_call
+                #annotations_call
+                #execution_call
+                #icons_call
+                #meta_call
             }
         };
         syn::parse2::<ImplItemFn>(tokens)
@@ -260,17 +256,17 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         let idempotent_hint = wrap_option(idempotent_hint);
         let open_world_hint = wrap_option(open_world_hint);
         let token_stream = quote! {
-            Some(rmcp::model::ToolAnnotations::from_raw(
+            rmcp::model::ToolAnnotations::from_raw(
                 #title,
                 #read_only_hint,
                 #destructive_hint,
                 #idempotent_hint,
                 #open_world_hint,
-            ))
+            )
         };
-        syn::parse2::<Expr>(token_stream)?
+        Some(syn::parse2::<Expr>(token_stream)?)
     } else {
-        none_expr()?
+        None
     };
     let execution_expr = if let Some(execution) = attribute.execution {
         let ToolExecutionAttribute { task_support } = execution;
@@ -296,13 +292,13 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         };
 
         let token_stream = quote! {
-            Some(rmcp::model::ToolExecution::from_raw(
+            rmcp::model::ToolExecution::from_raw(
                 #task_support_expr,
-            ))
+            )
         };
-        syn::parse2::<Expr>(token_stream)?
+        Some(syn::parse2::<Expr>(token_stream)?)
     } else {
-        none_expr()?
+        None
     };
     // Handle output_schema - either explicit or generated from return type
     let output_schema_expr = attribute.output_schema.or_else(|| {

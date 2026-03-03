@@ -68,20 +68,20 @@ impl Prompt {
     }
 
     /// Set the human-readable title
-    pub fn with_title(mut self, title: Option<String>) -> Self {
-        self.title = title;
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
         self
     }
 
     /// Set the icons
-    pub fn with_icons(mut self, icons: Option<Vec<Icon>>) -> Self {
-        self.icons = icons;
+    pub fn with_icons(mut self, icons: Vec<Icon>) -> Self {
+        self.icons = Some(icons);
         self
     }
 
     /// Set the metadata
-    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
-        self.meta = meta;
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
         self
     }
 }

@@ -44,7 +44,7 @@ impl ClientHandler for SamplingDemoClient {
             SamplingMessage::assistant_text(response_text),
             "mock_llm".to_string(),
         )
-        .with_stop_reason(Some(CreateMessageResult::STOP_REASON_END_TURN.to_string())))
+        .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN))
     }
 }
 

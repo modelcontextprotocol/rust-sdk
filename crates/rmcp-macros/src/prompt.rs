@@ -46,21 +46,13 @@ impl ResolvedPromptAttribute {
         } else {
             quote! { None::<String> }
         };
-        let title = if let Some(title) = title {
-            quote! { Some(#title.into()) }
-        } else {
-            quote! { None }
-        };
-        let icons = if let Some(icons) = icons {
-            quote! { Some(#icons) }
-        } else {
-            quote! { None }
-        };
-        let meta = if let Some(meta) = meta {
-            quote! { Some(#meta) }
-        } else {
-            quote! { None }
-        };
+        let title_call = title
+            .map(|t| quote! { .with_title(#t) })
+            .unwrap_or_default();
+        let icons_call = icons
+            .map(|i| quote! { .with_icons(#i) })
+            .unwrap_or_default();
+        let meta_call = meta.map(|m| quote! { .with_meta(#m) }).unwrap_or_default();
         let tokens = quote! {
             pub fn #fn_ident() -> rmcp::model::Prompt {
                 rmcp::model::Prompt::from_raw(
@@ -68,9 +60,9 @@ impl ResolvedPromptAttribute {
                     #description,
                     #arguments,
                 )
-                .with_title(#title)
-                .with_icons(#icons)
-                .with_meta(#meta)
+                #title_call
+                #icons_call
+                #meta_call
             }
         };
         syn::parse2::<ImplItemFn>(tokens)
