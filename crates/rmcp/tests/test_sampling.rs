@@ -102,13 +102,15 @@ async fn test_sampling_integration_with_test_handlers() -> Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -176,7 +178,7 @@ async fn test_sampling_integration_with_test_handlers() -> Result<()> {
         panic!("Expected CreateMessageResult");
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -186,13 +188,15 @@ async fn test_sampling_no_context_inclusion() -> Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -249,7 +253,7 @@ async fn test_sampling_no_context_inclusion() -> Result<()> {
         panic!("Expected CreateMessageResult");
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -259,13 +263,15 @@ async fn test_sampling_error_invalid_message_sequence() -> Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
@@ -305,7 +311,7 @@ async fn test_sampling_error_invalid_message_sequence() -> Result<()> {
 
     assert!(result.is_err());
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }

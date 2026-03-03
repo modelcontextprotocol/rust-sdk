@@ -325,7 +325,10 @@ async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    // Run the client work loop in the background while we interact with it
+    tokio::spawn(work);
+
     tracing::debug!("Connected (authenticated)");
 
     let tools = client.list_tools(Default::default()).await?;
@@ -379,7 +382,9 @@ async fn run_auth_scope_step_up_client(
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    // Run the client work loop in the background while we interact with it
+    tokio::spawn(work);
 
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
@@ -426,7 +431,8 @@ async fn run_auth_scope_step_up_client(
                     auth_client2,
                     StreamableHttpClientTransportConfig::with_uri(server_url),
                 );
-                let client2 = BasicClientHandler.serve(transport2).await?;
+                let (client2, work2) = BasicClientHandler.serve(transport2).await?;
+                tokio::spawn(work2);
                 let _ = client2
                     .call_tool(CallToolRequestParams {
                         meta: None,
@@ -474,7 +480,9 @@ async fn run_auth_scope_retry_limit_client(
             StreamableHttpClientTransportConfig::with_uri(server_url),
         );
 
-        let client = BasicClientHandler.serve(transport).await?;
+        let (client, work) = BasicClientHandler.serve(transport).await?;
+        tokio::spawn(work);
+
         let tools = client.list_tools(Default::default()).await?;
 
         let mut got_403 = false;
@@ -532,7 +540,9 @@ async fn run_auth_preregistered_client(
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    tokio::spawn(work);
+
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
 
@@ -591,7 +601,9 @@ async fn run_client_credentials_basic(
             .auth_header(access_token.to_string()),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    tokio::spawn(work);
+
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
     for tool in &tools.tools {
@@ -661,7 +673,9 @@ async fn run_client_credentials_jwt(
             .auth_header(access_token.to_string()),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    tokio::spawn(work);
+
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
     for tool in &tools.tools {

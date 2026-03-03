@@ -317,13 +317,16 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     // Server setup
     let server = OptionalSchemaTester::new();
     let server_handle = tokio::spawn(async move {
-        server.serve(server_transport).await?.waiting().await?;
+        let (server, work) = server.serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Create a simple client handler that just forwards prompt calls
     let client_handler = DummyClientHandler::default();
-    let client = client_handler.serve(client_transport).await?;
+    let (client, work) = client_handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Test null case
     let result = client
@@ -379,7 +382,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
         "Some case should return expected message"
     );
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }

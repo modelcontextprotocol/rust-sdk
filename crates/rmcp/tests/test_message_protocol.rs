@@ -29,14 +29,16 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
 
     // Start server
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Start client that honors context requests
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Test ThisServer context inclusion
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -191,7 +193,7 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
         panic!("Expected CreateMessageResult");
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -202,14 +204,16 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
 
     // Start server
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Start client that ignores context requests
     let handler = TestClientHandler::new(false, false);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Test that context requests are ignored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -262,7 +266,7 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
         panic!("Expected CreateMessageResult");
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -273,14 +277,16 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
 
     // Start server
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Start client
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
         method: Default::default(),
@@ -340,7 +346,7 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
         panic!("Expected CreateMessageResult");
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -350,13 +356,15 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Test valid sequence: User -> Assistant -> User
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -432,7 +440,7 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
 
     assert!(result.is_err());
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -442,14 +450,16 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Client that only honors ThisServer but ignores AllServers
     let handler = TestClientHandler::new(true, false);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Test ThisServer is honored
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -549,7 +559,7 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
         );
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -558,13 +568,15 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
 async fn test_context_inclusion() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     let handler = TestClientHandler::new(true, true);
-    let client = handler.clone().serve(client_transport).await?;
+    let (client, work) = handler.clone().serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Test context handling
     let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
@@ -612,7 +624,7 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
         assert!(text.contains("test context"));
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }

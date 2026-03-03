@@ -48,18 +48,20 @@ async fn test_custom_client_request_reaches_server() -> anyhow::Result<()> {
         let receive_signal = receive_signal.clone();
         let payload = payload.clone();
         tokio::spawn(async move {
-            let server = CustomRequestServer {
+            let (server, work) = CustomRequestServer {
                 receive_signal,
                 payload,
             }
             .serve(server_transport)
             .await?;
-            server.waiting().await?;
+            tokio::spawn(work);
+            server.waiting().await;
             anyhow::Ok(())
         });
     }
 
-    let client = ().serve(client_transport).await?;
+    let (client, work) = ().serve(client_transport).await?;
+    tokio::spawn(work);
 
     let response = client
         .send_request(ClientRequest::CustomRequest(CustomRequest::new(
@@ -81,7 +83,7 @@ async fn test_custom_client_request_reaches_server() -> anyhow::Result<()> {
         other => panic!("Expected custom result, got: {other:?}"),
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -148,13 +150,14 @@ async fn test_custom_server_request_reaches_client() -> anyhow::Result<()> {
         let response_signal = response_signal.clone();
         let response = response.clone();
         async move {
-            let server = CustomRequestServerNotifier {
+            let (server, work) = CustomRequestServerNotifier {
                 receive_signal: response_signal,
                 response,
             }
             .serve(server_transport)
             .await?;
-            server.waiting().await?;
+            tokio::spawn(work);
+            server.waiting().await;
             anyhow::Ok(())
         }
     });
@@ -162,12 +165,13 @@ async fn test_custom_server_request_reaches_client() -> anyhow::Result<()> {
     let receive_signal = Arc::new(Notify::new());
     let payload = Arc::new(Mutex::new(None));
 
-    let client = CustomRequestClient {
+    let (client, work) = CustomRequestClient {
         receive_signal: receive_signal.clone(),
         payload: payload.clone(),
     }
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
 
     tokio::time::timeout(std::time::Duration::from_secs(5), receive_signal.notified()).await?;
     tokio::time::timeout(
@@ -184,6 +188,6 @@ async fn test_custom_server_request_reaches_client() -> anyhow::Result<()> {
     let response = response.expect("custom request response ok");
     assert_eq!(response, json!({ "status": "ok" }));
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }

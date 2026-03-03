@@ -84,12 +84,15 @@ async fn test_required_task_tool_without_task_returns_method_not_found() -> anyh
 
     let server = TaskSupportTestServer::new();
     let server_handle = tokio::spawn(async move {
-        server.serve(server_transport).await?.waiting().await?;
+        let (service, work) = server.serve(server_transport).await?;
+        tokio::spawn(work);
+        service.waiting().await;
         anyhow::Ok(())
     });
 
     let client_handler = DummyClientHandler::default();
-    let client = client_handler.serve(client_transport).await?;
+    let (client, work) = client_handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Call the task-required tool without a task - should fail with -32601
     let result = client
@@ -127,7 +130,7 @@ async fn test_required_task_tool_without_task_returns_method_not_found() -> anyh
         _ => panic!("Expected McpError variant, got: {:?}", error),
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -138,12 +141,15 @@ async fn test_forbidden_task_tool_with_task_returns_error() -> anyhow::Result<()
 
     let server = TaskSupportTestServer::new();
     let server_handle = tokio::spawn(async move {
-        server.serve(server_transport).await?.waiting().await?;
+        let (service, work) = server.serve(server_transport).await?;
+        tokio::spawn(work);
+        service.waiting().await;
         anyhow::Ok(())
     });
 
     let client_handler = DummyClientHandler::default();
-    let client = client_handler.serve(client_transport).await?;
+    let (client, work) = client_handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Call the forbidden task tool WITH a task - should fail
     let result = client
@@ -181,7 +187,7 @@ async fn test_forbidden_task_tool_with_task_returns_error() -> anyhow::Result<()
         _ => panic!("Expected McpError variant, got: {:?}", error),
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -192,12 +198,15 @@ async fn test_forbidden_task_tool_without_task_succeeds() -> anyhow::Result<()> 
 
     let server = TaskSupportTestServer::new();
     let server_handle = tokio::spawn(async move {
-        server.serve(server_transport).await?.waiting().await?;
+        let (service, work) = server.serve(server_transport).await?;
+        tokio::spawn(work);
+        service.waiting().await;
         anyhow::Ok(())
     });
 
     let client_handler = DummyClientHandler::default();
-    let client = client_handler.serve(client_transport).await?;
+    let (client, work) = client_handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Call the forbidden task tool WITHOUT a task - should succeed
     let result = client
@@ -222,7 +231,7 @@ async fn test_forbidden_task_tool_without_task_succeeds() -> anyhow::Result<()> 
         .unwrap_or("");
     assert_eq!(text, "forbidden task executed");
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -233,12 +242,15 @@ async fn test_optional_task_tool_without_task_succeeds() -> anyhow::Result<()> {
 
     let server = TaskSupportTestServer::new();
     let server_handle = tokio::spawn(async move {
-        server.serve(server_transport).await?.waiting().await?;
+        let (service, work) = server.serve(server_transport).await?;
+        tokio::spawn(work);
+        service.waiting().await;
         anyhow::Ok(())
     });
 
     let client_handler = DummyClientHandler::default();
-    let client = client_handler.serve(client_transport).await?;
+    let (client, work) = client_handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Call the optional task tool WITHOUT a task - should succeed
     let result = client
@@ -263,7 +275,7 @@ async fn test_optional_task_tool_without_task_succeeds() -> anyhow::Result<()> {
         .unwrap_or("");
     assert_eq!(text, "optional task executed");
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }

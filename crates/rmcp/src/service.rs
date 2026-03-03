@@ -114,6 +114,27 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn into_dyn(self) -> Box<dyn DynService<R>> {
         Box::new(self)
     }
+
+    /// Serve this service with the provided transport
+    ///
+    /// This function returns a facade to the running service, and a future that runs the
+    /// service business logic. The caller is responsible for running the business logic
+    /// future, either by spawning it on a runtime or awaiting it directly.
+    ///
+    /// Ex:
+    /// ```rust,ignore
+    /// // Try to initialize a service with the given transport
+    /// let (client, work) = MyServiceImpl.serve(transport).await?;
+    ///
+    /// // Spawn the service business logic on a runtime (e.g. tokio)
+    /// tokio::spawn(work);
+    ///
+    /// // Now we can interact with the service
+    /// let response = client.send_request(...).await?;
+    /// ```
+    ///
+    /// The returned [RunningService] provides methods to interact with the running service, such
+    /// as sending requests or notifications to the peer, and cancelling the service.
     fn serve<T, E, A>(
         self,
         transport: T,
