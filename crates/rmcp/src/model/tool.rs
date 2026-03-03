@@ -261,32 +261,32 @@ impl Tool {
     }
 
     /// Set the human-readable title
-    pub fn with_title(mut self, title: Option<String>) -> Self {
-        self.title = title;
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
         self
     }
 
     /// Set the output schema from a raw value
-    pub fn with_raw_output_schema(mut self, output_schema: Option<Arc<JsonObject>>) -> Self {
-        self.output_schema = output_schema;
+    pub fn with_raw_output_schema(mut self, output_schema: Arc<JsonObject>) -> Self {
+        self.output_schema = Some(output_schema);
         self
     }
 
     /// Set the annotations
-    pub fn with_annotations(mut self, annotations: Option<ToolAnnotations>) -> Self {
-        self.annotations = annotations;
+    pub fn with_annotations(mut self, annotations: ToolAnnotations) -> Self {
+        self.annotations = Some(annotations);
         self
     }
 
     /// Set the icons
-    pub fn with_icons(mut self, icons: Option<Vec<Icon>>) -> Self {
-        self.icons = icons;
+    pub fn with_icons(mut self, icons: Vec<Icon>) -> Self {
+        self.icons = Some(icons);
         self
     }
 
     /// Set the metadata
-    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
-        self.meta = meta;
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
         self
     }
 
@@ -298,8 +298,8 @@ impl Tool {
     }
 
     /// Set the execution configuration for this tool.
-    pub fn with_execution(mut self, execution: Option<ToolExecution>) -> Self {
-        self.execution = execution;
+    pub fn with_execution(mut self, execution: ToolExecution) -> Self {
+        self.execution = Some(execution);
         self
     }
 
