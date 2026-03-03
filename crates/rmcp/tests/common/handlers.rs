@@ -3,15 +3,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use rmcp::{
-    ClientHandler, ErrorData as McpError, RoleClient, RoleServer, ServerHandler,
-    model::*,
-    service::{NotificationContext, RequestContext},
-};
+#[cfg(feature = "client")]
+use rmcp::service::NotificationContext;
+#[cfg(feature = "client")]
+use rmcp::{ClientHandler, RoleClient};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext};
+#[cfg(feature = "client")]
 use serde_json::json;
 use tokio::sync::Notify;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct TestClientHandler {
     pub honor_this_server: bool,
     pub honor_all_servers: bool,
@@ -46,6 +48,7 @@ impl TestClientHandler {
     }
 }
 
+#[cfg(feature = "client")]
 impl ClientHandler for TestClientHandler {
     async fn create_message(
         &self,
@@ -71,11 +74,11 @@ impl ClientHandler for TestClientHandler {
             _ => "Test response without context",
         };
 
-        Ok(CreateMessageResult {
-            message: SamplingMessage::assistant_text(response.to_string()),
-            model: "test-model".to_string(),
-            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()),
-        })
+        Ok(CreateMessageResult::new(
+            SamplingMessage::assistant_text(response.to_string()),
+            "test-model".to_string(),
+        )
+        .with_stop_reason(Some(CreateMessageResult::STOP_REASON_END_TURN.to_string())))
     }
 
     fn on_logging_message(
@@ -106,10 +109,7 @@ impl TestServer {
 
 impl ServerHandler for TestServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_logging().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_logging().build())
     }
 
     fn set_level(

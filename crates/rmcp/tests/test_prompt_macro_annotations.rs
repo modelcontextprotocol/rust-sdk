@@ -109,13 +109,11 @@ async fn complex_args_prompt(
     _server: &TestServer,
     _args: Parameters<ComplexArgs>,
 ) -> GetPromptResult {
-    GetPromptResult {
-        description: Some("Complex args result".to_string()),
-        messages: vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
-            "Complex response",
-        )],
-    }
+    GetPromptResult::new(vec![PromptMessage::new_text(
+        PromptMessageRole::Assistant,
+        "Complex response",
+    )])
+    .with_description("Complex args result")
 }
 
 // Test sync prompt

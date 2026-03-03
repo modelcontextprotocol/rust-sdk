@@ -82,10 +82,10 @@ fn test_resource_link_roundtrip() {
     }
 
     // Test with prompt message
-    let prompt_message = PromptMessage {
-        role: PromptMessageRole::User,
-        content: PromptMessageContent::resource_link(resource.no_annotation()),
-    };
+    let prompt_message = PromptMessage::new(
+        PromptMessageRole::User,
+        PromptMessageContent::resource_link(resource.no_annotation()),
+    );
 
     let prompt_json = serde_json::to_string(&prompt_message).unwrap();
     let prompt_deserialized: PromptMessage = serde_json::from_str(&prompt_json).unwrap();

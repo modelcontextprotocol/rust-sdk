@@ -266,6 +266,7 @@ impl<C> AuthClient<C> {
 
 /// Auth error
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AuthError {
     #[error("OAuth authorization required")]
     AuthorizationRequired,

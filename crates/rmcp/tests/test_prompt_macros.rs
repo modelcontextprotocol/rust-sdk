@@ -107,22 +107,20 @@ impl<DS: DataService> GenericServer<DS> {
     #[prompt(description = "Get contextual help from the service")]
     async fn get_help(&self) -> GetPromptResult {
         let context = self.data_service.get_context();
-        GetPromptResult {
-            description: Some("Contextual help based on service data".to_string()),
-            messages: vec![
-                PromptMessage::new_text(
-                    PromptMessageRole::User,
-                    "I need help with the current context.".to_string(),
+        GetPromptResult::new(vec![
+            PromptMessage::new_text(
+                PromptMessageRole::User,
+                "I need help with the current context.".to_string(),
+            ),
+            PromptMessage::new_text(
+                PromptMessageRole::Assistant,
+                format!(
+                    "Based on the context '{}', here's how I can help...",
+                    context
                 ),
-                PromptMessage::new_text(
-                    PromptMessageRole::Assistant,
-                    format!(
-                        "Based on the context '{}', here's how I can help...",
-                        context
-                    ),
-                ),
-            ],
-        }
+            ),
+        ])
+        .with_description("Contextual help based on service data")
     }
 }
 
@@ -250,13 +248,11 @@ impl OptionalSchemaTester {
             None => "Received null count".to_string(),
         };
 
-        GetPromptResult {
-            description: Some("Test result for optional i64".to_string()),
-            messages: vec![PromptMessage::new_text(
-                PromptMessageRole::Assistant,
-                message,
-            )],
-        }
+        GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::Assistant,
+            message,
+        )])
+        .with_description("Test result for optional i64")
     }
 }
 
@@ -327,10 +323,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test null case
     let result = client
-        .get_prompt(GetPromptRequestParams {
-            meta: None,
-            name: "test_optional_i64".into(),
-            arguments: Some(
+        .get_prompt(
+            GetPromptRequestParams::new("test_optional_i64").with_arguments(
                 serde_json::json!({
                     "count": null,
                     "mandatory_field": "test_null"
@@ -339,7 +333,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
                 .unwrap()
                 .clone(),
             ),
-        })
+        )
         .await?;
 
     let result_text = match &result.messages.first().unwrap().content {
@@ -354,10 +348,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test Some case
     let some_result = client
-        .get_prompt(GetPromptRequestParams {
-            meta: None,
-            name: "test_optional_i64".into(),
-            arguments: Some(
+        .get_prompt(
+            GetPromptRequestParams::new("test_optional_i64").with_arguments(
                 serde_json::json!({
                     "count": 42,
                     "mandatory_field": "test_some"
@@ -366,7 +358,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
                 .unwrap()
                 .clone(),
             ),
-        })
+        )
         .await?;
 
     let some_result_text = match &some_result.messages.first().unwrap().content {

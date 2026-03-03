@@ -5,6 +5,7 @@
 //! - `Required`: MUST be invoked as a task, returns -32601 otherwise
 //! - `Forbidden`: MUST NOT be invoked as a task, returns error otherwise
 //! - `Optional`: MAY be invoked either way
+#![cfg(feature = "client")]
 
 use rmcp::{
     ClientHandler, ServerHandler, ServiceError, ServiceExt,
@@ -93,12 +94,7 @@ async fn test_required_task_tool_without_task_returns_method_not_found() -> anyh
 
     // Call the task-required tool without a task - should fail with -32601
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "required_task_tool".into(),
-            arguments: None,
-            task: None, // No task provided!
-        })
+        .call_tool(CallToolRequestParams::new("required_task_tool"))
         .await;
 
     // Should be an error with code -32601 (METHOD_NOT_FOUND)
@@ -147,12 +143,7 @@ async fn test_forbidden_task_tool_with_task_returns_error() -> anyhow::Result<()
 
     // Call the forbidden task tool WITH a task - should fail
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "forbidden_task_tool".into(),
-            arguments: None,
-            task: make_task(), // Task provided but forbidden!
-        })
+        .call_tool(CallToolRequestParams::new("forbidden_task_tool").with_task(make_task()))
         .await;
 
     // Should be an error with code INVALID_PARAMS
@@ -201,12 +192,7 @@ async fn test_forbidden_task_tool_without_task_succeeds() -> anyhow::Result<()> 
 
     // Call the forbidden task tool WITHOUT a task - should succeed
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "forbidden_task_tool".into(),
-            arguments: None,
-            task: None, // No task - allowed for forbidden
-        })
+        .call_tool(CallToolRequestParams::new("forbidden_task_tool"))
         .await;
 
     assert!(
@@ -242,12 +228,7 @@ async fn test_optional_task_tool_without_task_succeeds() -> anyhow::Result<()> {
 
     // Call the optional task tool WITHOUT a task - should succeed
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "optional_task_tool".into(),
-            arguments: None,
-            task: None, // No task - allowed for optional
-        })
+        .call_tool(CallToolRequestParams::new("optional_task_tool"))
         .await;
 
     assert!(

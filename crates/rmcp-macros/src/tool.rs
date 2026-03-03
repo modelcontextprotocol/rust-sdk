@@ -159,17 +159,17 @@ impl ResolvedToolAttribute {
         let tokens = quote! {
             #doc_attr
             pub fn #fn_ident() -> rmcp::model::Tool {
-                rmcp::model::Tool {
-                    name: #name.into(),
-                    title: #title,
-                    description: #description,
-                    input_schema: #input_schema,
-                    output_schema: #output_schema,
-                    annotations: #annotations,
-                    execution: #execution,
-                    icons: #icons,
-                    meta: #meta,
-                }
+                rmcp::model::Tool::new_with_raw(
+                    #name,
+                    #description,
+                    #input_schema,
+                )
+                .with_title(#title)
+                .with_raw_output_schema(#output_schema)
+                .with_annotations(#annotations)
+                .with_execution(#execution)
+                .with_icons(#icons)
+                .with_meta(#meta)
             }
         };
         syn::parse2::<ImplItemFn>(tokens)
@@ -260,13 +260,13 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         let idempotent_hint = wrap_option(idempotent_hint);
         let open_world_hint = wrap_option(open_world_hint);
         let token_stream = quote! {
-            Some(rmcp::model::ToolAnnotations {
-                title: #title,
-                read_only_hint: #read_only_hint,
-                destructive_hint: #destructive_hint,
-                idempotent_hint: #idempotent_hint,
-                open_world_hint: #open_world_hint,
-            })
+            Some(rmcp::model::ToolAnnotations::from_raw(
+                #title,
+                #read_only_hint,
+                #destructive_hint,
+                #idempotent_hint,
+                #open_world_hint,
+            ))
         };
         syn::parse2::<Expr>(token_stream)?
     } else {
@@ -296,9 +296,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         };
 
         let token_stream = quote! {
-            Some(rmcp::model::ToolExecution {
-                task_support: #task_support_expr,
-            })
+            Some(rmcp::model::ToolExecution::from_raw(
+                #task_support_expr,
+            ))
         };
         syn::parse2::<Expr>(token_stream)?
     } else {

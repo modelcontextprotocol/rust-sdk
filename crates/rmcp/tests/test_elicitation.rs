@@ -141,15 +141,13 @@ async fn test_elicitation_json_rpc_protocol() {
     let request = JsonRpcRequest {
         jsonrpc: JsonRpcVersion2_0,
         id: RequestId::Number(1),
-        request: CreateElicitationRequest {
-            method: ElicitationCreateRequestMethod,
-            params: CreateElicitationRequestParams::FormElicitationParams {
+        request: CreateElicitationRequest::new(
+            CreateElicitationRequestParams::FormElicitationParams {
                 meta: None,
                 message: "Do you want to continue?".to_string(),
                 requested_schema: schema,
             },
-            extensions: Default::default(),
-        },
+        ),
     };
 
     // Test serialization of complete request
@@ -710,30 +708,24 @@ async fn test_elicitation_multi_select_enum() {
                 assert_eq!(
                     schema,
                     &EnumSchema::Multi(MultiSelectEnumSchema::Titled(
-                        TitledMultiSelectEnumSchema {
-                            type_: ArrayTypeConst,
-                            title: None,
-                            description: None,
-                            min_items: Some(1),
-                            max_items: Some(2),
-                            items: TitledItems {
-                                any_of: vec![
-                                    ConstTitle {
-                                        const_: "A".to_string(),
-                                        title: "A name".to_string()
-                                    },
-                                    ConstTitle {
-                                        const_: "B".to_string(),
-                                        title: "B name".to_string()
-                                    },
-                                    ConstTitle {
-                                        const_: "C".to_string(),
-                                        title: "C name".to_string()
-                                    }
-                                ],
-                            },
-                            default: None
-                        }
+                        TitledMultiSelectEnumSchema::new(TitledItems {
+                            any_of: vec![
+                                ConstTitle {
+                                    const_: "A".to_string(),
+                                    title: "A name".to_string()
+                                },
+                                ConstTitle {
+                                    const_: "B".to_string(),
+                                    title: "B name".to_string()
+                                },
+                                ConstTitle {
+                                    const_: "C".to_string(),
+                                    title: "C name".to_string()
+                                },
+                            ],
+                        })
+                        .with_min_items(1)
+                        .with_max_items(2)
                     ))
                 )
             }
@@ -789,26 +781,20 @@ async fn test_elicitation_single_select_enum() {
                 assert_eq!(
                     schema,
                     &EnumSchema::Single(SingleSelectEnumSchema::Titled(
-                        TitledSingleSelectEnumSchema {
-                            type_: StringTypeConst,
-                            title: None,
-                            description: None,
-                            one_of: vec![
-                                ConstTitle {
-                                    const_: "A".to_string(),
-                                    title: "A name".to_string()
-                                },
-                                ConstTitle {
-                                    const_: "B".to_string(),
-                                    title: "B name".to_string()
-                                },
-                                ConstTitle {
-                                    const_: "C".to_string(),
-                                    title: "C name".to_string()
-                                }
-                            ],
-                            default: None
-                        }
+                        TitledSingleSelectEnumSchema::new(vec![
+                            ConstTitle {
+                                const_: "A".to_string(),
+                                title: "A name".to_string()
+                            },
+                            ConstTitle {
+                                const_: "B".to_string(),
+                                title: "B name".to_string()
+                            },
+                            ConstTitle {
+                                const_: "C".to_string(),
+                                title: "C name".to_string()
+                            }
+                        ])
                     ))
                 )
             }
@@ -850,11 +836,8 @@ async fn test_elicitation_direction_server_to_client() {
     assert_eq!(serialized["requestedSchema"]["type"], "object");
 
     // Test that elicitation requests are part of ServerRequest
-    let _server_request = ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
-        method: ElicitationCreateRequestMethod,
-        params: elicitation_request,
-        extensions: Default::default(),
-    });
+    let _server_request =
+        ServerRequest::CreateElicitationRequest(CreateElicitationRequest::new(elicitation_request));
 
     // Test that client can respond with elicitation results
     let client_result = ClientResult::CreateElicitationResult(CreateElicitationResult {
@@ -889,15 +872,13 @@ async fn test_elicitation_json_rpc_direction() {
 
     // 1. Server creates elicitation request
     let server_request = ServerJsonRpcMessage::request(
-        ServerRequest::CreateElicitationRequest(CreateElicitationRequest {
-            method: ElicitationCreateRequestMethod,
-            params: CreateElicitationRequestParams::FormElicitationParams {
+        ServerRequest::CreateElicitationRequest(CreateElicitationRequest::new(
+            CreateElicitationRequestParams::FormElicitationParams {
                 meta: None,
                 message: "Do you want to continue?".to_string(),
                 requested_schema: schema,
             },
-            extensions: Default::default(),
-        }),
+        )),
         RequestId::Number(1),
     );
 
@@ -1051,15 +1032,14 @@ async fn test_elicitation_capability_structure() {
 #[tokio::test]
 async fn test_client_capabilities_with_elicitation() {
     // Test ClientCapabilities with elicitation capability
-    let capabilities = ClientCapabilities {
-        elicitation: Some(ElicitationCapability {
+    let capabilities = ClientCapabilities::builder()
+        .enable_elicitation_with(ElicitationCapability {
             form: Some(FormElicitationCapability {
                 schema_validation: Some(true),
             }),
             url: None,
-        }),
-        ..Default::default()
-    };
+        })
+        .build();
 
     // Verify elicitation capability is present
     assert!(capabilities.elicitation.is_some());
@@ -1084,10 +1064,7 @@ async fn test_client_capabilities_with_elicitation() {
     );
 
     // Test ClientCapabilities without elicitation
-    let capabilities_without = ClientCapabilities {
-        elicitation: None,
-        ..Default::default()
-    };
+    let capabilities_without = ClientCapabilities::default();
 
     assert!(capabilities_without.elicitation.is_none());
 }
@@ -1096,27 +1073,17 @@ async fn test_client_capabilities_with_elicitation() {
 #[tokio::test]
 async fn test_initialize_request_with_elicitation() {
     // Test InitializeRequestParam with elicitation capability
-    let init_param = InitializeRequestParams {
-        meta: None,
-        protocol_version: ProtocolVersion::LATEST,
-        capabilities: ClientCapabilities {
-            elicitation: Some(ElicitationCapability {
+    let init_param = InitializeRequestParams::new(
+        ClientCapabilities::builder()
+            .enable_elicitation_with(ElicitationCapability {
                 form: Some(FormElicitationCapability {
                     schema_validation: Some(true),
                 }),
                 url: None,
-            }),
-            ..Default::default()
-        },
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-            title: None,
-            description: None,
-            website_url: None,
-            icons: None,
-        },
-    };
+            })
+            .build(),
+        Implementation::new("test-client", "1.0.0"),
+    );
 
     // Verify the structure
     assert!(init_param.capabilities.elicitation.is_some());
@@ -1148,49 +1115,27 @@ async fn test_capability_checking_logic() {
     // Simulate the logic that would be used in supports_elicitation()
 
     // Case 1: Client with elicitation capability
-    let client_with_capability = InitializeRequestParams {
-        meta: None,
-        protocol_version: ProtocolVersion::LATEST,
-        capabilities: ClientCapabilities {
-            elicitation: Some(ElicitationCapability {
+    let client_with_capability = InitializeRequestParams::new(
+        ClientCapabilities::builder()
+            .enable_elicitation_with(ElicitationCapability {
                 form: Some(FormElicitationCapability {
                     schema_validation: Some(true),
                 }),
                 url: None,
-            }),
-            ..Default::default()
-        },
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-            title: None,
-            description: None,
-            website_url: None,
-            icons: None,
-        },
-    };
+            })
+            .build(),
+        Implementation::new("test-client", "1.0.0"),
+    );
 
     // Simulate supports_elicitation() logic
     let supports_elicitation = client_with_capability.capabilities.elicitation.is_some();
     assert!(supports_elicitation);
 
     // Case 2: Client without elicitation capability
-    let client_without_capability = InitializeRequestParams {
-        meta: None,
-        protocol_version: ProtocolVersion::LATEST,
-        capabilities: ClientCapabilities {
-            elicitation: None,
-            ..Default::default()
-        },
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-            title: None,
-            description: None,
-            website_url: None,
-            icons: None,
-        },
-    };
+    let client_without_capability = InitializeRequestParams::new(
+        ClientCapabilities::default(),
+        Implementation::new("test-client", "1.0.0"),
+    );
     let supports_elicitation = client_without_capability.capabilities.elicitation.is_some();
     assert!(!supports_elicitation);
 }
@@ -1910,16 +1855,14 @@ async fn test_url_elicitation_json_rpc_protocol() {
     let request = JsonRpcRequest {
         jsonrpc: JsonRpcVersion2_0,
         id: RequestId::Number(1),
-        request: CreateElicitationRequest {
-            method: ElicitationCreateRequestMethod,
-            params: CreateElicitationRequestParams::UrlElicitationParams {
+        request: CreateElicitationRequest::new(
+            CreateElicitationRequestParams::UrlElicitationParams {
                 meta: None,
                 message: "Please authorize this action at the following URL".to_string(),
                 url: "https://auth.example.com/authorize/abc123".to_string(),
                 elicitation_id: "auth-request-456".to_string(),
             },
-            extensions: Default::default(),
-        },
+        ),
     };
 
     // Test serialization of complete request
@@ -1977,11 +1920,7 @@ async fn test_elicitation_completion_notification() {
     assert_eq!(deserialized.elicitation_id, "elicit-789");
 
     // Test complete notification structure
-    let notification = ElicitationCompletionNotification {
-        method: ElicitationCompletionNotificationMethod,
-        params: notification_params,
-        extensions: Default::default(),
-    };
+    let notification = ElicitationCompletionNotification::new(notification_params);
 
     let json = serde_json::to_value(&notification).unwrap();
     assert_eq!(json["method"], "notifications/elicitation/complete");
@@ -2142,15 +2081,14 @@ async fn test_url_elicitation_required_error_code() {
 #[tokio::test]
 async fn test_client_capabilities_elicitation_modes() {
     // Test with form-only capability
-    let form_only_caps = ClientCapabilities {
-        elicitation: Some(ElicitationCapability {
+    let form_only_caps = ClientCapabilities::builder()
+        .enable_elicitation_with(ElicitationCapability {
             form: Some(FormElicitationCapability {
                 schema_validation: Some(true),
             }),
             url: None,
-        }),
-        ..Default::default()
-    };
+        })
+        .build();
 
     let json = serde_json::to_value(&form_only_caps).unwrap();
     assert!(json["elicitation"]["form"].is_object());
@@ -2160,13 +2098,12 @@ async fn test_client_capabilities_elicitation_modes() {
     );
 
     // Test with URL-only capability
-    let url_only_caps = ClientCapabilities {
-        elicitation: Some(ElicitationCapability {
+    let url_only_caps = ClientCapabilities::builder()
+        .enable_elicitation_with(ElicitationCapability {
             form: None,
             url: Some(UrlElicitationCapability::default()),
-        }),
-        ..Default::default()
-    };
+        })
+        .build();
 
     let json = serde_json::to_value(&url_only_caps).unwrap();
     assert!(json["elicitation"]["url"].is_object());
@@ -2179,15 +2116,14 @@ async fn test_client_capabilities_elicitation_modes() {
     );
 
     // Test with both capabilities
-    let both_caps = ClientCapabilities {
-        elicitation: Some(ElicitationCapability {
+    let both_caps = ClientCapabilities::builder()
+        .enable_elicitation_with(ElicitationCapability {
             form: Some(FormElicitationCapability {
                 schema_validation: Some(false),
             }),
             url: Some(UrlElicitationCapability::default()),
-        }),
-        ..Default::default()
-    };
+        })
+        .build();
 
     let json = serde_json::to_value(&both_caps).unwrap();
     assert!(json["elicitation"]["form"].is_object());
@@ -2201,11 +2137,8 @@ async fn test_elicitation_completion_in_server_notification() {
         elicitation_id: "notify-123".to_string(),
     };
 
-    let completion_notification = ElicitationCompletionNotification {
-        method: ElicitationCompletionNotificationMethod,
-        params: notification_param.clone(),
-        extensions: Default::default(),
-    };
+    let completion_notification =
+        ElicitationCompletionNotification::new(notification_param.clone());
 
     // Test that it's part of ServerNotification
     let server_notification =

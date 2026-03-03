@@ -15,14 +15,13 @@ pub struct Server {}
 
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()
                 .enable_resources_list_changed()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn subscribe(
@@ -87,10 +86,7 @@ async fn test_server_notification() -> anyhow::Result<()> {
     .serve(client_transport)
     .await?;
     client
-        .subscribe(SubscribeRequestParams {
-            meta: None,
-            uri: "test://test-resource".to_owned(),
-        })
+        .subscribe(SubscribeRequestParams::new("test://test-resource"))
         .await?;
     receive_signal.notified().await;
     client.cancel().await?;

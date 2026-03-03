@@ -174,14 +174,11 @@ impl PromptServer {
             ),
         ];
 
-        Ok(GetPromptResult {
-            description: Some(format!(
-                "Code review for {} file focusing on {}",
-                args.language,
-                focus_areas.join(", ")
-            )),
-            messages,
-        })
+        Ok(GetPromptResult::new(messages).with_description(format!(
+            "Code review for {} file focusing on {}",
+            args.language,
+            focus_areas.join(", ")
+        )))
     }
 
     /// Data analysis prompt demonstrating context usage
@@ -270,13 +267,10 @@ impl PromptServer {
             ));
         }
 
-        GetPromptResult {
-            description: Some(format!(
-                "Writing {} for {} audience with {} tone",
-                args.content_type, args.audience, tone
-            )),
-            messages,
-        }
+        GetPromptResult::new(messages).with_description(format!(
+            "Writing {} for {} audience with {} tone",
+            args.content_type, args.audience, tone
+        ))
     }
 
     /// Debug assistant demonstrating error handling patterns
@@ -332,14 +326,11 @@ impl PromptServer {
             "Let's debug this systematically. First, let me understand the error context better.",
         ));
 
-        Ok(GetPromptResult {
-            description: Some(format!(
-                "Debugging {} error in {}",
-                args.error_message.chars().take(50).collect::<String>(),
-                args.stack.first().map(|s| s.as_str()).unwrap_or("unknown")
-            )),
-            messages,
-        })
+        Ok(GetPromptResult::new(messages).with_description(format!(
+            "Debugging {} error in {}",
+            args.error_message.chars().take(50).collect::<String>(),
+            args.stack.first().map(|s| s.as_str()).unwrap_or("unknown")
+        )))
     }
 
     /// Learning path prompt that uses server state
@@ -376,17 +367,11 @@ impl PromptServer {
 #[prompt_handler]
 impl ServerHandler for PromptServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_prompts().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "This server provides various prompt templates for code review, data analysis, \
+        ServerInfo::new(ServerCapabilities::builder().enable_prompts().build()).with_instructions(
+            "This server provides various prompt templates for code review, data analysis, \
                  writing assistance, debugging help, and personalized learning paths. \
-                 All prompts are designed to provide structured, context-aware assistance."
-                    .to_string(),
-            ),
-            ..Default::default()
-        }
+                 All prompts are designed to provide structured, context-aware assistance.",
+        )
     }
 }
 

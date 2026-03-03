@@ -10,9 +10,10 @@ use serde_json::Value;
 use super::{Icon, JsonObject, Meta};
 
 /// A tool that can be used by a model.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Tool {
     /// The name of the tool
     pub name: Cow<'static, str>,
@@ -67,6 +68,7 @@ pub enum TaskSupport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ToolExecution {
     /// Indicates whether this tool supports task-based invocation.
     ///
@@ -81,6 +83,11 @@ impl ToolExecution {
     /// Create a new empty ToolExecution configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a ToolExecution from raw optional fields.
+    pub fn from_raw(task_support: Option<TaskSupport>) -> Self {
+        Self { task_support }
     }
 
     /// Set the task support mode.
@@ -101,6 +108,7 @@ impl ToolExecution {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ToolAnnotations {
     /// A human-readable title for the tool.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -145,6 +153,24 @@ impl ToolAnnotations {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Create a new ToolAnnotations with all fields specified
+    pub fn from_raw(
+        title: Option<String>,
+        read_only_hint: Option<bool>,
+        destructive_hint: Option<bool>,
+        idempotent_hint: Option<bool>,
+        open_world_hint: Option<bool>,
+    ) -> Self {
+        ToolAnnotations {
+            title,
+            read_only_hint,
+            destructive_hint,
+            idempotent_hint,
+            open_world_hint,
+        }
+    }
+
     pub fn with_title<T>(title: T) -> Self
     where
         T: Into<String>,
@@ -211,6 +237,59 @@ impl Tool {
         }
     }
 
+    /// Create a new tool with just a name and input schema (no description)
+    pub fn new_with_raw<N, S>(
+        name: N,
+        description: Option<Cow<'static, str>>,
+        input_schema: S,
+    ) -> Self
+    where
+        N: Into<Cow<'static, str>>,
+        S: Into<Arc<JsonObject>>,
+    {
+        Tool {
+            name: name.into(),
+            title: None,
+            description,
+            input_schema: input_schema.into(),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    /// Set the human-readable title
+    pub fn with_title(mut self, title: Option<String>) -> Self {
+        self.title = title;
+        self
+    }
+
+    /// Set the output schema from a raw value
+    pub fn with_raw_output_schema(mut self, output_schema: Option<Arc<JsonObject>>) -> Self {
+        self.output_schema = output_schema;
+        self
+    }
+
+    /// Set the annotations
+    pub fn with_annotations(mut self, annotations: Option<ToolAnnotations>) -> Self {
+        self.annotations = annotations;
+        self
+    }
+
+    /// Set the icons
+    pub fn with_icons(mut self, icons: Option<Vec<Icon>>) -> Self {
+        self.icons = icons;
+        self
+    }
+
+    /// Set the metadata
+    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
+        self.meta = meta;
+        self
+    }
+
     pub fn annotate(self, annotations: ToolAnnotations) -> Self {
         Tool {
             annotations: Some(annotations),
@@ -219,11 +298,9 @@ impl Tool {
     }
 
     /// Set the execution configuration for this tool.
-    pub fn with_execution(self, execution: ToolExecution) -> Self {
-        Tool {
-            execution: Some(execution),
-            ..self
-        }
+    pub fn with_execution(mut self, execution: Option<ToolExecution>) -> Self {
+        self.execution = execution;
+        self
     }
 
     /// Returns the task support mode for this tool.

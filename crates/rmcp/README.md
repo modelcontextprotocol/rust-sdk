@@ -19,7 +19,7 @@
 
 Creating a server with tools is simple using the `#[tool]` macro:
 
-```rust,no_run
+```rust,ignore
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::tool::ToolRouter,
@@ -68,11 +68,8 @@ impl Counter {
 #[tool_handler]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("A simple counter that tallies the number of times the increment tool has been used".into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("A simple counter that tallies the number of times the increment tool has been used")
     }
 }
 
@@ -147,7 +144,7 @@ To expose task support, enable the `tasks` capability when building `ServerCapab
 
 Creating a client to interact with a server:
 
-```rust,no_run
+```rust,ignore
 use rmcp::{
     ServiceExt,
     model::CallToolRequestParams,
@@ -176,12 +173,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Call a tool
     let result = service
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "git_status".into(),
-            arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
-            task: None,
-        })
+        .call_tool(
+            CallToolRequestParams::new("git_status")
+                .with_arguments(serde_json::json!({ "repo_path": "." }).as_object().cloned().unwrap_or_default())
+        )
         .await?;
     println!("Result: {result:#?}");
 

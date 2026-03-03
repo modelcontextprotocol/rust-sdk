@@ -1,4 +1,6 @@
 // cargo test --features "server client" --package rmcp test_client_initialization
+#![cfg(feature = "client")]
+
 mod common;
 
 use std::borrow::Cow;

@@ -6,12 +6,7 @@ fn serialize_tool_result_with_meta() {
     let content = vec![Content::text("ok")];
     let mut meta = Meta::new();
     meta.insert("foo".to_string(), json!("bar"));
-    let result = CallToolResult {
-        content,
-        structured_content: None,
-        is_error: Some(false),
-        meta: Some(meta),
-    };
+    let result = CallToolResult::success(content).with_meta(Some(meta));
     let v = serde_json::to_value(&result).unwrap();
     let expected = json!({
         "content": [{"type":"text","text":"ok"}],

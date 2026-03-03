@@ -156,14 +156,11 @@ impl ElicitationEnumFormServer {
 #[tool_handler]
 impl ServerHandler for ElicitationEnumFormServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(
                 "Simple server demonstrating elicitation for enum selection".to_string(),
-            ),
-            ..Default::default()
-        }
+            )
     }
 }
 

@@ -37,23 +37,19 @@ async fn main() -> Result<()> {
 
     // Call tool echo
     let tool_result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "echo".into(),
-            arguments: Some(object!({ "message": "hi from rmcp" })),
-            task: None,
-        })
+        .call_tool(
+            CallToolRequestParams::new("echo")
+                .with_arguments(object!({ "message": "hi from rmcp" })),
+        )
         .await?;
     tracing::info!("Tool result for echo: {tool_result:#?}");
 
     // Call tool longRunningOperation
     let tool_result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "longRunningOperation".into(),
-            arguments: Some(object!({ "duration": 3, "steps": 1 })),
-            task: None,
-        })
+        .call_tool(
+            CallToolRequestParams::new("longRunningOperation")
+                .with_arguments(object!({ "duration": 3, "steps": 1 })),
+        )
         .await?;
     tracing::info!("Tool result for longRunningOperation: {tool_result:#?}");
 
@@ -63,10 +59,7 @@ async fn main() -> Result<()> {
 
     // Read resource
     let resource = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "test://static/resource/3".into(),
-        })
+        .read_resource(ReadResourceRequestParams::new("test://static/resource/3"))
         .await?;
     tracing::info!("Resource: {resource:#?}");
 
@@ -76,21 +69,16 @@ async fn main() -> Result<()> {
 
     // Get simple prompt
     let prompt = client
-        .get_prompt(GetPromptRequestParams {
-            meta: None,
-            name: "simple_prompt".into(),
-            arguments: None,
-        })
+        .get_prompt(GetPromptRequestParams::new("simple_prompt"))
         .await?;
     tracing::info!("Prompt - simple: {prompt:#?}");
 
     // Get complex prompt (returns text & image)
     let prompt = client
-        .get_prompt(GetPromptRequestParams {
-            meta: None,
-            name: "complex_prompt".into(),
-            arguments: Some(object!({ "temperature": "0.5", "style": "formal" })),
-        })
+        .get_prompt(
+            GetPromptRequestParams::new("complex_prompt")
+                .with_arguments(object!({ "temperature": "0.5", "style": "formal" })),
+        )
         .await?;
     tracing::info!("Prompt - complex: {prompt:#?}");
 

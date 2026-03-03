@@ -42,9 +42,9 @@ impl ResolvedPromptAttribute {
             meta,
         } = self;
         let description = if let Some(description) = description {
-            quote! { Some(#description.into()) }
+            quote! { Some::<String>(#description.into()) }
         } else {
-            quote! { None }
+            quote! { None::<String> }
         };
         let title = if let Some(title) = title {
             quote! { Some(#title.into()) }
@@ -63,14 +63,14 @@ impl ResolvedPromptAttribute {
         };
         let tokens = quote! {
             pub fn #fn_ident() -> rmcp::model::Prompt {
-                rmcp::model::Prompt {
-                    name: #name.into(),
-                    description: #description,
-                    arguments: #arguments,
-                    title: #title,
-                    icons: #icons,
-                    meta: #meta,
-                }
+                rmcp::model::Prompt::from_raw(
+                    #name,
+                    #description,
+                    #arguments,
+                )
+                .with_title(#title)
+                .with_icons(#icons)
+                .with_meta(#meta)
             }
         };
         syn::parse2::<ImplItemFn>(tokens)

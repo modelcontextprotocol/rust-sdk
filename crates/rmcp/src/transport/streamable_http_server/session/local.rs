@@ -688,6 +688,7 @@ pub enum SessionEvent {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SessionQuitReason {
     ServiceTerminated,
     ClientTerminated,
@@ -880,6 +881,7 @@ pub type SessionTransport = WorkerTransport<LocalSessionWorker>;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LocalSessionWorkerError {
     #[error("transport terminated")]
     TransportTerminated,
