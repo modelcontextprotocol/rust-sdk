@@ -94,6 +94,35 @@ pub enum RunnerSpawnError {
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// A trait that defines the implementation needed for spawning a child process via the [CommandBuilder] and used in the [ChildProcessTransport].
+/// You can implement this trait however you'd like, usually using a unit-struct. Your implmentation can then be used with the [CommandBuilder].
+///
+/// Here is a high-level example of how you'd implement your own command runner:
+/// ```rust,ignore
+/// // Define the type for a child process instance that your runner will spawn.
+/// struct MyChildProcessInstance {
+///     // ...
+/// }
+///
+/// impl ChildProcessInstance for MyChildProcessInstance {
+///     type Stdin = ...;
+///     type Stdout = ...;
+///     type Stderr = ...;
+///     // Implement the required methods for taking the streams, getting the PID, and waiting/shutting down/killing the process.
+/// }
+///
+/// impl ChildProcessRunner for MyRunner {
+///     type Instance = MyChildProcessInstance;
+///
+///     fn spawn(command_config: CommandConfig) -> Result<Self::Instance, RunnerSpawnError> {
+///        // Use the information in command_config to spawn your child process instance, and return it
+///     }
+/// }
+///
+///
+/// // Use your implementation with the command builder
+/// let command = CommandBuilder::<MyRunner>::new("my_command").arg("some_arg").spawn_dyn();
+/// ```
 pub trait ChildProcessRunner {
     /// The implementation of the child process instance that this runner will spawn.
     type Instance: ChildProcessInstance;

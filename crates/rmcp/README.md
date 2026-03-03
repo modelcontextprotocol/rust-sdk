@@ -80,9 +80,12 @@ impl ServerHandler for Counter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create and run the server with STDIO transport
-    let service = Counter::new().serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = Counter::new().serve(stdio()).await.inspect_err(|e| {
         println!("Error starting server: {}", e);
     })?;
+    // Spawn the async work loop on the background
+    tokio::spawn(work);
+    // Wait for the service to conclude
     service.waiting().await?;
     Ok(())
 }
@@ -151,20 +154,25 @@ Creating a client to interact with a server:
 use rmcp::{
     ServiceExt,
     model::CallToolRequestParams,
-    transport::{ConfigureCommandExt, TokioChildProcess},
+    transport::{CommandBuilder, ChildProcessTransport, tokio::TokioChildProcessRunner}
 };
 use tokio::process::Command;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
     // Connect to a server running as a child process
-    let service = ()
-        .serve(TokioChildProcess::new(Command::new("uvx").configure(
-            |cmd| {
-                cmd.arg("mcp-server-git");
-            },
-        ))?)
-        .await?;
+    let command = CommandBuilder::<TokioChildProcessRunner>::new("uvx")
+        .arg("mcp-server-git")
+        .spawn_dyn()?
+
+    // Create a transport via the child process's STDIN and STDOUT streams
+    let transport = ChildProcessTransport::new(command)?
+
+    let (service, work) = ().serve(transport).await?;
+
+    // Spawn the async work loop on the background
+    tokio::spawn(work);
 
     // Get server information
     let server_info = service.peer_info();
@@ -186,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Result: {result:#?}");
 
     // Gracefully close the connection
-    service.cancel().await?;
+    service.cancel().await;
     Ok(())
 }
 ```
@@ -210,11 +218,18 @@ Run MCP servers as child processes and communicate via standard I/O.
 
 Example:
 ```rust,ignore
-use rmcp::transport::TokioChildProcess;
-use tokio::process::Command;
+use rmcp::transport::{
+    CommandBuilder,
+    ChildProcessTransport,
 
-let transport = TokioChildProcess::new(Command::new("mcp-server"))?;
-let service = client.serve(transport).await?;
+    // Included tokio command runner implementation in the "transport-child-process-tokio" feature,
+    // or implement your own via the `ChildProcessRunner` trait
+    tokio::TokioChildProcessRunner 
+};
+
+let command = CommandBuilder::<TokioChildProcessRunner>::new("mcp-server").spawn_dyn()?;
+let transport = ChildProcessTransport::new(command)?;
+let (service, work) = client.serve(transport).await?;
 ```
 
 ## Access with peer interface when handling message

@@ -38,14 +38,27 @@ JSON Schema 生成 (version 2020-12)：
 <summary>启动客户端</summary>
 
 ```rust, ignore
-use rmcp::{ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
-use tokio::process::Command;
+use rmcp::transport::{
+    CommandBuilder,
+    ChildProcessTransport,
+    tokio::TokioChildProcessRunner 
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = ().serve(TokioChildProcess::new(Command::new("npx").configure(|cmd| {
-        cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
-    }))?).await?;
+    let command = CommandBuilder::<TokioChildProcessRunner>::new("npx")
+        .arg("-y")
+        .arg("@modelcontextprotocol/server-everything")
+        .spawn_dyn()?
+
+    let transport = ChildProcessTransport::new(command)?
+
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
+
+    // ...
+
+    client.canel().await;
     Ok(())
 }
 ```
@@ -78,7 +91,8 @@ let service = common::counter::Counter::new();
 
 ```rust, ignore
 // 此调用将完成初始化过程
-let server = service.serve(transport).await?;
+let (server, work) = service.serve(transport).await?;
+tokio::spawn(work);
 ```
 </details>
 
