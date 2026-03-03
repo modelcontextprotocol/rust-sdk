@@ -75,8 +75,8 @@ impl ClientHandler for DummyClientHandler {
 }
 
 /// Helper to create a task object for tool calls
-fn make_task() -> Option<JsonObject> {
-    Some(json!({}).as_object().unwrap().clone())
+fn make_task() -> JsonObject {
+    json!({}).as_object().unwrap().clone()
 }
 
 #[tokio::test]

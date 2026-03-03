@@ -55,7 +55,7 @@ async fn test_sampling_result_structure() -> Result<()> {
         SamplingMessage::assistant_text("The capital of France is Paris."),
         "test-model".to_string(),
     )
-    .with_stop_reason(Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()));
+    .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN);
 
     let json = serde_json::to_string(&result)?;
     let deserialized: CreateMessageResult = serde_json::from_str(&json)?;
@@ -436,7 +436,7 @@ async fn test_create_message_result_tool_use_stop_reason() -> Result<()> {
         ),
         "test-model".to_string(),
     )
-    .with_stop_reason(Some(CreateMessageResult::STOP_REASON_TOOL_USE.to_string()));
+    .with_stop_reason(CreateMessageResult::STOP_REASON_TOOL_USE);
 
     let json = serde_json::to_string(&result)?;
     let deserialized: CreateMessageResult = serde_json::from_str(&json)?;
@@ -688,7 +688,7 @@ async fn test_create_message_result_validate_rejects_user_role() {
         SamplingMessage::user_text("This should not be a user message"),
         "test-model".to_string(),
     )
-    .with_stop_reason(Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()));
+    .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN);
 
     let err = result.validate().unwrap_err();
     assert!(
@@ -703,7 +703,7 @@ async fn test_create_message_result_validate_accepts_assistant_role() {
         SamplingMessage::assistant_text("Hello!"),
         "test-model".to_string(),
     )
-    .with_stop_reason(Some(CreateMessageResult::STOP_REASON_END_TURN.to_string()));
+    .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN);
 
     assert!(result.validate().is_ok());
 }
