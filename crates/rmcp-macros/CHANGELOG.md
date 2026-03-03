@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.18.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.17.0...rmcp-macros-v0.18.0) - 2026-03-03
+## [1.0.0-alpha](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.17.0...rmcp-macros-v1.0.0-alpha) - 2026-03-03
 
 ### Added
 
