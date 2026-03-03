@@ -1,6 +1,13 @@
 use std::{collections::HashMap, process::Stdio};
 
-use rmcp::{RoleClient, ServiceExt, service::RunningService, transport::ConfigureCommandExt};
+use rmcp::{
+    RoleClient, ServiceExt,
+    service::RunningService,
+    transport::{
+        CommandBuilder,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
+};
 use serde::{Deserialize, Serialize};
 
 use crate::mcp_adaptor::McpManager;
@@ -63,19 +70,24 @@ impl McpServerTransportConfig {
             McpServerTransportConfig::Streamable { url } => {
                 let transport =
                     rmcp::transport::StreamableHttpClientTransport::from_uri(url.to_string());
-                ().serve(transport).await?
+                let (service, work) = ().serve(transport).await?;
+                tokio::spawn(work);
+                service
             }
             McpServerTransportConfig::Stdio {
                 command,
                 args,
                 envs,
             } => {
-                let transport = rmcp::transport::TokioChildProcess::new(
-                    tokio::process::Command::new(command).configure(|cmd| {
-                        cmd.args(args).envs(envs).stderr(Stdio::null());
-                    }),
-                )?;
-                ().serve(transport).await?
+                let command = CommandBuilder::<TokioChildProcessRunner>::new(command)
+                    .args(args)
+                    .envs(envs)
+                    .stderr(Stdio::null())
+                    .spawn_dyn()?;
+                let transport = ChildProcessTransport::new(command)?;
+                let (service, work) = ().serve(transport).await?;
+                tokio::spawn(work);
+                service
             }
         };
         Ok(client)

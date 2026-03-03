@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     start_server().await?;
     let client = http_client("ws://127.0.0.1:8001").await?;
     let tools = client.list_all_tools().await?;
-    client.cancel().await?;
+    client.cancel().await;
     tracing::info!("{:#?}", tools);
     Ok(())
 }
@@ -28,7 +28,8 @@ async fn http_client(uri: &str) -> anyhow::Result<RunningService<RoleClient, ()>
         return Err(anyhow::anyhow!("failed to upgrade connection"));
     }
     let transport = WebsocketTransport::new_client(stream);
-    let client = ().serve(transport).await?;
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
     Ok(client)
 }
 
@@ -40,8 +41,9 @@ async fn start_server() -> anyhow::Result<()> {
             tokio::spawn(async move {
                 let ws_stream = tokio_tungstenite::accept_async(stream).await?;
                 let transport = WebsocketTransport::new_server(ws_stream);
-                let server = Calculator::new().serve(transport).await?;
-                server.waiting().await?;
+                let (server, work) = Calculator::new().serve(transport).await?;
+                tokio::spawn(work);
+                server.waiting().await;
                 Ok::<(), anyhow::Error>(())
             });
         }

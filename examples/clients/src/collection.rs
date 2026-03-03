@@ -8,9 +8,11 @@ use anyhow::Result;
 use rmcp::{
     model::CallToolRequestParams,
     service::ServiceExt,
-    transport::{ConfigureCommandExt, TokioChildProcess},
+    transport::{
+        CommandBuilder,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
 };
-use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -26,14 +28,13 @@ async fn main() -> Result<()> {
 
     let mut clients_map = HashMap::new();
     for idx in 0..10 {
-        let client = ()
-            .into_dyn()
-            .serve(TokioChildProcess::new(Command::new("uvx").configure(
-                |cmd| {
-                    cmd.arg("mcp-client-git");
-                },
-            ))?)
-            .await?;
+        let child_process = CommandBuilder::<TokioChildProcessRunner>::new("uvx")
+            .arg("mcp-client-git")
+            .spawn_dyn()?;
+        let transport = ChildProcessTransport::new(child_process)?;
+
+        let (client, work) = ().into_dyn().serve(transport).await?;
+        tokio::spawn(work);
         clients_map.insert(idx, client);
     }
 
@@ -55,7 +56,7 @@ async fn main() -> Result<()> {
             .await?;
     }
     for (_, service) in clients_map {
-        service.cancel().await?;
+        service.cancel().await;
     }
     Ok(())
 }

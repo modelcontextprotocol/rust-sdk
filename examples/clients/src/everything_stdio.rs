@@ -3,7 +3,10 @@ use rmcp::{
     ServiceExt,
     model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
     object,
-    transport::{ConfigureCommandExt, TokioChildProcess},
+    transport::{
+        self, CommandBuilder,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
 };
 use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -19,13 +22,15 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let client = ()
-        .serve(TokioChildProcess::new(Command::new("npx").configure(
-            |cmd| {
-                cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
-            },
-        ))?)
-        .await?;
+    let command = CommandBuilder::<TokioChildProcessRunner>::new("npx")
+        .arg("-y")
+        .arg("@modelcontextprotocol/server-everything")
+        .spawn_dyn()?;
+
+    let transport = ChildProcessTransport::new(command)?;
+
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
 
     // Initialize
     let server_info = client.peer_info();
@@ -98,7 +103,7 @@ async fn main() -> Result<()> {
     let resource_templates = client.list_all_resource_templates().await?;
     tracing::info!("Available resource templates: {resource_templates:#?}");
 
-    client.cancel().await?;
+    client.cancel().await;
 
     Ok(())
 }

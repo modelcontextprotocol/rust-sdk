@@ -536,7 +536,10 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mut client = ().serve(transport).await?;
+    /// let mut (client, work) = ().serve(transport).await?;
+    /// // spawn the work (e.g. on tokio)
+    /// tokio::spawn(work);
+    ///
     /// // ... use the client ...
     /// client.close().await?;
     /// ```

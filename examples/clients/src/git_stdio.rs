@@ -2,9 +2,11 @@ use rmcp::{
     RmcpError,
     model::CallToolRequestParams,
     service::ServiceExt,
-    transport::{ConfigureCommandExt, TokioChildProcess},
+    transport::{
+        CommandBuilder,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
 };
-use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[allow(clippy::result_large_err)]
@@ -18,16 +20,18 @@ async fn main() -> Result<(), RmcpError> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let client = ()
-        .serve(
-            TokioChildProcess::new(Command::new("uvx").configure(|cmd| {
-                cmd.arg("mcp-server-git");
-            }))
-            .map_err(RmcpError::transport_creation::<TokioChildProcess>)?,
-        )
-        .await?;
 
-    // or serve_client((), TokioChildProcess::new(cmd)?).await?;
+    let command = CommandBuilder::<TokioChildProcessRunner>::new("npx")
+        .arg("-y")
+        .arg("@modelcontextprotocol/server-everything")
+        .spawn_dyn()
+        .map_err(RmcpError::transport_creation::<TokioChildProcessRunner>)?;
+
+    let transport = ChildProcessTransport::new(command)
+        .map_err(RmcpError::transport_creation::<TokioChildProcessRunner>)?;
+
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
 
     // Initialize
     let server_info = client.peer_info();
@@ -47,6 +51,6 @@ async fn main() -> Result<(), RmcpError> {
         })
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }

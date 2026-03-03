@@ -10,6 +10,14 @@ use crate::{
     },
 };
 
+#[derive(thiserror::Error, Debug)]
+pub enum ChildProcessTransportError {
+    #[error("Missing stdout")]
+    MissingStdout,
+    #[error("Missing stdin")]
+    MissingStdin,
+}
+
 pub struct ChildProcessTransport<R: ServiceRole> {
     _child: Box<dyn ChildProcessControl + Send>,
     framed_transport: AsyncRwTransport<
@@ -23,18 +31,18 @@ impl<R> ChildProcessTransport<R>
 where
     R: ServiceRole,
 {
-    pub fn new(child: ChildProcess) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(child: ChildProcess) -> Result<Self, ChildProcessTransportError> {
         let (stdout, stdin, _stderr, control) = child.split();
 
         let framed_transport: AsyncRwTransport<R, _, _> = AsyncRwTransport::new(
             Box::new(
                 stdout
-                    .ok_or("Failed to capture stdout of child process")?
+                    .ok_or(ChildProcessTransportError::MissingStdout)?
                     .compat(),
             ) as Box<dyn TokioAsyncRead + Unpin + Send>,
             Box::new(
                 stdin
-                    .ok_or("Failed to capture stdin of child process")?
+                    .ok_or(ChildProcessTransportError::MissingStdin)?
                     .compat_write(),
             ) as Box<dyn TokioAsyncWrite + Unpin + Send>,
         );

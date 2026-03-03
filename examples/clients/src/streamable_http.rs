@@ -30,9 +30,11 @@ async fn main() -> Result<()> {
             icons: None,
         },
     };
-    let client = client_info.serve(transport).await.inspect_err(|e| {
+    let (client, work) = client_info.serve(transport).await.inspect_err(|e| {
         tracing::error!("client error: {:?}", e);
     })?;
+
+    tokio::spawn(work);
 
     // Initialize
     let server_info = client.peer_info();
@@ -51,6 +53,6 @@ async fn main() -> Result<()> {
         })
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }

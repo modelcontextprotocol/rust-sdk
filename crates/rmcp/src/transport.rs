@@ -51,7 +51,9 @@
 //!     let stream = tokio::net::TcpSocket::new_v4()?
 //!         .connect("127.0.0.1:8001".parse()?)
 //!         .await?;
-//!     let client = ().serve(stream).await?;
+//!     let (client, work) = ().serve(stream).await?;
+//!     // spawn the work on a runtime (or poll it somehow)
+//!     tokio::spawn(work);
 //!     let tools = client.peer().list_tools(Default::default()).await?;
 //!     println!("{:?}", tools);
 //!     Ok(())
@@ -60,7 +62,9 @@
 //! // create transport from std io
 //! #[cfg(feature = "client")]
 //! async fn io()  -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
+//!     let (client, work) = ().serve((tokio::io::stdin(), tokio::io::stdout())).await?;
+//!     // spawn the work on a runtime (or poll it somehow)
+//!     tokio::spawn(work);
 //!     let tools = client.peer().list_tools(Default::default()).await?;
 //!     println!("{:?}", tools);
 //!     Ok(())

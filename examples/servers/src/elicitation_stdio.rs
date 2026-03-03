@@ -182,13 +182,15 @@ async fn main() -> Result<()> {
     println!("1. Run: npx @modelcontextprotocol/inspector");
     println!("2. Enter server command: {}", current_exe);
 
-    let service = ElicitationServer::new()
+    let (service, work) = ElicitationServer::new()
         .serve(stdio())
         .await
         .inspect_err(|e| {
             tracing::error!("serving error: {:?}", e);
         })?;
 
-    service.waiting().await?;
+    tokio::spawn(work);
+
+    service.waiting().await;
     Ok(())
 }

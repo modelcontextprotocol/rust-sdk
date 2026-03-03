@@ -496,7 +496,8 @@ async fn test_mcp_custom_headers_sent_to_server() -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_config(config);
 
     // Start MCP client with empty handler (this will trigger initialize request)
-    let client = ().serve(transport).await.expect("Failed to start client");
+    let (client, work) = ().serve(transport).await.expect("Failed to start client");
+    tokio::spawn(work);
 
     // Wait for initialize to be called
     tokio::time::timeout(
@@ -526,7 +527,7 @@ async fn test_mcp_custom_headers_sent_to_server() -> anyhow::Result<()> {
     );
 
     // Cleanup
-    drop(client);
+    client.cancel().await;
     server_handle.abort();
 
     Ok(())
@@ -665,7 +666,8 @@ async fn test_mcp_protocol_version_header_sent_after_init() -> anyhow::Result<()
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{}/mcp", port));
 
     let transport = StreamableHttpClientTransport::from_config(config);
-    let client = ().serve(transport).await.expect("Failed to start client");
+    let (client, work) = ().serve(transport).await.expect("Failed to start client");
+    tokio::spawn(work);
 
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -701,7 +703,7 @@ async fn test_mcp_protocol_version_header_sent_after_init() -> anyhow::Result<()
         "Initialized notification should include MCP-Protocol-Version: 2025-03-26"
     );
 
-    drop(client);
+    client.cancel().await;
     server_handle.abort();
 
     Ok(())

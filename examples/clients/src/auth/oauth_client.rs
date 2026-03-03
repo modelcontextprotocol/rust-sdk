@@ -180,7 +180,8 @@ async fn main() -> Result<()> {
 
     // Create client and connect to MCP server
     let client_service = ClientInfo::default();
-    let client = client_service.serve(transport).await?;
+    let (client, work) = client_service.serve(transport).await?;
+    tokio::spawn(work);
     tracing::info!("Successfully connected to MCP server");
 
     // Test API requests

@@ -4,9 +4,11 @@ use rmcp::{
     model::*,
     object,
     service::{RequestContext, RoleClient},
-    transport::{ConfigureCommandExt, TokioChildProcess},
+    transport::{
+        CommandBuilder,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
 };
-use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Simple Sampling Demo Client
 ///
@@ -69,19 +71,20 @@ async fn main() -> Result<()> {
         .expect("CARGO_MANIFEST_DIR is not set")
         .join("servers");
 
-    let client = client
-        .serve(TokioChildProcess::new(Command::new("cargo").configure(
-            |cmd| {
-                cmd.arg("run")
-                    .arg("--example")
-                    .arg("servers_sampling_stdio")
-                    .current_dir(servers_dir);
-            },
-        ))?)
-        .await
-        .inspect_err(|e| {
-            tracing::error!("client error: {:?}", e);
-        })?;
+    let command = CommandBuilder::<TokioChildProcessRunner>::new("cargo")
+        .arg("run")
+        .arg("--example")
+        .arg("servers_sampling_stdio")
+        .current_dir(servers_dir)
+        .spawn_dyn()?;
+
+    let transport = ChildProcessTransport::new(command)?;
+
+    let (client, work) = client.serve(transport).await.inspect_err(|e| {
+        tracing::error!("client error: {:?}", e);
+    })?;
+
+    tokio::spawn(work);
 
     // Wait for initialization
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
@@ -118,6 +121,6 @@ async fn main() -> Result<()> {
     tracing::info!("Sampling demo completed successfully!");
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }

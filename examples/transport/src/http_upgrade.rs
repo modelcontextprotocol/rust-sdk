@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     start_server().await?;
     let client = http_client("127.0.0.1:8001").await?;
     let tools = client.list_all_tools().await?;
-    client.cancel().await?;
+    client.cancel().await;
     tracing::info!("{:#?}", tools);
     Ok(())
 }
@@ -24,8 +24,9 @@ async fn main() -> anyhow::Result<()> {
 async fn http_server(req: Request<Incoming>) -> Result<hyper::Response<String>, hyper::Error> {
     tokio::spawn(async move {
         let upgraded = hyper::upgrade::on(req).await?;
-        let service = Calculator::new().serve(TokioIo::new(upgraded)).await?;
-        service.waiting().await?;
+        let (service, work) = Calculator::new().serve(TokioIo::new(upgraded)).await?;
+        tokio::spawn(work);
+        service.waiting().await;
         anyhow::Result::<()>::Ok(())
     });
     let mut response = hyper::Response::new(String::new());
@@ -46,7 +47,8 @@ async fn http_client(uri: &str) -> anyhow::Result<RunningService<RoleClient, ()>
         .insert(UPGRADE, HeaderValue::from_static("mcp"));
     let response = s.send_request(req).await?;
     let upgraded = hyper::upgrade::on(response).await?;
-    let client = ().serve(TokioIo::new(upgraded)).await?;
+    let (client, work) = ().serve(TokioIo::new(upgraded)).await?;
+    tokio::spawn(work);
     Ok(client)
 }
 

@@ -17,10 +17,12 @@ async fn main() -> Result<()> {
     tracing::info!("Starting Calculator MCP server");
 
     // Create an instance of our calculator router
-    let service = Calculator::new().serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = Calculator::new().serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {:?}", e);
     })?;
 
-    service.waiting().await?;
+    tokio::spawn(work);
+
+    service.waiting().await;
     Ok(())
 }

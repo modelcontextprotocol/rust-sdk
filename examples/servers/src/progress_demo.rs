@@ -33,11 +33,12 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_stdio() -> anyhow::Result<()> {
     let server = ProgressDemo::new();
-    let service = server.serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = server.serve(stdio()).await.inspect_err(|e| {
         tracing::error!("stdio serving error: {:?}", e);
     })?;
+    tokio::spawn(work);
 
-    service.waiting().await?;
+    service.waiting().await;
     Ok(())
 }
 
