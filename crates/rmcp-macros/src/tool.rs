@@ -110,8 +110,8 @@ pub struct ResolvedToolAttribute {
     pub description: Option<Expr>,
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
-    pub annotations: Expr,
-    pub execution: Expr,
+    pub annotations: Option<Expr>,
+    pub execution: Option<Expr>,
     pub icons: Option<Expr>,
     pub meta: Option<Expr>,
 }
@@ -140,6 +140,12 @@ impl ResolvedToolAttribute {
         let output_schema_call = output_schema
             .map(|s| quote! { .with_raw_output_schema(#s) })
             .unwrap_or_default();
+        let annotations_call = annotations
+            .map(|a| quote! { .with_annotations(#a) })
+            .unwrap_or_default();
+        let execution_call = execution
+            .map(|e| quote! { .with_execution(#e) })
+            .unwrap_or_default();
         let icons_call = icons
             .map(|i| quote! { .with_icons(#i) })
             .unwrap_or_default();
@@ -149,22 +155,17 @@ impl ResolvedToolAttribute {
         let tokens = quote! {
             #doc_attr
             pub fn #fn_ident() -> rmcp::model::Tool {
-                let mut __tool = rmcp::model::Tool::new_with_raw(
+                rmcp::model::Tool::new_with_raw(
                     #name,
                     #description,
                     #input_schema,
                 )
                 #title_call
                 #output_schema_call
+                #annotations_call
+                #execution_call
                 #icons_call
-                #meta_call;
-                if let Some(__annotations) = #annotations {
-                    __tool = __tool.with_annotations(__annotations);
-                }
-                if let Some(__execution) = #execution {
-                    __tool = __tool.with_execution(__execution);
-                }
-                __tool
+                #meta_call
             }
         };
         syn::parse2::<ImplItemFn>(tokens)
@@ -255,17 +256,17 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         let idempotent_hint = wrap_option(idempotent_hint);
         let open_world_hint = wrap_option(open_world_hint);
         let token_stream = quote! {
-            Some(rmcp::model::ToolAnnotations::from_raw(
+            rmcp::model::ToolAnnotations::from_raw(
                 #title,
                 #read_only_hint,
                 #destructive_hint,
                 #idempotent_hint,
                 #open_world_hint,
-            ))
+            )
         };
-        syn::parse2::<Expr>(token_stream)?
+        Some(syn::parse2::<Expr>(token_stream)?)
     } else {
-        none_expr()?
+        None
     };
     let execution_expr = if let Some(execution) = attribute.execution {
         let ToolExecutionAttribute { task_support } = execution;
@@ -291,13 +292,13 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         };
 
         let token_stream = quote! {
-            Some(rmcp::model::ToolExecution::from_raw(
+            rmcp::model::ToolExecution::from_raw(
                 #task_support_expr,
-            ))
+            )
         };
-        syn::parse2::<Expr>(token_stream)?
+        Some(syn::parse2::<Expr>(token_stream)?)
     } else {
-        none_expr()?
+        None
     };
     // Handle output_schema - either explicit or generated from return type
     let output_schema_expr = attribute.output_schema.or_else(|| {
