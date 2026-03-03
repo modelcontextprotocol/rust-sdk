@@ -13,7 +13,6 @@ use rmcp::{
     model::{CallToolRequestParams, ClientInfo, ErrorCode, JsonObject},
     tool, tool_handler, tool_router,
 };
-use serde_json::json;
 
 /// Server with tools having different task support modes.
 #[derive(Debug, Clone)]
@@ -76,7 +75,7 @@ impl ClientHandler for DummyClientHandler {
 
 /// Helper to create a task object for tool calls
 fn make_task() -> JsonObject {
-    json!({}).as_object().unwrap().clone()
+    serde_json::Map::new()
 }
 
 #[tokio::test]
