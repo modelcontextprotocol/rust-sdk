@@ -793,6 +793,11 @@ impl InitializeRequestParams {
             client_info,
         }
     }
+
+    pub fn with_protocol_version(mut self, protocol_version: ProtocolVersion) -> Self {
+        self.protocol_version = protocol_version;
+        self
+    }
 }
 
 impl RequestParamsMeta for InitializeRequestParams {
@@ -978,6 +983,30 @@ impl Implementation {
             website_url: None,
         }
     }
+
+    /// Set the human-readable title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the icons.
+    pub fn with_icons(mut self, icons: Vec<Icon>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set the website URL.
+    pub fn with_website_url(mut self, website_url: impl Into<String>) -> Self {
+        self.website_url = Some(website_url.into());
+        self
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -990,6 +1019,13 @@ pub struct PaginatedRequestParams {
     pub meta: Option<Meta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+}
+
+impl PaginatedRequestParams {
+    pub fn with_cursor(mut self, cursor: Option<String>) -> Self {
+        self.cursor = cursor;
+        self
+    }
 }
 
 impl RequestParamsMeta for PaginatedRequestParams {
@@ -1036,6 +1072,18 @@ impl ProgressNotificationParam {
             total: None,
             message: None,
         }
+    }
+
+    /// Set the total number of items to process.
+    pub fn with_total(mut self, total: f64) -> Self {
+        self.total = Some(total);
+        self
+    }
+
+    /// Set a message describing the current progress.
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
     }
 }
 
@@ -1115,6 +1163,12 @@ impl ReadResourceRequestParams {
             meta: None,
             uri: uri.into(),
         }
+    }
+
+    /// Set the metadata for this request.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
     }
 }
 
@@ -1287,6 +1341,12 @@ impl GetPromptRequestParams {
     /// Set the arguments for this prompt request.
     pub fn with_arguments(mut self, arguments: JsonObject) -> Self {
         self.arguments = Some(arguments);
+        self
+    }
+
+    /// Set the metadata for this request.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
         self
     }
 }
@@ -2832,6 +2892,12 @@ impl CreateMessageResult {
     /// Set the stop reason.
     pub fn with_stop_reason(mut self, stop_reason: Option<String>) -> Self {
         self.stop_reason = stop_reason;
+        self
+    }
+
+    /// Set the model identifier.
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
         self
     }
 
