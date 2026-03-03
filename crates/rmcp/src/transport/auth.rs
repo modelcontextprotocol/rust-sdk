@@ -1612,14 +1612,29 @@ impl AuthorizationManager {
             return Ok(());
         };
 
-        let required_method = config.auth_method();
-
         if let Some(methods) = metadata
             .additional_fields
             .get("token_endpoint_auth_methods_supported")
             .and_then(|v| v.as_array())
         {
-            if !methods.iter().any(|m| m.as_str() == Some(required_method)) {
+            let is_supported = match config {
+                ClientCredentialsConfig::ClientSecret { .. } => {
+                    // Accept either client_secret_post (request body) or
+                    // client_secret_basic (HTTP Basic) per the MCP auth spec.
+                    methods.iter().any(|m| {
+                        matches!(
+                            m.as_str(),
+                            Some("client_secret_post") | Some("client_secret_basic")
+                        )
+                    })
+                }
+                #[cfg(feature = "auth-client-credentials-jwt")]
+                ClientCredentialsConfig::PrivateKeyJwt { .. } => methods
+                    .iter()
+                    .any(|m| m.as_str() == Some("private_key_jwt")),
+            };
+            if !is_supported {
+                let required_method = config.auth_method();
                 let supported: Vec<&str> = methods.iter().filter_map(|m| m.as_str()).collect();
                 return Err(AuthError::ClientCredentialsError(format!(
                     "Authorization server does not support auth method '{}'. Supported: {:?}",
@@ -1654,9 +1669,10 @@ impl AuthorizationManager {
 
     /// Configure the OAuth2 client for the client credentials flow.
     ///
-    /// Sets up the internal `BasicClient` with the token endpoint from metadata,
-    /// client_id, and optionally client_secret. Uses `AuthType::RequestBody` for
-    /// `client_secret` per SEP-1046.
+    /// Selects `client_secret_post` (request body) by default. Switches to
+    /// `client_secret_basic` (HTTP Basic) only when the server advertises that
+    /// method exclusively. For `PrivateKeyJwt`, no OAuth client state is needed
+    /// here; the token request is built manually in [`Self::exchange_client_credentials_jwt`].
     pub fn configure_client_credentials(
         &mut self,
         config: &ClientCredentialsConfig,
@@ -1675,7 +1691,7 @@ impl AuthorizationManager {
 
         let client_id = ClientId::new(config.client_id().to_string());
 
-        let mut client_builder = BasicClient::new(client_id)
+        let mut client_builder: OAuthClient = oauth2::Client::new(client_id)
             .set_auth_uri(auth_url)
             .set_token_uri(token_url);
 
@@ -1683,13 +1699,32 @@ impl AuthorizationManager {
             ClientCredentialsConfig::ClientSecret { client_secret, .. } => {
                 client_builder =
                     client_builder.set_client_secret(ClientSecret::new(client_secret.clone()));
-                // SEP-1046: credentials in request body
-                client_builder = client_builder.set_auth_type(AuthType::RequestBody);
+                // Use client_secret_basic (HTTP Basic) when that is the only method
+                // the server advertises; fall back to client_secret_post (request body).
+                let only_basic = metadata
+                    .additional_fields
+                    .get("token_endpoint_auth_methods_supported")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        let (has_basic, has_post) =
+                            arr.iter()
+                                .fold((false, false), |(b, p), m| match m.as_str() {
+                                    Some("client_secret_basic") => (true, p),
+                                    Some("client_secret_post") => (b, true),
+                                    _ => (b, p),
+                                });
+                        has_basic && !has_post
+                    })
+                    .unwrap_or_default();
+                if !only_basic {
+                    client_builder = client_builder.set_auth_type(AuthType::RequestBody);
+                }
             }
             #[cfg(feature = "auth-client-credentials-jwt")]
             ClientCredentialsConfig::PrivateKeyJwt { .. } => {
-                // For JWT, we don't set client_secret; assertion is added as extra param
-                // No auth type needed since we handle auth via JWT assertion params
+                // For JWT, client identity comes from the assertion's `sub` claim.
+                // The request is built manually in exchange_client_credentials_jwt to
+                // ensure client_id is not included in the body per RFC 7523 §3.
             }
         }
 
@@ -1699,12 +1734,27 @@ impl AuthorizationManager {
 
     /// Exchange client credentials for an access token (SEP-1046).
     ///
-    /// For `ClientSecret`: sends credentials in the request body with scopes and optional resource.
-    /// For `PrivateKeyJwt`: additionally sends `client_assertion_type` and `client_assertion`.
+    /// For `ClientSecret`: sends credentials in the request body (or Authorization header
+    /// for `client_secret_basic`) with scopes and resource.
+    /// For `PrivateKeyJwt`: builds the request manually (no `client_id` in body per RFC 7523 §3).
     pub async fn exchange_client_credentials(
         &self,
         config: &ClientCredentialsConfig,
     ) -> Result<OAuthTokenResponse, AuthError> {
+        // The MCP auth spec requires the `resource` parameter in all token requests.
+        if config.resource().is_none() {
+            return Err(AuthError::ClientCredentialsError(
+                "resource parameter is required by the MCP auth spec".to_string(),
+            ));
+        }
+
+        // For private_key_jwt, use a separate path that omits client_id from the request
+        // body, as required by RFC 7523 §3 (client is identified by the JWT `sub` claim).
+        #[cfg(feature = "auth-client-credentials-jwt")]
+        if matches!(config, ClientCredentialsConfig::PrivateKeyJwt { .. }) {
+            return self.exchange_client_credentials_jwt(config).await;
+        }
+
         let oauth_client = self
             .oauth_client
             .as_ref()
@@ -1712,43 +1762,12 @@ impl AuthorizationManager {
 
         let mut request = oauth_client.exchange_client_credentials();
 
-        // Add scopes
         for scope in config.scopes() {
             request = request.add_scope(Scope::new(scope.clone()));
         }
 
-        // Add resource parameter if specified
         if let Some(resource) = config.resource() {
             request = request.add_extra_param("resource", resource);
-        }
-
-        // For private_key_jwt, add assertion parameters
-        #[cfg(feature = "auth-client-credentials-jwt")]
-        if let ClientCredentialsConfig::PrivateKeyJwt {
-            client_id,
-            signing_key,
-            signing_algorithm,
-            token_endpoint_audience,
-            ..
-        } = config
-        {
-            let metadata = self
-                .metadata
-                .as_ref()
-                .ok_or(AuthError::NoAuthorizationSupport)?;
-
-            let audience = token_endpoint_audience
-                .as_deref()
-                .unwrap_or(&metadata.token_endpoint);
-
-            let assertion =
-                Self::build_jwt_assertion(client_id, audience, signing_key, *signing_algorithm)?;
-
-            request = request.add_extra_param(
-                "client_assertion_type",
-                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            );
-            request = request.add_extra_param("client_assertion", assertion);
         }
 
         let http_client = reqwest::ClientBuilder::new()
@@ -1806,6 +1825,115 @@ impl AuthorizationManager {
         Ok(token_result)
     }
 
+    /// Exchange client credentials using a JWT assertion (RFC 7523).
+    ///
+    /// Builds the token request manually so that `client_id` is **not** included in the
+    /// request body; client identity is conveyed solely by the `sub` claim in the assertion.
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    async fn exchange_client_credentials_jwt(
+        &self,
+        config: &ClientCredentialsConfig,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let ClientCredentialsConfig::PrivateKeyJwt {
+            client_id,
+            signing_key,
+            signing_algorithm,
+            token_endpoint_audience,
+            scopes,
+            resource,
+        } = config
+        else {
+            return Err(AuthError::InternalError(
+                "expected PrivateKeyJwt config".to_string(),
+            ));
+        };
+
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(AuthError::NoAuthorizationSupport)?;
+
+        let audience = token_endpoint_audience
+            .as_deref()
+            .unwrap_or(&metadata.token_endpoint);
+
+        let assertion =
+            Self::build_jwt_assertion(client_id, audience, signing_key, *signing_algorithm)?;
+
+        let scope_str = scopes.join(" ");
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer.append_pair("grant_type", "client_credentials");
+        serializer.append_pair(
+            "client_assertion_type",
+            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        );
+        serializer.append_pair("client_assertion", &assertion);
+        if !scope_str.is_empty() {
+            serializer.append_pair("scope", &scope_str);
+        }
+        if let Some(res) = resource.as_deref() {
+            serializer.append_pair("resource", res);
+        }
+        let body_str = serializer.finish();
+
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| AuthError::InternalError(e.to_string()))?;
+
+        let response = http_client
+            .post(&metadata.token_endpoint)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body_str)
+            .send()
+            .await
+            .map_err(|e| {
+                AuthError::ClientCredentialsError(format!("Token exchange request failed: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response.bytes().await.map_err(|e| {
+            AuthError::ClientCredentialsError(format!("Failed to read token response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            let msg = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                let error = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown");
+                let desc = v
+                    .get("error_description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                format!("Token exchange failed: {error}: {desc}")
+            } else {
+                format!("Token exchange failed: HTTP {status}")
+            };
+            return Err(AuthError::ClientCredentialsError(msg));
+        }
+
+        let token_result = serde_json::from_slice::<OAuthTokenResponse>(&body).map_err(|e| {
+            AuthError::ClientCredentialsError(format!("Failed to parse token response: {e}"))
+        })?;
+
+        debug!("client credentials JWT token result: {:?}", token_result);
+
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
+        let stored = StoredCredentials {
+            client_id: client_id.clone(),
+            token_response: Some(token_result.clone()),
+            granted_scopes,
+            token_received_at: Some(Self::now_epoch_secs()),
+        };
+        self.credential_store.save(stored).await?;
+
+        Ok(token_result)
+    }
+
     /// Build a JWT assertion per RFC 7523 for private_key_jwt authentication.
     #[cfg(feature = "auth-client-credentials-jwt")]
     fn build_jwt_assertion(
@@ -1821,7 +1949,7 @@ impl AuthorizationManager {
             .unwrap_or_default()
             .as_secs();
 
-        let jti = format!("{:x}{:x}", now, rand_u64());
+        let jti = uuid::Uuid::new_v4().to_string();
 
         let claims = json!({
             "iss": client_id,
@@ -1842,16 +1970,6 @@ impl AuthorizationManager {
         jsonwebtoken::encode(&header, &claims, &encoding_key)
             .map_err(|e| AuthError::JwtSigningError(format!("Failed to sign JWT: {}", e)))
     }
-}
-
-/// Simple random u64 for JWT jti claim uniqueness
-#[cfg(feature = "auth-client-credentials-jwt")]
-fn rand_u64() -> u64 {
-    use std::{
-        collections::hash_map::RandomState,
-        hash::{BuildHasher, Hasher},
-    };
-    RandomState::new().build_hasher().finish()
 }
 
 /// oauth2 authorization session, for guiding user to complete the authorization process
@@ -3316,7 +3434,8 @@ mod tests {
         let mut additional_fields = HashMap::new();
         additional_fields.insert(
             "token_endpoint_auth_methods_supported".to_string(),
-            serde_json::json!(["client_secret_basic"]),
+            // Neither client_secret_post nor client_secret_basic — should be rejected.
+            serde_json::json!(["tls_client_auth", "private_key_jwt"]),
         );
         let meta = AuthorizationMetadata {
             authorization_endpoint: "http://localhost/authorize".to_string(),
@@ -3334,7 +3453,10 @@ mod tests {
         let err = mgr
             .validate_client_credentials_metadata(&config)
             .unwrap_err();
-        assert!(matches!(err, AuthError::ClientCredentialsError(_)));
+        assert!(
+            err.to_string().contains("tls_client_auth"),
+            "expected error to mention unsupported method, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -3370,6 +3492,58 @@ mod tests {
             resource: None,
         };
         mgr.validate_client_credentials_metadata(&config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn validate_client_credentials_metadata_accepts_client_secret_basic_only() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_basic"]),
+        );
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            additional_fields,
+            ..Default::default()
+        };
+        let mgr = manager_with_metadata(Some(meta)).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        // A server advertising only client_secret_basic must be accepted.
+        mgr.validate_client_credentials_metadata(&config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn configure_client_credentials_uses_basic_auth_when_server_only_supports_basic() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_basic"]),
+        );
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            additional_fields,
+            ..Default::default()
+        };
+        let mut mgr = manager_with_metadata(Some(meta)).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        mgr.configure_client_credentials(&config).unwrap();
+        let oauth_client = mgr.oauth_client.as_ref().unwrap();
+        assert!(
+            !matches!(oauth_client.auth_type(), AuthType::RequestBody),
+            "expected HTTP Basic auth when server only supports client_secret_basic"
+        );
     }
 
     #[test]

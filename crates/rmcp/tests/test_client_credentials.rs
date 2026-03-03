@@ -172,7 +172,7 @@ async fn test_client_credentials_invalid_secret() {
         client_id: "test-m2m-client".to_string(),
         client_secret: "wrong-secret".to_string(),
         scopes: vec![],
-        resource: None,
+        resource: Some(base_url.clone()),
     };
 
     let result = oauth_state.authenticate_client_credentials(config).await;
@@ -189,7 +189,7 @@ async fn test_client_credentials_invalid_client_id() {
         client_id: "unknown-client".to_string(),
         client_secret: "test-m2m-secret".to_string(),
         scopes: vec![],
-        resource: None,
+        resource: Some(base_url.clone()),
     };
 
     let result = oauth_state.authenticate_client_credentials(config).await;

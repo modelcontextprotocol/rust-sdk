@@ -132,7 +132,7 @@ transport-streamable-http-server-session = [
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
 auth = ["dep:oauth2", "__reqwest", "dep:url"]
-auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken"]
+auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
