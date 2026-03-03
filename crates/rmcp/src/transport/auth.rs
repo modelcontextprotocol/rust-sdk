@@ -1672,7 +1672,7 @@ impl AuthorizationManager {
     /// Selects `client_secret_post` (request body) by default. Switches to
     /// `client_secret_basic` (HTTP Basic) only when the server advertises that
     /// method exclusively. For `PrivateKeyJwt`, no OAuth client state is needed
-    /// here; the token request is built manually in [`Self::exchange_client_credentials_jwt`].
+    /// here; the token request is built manually in `exchange_client_credentials_jwt`.
     pub fn configure_client_credentials(
         &mut self,
         config: &ClientCredentialsConfig,
@@ -1853,6 +1853,19 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or(AuthError::NoAuthorizationSupport)?;
 
+        // Validate that the token endpoint uses HTTPS before transmitting sensitive credentials.
+        let token_endpoint_url = url::Url::parse(&metadata.token_endpoint).map_err(|e| {
+            AuthError::ClientCredentialsError(format!(
+                "Invalid token endpoint URL in authorization metadata: {e}"
+            ))
+        })?;
+        if token_endpoint_url.scheme() != "https" {
+            return Err(AuthError::ClientCredentialsError(
+                "Insecure token endpoint URL: HTTPS is required for client credentials flow"
+                    .to_string(),
+            ));
+        }
+
         let audience = token_endpoint_audience
             .as_deref()
             .unwrap_or(&metadata.token_endpoint);
@@ -1882,7 +1895,7 @@ impl AuthorizationManager {
             .map_err(|e| AuthError::InternalError(e.to_string()))?;
 
         let response = http_client
-            .post(&metadata.token_endpoint)
+            .post(token_endpoint_url.as_str())
             .header("content-type", "application/x-www-form-urlencoded")
             .body(body_str)
             .send()
