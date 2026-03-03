@@ -11,7 +11,9 @@
 
 </div>
 
-`rmcp-macros` is a procedural macro library for the Rust Model Context Protocol (RMCP) SDK, providing macros that facilitate the development of RMCP applications.
+Procedural macros for the [RMCP](../rmcp) SDK. Most users should depend on `rmcp` with the `macros` feature (enabled by default) rather than using this crate directly.
+
+For **getting started** and **full MCP feature documentation**, see the [main README](../../README.md).
 
 ## Available Macros
 
@@ -63,4 +65,4 @@ See the [full documentation](https://docs.rs/rmcp-macros) for detailed usage of 
 
 ## License
 
-Please refer to the LICENSE file in the project root directory.
+This project is licensed under the terms specified in the repository's [LICENSE](../../LICENSE) file.
