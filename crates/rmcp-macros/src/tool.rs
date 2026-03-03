@@ -3,7 +3,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
 
-use crate::common::{extract_doc_line, none_expr};
+use crate::common::extract_doc_line;
 
 /// Check if a type is Json<T> and extract the inner type T
 fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
