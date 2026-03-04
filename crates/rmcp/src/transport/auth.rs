@@ -315,6 +315,13 @@ pub enum AuthError {
         required_scope: String,
         upgrade_url: Option<String>,
     },
+
+    #[error("Client credentials error: {0}")]
+    ClientCredentialsError(String),
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[error("JWT signing error: {0}")]
+    JwtSigningError(String),
 }
 
 /// oauth2 metadata
@@ -401,6 +408,105 @@ type OAuthClient = oauth2::Client<
     oauth2::EndpointSet,
 >;
 type Credentials = (String, Option<OAuthTokenResponse>);
+
+/// OAuth 2.0 extension identifier for client credentials flow (SEP-1046)
+pub const EXTENSION_OAUTH_CLIENT_CREDENTIALS: &str =
+    "io.modelcontextprotocol/oauth-client-credentials";
+
+/// JWT signing algorithm for private_key_jwt authentication (SEP-1046)
+#[cfg(feature = "auth-client-credentials-jwt")]
+#[derive(Debug, Clone, Copy)]
+pub enum JwtSigningAlgorithm {
+    RS256,
+    RS384,
+    RS512,
+    ES256,
+    ES384,
+}
+
+#[cfg(feature = "auth-client-credentials-jwt")]
+impl JwtSigningAlgorithm {
+    fn to_jsonwebtoken_algorithm(self) -> jsonwebtoken::Algorithm {
+        match self {
+            JwtSigningAlgorithm::RS256 => jsonwebtoken::Algorithm::RS256,
+            JwtSigningAlgorithm::RS384 => jsonwebtoken::Algorithm::RS384,
+            JwtSigningAlgorithm::RS512 => jsonwebtoken::Algorithm::RS512,
+            JwtSigningAlgorithm::ES256 => jsonwebtoken::Algorithm::ES256,
+            JwtSigningAlgorithm::ES384 => jsonwebtoken::Algorithm::ES384,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            JwtSigningAlgorithm::RS256 => "RS256",
+            JwtSigningAlgorithm::RS384 => "RS384",
+            JwtSigningAlgorithm::RS512 => "RS512",
+            JwtSigningAlgorithm::ES256 => "ES256",
+            JwtSigningAlgorithm::ES384 => "ES384",
+        }
+    }
+}
+
+/// Configuration for OAuth 2.0 Client Credentials flow (SEP-1046)
+///
+/// This supports two authentication methods:
+/// - `ClientSecret`: credentials sent in the request body
+/// - `PrivateKeyJwt`: RFC 7523 signed JWT assertion (requires `auth-client-credentials-jwt` feature)
+#[derive(Debug, Clone)]
+pub enum ClientCredentialsConfig {
+    /// Client secret authentication (credentials in request body)
+    ClientSecret {
+        client_id: String,
+        client_secret: String,
+        scopes: Vec<String>,
+        resource: Option<String>,
+    },
+    /// Private key JWT authentication (RFC 7523)
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    PrivateKeyJwt {
+        client_id: String,
+        signing_key: Vec<u8>,
+        signing_algorithm: JwtSigningAlgorithm,
+        /// Override the `aud` claim in the JWT assertion; defaults to token_endpoint
+        token_endpoint_audience: Option<String>,
+        scopes: Vec<String>,
+        resource: Option<String>,
+    },
+}
+
+impl ClientCredentialsConfig {
+    fn client_id(&self) -> &str {
+        match self {
+            ClientCredentialsConfig::ClientSecret { client_id, .. } => client_id,
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            ClientCredentialsConfig::PrivateKeyJwt { client_id, .. } => client_id,
+        }
+    }
+
+    fn scopes(&self) -> &[String] {
+        match self {
+            ClientCredentialsConfig::ClientSecret { scopes, .. } => scopes,
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            ClientCredentialsConfig::PrivateKeyJwt { scopes, .. } => scopes,
+        }
+    }
+
+    fn resource(&self) -> Option<&str> {
+        match self {
+            ClientCredentialsConfig::ClientSecret { resource, .. } => resource.as_deref(),
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            ClientCredentialsConfig::PrivateKeyJwt { resource, .. } => resource.as_deref(),
+        }
+    }
+
+    fn auth_method(&self) -> &str {
+        match self {
+            ClientCredentialsConfig::ClientSecret { .. } => "client_secret_post",
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            ClientCredentialsConfig::PrivateKeyJwt { .. } => "private_key_jwt",
+        }
+    }
+}
 
 /// Configuration for scope upgrade behavior
 #[derive(Debug, Clone)]
@@ -1489,6 +1595,394 @@ impl AuthorizationManager {
             Some((trimmed[..end].to_string(), leading_ws + end))
         }
     }
+
+    // -- Client Credentials flow (SEP-1046) --
+
+    /// Validate that the authorization server metadata supports the requested
+    /// client credentials authentication method.
+    ///
+    /// For `client_secret_post`, checks `token_endpoint_auth_methods_supported`.
+    /// For `private_key_jwt`, additionally checks `token_endpoint_auth_signing_alg_values_supported`.
+    /// When the metadata field is absent, the method is permissive (assumes support).
+    pub fn validate_client_credentials_metadata(
+        &self,
+        config: &ClientCredentialsConfig,
+    ) -> Result<(), AuthError> {
+        let Some(metadata) = self.metadata.as_ref() else {
+            return Ok(());
+        };
+
+        if let Some(methods) = metadata
+            .additional_fields
+            .get("token_endpoint_auth_methods_supported")
+            .and_then(|v| v.as_array())
+        {
+            let is_supported = match config {
+                ClientCredentialsConfig::ClientSecret { .. } => {
+                    // Accept either client_secret_post (request body) or
+                    // client_secret_basic (HTTP Basic) per the MCP auth spec.
+                    methods.iter().any(|m| {
+                        matches!(
+                            m.as_str(),
+                            Some("client_secret_post") | Some("client_secret_basic")
+                        )
+                    })
+                }
+                #[cfg(feature = "auth-client-credentials-jwt")]
+                ClientCredentialsConfig::PrivateKeyJwt { .. } => methods
+                    .iter()
+                    .any(|m| m.as_str() == Some("private_key_jwt")),
+            };
+            if !is_supported {
+                let required_method = config.auth_method();
+                let supported: Vec<&str> = methods.iter().filter_map(|m| m.as_str()).collect();
+                return Err(AuthError::ClientCredentialsError(format!(
+                    "Authorization server does not support auth method '{}'. Supported: {:?}",
+                    required_method, supported
+                )));
+            }
+        }
+
+        #[cfg(feature = "auth-client-credentials-jwt")]
+        if let ClientCredentialsConfig::PrivateKeyJwt {
+            signing_algorithm, ..
+        } = config
+        {
+            if let Some(algs) = metadata
+                .additional_fields
+                .get("token_endpoint_auth_signing_alg_values_supported")
+                .and_then(|v| v.as_array())
+            {
+                let alg_str = signing_algorithm.as_str();
+                if !algs.iter().any(|a| a.as_str() == Some(alg_str)) {
+                    let supported: Vec<&str> = algs.iter().filter_map(|a| a.as_str()).collect();
+                    return Err(AuthError::ClientCredentialsError(format!(
+                        "Authorization server does not support signing algorithm '{}'. Supported: {:?}",
+                        alg_str, supported
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Configure the OAuth2 client for the client credentials flow.
+    ///
+    /// Selects `client_secret_post` (request body) by default. Switches to
+    /// `client_secret_basic` (HTTP Basic) only when the server advertises that
+    /// method exclusively. For `PrivateKeyJwt`, no OAuth client state is needed
+    /// here; the token request is built manually in `exchange_client_credentials_jwt`.
+    pub fn configure_client_credentials(
+        &mut self,
+        config: &ClientCredentialsConfig,
+    ) -> Result<(), AuthError> {
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(AuthError::NoAuthorizationSupport)?;
+
+        let token_url = TokenUrl::new(metadata.token_endpoint.clone())
+            .map_err(|e| AuthError::OAuthError(format!("Invalid token URL: {}", e)))?;
+
+        // auth_url is required by the type but won't be used for client credentials
+        let auth_url = AuthUrl::new(metadata.authorization_endpoint.clone())
+            .map_err(|e| AuthError::OAuthError(format!("Invalid authorization URL: {}", e)))?;
+
+        let client_id = ClientId::new(config.client_id().to_string());
+
+        let mut client_builder: OAuthClient = oauth2::Client::new(client_id)
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url);
+
+        match config {
+            ClientCredentialsConfig::ClientSecret { client_secret, .. } => {
+                client_builder =
+                    client_builder.set_client_secret(ClientSecret::new(client_secret.clone()));
+                // Use client_secret_basic (HTTP Basic) when that is the only method
+                // the server advertises; fall back to client_secret_post (request body).
+                let only_basic = metadata
+                    .additional_fields
+                    .get("token_endpoint_auth_methods_supported")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        let (has_basic, has_post) =
+                            arr.iter()
+                                .fold((false, false), |(b, p), m| match m.as_str() {
+                                    Some("client_secret_basic") => (true, p),
+                                    Some("client_secret_post") => (b, true),
+                                    _ => (b, p),
+                                });
+                        has_basic && !has_post
+                    })
+                    .unwrap_or_default();
+                if !only_basic {
+                    client_builder = client_builder.set_auth_type(AuthType::RequestBody);
+                }
+            }
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            ClientCredentialsConfig::PrivateKeyJwt { .. } => {
+                // For JWT, client identity comes from the assertion's `sub` claim.
+                // The request is built manually in exchange_client_credentials_jwt to
+                // ensure client_id is not included in the body per RFC 7523 §3.
+            }
+        }
+
+        self.oauth_client = Some(client_builder);
+        Ok(())
+    }
+
+    /// Exchange client credentials for an access token (SEP-1046).
+    ///
+    /// For `ClientSecret`: sends credentials in the request body (or Authorization header
+    /// for `client_secret_basic`) with scopes and resource.
+    /// For `PrivateKeyJwt`: builds the request manually (no `client_id` in body per RFC 7523 §3).
+    pub async fn exchange_client_credentials(
+        &self,
+        config: &ClientCredentialsConfig,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        // The MCP auth spec requires the `resource` parameter in all token requests.
+        if config.resource().is_none() {
+            return Err(AuthError::ClientCredentialsError(
+                "resource parameter is required by the MCP auth spec".to_string(),
+            ));
+        }
+
+        // For private_key_jwt, use a separate path that omits client_id from the request
+        // body, as required by RFC 7523 §3 (client is identified by the JWT `sub` claim).
+        #[cfg(feature = "auth-client-credentials-jwt")]
+        if matches!(config, ClientCredentialsConfig::PrivateKeyJwt { .. }) {
+            return self.exchange_client_credentials_jwt(config).await;
+        }
+
+        let oauth_client = self
+            .oauth_client
+            .as_ref()
+            .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
+
+        let mut request = oauth_client.exchange_client_credentials();
+
+        for scope in config.scopes() {
+            request = request.add_scope(Scope::new(scope.clone()));
+        }
+
+        if let Some(resource) = config.resource() {
+            request = request.add_extra_param("resource", resource);
+        }
+
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| AuthError::InternalError(e.to_string()))?;
+
+        let token_result = match request
+            .request_async(&OAuthReqwestClient(http_client))
+            .await
+        {
+            Ok(token) => token,
+            Err(RequestTokenError::Parse(_, body)) => {
+                match serde_json::from_slice::<OAuthTokenResponse>(&body) {
+                    Ok(parsed) => {
+                        warn!(
+                            "client credentials token exchange failed to parse completely but included a valid token response. Accepting it."
+                        );
+                        parsed
+                    }
+                    Err(parse_err) => {
+                        return Err(AuthError::ClientCredentialsError(format!(
+                            "Token exchange parse error: {}",
+                            parse_err
+                        )));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(AuthError::ClientCredentialsError(format!(
+                    "Token exchange failed: {}",
+                    e
+                )));
+            }
+        };
+
+        debug!("client credentials token result: {:?}", token_result);
+
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
+        let client_id = config.client_id().to_string();
+        let stored = StoredCredentials {
+            client_id,
+            token_response: Some(token_result.clone()),
+            granted_scopes,
+            token_received_at: Some(Self::now_epoch_secs()),
+        };
+        self.credential_store.save(stored).await?;
+
+        Ok(token_result)
+    }
+
+    /// Exchange client credentials using a JWT assertion (RFC 7523).
+    ///
+    /// Builds the token request manually so that `client_id` is **not** included in the
+    /// request body; client identity is conveyed solely by the `sub` claim in the assertion.
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    async fn exchange_client_credentials_jwt(
+        &self,
+        config: &ClientCredentialsConfig,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let ClientCredentialsConfig::PrivateKeyJwt {
+            client_id,
+            signing_key,
+            signing_algorithm,
+            token_endpoint_audience,
+            scopes,
+            resource,
+        } = config
+        else {
+            return Err(AuthError::InternalError(
+                "expected PrivateKeyJwt config".to_string(),
+            ));
+        };
+
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(AuthError::NoAuthorizationSupport)?;
+
+        // Validate that the token endpoint uses HTTPS before transmitting sensitive credentials.
+        let token_endpoint_url = url::Url::parse(&metadata.token_endpoint).map_err(|e| {
+            AuthError::ClientCredentialsError(format!(
+                "Invalid token endpoint URL in authorization metadata: {e}"
+            ))
+        })?;
+        if token_endpoint_url.scheme() != "https" {
+            return Err(AuthError::ClientCredentialsError(
+                "Insecure token endpoint URL: HTTPS is required for client credentials flow"
+                    .to_string(),
+            ));
+        }
+
+        let audience = token_endpoint_audience
+            .as_deref()
+            .unwrap_or(&metadata.token_endpoint);
+
+        let assertion =
+            Self::build_jwt_assertion(client_id, audience, signing_key, *signing_algorithm)?;
+
+        let scope_str = scopes.join(" ");
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer.append_pair("grant_type", "client_credentials");
+        serializer.append_pair(
+            "client_assertion_type",
+            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        );
+        serializer.append_pair("client_assertion", &assertion);
+        if !scope_str.is_empty() {
+            serializer.append_pair("scope", &scope_str);
+        }
+        if let Some(res) = resource.as_deref() {
+            serializer.append_pair("resource", res);
+        }
+        let body_str = serializer.finish();
+
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| AuthError::InternalError(e.to_string()))?;
+
+        let response = http_client
+            .post(token_endpoint_url.as_str())
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body_str)
+            .send()
+            .await
+            .map_err(|e| {
+                AuthError::ClientCredentialsError(format!("Token exchange request failed: {e}"))
+            })?;
+
+        let status = response.status();
+        let body = response.bytes().await.map_err(|e| {
+            AuthError::ClientCredentialsError(format!("Failed to read token response: {e}"))
+        })?;
+
+        if !status.is_success() {
+            let msg = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+                let error = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown");
+                let desc = v
+                    .get("error_description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                format!("Token exchange failed: {error}: {desc}")
+            } else {
+                format!("Token exchange failed: HTTP {status}")
+            };
+            return Err(AuthError::ClientCredentialsError(msg));
+        }
+
+        let token_result = serde_json::from_slice::<OAuthTokenResponse>(&body).map_err(|e| {
+            AuthError::ClientCredentialsError(format!("Failed to parse token response: {e}"))
+        })?;
+
+        debug!("client credentials JWT token result: {:?}", token_result);
+
+        let granted_scopes: Vec<String> = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+
+        *self.current_scopes.write().await = granted_scopes.clone();
+
+        let stored = StoredCredentials {
+            client_id: client_id.clone(),
+            token_response: Some(token_result.clone()),
+            granted_scopes,
+            token_received_at: Some(Self::now_epoch_secs()),
+        };
+        self.credential_store.save(stored).await?;
+
+        Ok(token_result)
+    }
+
+    /// Build a JWT assertion per RFC 7523 for private_key_jwt authentication.
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    fn build_jwt_assertion(
+        client_id: &str,
+        audience: &str,
+        signing_key: &[u8],
+        algorithm: JwtSigningAlgorithm,
+    ) -> Result<String, AuthError> {
+        use serde_json::json;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let jti = uuid::Uuid::new_v4().to_string();
+
+        let claims = json!({
+            "iss": client_id,
+            "sub": client_id,
+            "aud": audience,
+            "iat": now,
+            "exp": now + 300, // 5 minutes
+            "jti": jti,
+        });
+
+        let header = jsonwebtoken::Header::new(algorithm.to_jsonwebtoken_algorithm());
+        let encoding_key = jsonwebtoken::EncodingKey::from_rsa_pem(signing_key).or_else(|_| {
+            jsonwebtoken::EncodingKey::from_ec_pem(signing_key).map_err(|e| {
+                AuthError::JwtSigningError(format!("Failed to parse signing key: {}", e))
+            })
+        })?;
+
+        jsonwebtoken::encode(&header, &claims, &encoding_key)
+            .map_err(|e| AuthError::JwtSigningError(format!("Failed to sign JWT: {}", e)))
+    }
 }
 
 /// oauth2 authorization session, for guiding user to complete the authorization process
@@ -1906,6 +2400,41 @@ impl OAuthState {
             OAuthState::Authorized(manager) => Some(manager),
             _ => None,
         }
+    }
+
+    /// Authenticate using OAuth 2.0 Client Credentials flow (SEP-1046).
+    ///
+    /// Transitions directly from `Unauthorized` to `Authorized`, skipping the
+    /// interactive `Session` state entirely. Discovers metadata, configures the
+    /// client, and exchanges credentials for an access token.
+    pub async fn authenticate_client_credentials(
+        &mut self,
+        config: ClientCredentialsConfig,
+    ) -> Result<(), AuthError> {
+        let OAuthState::Unauthorized(mut manager) = std::mem::replace(
+            self,
+            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
+        ) else {
+            return Err(AuthError::InternalError(
+                "Client credentials flow requires Unauthorized state".to_string(),
+            ));
+        };
+
+        // Discover metadata
+        let metadata = manager.discover_metadata().await?;
+        manager.metadata = Some(metadata);
+
+        // Validate server supports the requested auth method
+        manager.validate_client_credentials_metadata(&config)?;
+
+        // Configure OAuth client
+        manager.configure_client_credentials(&config)?;
+
+        // Exchange credentials for token
+        manager.exchange_client_credentials(&config).await?;
+
+        *self = OAuthState::Authorized(manager);
+        Ok(())
     }
 }
 
@@ -2868,5 +3397,187 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(!json.as_object().unwrap().contains_key("scope"));
+    }
+
+    // -- client credentials (SEP-1046) --
+
+    #[tokio::test]
+    async fn configure_client_credentials_uses_request_body_auth_for_client_secret() {
+        let mut mgr = manager_with_metadata(None).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "my-m2m-client".to_string(),
+            client_secret: "super-secret".to_string(),
+            scopes: vec!["read".to_string()],
+            resource: None,
+        };
+        mgr.configure_client_credentials(&config).unwrap();
+        let oauth_client = mgr.oauth_client.as_ref().unwrap();
+        assert!(matches!(oauth_client.auth_type(), AuthType::RequestBody));
+    }
+
+    #[tokio::test]
+    async fn configure_client_credentials_sets_correct_client_id() {
+        let mut mgr = manager_with_metadata(None).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "my-m2m-client".to_string(),
+            client_secret: "super-secret".to_string(),
+            scopes: vec!["read".to_string()],
+            resource: None,
+        };
+        mgr.configure_client_credentials(&config).unwrap();
+        let oauth_client = mgr.oauth_client.as_ref().unwrap();
+        assert_eq!(oauth_client.client_id().as_str(), "my-m2m-client");
+    }
+
+    #[tokio::test]
+    async fn configure_client_credentials_returns_error_without_metadata() {
+        let mut mgr = AuthorizationManager::new("http://localhost").await.unwrap();
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        let err = mgr.configure_client_credentials(&config).unwrap_err();
+        assert!(matches!(err, AuthError::NoAuthorizationSupport));
+    }
+
+    #[tokio::test]
+    async fn validate_client_credentials_metadata_rejects_unsupported_method() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            // Neither client_secret_post nor client_secret_basic — should be rejected.
+            serde_json::json!(["tls_client_auth", "private_key_jwt"]),
+        );
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            additional_fields,
+            ..Default::default()
+        };
+        let mgr = manager_with_metadata(Some(meta)).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        let err = mgr
+            .validate_client_credentials_metadata(&config)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("tls_client_auth"),
+            "expected error to mention unsupported method, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_client_credentials_metadata_accepts_supported_method() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_post", "client_secret_basic"]),
+        );
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            additional_fields,
+            ..Default::default()
+        };
+        let mgr = manager_with_metadata(Some(meta)).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        mgr.validate_client_credentials_metadata(&config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn validate_client_credentials_metadata_permits_when_field_absent() {
+        let mgr = manager_with_metadata(None).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        mgr.validate_client_credentials_metadata(&config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn validate_client_credentials_metadata_accepts_client_secret_basic_only() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_basic"]),
+        );
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            additional_fields,
+            ..Default::default()
+        };
+        let mgr = manager_with_metadata(Some(meta)).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        // A server advertising only client_secret_basic must be accepted.
+        mgr.validate_client_credentials_metadata(&config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn configure_client_credentials_uses_basic_auth_when_server_only_supports_basic() {
+        let mut additional_fields = HashMap::new();
+        additional_fields.insert(
+            "token_endpoint_auth_methods_supported".to_string(),
+            serde_json::json!(["client_secret_basic"]),
+        );
+        let meta = AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            additional_fields,
+            ..Default::default()
+        };
+        let mut mgr = manager_with_metadata(Some(meta)).await;
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+        mgr.configure_client_credentials(&config).unwrap();
+        let oauth_client = mgr.oauth_client.as_ref().unwrap();
+        assert!(
+            !matches!(oauth_client.auth_type(), AuthType::RequestBody),
+            "expected HTTP Basic auth when server only supports client_secret_basic"
+        );
+    }
+
+    #[test]
+    fn client_credentials_config_returns_correct_accessor_values() {
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "test-id".to_string(),
+            client_secret: "test-secret".to_string(),
+            scopes: vec!["scope1".to_string(), "scope2".to_string()],
+            resource: Some("https://example.com".to_string()),
+        };
+        assert_eq!(config.client_id(), "test-id");
+        assert_eq!(config.scopes(), &["scope1", "scope2"]);
+        assert_eq!(config.resource(), Some("https://example.com"));
+        assert_eq!(config.auth_method(), "client_secret_post");
+    }
+
+    #[test]
+    fn extension_constant_matches_spec() {
+        assert_eq!(
+            super::EXTENSION_OAUTH_CLIENT_CREDENTIALS,
+            "io.modelcontextprotocol/oauth-client-credentials"
+        );
     }
 }
