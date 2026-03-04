@@ -906,6 +906,7 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [spreadsheet-mcp](https://github.com/PSU3D0/spreadsheet-mcp) - Token-efficient MCP server for spreadsheet analysis with automatic region detection, recalculation, screenshot, and editing support for LLM agents
 - [hyper-mcp](https://github.com/hyper-mcp-rs/hyper-mcp) - A fast, secure MCP server that extends its capabilities through WebAssembly (WASM) plugins
 - [rudof-mcp](https://github.com/rudof-project/rudof/tree/master/rudof_mcp) - RDF validation and data processing MCP server with ShEx/SHACL validation, SPARQL queries, and format conversion. Supports stdio and streamable HTTP transports with full MCP capabilities (tools, prompts, resources, logging, completions, tasks)
+- [McpMux](https://github.com/mcpmux/mcp-mux) - Desktop app to configure MCP servers once at McpMux, connect every AI client (Cursor, Claude Desktop, VS Code, Windsurf) through a single encrypted local gateway with Spaces for project organization, FeatureSets to switch toolsets per client, and a built-in server registry
 
 
 ## Development
