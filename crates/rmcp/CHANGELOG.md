@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.0.0...rmcp-v1.1.0) - 2026-03-04
+
+### Added
+
+- implement OAuth 2.0 Client Credentials flow ([#707](https://github.com/modelcontextprotocol/rust-sdk/pull/707))
+
+### Other
+
+- add McpMux to Built with rmcp section ([#717](https://github.com/modelcontextprotocol/rust-sdk/pull/717))
+
 ## [1.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.0.0-alpha...rmcp-v1.0.0) - 2026-03-03
 
 ### Fixed
