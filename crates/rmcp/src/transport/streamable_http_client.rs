@@ -822,9 +822,12 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     StreamableHttpClientTransportConfig::with_uri("http://localhost:8000/mcp")
     /// );
     /// ```
-    pub fn with_client(client: C, config: StreamableHttpClientTransportConfig) -> Self {
+    pub fn with_client(
+        client: C,
+        config: StreamableHttpClientTransportConfig,
+    ) -> (Self, impl Future<Output = ()> + Send + 'static) {
         let worker = StreamableHttpClientWorker::new(client, config);
-        WorkerTransport::spawn(worker)
+        WorkerTransport::new(worker)
     }
 }
 #[derive(Debug, Clone)]

@@ -43,6 +43,7 @@ pub enum LocalSessionManagerError {
     #[error("Invalid event id: {0}")]
     InvalidEventId(#[from] EventIdParseError),
 }
+
 impl SessionManager for LocalSessionManager {
     type Error = LocalSessionManagerError;
     type Transport = WorkerTransport<LocalSessionWorker>;
@@ -50,7 +51,7 @@ impl SessionManager for LocalSessionManager {
         let id = session_id();
         let (handle, worker) = create_local_session(id.clone(), self.session_config.clone());
         self.sessions.write().await.insert(id.clone(), handle);
-        Ok((id, WorkerTransport::spawn(worker)))
+        Ok((id, WorkerTransport::new(worker)))
     }
     async fn initialize_session(
         &self,
