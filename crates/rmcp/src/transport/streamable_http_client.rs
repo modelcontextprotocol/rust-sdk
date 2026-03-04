@@ -1,6 +1,10 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 
-use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
+use futures::{
+    FutureExt, Stream, StreamExt,
+    future::BoxFuture,
+    stream::{BoxStream, FuturesUnordered},
+};
 use http::{HeaderName, HeaderValue};
 pub use sse_stream::Error as SseError;
 use sse_stream::Sse;
@@ -423,7 +427,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             ServerMessage(ServerJsonRpcMessage),
             StreamResult(Result<(), StreamableHttpError<E>>),
         }
-        let mut streams = tokio::task::JoinSet::new();
+        let mut streams = FuturesUnordered::new();
         if let Some(session_id) = &session_id {
             let client = self.client.clone();
             let uri = config.uri.clone();
@@ -436,7 +440,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             let config_auth_header = config.auth_header.clone();
             let spawn_headers = protocol_headers.clone();
 
-            streams.spawn(async move {
+            let work = async move {
                 match client
                     .get_stream(
                         uri.clone(),
@@ -477,7 +481,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         Err(e)
                     }
                 }
-            });
+            }
+            .boxed();
+
+            streams.push(work);
         }
         // Main event loop - capture exit reason so we can do cleanup before returning
         let loop_result: Result<(), WorkerQuitReason<Self::Error>> = 'main_loop: loop {
@@ -499,10 +506,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     };
                     Event::ServerMessage(message)
                 },
-                terminated_stream = streams.join_next(), if !streams.is_empty() => {
+                terminated_stream = streams.next(), if !streams.is_empty() => {
                     match terminated_stream {
                         Some(result) => {
-                            Event::StreamResult(result.map_err(StreamableHttpError::TokioJoinError).and_then(std::convert::identity))
+                            Event::StreamResult(result)
                         }
                         None => {
                             continue
@@ -546,23 +553,29 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                     },
                                     self.config.retry_config.clone(),
                                 );
-                                streams.spawn(Self::execute_sse_stream(
-                                    sse_stream,
-                                    sse_worker_tx.clone(),
-                                    true,
-                                    transport_task_ct.child_token(),
-                                ));
+                                streams.push(
+                                    Self::execute_sse_stream(
+                                        sse_stream,
+                                        sse_worker_tx.clone(),
+                                        true,
+                                        transport_task_ct.child_token(),
+                                    )
+                                    .boxed(),
+                                );
                             } else {
                                 let sse_stream = SseAutoReconnectStream::never_reconnect(
                                     stream,
                                     StreamableHttpError::<C::Error>::UnexpectedEndOfStream,
                                 );
-                                streams.spawn(Self::execute_sse_stream(
-                                    sse_stream,
-                                    sse_worker_tx.clone(),
-                                    true,
-                                    transport_task_ct.child_token(),
-                                ));
+                                streams.push(
+                                    Self::execute_sse_stream(
+                                        sse_stream,
+                                        sse_worker_tx.clone(),
+                                        true,
+                                        transport_task_ct.child_token(),
+                                    )
+                                    .boxed(),
+                                );
                             }
                             tracing::trace!("got new sse stream");
                             Ok(())
