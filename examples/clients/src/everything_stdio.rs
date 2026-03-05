@@ -4,11 +4,10 @@ use rmcp::{
     model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
     object,
     transport::{
-        self, CommandBuilder,
+        CommandBuilder,
         child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
     },
 };
-use tokio::process::Command;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]

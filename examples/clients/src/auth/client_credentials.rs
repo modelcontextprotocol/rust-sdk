@@ -67,14 +67,16 @@ async fn main() -> Result<()> {
         .into_authorization_manager()
         .context("Failed to get authorization manager")?;
     let client = AuthClient::new(reqwest::Client::default(), manager);
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         client,
         StreamableHttpClientTransportConfig::with_uri(server_url.as_str()),
     );
+    tokio::spawn(http_work);
 
     // Connect to MCP server and list tools
     let client_service = ClientInfo::default();
-    let client = client_service.serve(transport).await?;
+    let (client, work) = client_service.serve(transport).await?;
+    tokio::spawn(work);
     tracing::info!("Connected to MCP server");
 
     match client.peer().list_all_tools().await {
