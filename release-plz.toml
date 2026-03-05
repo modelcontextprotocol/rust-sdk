@@ -1,0 +1,8 @@
+[workspace]
+changelog_update = true
+
+[[package]]
+name = "mcp-conformance"
+git_release_enable = false
+git_tag_enable = false
+changelog_update = true
