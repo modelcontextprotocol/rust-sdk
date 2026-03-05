@@ -5,6 +5,7 @@ use futures::{
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
+use futures_timeout::TimeoutExt;
 use http::{HeaderName, HeaderValue};
 pub use sse_stream::Error as SseError;
 use sse_stream::Sse;
@@ -605,16 +606,16 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         if let Some(cleanup) = session_cleanup_info {
             const SESSION_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
             let cleanup_session_id = cleanup.session_id.clone();
-            match tokio::time::timeout(
-                SESSION_CLEANUP_TIMEOUT,
-                cleanup.client.delete_session(
+            match cleanup
+                .client
+                .delete_session(
                     cleanup.uri,
                     cleanup.session_id,
                     cleanup.auth_header,
                     cleanup.protocol_headers,
-                ),
-            )
-            .await
+                )
+                .timeout(SESSION_CLEANUP_TIMEOUT)
+                .await
             {
                 Ok(Ok(_)) => {
                     tracing::info!(

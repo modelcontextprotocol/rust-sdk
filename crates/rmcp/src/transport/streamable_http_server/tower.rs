@@ -236,6 +236,13 @@ where
     S: crate::Service<RoleServer> + Send + 'static,
     M: SessionManager,
 {
+    /// Create a new `StreamableHttpService` using the service factory, session manager, and configuration provided.
+    ///
+    /// This function returns a handle to the service, and a future that must be polled to drive the execution
+    /// of the service and its sessions. The caller is responsible for polling or spawning the future returned
+    /// by this function.
+    ///
+    /// If you drop the [StreamableHttpService] handle, the async work loop future will exit.
     pub fn new(
         service_factory: impl Fn() -> Result<S, std::io::Error> + Send + Sync + 'static,
         session_manager: Arc<M>,

@@ -5,10 +5,8 @@ use futures::{
     future::abortable,
     stream::{AbortHandle, FuturesUnordered},
 };
-use tokio::{
-    sync::mpsc,
-    time::{Duration, timeout},
-};
+use futures_timeout::TimeoutExt;
+use tokio::{sync::mpsc, time::Duration};
 
 use crate::{
     RoleServer,
@@ -222,7 +220,7 @@ impl OperationProcessor {
 
         let timed_future = async move {
             if let Some(secs) = timeout_secs {
-                match timeout(Duration::from_secs(secs), future).await {
+                match future.timeout(Duration::from_secs(secs)).await {
                     Ok(result) => result,
                     Err(_) => Err(Error::TaskError("Operation timed out".to_string())),
                 }

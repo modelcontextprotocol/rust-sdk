@@ -3,6 +3,7 @@ use futures::{
     future::{BoxFuture, RemoteHandle},
     stream::FuturesUnordered,
 };
+use futures_timeout::TimeoutExt;
 use thiserror::Error;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -278,14 +279,10 @@ impl<R: ServiceRole> RequestHandle<R> {
     pub const REQUEST_TIMEOUT_REASON: &str = "request timeout";
     pub async fn await_response(self) -> Result<R::PeerResp, ServiceError> {
         if let Some(timeout) = self.options.timeout {
-            // TODO: tokio timeout won't work if not in the tokio RT
-            // Find an alternative
-            let timeout_result = tokio::time::timeout(timeout, async move {
-                self.rx.await.map_err(|_e| ServiceError::TransportClosed)?
-            })
-            .await;
+            let timeout_result = self.rx.timeout(timeout).await;
+
             match timeout_result {
-                Ok(response) => response,
+                Ok(response) => response.map_err(|_e| ServiceError::TransportClosed)?,
                 Err(_) => {
                     let error = Err(ServiceError::Timeout { timeout });
                     // cancel this request
@@ -566,10 +563,10 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     pub async fn close_with_timeout(&mut self, timeout: Duration) -> Option<QuitReason> {
         if let Some(handle) = self.handle.take() {
             self.cancellation_token.cancel();
-            // TODO: tokio timeout won't work if not in the tokio RT, find an alternative
-            match tokio::time::timeout(timeout, handle).await {
+
+            match handle.timeout(timeout).await {
                 Ok(reason) => Some(reason),
-                Err(_elapsed) => {
+                Err(_) => {
                     tracing::warn!(
                         "close_with_timeout: cleanup did not complete within {:?}",
                         timeout
