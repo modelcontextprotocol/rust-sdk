@@ -1,8 +1,10 @@
 [package]
 name = "mcp-conformance"
-version = "0.1.0"
-edition = "2021"
-publish = false
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+license-file = { workspace = true }
+repository = { workspace = true }
 
 [[bin]]
 name = "conformance-server"
