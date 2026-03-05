@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn the async work loop on the background
     tokio::spawn(work);
     // Wait for the service to conclude
-    service.waiting().await?;
+    service.waiting().await;
     Ok(())
 }
 ```
@@ -154,7 +154,7 @@ Creating a client to interact with a server:
 use rmcp::{
     ServiceExt,
     model::CallToolRequestParams,
-    transport::{CommandBuilder, ChildProcessTransport, tokio::TokioChildProcessRunner}
+    transport::{CommandBuilder, child_process::{ChildProcessTransport, tokio::TokioChildProcessRunner}}
 };
 use tokio::process::Command;
 
@@ -164,10 +164,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to a server running as a child process
     let command = CommandBuilder::<TokioChildProcessRunner>::new("uvx")
         .arg("mcp-server-git")
-        .spawn_dyn()?
+        .spawn_dyn()?;
 
     // Create a transport via the child process's STDIN and STDOUT streams
-    let transport = ChildProcessTransport::new(command)?
+    let transport = ChildProcessTransport::new(command)?;
 
     let (service, work) = ().serve(transport).await?;
 
