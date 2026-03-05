@@ -76,7 +76,7 @@ impl ServerHandler for TestServer {
 
 async fn start_test_server(ct: CancellationToken, trigger: Arc<Notify>) -> String {
     let server = TestServer::new(trigger);
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         move || Ok(server.clone()),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig {
@@ -87,6 +87,8 @@ async fn start_test_server(ct: CancellationToken, trigger: Arc<Notify>) -> Strin
             ..Default::default()
         },
     );
+
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

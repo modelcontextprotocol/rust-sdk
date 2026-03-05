@@ -131,12 +131,12 @@ async fn main() -> Result<()> {
     let addr = BIND_ADDRESS.parse::<SocketAddr>()?;
 
     // Create streamable HTTP service
-    let mcp_service: StreamableHttpService<Counter, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(Counter::new()),
-            LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
-        );
+    let (mcp_service, http_work) = StreamableHttpService::new(
+        || Ok(Counter::new()),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+    tokio::spawn(http_work);
 
     // Create API routes
     let api_routes = Router::new()

@@ -39,8 +39,20 @@ impl SessionManager for NeverSessionManager {
 
     fn create_session(
         &self,
-    ) -> impl Future<Output = Result<(SessionId, Self::Transport), Self::Error>> + Send {
-        futures::future::ready(Err(ErrorSessionManagementNotSupported))
+    ) -> impl Future<
+        Output = Result<
+            (
+                SessionId,
+                Self::Transport,
+                impl Future<Output = ()> + Send + 'static,
+            ),
+            Self::Error,
+        >,
+    > + Send {
+        futures::future::ready(Err::<
+            (SessionId, Self::Transport, futures::future::Ready<()>),
+            Self::Error,
+        >(ErrorSessionManagementNotSupported))
     }
 
     fn initialize_session(

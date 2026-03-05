@@ -45,7 +45,16 @@ pub trait SessionManager: Send + Sync + 'static {
     /// that will be used to exchange MCP messages within this session.
     fn create_session(
         &self,
-    ) -> impl Future<Output = Result<(SessionId, Self::Transport), Self::Error>> + Send;
+    ) -> impl Future<
+        Output = Result<
+            (
+                SessionId,
+                Self::Transport,
+                impl Future<Output = ()> + Send + 'static,
+            ),
+            Self::Error,
+        >,
+    > + Send;
 
     /// Forward the first message (the `initialize` request) to the session.
     fn initialize_session(

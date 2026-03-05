@@ -52,8 +52,9 @@ impl McpServerTransportConfig {
     pub async fn start(&self) -> Result<RunningService<RoleClient, ()>> {
         let client = match self {
             McpServerTransportConfig::Streamable { url } => {
-                let transport =
+                let (transport, http_work) =
                     rmcp::transport::StreamableHttpClientTransport::from_uri(url.to_string());
+                tokio::spawn(http_work);
                 let (service, work) = ().serve(transport).await?;
                 tokio::spawn(work);
                 service

@@ -6,7 +6,7 @@ use rmcp::{
     service::{RequestContext, RoleClient},
     transport::{
         CommandBuilder,
-        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+        child_process::{ChildProcessTransport, tokio::TokioChildProcessRunner},
     },
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

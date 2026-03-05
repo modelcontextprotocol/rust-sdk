@@ -320,10 +320,11 @@ async fn perform_oauth_flow_preregistered(
 async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::Result<()> {
     let auth_client = perform_oauth_flow(server_url, ctx).await?;
 
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         auth_client,
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
+    tokio::spawn(http_work);
 
     let (client, work) = BasicClientHandler.serve(transport).await?;
     // Run the client work loop in the background while we interact with it
@@ -347,7 +348,7 @@ async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::
             .await;
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -377,10 +378,11 @@ async fn run_auth_scope_step_up_client(
         .ok_or_else(|| anyhow::anyhow!("No AM"))?;
     let auth_client = AuthClient::new(reqwest::Client::default(), am);
 
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         auth_client.clone(),
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
+    tokio::spawn(http_work);
 
     let (client, work) = BasicClientHandler.serve(transport).await?;
     // Run the client work loop in the background while we interact with it
@@ -407,7 +409,7 @@ async fn run_auth_scope_step_up_client(
             Err(_) => {
                 tracing::debug!("Tool call failed (likely 403), attempting scope upgrade...");
                 // Drop old client, re-auth with upgraded scopes
-                client.cancel().await.ok();
+                client.cancel().await;
 
                 // Re-do the full flow; the server will give us the right scopes
                 // on the second authorization request.
@@ -427,10 +429,11 @@ async fn run_auth_scope_step_up_client(
 
                 let am2 = oauth2.into_authorization_manager().unwrap();
                 let auth_client2 = AuthClient::new(reqwest::Client::default(), am2);
-                let transport2 = StreamableHttpClientTransport::with_client(
+                let (transport2, http_work2) = StreamableHttpClientTransport::with_client(
                     auth_client2,
                     StreamableHttpClientTransportConfig::with_uri(server_url),
                 );
+                tokio::spawn(http_work2);
                 let (client2, work2) = BasicClientHandler.serve(transport2).await?;
                 tokio::spawn(work2);
                 let _ = client2
@@ -441,13 +444,13 @@ async fn run_auth_scope_step_up_client(
                         task: None,
                     })
                     .await;
-                client2.cancel().await.ok();
+                client2.cancel().await;
                 return Ok(());
             }
         }
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -475,10 +478,11 @@ async fn run_auth_scope_retry_limit_client(
 
         let am = oauth.into_authorization_manager().unwrap();
         let auth_client = AuthClient::new(reqwest::Client::default(), am);
-        let transport = StreamableHttpClientTransport::with_client(
+        let (transport, http_work) = StreamableHttpClientTransport::with_client(
             auth_client,
             StreamableHttpClientTransportConfig::with_uri(server_url),
         );
+        tokio::spawn(http_work);
 
         let (client, work) = BasicClientHandler.serve(transport).await?;
         tokio::spawn(work);
@@ -504,7 +508,7 @@ async fn run_auth_scope_retry_limit_client(
                 }
             }
         }
-        client.cancel().await.ok();
+        client.cancel().await;
 
         if !got_403 {
             break;
@@ -535,10 +539,11 @@ async fn run_auth_preregistered_client(
     let auth_client =
         perform_oauth_flow_preregistered(server_url, client_id, client_secret).await?;
 
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         auth_client,
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
+    tokio::spawn(http_work);
 
     let (client, work) = BasicClientHandler.serve(transport).await?;
     tokio::spawn(work);
@@ -557,7 +562,7 @@ async fn run_auth_preregistered_client(
             })
             .await;
     }
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -595,11 +600,12 @@ async fn run_client_credentials_basic(
         .ok_or_else(|| anyhow::anyhow!("No access_token in response"))?;
 
     // Use static token
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         reqwest::Client::default(),
         StreamableHttpClientTransportConfig::with_uri(server_url)
             .auth_header(access_token.to_string()),
     );
+    tokio::spawn(http_work);
 
     let (client, work) = BasicClientHandler.serve(transport).await?;
     tokio::spawn(work);
@@ -617,7 +623,7 @@ async fn run_client_credentials_basic(
             })
             .await;
     }
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -667,11 +673,12 @@ async fn run_client_credentials_jwt(
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No access_token: {}", token_resp))?;
 
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         reqwest::Client::default(),
         StreamableHttpClientTransportConfig::with_uri(server_url)
             .auth_header(access_token.to_string()),
     );
+    tokio::spawn(http_work);
 
     let (client, work) = BasicClientHandler.serve(transport).await?;
     tokio::spawn(work);
@@ -689,7 +696,7 @@ async fn run_client_credentials_jwt(
             })
             .await;
     }
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -839,17 +846,21 @@ fn build_tool_arguments(tool: &Tool) -> Option<serde_json::Map<String, Value>> {
 // ─── Non-auth scenarios ─────────────────────────────────────────────────────
 
 async fn run_basic_client(server_url: &str) -> anyhow::Result<()> {
-    let transport = StreamableHttpClientTransport::from_uri(server_url);
-    let client = BasicClientHandler.serve(transport).await?;
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(server_url);
+    tokio::spawn(http_work);
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    tokio::spawn(work);
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
 async fn run_tools_call_client(server_url: &str) -> anyhow::Result<()> {
-    let transport = StreamableHttpClientTransport::from_uri(server_url);
-    let client = FullClientHandler.serve(transport).await?;
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(server_url);
+    tokio::spawn(http_work);
+    let (client, work) = FullClientHandler.serve(transport).await?;
+    tokio::spawn(work);
     let tools = client.list_tools(Default::default()).await?;
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
@@ -862,13 +873,15 @@ async fn run_tools_call_client(server_url: &str) -> anyhow::Result<()> {
             })
             .await?;
     }
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
 async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()> {
-    let transport = StreamableHttpClientTransport::from_uri(server_url);
-    let client = ElicitationDefaultsClientHandler.serve(transport).await?;
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(server_url);
+    tokio::spawn(http_work);
+    let (client, work) = ElicitationDefaultsClientHandler.serve(transport).await?;
+    tokio::spawn(work);
     let tools = client.list_tools(Default::default()).await?;
     let test_tool = tools.tools.iter().find(|t| {
         let n = t.name.as_ref();
@@ -884,13 +897,15 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
             })
             .await?;
     }
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
 async fn run_sse_retry_client(server_url: &str) -> anyhow::Result<()> {
-    let transport = StreamableHttpClientTransport::from_uri(server_url);
-    let client = BasicClientHandler.serve(transport).await?;
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(server_url);
+    tokio::spawn(http_work);
+    let (client, work) = BasicClientHandler.serve(transport).await?;
+    tokio::spawn(work);
     let tools = client.list_tools(Default::default()).await?;
     if let Some(tool) = tools
         .tools
@@ -906,7 +921,7 @@ async fn run_sse_retry_client(server_url: &str) -> anyhow::Result<()> {
             })
             .await?;
     }
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 

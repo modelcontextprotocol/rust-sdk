@@ -493,7 +493,8 @@ async fn test_mcp_custom_headers_sent_to_server() -> anyhow::Result<()> {
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{}/mcp", port))
             .custom_headers(custom_headers);
 
-    let transport = StreamableHttpClientTransport::from_config(config);
+    let (transport, http_work) = StreamableHttpClientTransport::from_config(config);
+    tokio::spawn(http_work);
 
     // Start MCP client with empty handler (this will trigger initialize request)
     let (client, work) = ().serve(transport).await.expect("Failed to start client");
@@ -665,7 +666,8 @@ async fn test_mcp_protocol_version_header_sent_after_init() -> anyhow::Result<()
     let config =
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{}/mcp", port));
 
-    let transport = StreamableHttpClientTransport::from_config(config);
+    let (transport, http_work) = StreamableHttpClientTransport::from_config(config);
+    tokio::spawn(http_work);
     let (client, work) = ().serve(transport).await.expect("Failed to start client");
     tokio::spawn(work);
 
@@ -740,11 +742,13 @@ async fn test_server_rejects_unsupported_protocol_version() {
     }
 
     let session_manager = Arc::new(LocalSessionManager::default());
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         || Ok(TestHandler),
         session_manager,
         StreamableHttpServerConfig::default(),
     );
+
+    tokio::spawn(http_work);
 
     // First, send an initialize request to create a session
     let init_body = json!({

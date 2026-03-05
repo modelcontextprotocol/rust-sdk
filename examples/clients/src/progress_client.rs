@@ -216,7 +216,8 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     // Wait a bit for server to be ready
     sleep(Duration::from_secs(1)).await;
 
-    let transport = StreamableHttpClientTransport::from_uri(http_url);
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(http_url);
+    tokio::spawn(http_work);
 
     // Create progress-aware client handler
     let client_handler = ProgressAwareClient::new();

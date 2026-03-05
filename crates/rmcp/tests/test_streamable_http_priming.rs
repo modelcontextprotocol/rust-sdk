@@ -13,7 +13,7 @@ async fn test_priming_on_stream_start() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
 
     // stateful_mode: true automatically enables priming with DEFAULT_RETRY_INTERVAL (3 seconds)
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+    let (service, http_work): (StreamableHttpService<Calculator, LocalSessionManager>, _) =
         StreamableHttpService::new(
             || Ok(Calculator::new()),
             Default::default(),
@@ -24,6 +24,8 @@ async fn test_priming_on_stream_start() -> anyhow::Result<()> {
                 ..Default::default()
             },
         );
+
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -83,7 +85,7 @@ async fn test_priming_on_stream_close() -> anyhow::Result<()> {
     let session_manager = Arc::new(LocalSessionManager::default());
 
     // stateful_mode: true automatically enables priming with DEFAULT_RETRY_INTERVAL (3 seconds)
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         || Ok(Calculator::new()),
         session_manager.clone(),
         StreamableHttpServerConfig {
@@ -93,6 +95,8 @@ async fn test_priming_on_stream_close() -> anyhow::Result<()> {
             ..Default::default()
         },
     );
+
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

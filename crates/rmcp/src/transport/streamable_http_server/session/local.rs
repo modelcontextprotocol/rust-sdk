@@ -47,11 +47,21 @@ pub enum LocalSessionManagerError {
 impl SessionManager for LocalSessionManager {
     type Error = LocalSessionManagerError;
     type Transport = WorkerTransport<LocalSessionWorker>;
-    async fn create_session(&self) -> Result<(SessionId, Self::Transport), Self::Error> {
+    async fn create_session(
+        &self,
+    ) -> Result<
+        (
+            SessionId,
+            Self::Transport,
+            impl Future<Output = ()> + Send + 'static,
+        ),
+        Self::Error,
+    > {
         let id = session_id();
         let (handle, worker) = create_local_session(id.clone(), self.session_config.clone());
         self.sessions.write().await.insert(id.clone(), handle);
-        Ok((id, WorkerTransport::new(worker)))
+        let (transport, work) = WorkerTransport::new(worker);
+        Ok((id, transport, work))
     }
     async fn initialize_session(
         &self,

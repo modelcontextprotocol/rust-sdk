@@ -75,7 +75,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         .await?;
 
     let ct = CancellationToken::new();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+    let (service, http_work): (StreamableHttpService<Calculator, LocalSessionManager>, _) =
         StreamableHttpService::new(
             || Ok(Calculator::new()),
             Default::default(),
@@ -88,6 +88,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         );
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(STREAMABLE_HTTP_BIND_ADDRESS).await?;
+    tokio::spawn(http_work);
 
     let handle = tokio::spawn({
         let ct = ct.clone();
@@ -124,9 +125,10 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let transport = StreamableHttpClientTransport::from_uri(format!(
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(format!(
         "http://{STREAMABLE_HTTP_JS_BIND_ADDRESS}/mcp"
     ));
+    tokio::spawn(http_work);
 
     let mut server = tokio::process::Command::new("node")
         .arg("tests/test_with_js/streamable_server.js")

@@ -642,12 +642,12 @@ async fn main() -> Result<()> {
     let addr = BIND_ADDRESS.parse::<SocketAddr>()?;
 
     // Create streamable HTTP service for MCP
-    let mcp_service: StreamableHttpService<Counter, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(Counter::new()),
-            LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
-        );
+    let (mcp_service, http_work) = StreamableHttpService::new(
+        || Ok(Counter::new()),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+    tokio::spawn(http_work);
 
     // Create protected MCP routes (require authorization)
     let protected_mcp_router =

@@ -246,7 +246,7 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// # Feature requirement
     ///
     /// This method requires the `transport-streamable-http-client-reqwest` feature.
-    pub fn from_uri(uri: impl Into<Arc<str>>) -> Self {
+    pub fn from_uri(uri: impl Into<Arc<str>>) -> (Self, impl Future<Output = ()> + Send + 'static) {
         StreamableHttpClientTransport::with_client(
             reqwest::Client::default(),
             StreamableHttpClientTransportConfig {
@@ -262,7 +262,9 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// # Arguments
     ///
     /// * `config` - The config to use with this transport
-    pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
+    pub fn from_config(
+        config: StreamableHttpClientTransportConfig,
+    ) -> (Self, impl Future<Output = ()> + Send + 'static) {
         StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
     }
 }

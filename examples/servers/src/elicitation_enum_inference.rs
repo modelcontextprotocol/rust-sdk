@@ -174,11 +174,12 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         || Ok(ElicitationEnumFormServer::new()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(BIND_ADDRESS).await?;
