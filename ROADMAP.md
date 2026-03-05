@@ -2,7 +2,7 @@
 
 This roadmap tracks the path to SEP-1730 Tier 1 for the Rust MCP SDK.
 
-Server conformance: 86.7% (26/30) · Client conformance: 85.0% (18/24) · Spec tracking gap: 6 days
+Server conformance: 87.5% (28/32) · Client conformance: 80.0% (16/20)
 
 ---
 
@@ -10,18 +10,19 @@ Server conformance: 86.7% (26/30) · Client conformance: 85.0% (18/24) · Spec t
 
 ### Conformance
 
-#### Server (86.7% → 100%)
+#### Server (87.5% → 100%)
 
-- [ ] Fix `server-prompts-get-with-args` — prompt argument handling returns incorrect result
-- [ ] Fix `server-prompts-get-embedded-resource` — embedded resource content in prompt responses
-- [ ] Fix `server-elicitation-sep1330-enums` — enum inference handling per SEP-1330
-- [ ] Fix `server-dns-rebinding-protection` — validate `Host` / `Origin` headers on Streamable HTTP transport
+- [ ] Fix `prompts-get-with-args` — prompt argument handling returns incorrect result (arg1/arg2 not substituted)
+- [ ] Fix `prompts-get-embedded-resource` — embedded resource content in prompt responses (invalid content union)
+- [ ] Fix `elicitation-sep1330-enums` — enum inference handling per SEP-1330 (missing enumNames for legacy titled enum)
+- [ ] Fix `dns-rebinding-protection` — validate `Host` / `Origin` headers on Streamable HTTP transport (accepts invalid headers with 200)
 
-#### Client (85.0% → 100%)
+#### Client (80.0% → 100%)
 
-- [ ] Fix `auth/scope-step-up` (2025-11-25) — handle 403 `insufficient_scope` and re-authorize with upgraded scopes
-- [ ] Fix `auth/metadata-var3` (2025-11-25) — AS metadata discovery variant 3
-- [ ] Fix `auth/2025-03-26-oauth-endpoint-fallback` (2025-03-26) — legacy OAuth endpoint fallback for pre-2025-06-18 servers
+- [ ] Fix `auth/metadata-var3` — AS metadata discovery variant 3 (no authorization support detected)
+- [ ] Fix `auth/scope-from-www-authenticate` — use scope parameter from WWW-Authenticate header on 403 insufficient_scope
+- [ ] Fix `auth/scope-step-up` — handle 403 `insufficient_scope` and re-authorize with upgraded scopes
+- [ ] Fix `auth/2025-03-26-oauth-endpoint-fallback` — legacy OAuth endpoint fallback for pre-2025-06-18 servers (no authorization support detected)
 
 ### Governance & Policy
 
@@ -58,10 +59,13 @@ Server conformance: 86.7% (26/30) · Client conformance: 85.0% (18/24) · Spec t
 
 ---
 
-## Informational (not scored)
+## Informational (not scored for tiering)
 
-These draft/extension scenarios are tracked but do not block tier advancement:
+These draft/extension scenarios are tracked but do not count toward tier advancement:
 
-- [ ] `auth/resource-mismatch` (draft)
-- [ ] `auth/cross-app-access-complete-flow` (extension)
-- [ ] `auth/client-credentials-jwt` (extension)
+| Scenario | Tag | Status |
+|---|---|---|
+| `auth/resource-mismatch` | draft | ❌ Failed |
+| `auth/client-credentials-jwt` | extension | ❌ Failed — JWT `aud` claim verification error |
+| `auth/client-credentials-basic` | extension | ✅ Passed |
+| `auth/cross-app-access-complete-flow` | extension | ❌ Failed — sends `authorization_code` grant instead of `jwt-bearer` |
