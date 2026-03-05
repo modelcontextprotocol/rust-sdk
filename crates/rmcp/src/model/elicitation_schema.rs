@@ -89,6 +89,7 @@ pub enum StringFormat {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct StringSchema {
     /// Type discriminator
     #[serde(rename = "type")]
@@ -237,6 +238,7 @@ impl StringSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct NumberSchema {
     /// Type discriminator
     #[serde(rename = "type")]
@@ -444,6 +446,7 @@ impl IntegerSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BooleanSchema {
     /// Type discriminator
     #[serde(rename = "type")]
@@ -513,6 +516,16 @@ pub struct ConstTitle {
     pub title: String,
 }
 
+impl ConstTitle {
+    /// Create a new ConstTitle.
+    pub fn new(const_: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            const_: const_.into(),
+            title: title.into(),
+        }
+    }
+}
+
 /// Legacy enum schema, keep for backward compatibility
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -533,6 +546,7 @@ pub struct LegacyEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct UntitledSingleSelectEnumSchema {
     #[serde(rename = "type")]
     pub type_: StringTypeConst,
@@ -550,6 +564,7 @@ pub struct UntitledSingleSelectEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct TitledSingleSelectEnumSchema {
     #[serde(rename = "type")]
     pub type_: StringTypeConst,
@@ -561,6 +576,19 @@ pub struct TitledSingleSelectEnumSchema {
     pub one_of: Vec<ConstTitle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+}
+
+impl TitledSingleSelectEnumSchema {
+    /// Create a new TitledSingleSelectEnumSchema.
+    pub fn new(one_of: Vec<ConstTitle>) -> Self {
+        Self {
+            type_: StringTypeConst,
+            title: None,
+            description: None,
+            one_of,
+            default: None,
+        }
+    }
 }
 
 /// Combined single-select
@@ -592,10 +620,18 @@ pub struct TitledItems {
     pub any_of: Vec<ConstTitle>,
 }
 
+impl TitledItems {
+    /// Create a new TitledItems.
+    pub fn new(any_of: Vec<ConstTitle>) -> Self {
+        Self { any_of }
+    }
+}
+
 /// Multi-select untitled options
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct UntitledMultiSelectEnumSchema {
     #[serde(rename = "type")]
     pub type_: ArrayTypeConst,
@@ -616,6 +652,7 @@ pub struct UntitledMultiSelectEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct TitledMultiSelectEnumSchema {
     #[serde(rename = "type")]
     pub type_: ArrayTypeConst,
@@ -630,6 +667,51 @@ pub struct TitledMultiSelectEnumSchema {
     pub items: TitledItems,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<Vec<String>>,
+}
+
+impl TitledMultiSelectEnumSchema {
+    /// Create a new TitledMultiSelectEnumSchema.
+    pub fn new(items: TitledItems) -> Self {
+        Self {
+            type_: ArrayTypeConst,
+            title: None,
+            description: None,
+            min_items: None,
+            max_items: None,
+            items,
+            default: None,
+        }
+    }
+
+    /// Set the title.
+    pub fn with_title(mut self, title: impl Into<Cow<'static, str>>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the description.
+    pub fn with_description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the minimum number of items.
+    pub fn with_min_items(mut self, min_items: u64) -> Self {
+        self.min_items = Some(min_items);
+        self
+    }
+
+    /// Set the maximum number of items.
+    pub fn with_max_items(mut self, max_items: u64) -> Self {
+        self.max_items = Some(max_items);
+        self
+    }
+
+    /// Set the default values.
+    pub fn with_default(mut self, default: Vec<String>) -> Self {
+        self.default = Some(default);
+        self
+    }
 }
 
 /// Multi-select enum options

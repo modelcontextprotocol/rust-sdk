@@ -41,24 +41,10 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     tokio::spawn(work);
 
     // Test ThisServer context inclusion
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test message")],
-            include_context: Some(ContextInclusion::ThisServer),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test message")], 100)
+            .with_include_context(ContextInclusion::ThisServer),
+    ));
 
     let result = handler
         .handle_request(
@@ -92,24 +78,10 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     }
 
     // Test AllServers context inclusion
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test message")],
-            include_context: Some(ContextInclusion::AllServers),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test message")], 100)
+            .with_include_context(ContextInclusion::AllServers),
+    ));
 
     let result = handler
         .handle_request(
@@ -143,24 +115,10 @@ async fn test_context_inclusion_integration() -> anyhow::Result<()> {
     }
 
     // Test No context inclusion
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test message")],
-            include_context: Some(ContextInclusion::None),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test message")], 100)
+            .with_include_context(ContextInclusion::None),
+    ));
 
     let result = handler
         .handle_request(
@@ -216,24 +174,10 @@ async fn test_context_inclusion_ignored_integration() -> anyhow::Result<()> {
     tokio::spawn(work);
 
     // Test that context requests are ignored
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test message")],
-            include_context: Some(ContextInclusion::ThisServer),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test message")], 100)
+            .with_include_context(ContextInclusion::ThisServer),
+    ));
 
     let result = handler
         .handle_request(
@@ -288,27 +232,16 @@ async fn test_message_sequence_integration() -> anyhow::Result<()> {
     let (client, work) = handler.clone().serve(client_transport).await?;
     tokio::spawn(work);
 
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(
+            vec![
                 SamplingMessage::user_text("first message"),
                 SamplingMessage::assistant_text("second message"),
             ],
-            include_context: Some(ContextInclusion::ThisServer),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+            100,
+        )
+        .with_include_context(ContextInclusion::ThisServer),
+    ));
 
     let result = handler
         .handle_request(
@@ -367,28 +300,16 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     tokio::spawn(work);
 
     // Test valid sequence: User -> Assistant -> User
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(
+            vec![
                 SamplingMessage::user_text("first user message"),
                 SamplingMessage::assistant_text("first assistant response"),
                 SamplingMessage::user_text("second user message"),
             ],
-            include_context: None,
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+            100,
+        ),
+    ));
 
     let result = handler
         .handle_request(
@@ -406,24 +327,12 @@ async fn test_message_sequence_validation_integration() -> anyhow::Result<()> {
     assert!(matches!(result, ClientResult::CreateMessageResult(_)));
 
     // Test invalid: No user message
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::assistant_text("assistant message")],
-            include_context: None,
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(
+            vec![SamplingMessage::assistant_text("assistant message")],
+            100,
+        ),
+    ));
 
     let result = handler
         .handle_request(
@@ -462,24 +371,10 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     tokio::spawn(work);
 
     // Test ThisServer is honored
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test message")],
-            include_context: Some(ContextInclusion::ThisServer),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test message")], 100)
+            .with_include_context(ContextInclusion::ThisServer),
+    ));
 
     let result = handler
         .handle_request(
@@ -511,24 +406,10 @@ async fn test_selective_context_handling_integration() -> anyhow::Result<()> {
     }
 
     // Test AllServers is ignored
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test message")],
-            include_context: Some(ContextInclusion::AllServers),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test message")], 100)
+            .with_include_context(ContextInclusion::AllServers),
+    ));
 
     let result = handler
         .handle_request(
@@ -579,24 +460,10 @@ async fn test_context_inclusion() -> anyhow::Result<()> {
     tokio::spawn(work);
 
     // Test context handling
-    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest {
-        method: Default::default(),
-        params: CreateMessageRequestParams {
-            meta: None,
-            task: None,
-            messages: vec![SamplingMessage::user_text("test")],
-            include_context: Some(ContextInclusion::ThisServer),
-            model_preferences: None,
-            system_prompt: None,
-            temperature: None,
-            max_tokens: 100,
-            stop_sequences: None,
-            metadata: None,
-            tools: None,
-            tool_choice: None,
-        },
-        extensions: Default::default(),
-    });
+    let request = ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+        CreateMessageRequestParams::new(vec![SamplingMessage::user_text("test")], 100)
+            .with_include_context(ContextInclusion::ThisServer),
+    ));
 
     let result = handler
         .handle_request(

@@ -311,10 +311,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test null case
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "test_optional_i64".into(),
-            arguments: Some(
+        .call_tool(
+            CallToolRequestParams::new("test_optional_i64").with_arguments(
                 serde_json::json!({
                     "count": null,
                     "mandatory_field": "test_null"
@@ -323,8 +321,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
                 .unwrap()
                 .clone(),
             ),
-            task: None,
-        })
+        )
         .await?;
 
     let result_text = result
@@ -341,10 +338,8 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
     // Test Some case
     let some_result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "test_optional_i64".into(),
-            arguments: Some(
+        .call_tool(
+            CallToolRequestParams::new("test_optional_i64").with_arguments(
                 serde_json::json!({
                     "count": 42,
                     "mandatory_field": "test_some"
@@ -353,8 +348,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
                 .unwrap()
                 .clone(),
             ),
-            task: None,
-        })
+        )
         .await?;
 
     let some_result_text = some_result

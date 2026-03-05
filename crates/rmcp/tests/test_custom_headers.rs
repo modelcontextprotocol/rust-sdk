@@ -734,10 +734,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
 
     impl ServerHandler for TestHandler {
         fn get_info(&self) -> ServerInfo {
-            ServerInfo {
-                capabilities: ServerCapabilities::builder().build(),
-                ..Default::default()
-            }
+            ServerInfo::new(ServerCapabilities::builder().build())
         }
     }
 

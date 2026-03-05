@@ -170,10 +170,10 @@ impl Counter {
             "This is an example prompt with your message here: '{}'",
             args.message
         );
-        Ok(vec![PromptMessage {
-            role: PromptMessageRole::User,
-            content: PromptMessageContent::text(prompt),
-        }])
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            prompt,
+        )])
     }
 
     /// Analyze the current counter value and suggest next steps
@@ -201,13 +201,10 @@ impl Counter {
             ),
         ];
 
-        Ok(GetPromptResult {
-            description: Some(format!(
-                "Counter analysis for reaching {} from {}",
-                args.goal, current_value
-            )),
-            messages,
-        })
+        Ok(GetPromptResult::new(messages).with_description(format!(
+            "Counter analysis for reaching {} from {}",
+            args.goal, current_value
+        )))
     }
 }
 
@@ -216,16 +213,16 @@ impl Counter {
 #[task_handler]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_resources()
                 .enable_tools()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides counter tools and prompts. Tools: increment, decrement, get_value, say_hello, echo, sum. Prompts: example_prompt (takes a message), counter_analysis (analyzes counter state with a goal).".to_string()),
-        }
+        )
+        .with_server_info(Implementation::from_build_env())
+        .with_protocol_version(ProtocolVersion::V_2024_11_05)
+        .with_instructions("This server provides counter tools and prompts. Tools: increment, decrement, get_value, say_hello, echo, sum. Prompts: example_prompt (takes a message), counter_analysis (analyzes counter state with a goal).".to_string())
     }
 
     async fn list_resources(
@@ -245,21 +242,24 @@ impl ServerHandler for Counter {
 
     async fn read_resource(
         &self,
-        ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
+        request: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
+        let uri = &request.uri;
         match uri.as_str() {
             "str:////Users/to/some/path/" => {
                 let cwd = "/Users/to/some/path/";
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(cwd, uri)],
-                })
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                    cwd,
+                    uri.clone(),
+                )]))
             }
             "memo://insights" => {
                 let memo = "Business Intelligence Memo\n\nAnalysis has revealed 5 key insights ...";
-                Ok(ReadResourceResult {
-                    contents: vec![ResourceContents::text(memo, uri)],
-                })
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                    memo,
+                    uri.clone(),
+                )]))
             }
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
@@ -365,12 +365,7 @@ mod tests {
             "source".into(),
             serde_json::Value::String("integration-test".into()),
         );
-        let params = CallToolRequestParams {
-            meta: None,
-            name: "long_task".into(),
-            arguments: None,
-            task: Some(task_meta),
-        };
+        let params = CallToolRequestParams::new("long_task").with_task(Some(task_meta));
         let response = client_service
             .send_request(ClientRequest::CallToolRequest(Request::new(params.clone())))
             .await?;

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.0.0...rmcp-macros-v1.1.0) - 2026-03-04
+
+### Other
+
+- add McpMux to Built with rmcp section ([#717](https://github.com/modelcontextprotocol/rust-sdk/pull/717))
+
+## [1.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.0.0-alpha...rmcp-macros-v1.0.0) - 2026-03-03
+
+### Fixed
+
+- api ergonomics follow-up ([#720](https://github.com/modelcontextprotocol/rust-sdk/pull/720))
+
+## [1.0.0-alpha](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.17.0...rmcp-macros-v1.0.0-alpha) - 2026-03-03
+
+### Added
+
+- docs update ([#718](https://github.com/modelcontextprotocol/rust-sdk/pull/718))
+
+### Other
+
+- add #[non_exhaustive] and mutation methods to improve compatibility ([#715](https://github.com/modelcontextprotocol/rust-sdk/pull/715))
+
 ## [0.17.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.16.0...rmcp-macros-v0.17.0) - 2026-02-27
 
 ### Added

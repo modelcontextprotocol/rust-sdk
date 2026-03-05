@@ -49,6 +49,7 @@ impl InsufficientScopeError {
 }
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("SSE error: {0}")]
     Sse(#[from] SseError),
@@ -86,12 +87,14 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
 }
 
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum StreamableHttpProtocolError {
     #[error("Missing session id in response")]
     MissingSessionIdInResponse,
 }
 
 #[allow(clippy::large_enum_variant)]
+#[non_exhaustive]
 pub enum StreamableHttpPostResponse {
     Accepted,
     Json(ServerJsonRpcMessage, Option<String>),

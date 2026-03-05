@@ -47,12 +47,14 @@ async fn main() -> Result<()> {
 
         // Call tool 'git_status' with arguments = {"repo_path": "."}
         let _tool_result = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: "git_status".into(),
-                arguments: serde_json::json!({ "repo_path": "." }).as_object().cloned(),
-                task: None,
-            })
+            .call_tool(
+                CallToolRequestParams::new("git_status").with_arguments(
+                    serde_json::json!({ "repo_path": "." })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
             .await?;
     }
     for (_, service) in clients_map {

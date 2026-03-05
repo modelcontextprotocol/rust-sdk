@@ -77,10 +77,7 @@ impl<DS: DataService> GenericService<DS> {
 #[tool_handler]
 impl<DS: DataService> ServerHandler for GenericService<DS> {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some("generic data service".into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("generic data service".to_string())
     }
 }

@@ -28,6 +28,8 @@ permissions:
 jobs:
   triage:
     name: Triage Issues
+    # TODO: Re-enable once OPENAI_API_KEY secret is available
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

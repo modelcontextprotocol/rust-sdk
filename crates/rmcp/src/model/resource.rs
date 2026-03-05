@@ -80,6 +80,7 @@ pub enum ResourceContents {
 }
 
 impl ResourceContents {
+    /// Create text resource contents.
     pub fn text(text: impl Into<String>, uri: impl Into<String>) -> Self {
         Self::TextResourceContents {
             uri: uri.into(),
@@ -87,6 +88,34 @@ impl ResourceContents {
             text: text.into(),
             meta: None,
         }
+    }
+
+    /// Create blob resource contents.
+    pub fn blob(blob: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self::BlobResourceContents {
+            uri: uri.into(),
+            mime_type: None,
+            blob: blob.into(),
+            meta: None,
+        }
+    }
+
+    /// Set the MIME type on this resource contents.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        match &mut self {
+            Self::TextResourceContents { mime_type: mt, .. } => *mt = Some(mime_type.into()),
+            Self::BlobResourceContents { mime_type: mt, .. } => *mt = Some(mime_type.into()),
+        }
+        self
+    }
+
+    /// Set the metadata on this resource contents.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        match &mut self {
+            Self::TextResourceContents { meta: m, .. } => *m = Some(meta),
+            Self::BlobResourceContents { meta: m, .. } => *m = Some(meta),
+        }
+        self
     }
 }
 
@@ -103,6 +132,80 @@ impl RawResource {
             icons: None,
             meta: None,
         }
+    }
+
+    /// Set the human-readable title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the MIME type.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the size in bytes.
+    pub fn with_size(mut self, size: u32) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// Set the icons.
+    pub fn with_icons(mut self, icons: Vec<Icon>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set the metadata.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+impl RawResourceTemplate {
+    /// Creates a new RawResourceTemplate with a URI template and name.
+    pub fn new(uri_template: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            uri_template: uri_template.into(),
+            name: name.into(),
+            title: None,
+            description: None,
+            mime_type: None,
+            icons: None,
+        }
+    }
+
+    /// Set the human-readable title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the MIME type.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the icons.
+    pub fn with_icons(mut self, icons: Vec<Icon>) -> Self {
+        self.icons = Some(icons);
+        self
     }
 }
 

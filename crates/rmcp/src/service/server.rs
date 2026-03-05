@@ -47,6 +47,7 @@ impl ServiceRole for RoleServer {
 ///
 /// if you want to handle the error, you can use `serve_server_with_ct` or `serve_server` with `Result<RunningService<RoleServer, S>, ServerError>`
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ServerInitializeError {
     #[error("expect initialized request, but received: {0:?}")]
     ExpectedInitializeRequest(Option<ClientJsonRpcMessage>),
@@ -466,6 +467,7 @@ impl Peer<RoleServer> {
 /// Errors that can occur during typed elicitation operations
 #[cfg(feature = "elicitation")]
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ElicitationError {
     /// The elicitation request failed at the service level
     #[error("Service error: {0}")]
@@ -817,6 +819,7 @@ impl Peer<RoleServer> {
     ///     ElicitationAction::Cancel => {
     ///         println!("User cancelled/dismissed the request");
     ///     }
+    ///     _ => {}
     ///  }
     ///  Ok(())
     /// }
@@ -867,6 +870,7 @@ impl Peer<RoleServer> {
     ///     ElicitationAction::Cancel => {
     ///         println!("User cancelled/dismissed the request");
     ///     }
+    ///     _ => {}
     ///  }
     ///  Ok(())
     /// }
