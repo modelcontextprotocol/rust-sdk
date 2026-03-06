@@ -33,7 +33,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let list_fn = quote! {
             async fn list_tasks(
                 &self,
-                _request: Option<rmcp::model::PaginatedRequestParam>,
+                _request: Option<rmcp::model::PaginatedRequestParams>,
                 _: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::ListTasksResult, McpError> {
                 let running_ids = (#processor).lock().await.list_running();
@@ -61,7 +61,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let enqueue_fn = quote! {
             async fn enqueue_task(
                 &self,
-                request: rmcp::model::CallToolRequestParam,
+                request: rmcp::model::CallToolRequestParams,
                 context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::CreateTaskResult, McpError> {
                 use rmcp::task_manager::{
@@ -116,7 +116,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let get_info_fn = quote! {
             async fn get_task_info(
                 &self,
-                request: rmcp::model::GetTaskInfoParam,
+                request: rmcp::model::GetTaskInfoParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::GetTaskResult, McpError> {
                 use rmcp::task_manager::current_timestamp;
@@ -176,7 +176,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let get_result_fn = quote! {
             async fn get_task_result(
                 &self,
-                request: rmcp::model::GetTaskResultParam,
+                request: rmcp::model::GetTaskResultParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::GetTaskPayloadResult, McpError> {
                 use std::time::Duration;
@@ -232,7 +232,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let cancel_fn = quote! {
             async fn cancel_task(
                 &self,
-                request: rmcp::model::CancelTaskParam,
+                request: rmcp::model::CancelTaskParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::CancelTaskResult, McpError> {
                 use rmcp::task_manager::current_timestamp;
