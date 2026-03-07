@@ -440,10 +440,12 @@ async fn main() -> Result<()> {
     println!();
 
     let server = SqlQueryServer::new();
-    let service = server.serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = server.serve(stdio()).await.inspect_err(|e| {
         tracing::error!("Server error: {:?}", e);
     })?;
 
-    service.waiting().await?;
+    tokio::spawn(work);
+
+    service.waiting().await;
     Ok(())
 }

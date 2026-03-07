@@ -15,11 +15,10 @@ async fn main() -> anyhow::Result<()> {
             println!("Client connected: {:?}", addr);
             tokio::spawn(async move {
                 match serve_server(Calculator::new(), stream).await {
-                    Ok(server) => {
+                    Ok((server, work)) => {
+                        tokio::spawn(work);
                         println!("Server initialized successfully");
-                        if let Err(e) = server.waiting().await {
-                            println!("Error while server waiting: {}", e);
-                        }
+                        server.waiting().await;
                     }
                     Err(e) => println!("Server initialization failed: {}", e),
                 }
@@ -34,7 +33,8 @@ async fn main() -> anyhow::Result<()> {
         println!("Client connecting to {}", SOCKET_PATH);
         let stream = UnixStream::connect(SOCKET_PATH).await?;
 
-        let client = serve_client((), stream).await?;
+        let (client, work) = serve_client((), stream).await?;
+        tokio::spawn(work);
         println!("Client connected and initialized successfully");
 
         // List available tools

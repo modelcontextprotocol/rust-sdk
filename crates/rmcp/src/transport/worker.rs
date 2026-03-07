@@ -1,9 +1,10 @@
 use std::borrow::Cow;
 
+use futures::{FutureExt, future::RemoteHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level};
 
-use super::{IntoTransport, Transport};
+use super::Transport;
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 #[derive(Debug, thiserror::Error)]
@@ -61,7 +62,7 @@ pub struct WorkerSendRequest<W: Worker> {
 pub struct WorkerTransport<W: Worker> {
     rx: tokio::sync::mpsc::Receiver<RxJsonRpcMessage<W::Role>>,
     send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
-    join_handle: Option<tokio::task::JoinHandle<Result<(), WorkerQuitReason<W::Error>>>>,
+    join_handle: Option<RemoteHandle<Result<(), WorkerQuitReason<W::Error>>>>,
     _drop_guard: tokio_util::sync::DropGuard,
     ct: CancellationToken,
 }
@@ -81,20 +82,25 @@ impl Default for WorkerConfig {
 }
 pub enum WorkerAdapter {}
 
-impl<W: Worker> IntoTransport<W::Role, W::Error, WorkerAdapter> for W {
-    fn into_transport(self) -> impl Transport<W::Role, Error = W::Error> + 'static {
-        WorkerTransport::spawn(self)
-    }
-}
+// This can't be implemented if we are removing integrated "spawning" on
+// an async runtime.
+// impl<W: Worker> IntoTransport<W::Role, W::Error, WorkerAdapter> for W {
+//     fn into_transport(self) -> impl Transport<W::Role, Error = W::Error> + 'static {
+//         WorkerTransport::new(self)
+//     }
+// }
 
 impl<W: Worker> WorkerTransport<W> {
     pub fn cancel_token(&self) -> CancellationToken {
         self.ct.clone()
     }
-    pub fn spawn(worker: W) -> Self {
-        Self::spawn_with_ct(worker, CancellationToken::new())
+    pub fn new(worker: W) -> (Self, impl Future<Output = ()> + Send + 'static) {
+        Self::new_with_ct(worker, CancellationToken::new())
     }
-    pub fn spawn_with_ct(worker: W, transport_task_ct: CancellationToken) -> Self {
+    pub fn new_with_ct(
+        worker: W,
+        transport_task_ct: CancellationToken,
+    ) -> (Self, impl Future<Output = ()> + Send + 'static) {
         let config = worker.config();
         let worker_name = config.name;
         let (to_transport_tx, from_handler_rx) =
@@ -107,7 +113,7 @@ impl<W: Worker> WorkerTransport<W> {
             cancellation_token: transport_task_ct.clone(),
         };
 
-        let join_handle = tokio::spawn(async move {
+        let work = async move {
             worker
                 .run(context)
                 .instrument(tracing::span!(
@@ -132,14 +138,19 @@ impl<W: Worker> WorkerTransport<W> {
                 .inspect(|_| {
                     tracing::debug!("worker quit");
                 })
-        });
-        Self {
+        };
+
+        let (work, remote_handle) = work.remote_handle();
+
+        let this = Self {
             rx: from_transport_rx,
             send_service: to_transport_tx,
-            join_handle: Some(join_handle),
+            join_handle: Some(remote_handle),
             ct: transport_task_ct.clone(),
             _drop_guard: transport_task_ct.drop_guard(),
-        }
+        };
+
+        (this, work)
     }
 }
 
@@ -200,7 +211,7 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
     async fn close(&mut self) -> Result<(), Self::Error> {
         if let Some(handle) = self.join_handle.take() {
             self.ct.cancel();
-            let _quit_reason = handle.await.map_err(W::err_join)?;
+            let _quit_reason = handle.await;
             Ok(())
         } else {
             Ok(())

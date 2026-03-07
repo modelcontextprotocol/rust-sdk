@@ -19,7 +19,8 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
 
     // Start server in a separate task
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
 
         // Test server can send messages before level is set
         server
@@ -34,11 +35,11 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
             })
             .await?;
 
-        server.waiting().await?;
+        server.waiting().await;
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let (client, work) = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -46,6 +47,7 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
     )
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
 
     // Wait for the initial server message
     receive_signal.notified().await;
@@ -89,7 +91,7 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
     }
 
     // Important: Cancel the client before ending the test
-    client.cancel().await?;
+    client.cancel().await;
 
     // Wait for server to complete
     server_handle.await??;
@@ -104,12 +106,13 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let (client, work) = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -117,6 +120,7 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     )
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
 
     // Test 1: Error reporting scenario
     client
@@ -178,7 +182,7 @@ async fn test_logging_user_scenarios() -> anyhow::Result<()> {
     }
 
     // Important: Cancel client and wait for server before ending
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
 
     Ok(())
@@ -228,12 +232,13 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
     let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let (client, work) = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -241,6 +246,7 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
     )
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
 
     // Test all logging levels from spec
     for level in [
@@ -259,7 +265,7 @@ async fn test_logging_edge_cases() -> anyhow::Result<()> {
         assert_eq!(msg.level, level);
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     server_handle.await??;
     Ok(())
 }
@@ -271,7 +277,8 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
     let received_messages = Arc::new(Mutex::new(Vec::<LoggingMessageNotificationParam>::new()));
 
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
 
         // Test message with and without optional logger field
         for (level, has_logger) in [(LoggingLevel::Info, true), (LoggingLevel::Debug, false)] {
@@ -285,11 +292,11 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
                 .await?;
         }
 
-        server.waiting().await?;
+        server.waiting().await;
         anyhow::Ok(())
     });
 
-    let client = TestClientHandler::with_notification(
+    let (client, work) = TestClientHandler::with_notification(
         true,
         true,
         receive_signal.clone(),
@@ -297,6 +304,7 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
     )
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
 
     // Wait for the initial server message
     receive_signal.notified().await;
@@ -336,7 +344,7 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
     }
 
     // Important: Cancel the client before ending the test
-    client.cancel().await?;
+    client.cancel().await;
 
     // Wait for server to complete
     server_handle.await??;

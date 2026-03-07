@@ -59,14 +59,32 @@ Json Schema generation (version 2020-12):
 <summary>Start a client</summary>
 
 ```rust, ignore
-use rmcp::{ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
+use rmcp::{
+    ServiceExt, 
+    transport::{CommandBuilder, ChildProcessTransport, tokio::TokioChildProcessRunner}
+};
 use tokio::process::Command;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = ().serve(TokioChildProcess::new(Command::new("npx").configure(|cmd| {
-        cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
-    }))?).await?;
+
+    // Build and spawn a child process
+    let command = CommandBuilder::<TokioChildProcessRunner>::new("npx")
+        .arg("-y")
+        .arg("@modelcontextprotocol/server-everything")
+        .spawn_dyn()?
+
+    // Create a transport via the child process's STDIN and STDOUT streams
+    let transport = ChildProcessTransport::new(command)?
+
+    let (client, work) = ().serve(transport).await?;
+    // Spawn the async work loop on the background
+    tokio::spawn(work);
+
+    // Use the client ...
+
+    // Finish using the client
+    client.cancel().await;
     Ok(())
 }
 ```
@@ -99,7 +117,7 @@ let service = common::counter::Counter::new();
 
 ```rust, ignore
 // this call will finish the initialization process
-let server = service.serve(transport).await?;
+let (server, work) = service.serve(transport).await?;
 ```
 </details>
 

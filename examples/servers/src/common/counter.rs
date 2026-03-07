@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use std::{any::Any, sync::Arc};
 
-use chrono::Utc;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
@@ -12,14 +11,11 @@ use rmcp::{
     prompt, prompt_handler, prompt_router, schemars,
     service::RequestContext,
     task_handler,
-    task_manager::{
-        OperationDescriptor, OperationMessage, OperationProcessor, OperationResultTransport,
-    },
+    task_manager::{OperationProcessor, OperationResultTransport},
     tool, tool_handler, tool_router,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
-use tracing::info;
 
 struct ToolCallOperationResult {
     id: String,
@@ -69,11 +65,14 @@ pub struct Counter {
 impl Counter {
     #[allow(dead_code)]
     pub fn new() -> Self {
+        let (processor, processor_work) = OperationProcessor::new();
+        tokio::spawn(processor_work);
+
         Self {
             counter: Arc::new(Mutex::new(0)),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
-            processor: Arc::new(Mutex::new(OperationProcessor::new())),
+            processor: Arc::new(Mutex::new(processor)),
         }
     }
 
@@ -353,18 +352,20 @@ mod tests {
 
         let (server_transport, client_transport) = tokio::io::duplex(4096);
         let server_handle = tokio::spawn(async move {
-            let service = counter.serve(server_transport).await?;
-            service.waiting().await?;
+            let (service, work) = counter.serve(server_transport).await?;
+            tokio::spawn(work);
+            service.waiting().await;
             anyhow::Ok(())
         });
 
-        let client_service = client.serve(client_transport).await?;
+        let (client_service, work) = client.serve(client_transport).await?;
+        tokio::spawn(work);
         let mut task_meta = serde_json::Map::new();
         task_meta.insert(
             "source".into(),
             serde_json::Value::String("integration-test".into()),
         );
-        let params = CallToolRequestParams::new("long_task").with_task(Some(task_meta));
+        let params = CallToolRequestParams::new("long_task").with_task(task_meta);
         let response = client_service
             .send_request(ClientRequest::CallToolRequest(Request::new(params.clone())))
             .await?;
@@ -390,7 +391,7 @@ mod tests {
         let running = processor.lock().await.running_task_count();
         assert_eq!(running, 1);
 
-        client_service.cancel().await?;
+        client_service.cancel().await;
         let _ = server_handle.await;
         Ok(())
     }

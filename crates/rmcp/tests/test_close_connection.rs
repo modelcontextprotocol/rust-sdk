@@ -3,6 +3,7 @@
 mod common;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use common::handlers::{TestClientHandler, TestServer};
 use rmcp::{ServiceExt, service::QuitReason};
 
@@ -13,27 +14,29 @@ async fn test_close_method() -> anyhow::Result<()> {
 
     // Start server
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Start client
     let handler = TestClientHandler::new(true, true);
-    let mut client = handler.serve(client_transport).await?;
+    let (mut client, work) = handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Verify client is not closed
     assert!(!client.is_closed());
 
     // Call close() and verify it returns
-    let result = client.close().await?;
+    let result = client.close().await;
     assert!(matches!(result, QuitReason::Cancelled));
 
     // Verify client is now closed
     assert!(client.is_closed());
 
     // Calling close() again should return Closed immediately
-    let result = client.close().await?;
+    let result = client.close().await;
     assert!(matches!(result, QuitReason::Closed));
 
     // Wait for server to finish
@@ -48,19 +51,23 @@ async fn test_close_with_timeout() -> anyhow::Result<()> {
 
     // Start server
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Start client
     let handler = TestClientHandler::new(true, true);
-    let mut client = handler.serve(client_transport).await?;
+    let (mut client, work) = handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Close with a reasonable timeout
-    let result = client.close_with_timeout(Duration::from_secs(5)).await?;
-    assert!(result.is_some());
-    assert!(matches!(result.unwrap(), QuitReason::Cancelled));
+    let result = client
+        .close_with_timeout(Duration::from_secs(5))
+        .await
+        .ok_or(anyhow!("close_with_timeout should return Ok on timeout"))?;
+    assert!(matches!(result, QuitReason::Cancelled));
 
     // Verify client is now closed
     assert!(client.is_closed());
@@ -77,17 +84,19 @@ async fn test_cancel_method() -> anyhow::Result<()> {
 
     // Start server
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     // Start client
     let handler = TestClientHandler::new(true, true);
-    let client = handler.serve(client_transport).await?;
+    let (client, work) = handler.serve(client_transport).await?;
+    tokio::spawn(work);
 
     // Cancel should work as before
-    let result = client.cancel().await?;
+    let result = client.cancel().await;
     assert!(matches!(result, QuitReason::Cancelled));
 
     // Wait for server to finish
@@ -103,9 +112,10 @@ async fn test_drop_without_close() -> anyhow::Result<()> {
 
     // Start server that will handle the drop
     let server_handle = tokio::spawn(async move {
-        let server = TestServer::new().serve(server_transport).await?;
+        let (server, work) = TestServer::new().serve(server_transport).await?;
+        tokio::spawn(work);
         // The server should close when the client drops
-        let result = server.waiting().await?;
+        let result = server.waiting().await;
         // Server should detect closure
         assert!(matches!(result, QuitReason::Closed | QuitReason::Cancelled));
         anyhow::Ok(())

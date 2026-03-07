@@ -1,10 +1,16 @@
 use std::process::Stdio;
 
+use futures::AsyncReadExt;
 use rmcp::{
     ServiceExt,
-    transport::{ConfigureCommandExt, TokioChildProcess},
+    transport::{
+        ChildProcess, ChildProcessInstance,
+        child_process::{
+            builder::CommandBuilder, tokio::TokioChildProcessRunner,
+            transport::ChildProcessTransport,
+        },
+    },
 };
-use tokio::io::AsyncReadExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod common;
 
@@ -29,18 +35,21 @@ async fn init() -> anyhow::Result<()> {
 async fn test_with_python_server() -> anyhow::Result<()> {
     init().await?;
 
-    let transport = TokioChildProcess::new(tokio::process::Command::new("uv").configure(|cmd| {
-        cmd.arg("run")
-            .arg("server.py")
-            .current_dir("tests/test_with_python");
-    }))?;
+    let server_command = CommandBuilder::<TokioChildProcessRunner>::new("uv")
+        .args(["run", "server.py"])
+        .current_dir("tests/test_with_python")
+        .spawn_dyn()?;
 
-    let client = ().serve(transport).await?;
+    let transport = ChildProcessTransport::new(server_command)
+        .map_err(|e| anyhow::anyhow!("Failed to wrap child process: {e}"))?;
+
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -48,15 +57,14 @@ async fn test_with_python_server() -> anyhow::Result<()> {
 async fn test_with_python_server_stderr() -> anyhow::Result<()> {
     init().await?;
 
-    let (transport, stderr) =
-        TokioChildProcess::builder(tokio::process::Command::new("uv").configure(|cmd| {
-            cmd.arg("run")
-                .arg("server.py")
-                .current_dir("tests/test_with_python");
-        }))
+    let mut server_command = CommandBuilder::<TokioChildProcessRunner>::new("uv")
+        .args(["run", "server.py"])
+        .current_dir("tests/test_with_python")
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn_dyn()?;
 
+    let stderr: Option<<ChildProcess as ChildProcessInstance>::Stderr> =
+        server_command.take_stderr().into();
     let mut stderr = stderr.expect("stderr must be piped");
 
     let stderr_task = tokio::spawn(async move {
@@ -65,10 +73,14 @@ async fn test_with_python_server_stderr() -> anyhow::Result<()> {
         Ok::<_, std::io::Error>(buffer)
     });
 
-    let client = ().serve(transport).await?;
+    let transport = ChildProcessTransport::new(server_command)
+        .map_err(|e| anyhow::anyhow!("Failed to wrap child process: {e}"))?;
+
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
     let _ = client.list_all_resources().await?;
     let _ = client.list_all_tools().await?;
-    client.cancel().await?;
+    client.cancel().await;
 
     let stderr_output = stderr_task.await??;
     assert!(stderr_output.contains("server starting up..."));

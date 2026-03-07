@@ -151,8 +151,9 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("Starting server. Connect with an MCP client to test the tools.");
     eprintln!("Press Ctrl+C to stop.");
 
-    let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+    let (service, work) = server.serve(stdio()).await?;
+    tokio::spawn(work);
+    service.waiting().await;
 
     Ok(())
 }

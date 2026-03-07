@@ -1,5 +1,11 @@
-use futures::{FutureExt, future::BoxFuture};
+use futures::{
+    FutureExt, Stream, StreamExt,
+    future::{BoxFuture, RemoteHandle},
+    stream::FuturesUnordered,
+};
+use futures_timeout::TimeoutExt;
 use thiserror::Error;
+use tokio_stream::wrappers::ReceiverStream;
 
 #[cfg(feature = "server")]
 use crate::model::ServerJsonRpcMessage;
@@ -11,6 +17,7 @@ use crate::{
         NumberOrString, ProgressToken, RequestId,
     },
     transport::{DynamicTransportError, IntoTransport, Transport},
+    util::PinnedFuture,
 };
 #[cfg(feature = "client")]
 mod client;
@@ -108,10 +115,33 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn into_dyn(self) -> Box<dyn DynService<R>> {
         Box::new(self)
     }
+
+    /// Serve this service with the provided transport
+    ///
+    /// This function returns a facade to the running service, and a future that runs the
+    /// service business logic. The caller is responsible for running the business logic
+    /// future, either by spawning it on a runtime or awaiting it directly.
+    ///
+    /// Ex:
+    /// ```rust,ignore
+    /// // Try to initialize a service with the given transport
+    /// let (client, work) = MyServiceImpl.serve(transport).await?;
+    ///
+    /// // Spawn the service business logic on a runtime (e.g. tokio)
+    /// tokio::spawn(work);
+    ///
+    /// // Now we can interact with the service
+    /// let response = client.send_request(...).await?;
+    /// ```
+    ///
+    /// The returned [RunningService] provides methods to interact with the running service, such
+    /// as sending requests or notifications to the peer, and cancelling the service.
     fn serve<T, E, A>(
         self,
         transport: T,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
+    ) -> impl Future<
+        Output = Result<(RunningService<R, Self>, impl Future<Output = ()>), R::InitializeError>,
+    > + Send
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -123,7 +153,9 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
+    ) -> impl Future<
+        Output = Result<(RunningService<R, Self>, impl Future<Output = ()>), R::InitializeError>,
+    > + Send
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -188,6 +220,7 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
 
 use std::{
     collections::{HashMap, VecDeque},
+    fmt::Debug,
     ops::Deref,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
@@ -246,12 +279,10 @@ impl<R: ServiceRole> RequestHandle<R> {
     pub const REQUEST_TIMEOUT_REASON: &str = "request timeout";
     pub async fn await_response(self) -> Result<R::PeerResp, ServiceError> {
         if let Some(timeout) = self.options.timeout {
-            let timeout_result = tokio::time::timeout(timeout, async move {
-                self.rx.await.map_err(|_e| ServiceError::TransportClosed)?
-            })
-            .await;
+            let timeout_result = self.rx.timeout(timeout).await;
+
             match timeout_result {
-                Ok(response) => response,
+                Ok(response) => response.map_err(|_e| ServiceError::TransportClosed)?,
                 Err(_) => {
                     let error = Err(ServiceError::Timeout { timeout });
                     // cancel this request
@@ -426,14 +457,29 @@ impl<R: ServiceRole> Peer<R> {
     }
 }
 
-#[derive(Debug)]
 pub struct RunningService<R: ServiceRole, S: Service<R>> {
     service: Arc<S>,
     peer: Peer<R>,
-    handle: Option<tokio::task::JoinHandle<QuitReason>>,
+    handle: Option<RemoteHandle<QuitReason>>,
     cancellation_token: CancellationToken,
     dg: DropGuard,
 }
+
+impl<R: ServiceRole, S: Service<R>> Debug for RunningService<R, S>
+where
+    S: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunningService")
+            .field("service", &self.service)
+            .field("peer", &self.peer)
+            .field("handle", &self.handle.as_ref().map(|_| "<future>"))
+            .field("cancellation_token", &self.cancellation_token)
+            .field("dg", &self.dg)
+            .finish()
+    }
+}
+
 impl<R: ServiceRole, S: Service<R>> Deref for RunningService<R, S> {
     type Target = Peer<R>;
 
@@ -467,10 +513,10 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     /// This will block until the service loop terminates (either due to
     /// cancellation, transport closure, or an error).
     #[inline]
-    pub async fn waiting(mut self) -> Result<QuitReason, tokio::task::JoinError> {
+    pub async fn waiting(mut self) -> QuitReason {
         match self.handle.take() {
             Some(handle) => handle.await,
-            None => Ok(QuitReason::Closed),
+            None => QuitReason::Closed,
         }
     }
 
@@ -487,11 +533,14 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mut client = ().serve(transport).await?;
+    /// let mut (client, work) = ().serve(transport).await?;
+    /// // spawn the work (e.g. on tokio)
+    /// tokio::spawn(work);
+    ///
     /// // ... use the client ...
     /// client.close().await?;
     /// ```
-    pub async fn close(&mut self) -> Result<QuitReason, tokio::task::JoinError> {
+    pub async fn close(&mut self) -> QuitReason {
         if let Some(handle) = self.handle.take() {
             // Disarm the drop guard so it doesn't try to cancel again
             // We need to cancel manually and wait for completion
@@ -499,7 +548,7 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
             handle.await
         } else {
             // Already closed
-            Ok(QuitReason::Closed)
+            QuitReason::Closed
         }
     }
 
@@ -511,24 +560,22 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     ///
     /// Returns `Ok(Some(reason))` if shutdown completed within the timeout,
     /// `Ok(None)` if the timeout was reached, or `Err` if there was a join error.
-    pub async fn close_with_timeout(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<QuitReason>, tokio::task::JoinError> {
+    pub async fn close_with_timeout(&mut self, timeout: Duration) -> Option<QuitReason> {
         if let Some(handle) = self.handle.take() {
             self.cancellation_token.cancel();
-            match tokio::time::timeout(timeout, handle).await {
-                Ok(result) => result.map(Some),
-                Err(_elapsed) => {
+
+            match handle.timeout(timeout).await {
+                Ok(reason) => Some(reason),
+                Err(_) => {
                     tracing::warn!(
                         "close_with_timeout: cleanup did not complete within {:?}",
                         timeout
                     );
-                    Ok(None)
+                    None
                 }
             }
         } else {
-            Ok(Some(QuitReason::Closed))
+            Some(QuitReason::Closed)
         }
     }
 
@@ -536,7 +583,7 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     ///
     /// This consumes the `RunningService` and ensures the connection is properly
     /// closed. For a non-consuming alternative, see [`close`](Self::close).
-    pub async fn cancel(mut self) -> Result<QuitReason, tokio::task::JoinError> {
+    pub async fn cancel(mut self) -> QuitReason {
         // Disarm the drop guard since we're handling cancellation explicitly
         let _ = std::mem::replace(&mut self.dg, self.cancellation_token.clone().drop_guard());
         self.close().await
@@ -546,6 +593,9 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
 impl<R: ServiceRole, S: Service<R>> Drop for RunningService<R, S> {
     fn drop(&mut self) {
         if self.handle.is_some() && !self.cancellation_token.is_cancelled() {
+            // Make sure we don't stop the work itself, the work future should
+            // handle that via cancellation token or drop guard
+            self.handle.take().unwrap().forget();
             tracing::debug!(
                 "RunningService dropped without explicit close(). \
                  The connection will be closed asynchronously. \
@@ -570,7 +620,6 @@ impl RunningServiceCancellationToken {
 pub enum QuitReason {
     Cancelled,
     Closed,
-    JoinError(tokio::task::JoinError),
 }
 
 /// Request execution context
@@ -608,11 +657,20 @@ pub struct NotificationContext<R: ServiceRole> {
 }
 
 /// Use this function to skip initialization process
+///
+/// TODO: What initialization process? Reference that here
+///
+/// Creates a handle to the running service, and the async task that runs the service
+/// business logic.
+///
+/// The caller is responsible for running the business logic task, either by spawning it on
+/// a runtime or awaiting it directly. You can use the [RunningService] to cancel the
+/// business logic or wait for it to finish.
 pub fn serve_directly<R, S, T, E, A>(
     service: S,
     transport: T,
     peer_info: Option<R::PeerInfo>,
-) -> RunningService<R, S>
+) -> (RunningService<R, S>, impl Future<Output = ()>)
 where
     R: ServiceRole,
     S: Service<R>,
@@ -623,12 +681,21 @@ where
 }
 
 /// Use this function to skip initialization process
+///
+/// TODO: What initialization process? Reference that here
+///
+/// Creates a handle to the running service, and the async task that runs the service
+/// business logic.
+///
+/// The caller is responsible for running the business logic task, either by spawning it on
+/// a runtime or awaiting it directly. You can use the [RunningService] to cancel the
+/// business logic or wait for it to finish.
 pub fn serve_directly_with_ct<R, S, T, E, A>(
     service: S,
     transport: T,
     peer_info: Option<R::PeerInfo>,
     ct: CancellationToken,
-) -> RunningService<R, S>
+) -> (RunningService<R, S>, impl Future<Output = ()>)
 where
     R: ServiceRole,
     S: Service<R>,
@@ -636,25 +703,30 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let (peer, peer_rx) = Peer::new(Arc::new(AtomicU32RequestIdProvider::default()), peer_info);
+    let peer_rx = ReceiverStream::new(peer_rx);
     serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
 }
 
+/// Creates a handle to the running service, and the async task that runs the service
+/// business logic.
+///
+/// The caller is responsible for running the business logic task, either by spawning it on
+/// a runtime or awaiting it directly. You can use the [RunningService] to cancel the
+/// business logic or wait for it to finish.
 #[instrument(skip_all)]
-fn serve_inner<R, S, T>(
+fn serve_inner<R, S, T, PeerStream>(
     service: S,
     transport: T,
     peer: Peer<R>,
-    mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
+    peer_rx: PeerStream,
     ct: CancellationToken,
-) -> RunningService<R, S>
+) -> (RunningService<R, S>, impl Future<Output = ()>)
 where
     R: ServiceRole,
     S: Service<R>,
     T: Transport<R> + 'static,
+    PeerStream: Stream<Item = PeerSinkMessage<R>> + Unpin,
 {
-    const SINK_PROXY_BUFFER_SIZE: usize = 64;
-    let (sink_proxy_tx, mut sink_proxy_rx) =
-        tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
     let peer_info = peer.peer_info();
     if R::IS_CLIENT {
         tracing::info!(?peer_info, "Service initialized as client");
@@ -662,9 +734,6 @@ where
         tracing::info!(?peer_info, "Service initialized as server");
     }
 
-    let mut local_responder_pool =
-        HashMap::<RequestId, Responder<Result<R::PeerResp, ServiceError>>>::new();
-    let mut local_ct_pool = HashMap::<RequestId, CancellationToken>::new();
     let shared_service = Arc::new(service);
     // for return
     let service = shared_service.clone();
@@ -672,283 +741,325 @@ where
     // let message_sink = tokio::sync::
     // let mut stream = std::pin::pin!(stream);
     let serve_loop_ct = ct.child_token();
-    let peer_return: Peer<R> = peer.clone();
+    let peer_return = peer.clone();
     let current_span = tracing::Span::current();
-    let handle = tokio::spawn(async move {
-        let mut transport = transport.into_transport();
-        let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
-        let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
-        #[derive(Debug)]
-        enum SendTaskResult {
-            Request {
-                id: RequestId,
-                result: Result<(), DynamicTransportError>,
-            },
-            Notification {
-                responder: Responder<Result<(), ServiceError>>,
-                cancellation_param: Option<CancelledNotificationParam>,
-                result: Result<(), DynamicTransportError>,
-            },
-        }
-        #[derive(Debug)]
-        enum Event<R: ServiceRole> {
-            ProxyMessage(PeerSinkMessage<R>),
-            PeerMessage(RxJsonRpcMessage<R>),
-            ToSink(TxJsonRpcMessage<R>),
-            SendTaskResult(SendTaskResult),
-        }
 
-        let quit_reason = loop {
-            let evt = if let Some(m) = batch_messages.pop_front() {
-                Event::PeerMessage(m)
-            } else {
-                tokio::select! {
-                    m = sink_proxy_rx.recv(), if !sink_proxy_rx.is_closed() => {
-                        if let Some(m) = m {
-                            Event::ToSink(m)
-                        } else {
-                            continue
-                        }
-                    }
-                    m = transport.receive() => {
-                        if let Some(m) = m {
-                            Event::PeerMessage(m)
-                        } else {
-                            // input stream closed
-                            tracing::info!("input stream terminated");
-                            break QuitReason::Closed
-                        }
-                    }
-                    m = peer_rx.recv(), if !peer_rx.is_closed() => {
-                        if let Some(m) = m {
-                            Event::ProxyMessage(m)
-                        } else {
-                            continue
-                        }
-                    }
-                    m = send_task_set.join_next(), if !send_task_set.is_empty() => {
-                        let Some(result) = m else {
-                            continue
-                        };
-                        match result {
-                            Err(e) => {
-                                // join error, which is serious, we should quit.
-                                tracing::error!(%e, "send request task encounter a tokio join error");
-                                break QuitReason::JoinError(e)
-                            }
-                            Ok(result) => {
-                                Event::SendTaskResult(result)
-                            }
-                        }
-                    }
-                    _ = serve_loop_ct.cancelled() => {
-                        tracing::info!("task cancelled");
-                        break QuitReason::Cancelled
-                    }
-                }
-            };
+    let work = controller(transport, peer_rx, serve_loop_ct, shared_service, peer)
+        .instrument(current_span);
 
-            tracing::trace!(?evt, "new event");
-            match evt {
-                Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
-                    if let Err(e) = result {
-                        if let Some(responder) = local_responder_pool.remove(&id) {
-                            let _ = responder.send(Err(ServiceError::TransportSend(e)));
-                        }
-                    }
-                }
-                Event::SendTaskResult(SendTaskResult::Notification {
-                    responder,
-                    result,
-                    cancellation_param,
-                }) => {
-                    let response = if let Err(e) = result {
-                        Err(ServiceError::TransportSend(e))
+    let (work, work_handle) = work.remote_handle();
+
+    let running_service = RunningService {
+        service,
+        peer: peer_return,
+        handle: Some(work_handle),
+        cancellation_token: ct.clone(),
+        dg: ct.drop_guard(),
+    };
+
+    (running_service, work)
+}
+
+/// Main business logic for event dispatching and handling.
+async fn controller<R, T, PeerStream>(
+    transport: T,
+    peer_rx: PeerStream,
+    cancel_token: CancellationToken,
+    shared_service: Arc<impl Service<R>>,
+    peer: Peer<R>,
+) -> QuitReason
+where
+    R: ServiceRole,
+    T: Transport<R> + 'static,
+    PeerStream: Stream<Item = PeerSinkMessage<R>> + Unpin,
+{
+    let mut transport = transport.into_transport();
+    let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
+    let mut send_task_set = FuturesUnordered::<PinnedFuture<SendTaskResult>>::new();
+    let mut side_effects_set = FuturesUnordered::<PinnedFuture<()>>::new();
+
+    let mut local_responder_pool =
+        HashMap::<RequestId, Responder<Result<R::PeerResp, ServiceError>>>::new();
+    let mut local_ct_pool = HashMap::<RequestId, CancellationToken>::new();
+
+    const SINK_PROXY_BUFFER_SIZE: usize = 64;
+    let (sink_proxy_tx, mut rpc_rx) =
+        tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
+
+    // Fuse the stream, so that once it return `None` it is guaranteed to never
+    // be polled again. Additionally, we can check if it have been fused by checking
+    // `is_done()`, which we use in the select branches below.
+    let mut peer_rx = peer_rx.fuse();
+
+    #[derive(Debug)]
+    enum SendTaskResult {
+        Request {
+            id: RequestId,
+            result: Result<(), DynamicTransportError>,
+        },
+        Notification {
+            responder: Responder<Result<(), ServiceError>>,
+            cancellation_param: Option<CancelledNotificationParam>,
+            result: Result<(), DynamicTransportError>,
+        },
+    }
+    #[derive(Debug)]
+    enum Event<R: ServiceRole> {
+        ProxyMessage(PeerSinkMessage<R>),
+        PeerMessage(RxJsonRpcMessage<R>),
+        ToSink(TxJsonRpcMessage<R>),
+        SendTaskResult(SendTaskResult),
+    }
+
+    let quit_reason = loop {
+        // Prioritize processing batch messages before other things
+        let evt = if let Some(m) = batch_messages.pop_front() {
+            Event::PeerMessage(m)
+        } else {
+            tokio::select! {
+                m = rpc_rx.recv(), if !rpc_rx.is_closed() => {
+                    if let Some(m) = m {
+                        Event::ToSink(m)
                     } else {
-                        Ok(())
+                        continue
+                    }
+                }
+                m = transport.receive() => {
+                    if let Some(m) = m {
+                        Event::PeerMessage(m)
+                    } else {
+                        // input stream closed
+                        tracing::info!("input stream terminated");
+                        break QuitReason::Closed
+                    }
+                }
+                m = peer_rx.next(), if !peer_rx.is_done() => {
+                    if let Some(m) = m {
+                        Event::ProxyMessage(m)
+                    } else {
+                        continue
+                    }
+                }
+                m = send_task_set.next(), if !send_task_set.is_empty() => {
+                    let Some(send_result) = m else {
+                        continue
                     };
-                    let _ = responder.send(response);
-                    if let Some(param) = cancellation_param {
-                        if let Some(responder) = local_responder_pool.remove(&param.request_id) {
-                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
-                            let _response_result = responder.send(Err(ServiceError::Cancelled {
-                                reason: param.reason.clone(),
-                            }));
-                        }
-                    }
+                    Event::SendTaskResult(send_result)
                 }
-                // response and error
-                Event::ToSink(m) => {
-                    if let Some(id) = match &m {
-                        JsonRpcMessage::Response(response) => Some(&response.id),
-                        JsonRpcMessage::Error(error) => Some(&error.id),
-                        _ => None,
-                    } {
-                        if let Some(ct) = local_ct_pool.remove(id) {
-                            ct.cancel();
-                        }
-                        let send = transport.send(m);
-                        let current_span = tracing::Span::current();
-                        tokio::spawn(async move {
-                            let send_result = send.await;
-                            if let Err(error) = send_result {
-                                tracing::error!(%error, "fail to response message");
-                            }
-                        }.instrument(current_span));
-                    }
+                _ = side_effects_set.next(), if !side_effects_set.is_empty() => {
+                    // just drive the future, we don't care about the result
+                    continue
                 }
-                Event::ProxyMessage(PeerSinkMessage::Request {
-                    request,
-                    id,
-                    responder,
-                }) => {
-                    local_responder_pool.insert(id.clone(), responder);
-                    let send = transport.send(JsonRpcMessage::request(request, id.clone()));
-                    {
-                        let id = id.clone();
-                        let current_span = tracing::Span::current();
-                        send_task_set.spawn(send.map(move |r| SendTaskResult::Request {
-                            id,
-                            result: r.map_err(DynamicTransportError::new::<T, R>),
-                        }).instrument(current_span));
-                    }
-                }
-                Event::ProxyMessage(PeerSinkMessage::Notification {
-                    notification,
-                    responder,
-                }) => {
-                    // catch cancellation notification
-                    let mut cancellation_param = None;
-                    let notification = match notification.try_into() {
-                        Ok::<CancelledNotification, _>(cancelled) => {
-                            cancellation_param.replace(cancelled.params.clone());
-                            cancelled.into()
-                        }
-                        Err(notification) => notification,
-                    };
-                    let send = transport.send(JsonRpcMessage::notification(notification));
-                    let current_span = tracing::Span::current();
-                    send_task_set.spawn(send.map(move |result| SendTaskResult::Notification {
-                        responder,
-                        cancellation_param,
-                        result: result.map_err(DynamicTransportError::new::<T, R>),
-                    }).instrument(current_span));
-                }
-                Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
-                    id,
-                    mut request,
-                    ..
-                })) => {
-                    tracing::debug!(%id, ?request, "received request");
-                    {
-                        let service = shared_service.clone();
-                        let sink = sink_proxy_tx.clone();
-                        let request_ct = serve_loop_ct.child_token();
-                        let context_ct = request_ct.child_token();
-                        local_ct_pool.insert(id.clone(), request_ct);
-                        let mut extensions = Extensions::new();
-                        let mut meta = Meta::new();
-                        // avoid clone
-                        // swap meta firstly, otherwise progress token will be lost
-                        std::mem::swap(&mut meta, request.get_meta_mut());
-                        std::mem::swap(&mut extensions, request.extensions_mut());
-                        let context = RequestContext {
-                            ct: context_ct,
-                            id: id.clone(),
-                            peer: peer.clone(),
-                            meta,
-                            extensions,
-                        };
-                        let current_span = tracing::Span::current();
-                        tokio::spawn(async move {
-                            let result = service
-                                .handle_request(request, context)
-                                .await;
-                            let response = match result {
-                                Ok(result) => {
-                                    tracing::debug!(%id, ?result, "response message");
-                                    JsonRpcMessage::response(result, id)
-                                }
-                                Err(error) => {
-                                    tracing::warn!(%id, ?error, "response error");
-                                    JsonRpcMessage::error(error, id)
-                                }
-                            };
-                            let _send_result = sink.send(response).await;
-                        }.instrument(current_span));
-                    }
-                }
-                Event::PeerMessage(JsonRpcMessage::Notification(JsonRpcNotification {
-                    notification,
-                    ..
-                })) => {
-                    tracing::info!(?notification, "received notification");
-                    // catch cancelled notification
-                    let mut notification = match notification.try_into() {
-                        Ok::<CancelledNotification, _>(cancelled) => {
-                            if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
-                                tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
-                                ct.cancel();
-                            }
-                            cancelled.into()
-                        }
-                        Err(notification) => notification,
-                    };
-                    {
-                        let service = shared_service.clone();
-                        let mut extensions = Extensions::new();
-                        let mut meta = Meta::new();
-                        // avoid clone
-                        std::mem::swap(&mut extensions, notification.extensions_mut());
-                        std::mem::swap(&mut meta, notification.get_meta_mut());
-                        let context = NotificationContext {
-                            peer: peer.clone(),
-                            meta,
-                            extensions,
-                        };
-                        let current_span = tracing::Span::current();
-                        tokio::spawn(async move {
-                            let result = service.handle_notification(notification, context).await;
-                            if let Err(error) = result {
-                                tracing::warn!(%error, "Error sending notification");
-                            }
-                        }.instrument(current_span));
-                    }
-                }
-                Event::PeerMessage(JsonRpcMessage::Response(JsonRpcResponse {
-                    result,
-                    id,
-                    ..
-                })) => {
-                    if let Some(responder) = local_responder_pool.remove(&id) {
-                        let response_result = responder.send(Ok(result));
-                        if let Err(_error) = response_result {
-                            tracing::warn!(%id, "Error sending response");
-                        }
-                    }
-                }
-                Event::PeerMessage(JsonRpcMessage::Error(JsonRpcError { error, id, .. })) => {
-                    if let Some(responder) = local_responder_pool.remove(&id) {
-                        let _response_result = responder.send(Err(ServiceError::McpError(error)));
-                        if let Err(_error) = _response_result {
-                            tracing::warn!(%id, "Error sending response");
-                        }
-                    }
+                _ = cancel_token.cancelled() => {
+                    tracing::info!("task cancelled");
+                    break QuitReason::Cancelled
                 }
             }
         };
-        let sink_close_result = transport.close().await;
-        if let Err(e) = sink_close_result {
-            tracing::error!(%e, "fail to close sink");
+
+        tracing::trace!(?evt, "new event");
+        match evt {
+            Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
+                if let Err(e) = result {
+                    if let Some(responder) = local_responder_pool.remove(&id) {
+                        let _ = responder.send(Err(ServiceError::TransportSend(e)));
+                    }
+                }
+            }
+            Event::SendTaskResult(SendTaskResult::Notification {
+                responder,
+                result,
+                cancellation_param,
+            }) => {
+                let response = if let Err(e) = result {
+                    Err(ServiceError::TransportSend(e))
+                } else {
+                    Ok(())
+                };
+                let _ = responder.send(response);
+                if let Some(param) = cancellation_param {
+                    if let Some(responder) = local_responder_pool.remove(&param.request_id) {
+                        tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
+                        let _response_result = responder.send(Err(ServiceError::Cancelled {
+                            reason: param.reason.clone(),
+                        }));
+                    }
+                }
+            }
+            // response and error
+            Event::ToSink(m) => {
+                if let Some(id) = match &m {
+                    JsonRpcMessage::Response(response) => Some(&response.id),
+                    JsonRpcMessage::Error(error) => Some(&error.id),
+                    _ => None,
+                } {
+                    if let Some(ct) = local_ct_pool.remove(id) {
+                        ct.cancel();
+                    }
+                    let send = transport.send(m);
+                    let current_span = tracing::Span::current();
+                    let send_work = async move {
+                        let send_result = send.await;
+                        if let Err(error) = send_result {
+                            tracing::error!(%error, "fail to response message");
+                        }
+                    }
+                    .instrument(current_span)
+                    .boxed();
+                    side_effects_set.push(send_work);
+                }
+            }
+            Event::ProxyMessage(PeerSinkMessage::Request {
+                request,
+                id,
+                responder,
+            }) => {
+                local_responder_pool.insert(id.clone(), responder);
+                let send = transport.send(JsonRpcMessage::request(request, id.clone()));
+                let id = id.clone();
+                let current_span = tracing::Span::current();
+
+                let send = send
+                    .map(move |r| SendTaskResult::Request {
+                        id,
+                        result: r.map_err(DynamicTransportError::new::<T, R>),
+                    })
+                    .instrument(current_span)
+                    .boxed();
+                send_task_set.push(send);
+            }
+            Event::ProxyMessage(PeerSinkMessage::Notification {
+                notification,
+                responder,
+            }) => {
+                // catch cancellation notification
+                let mut cancellation_param = None;
+                let notification = match notification.try_into() {
+                    Ok::<CancelledNotification, _>(cancelled) => {
+                        cancellation_param.replace(cancelled.params.clone());
+                        cancelled.into()
+                    }
+                    Err(notification) => notification,
+                };
+                let send = transport.send(JsonRpcMessage::notification(notification));
+                let current_span = tracing::Span::current();
+                let send = send
+                    .map(move |result| SendTaskResult::Notification {
+                        responder,
+                        cancellation_param,
+                        result: result.map_err(DynamicTransportError::new::<T, R>),
+                    })
+                    .instrument(current_span)
+                    .boxed();
+                send_task_set.push(send);
+            }
+            Event::PeerMessage(JsonRpcMessage::Request(JsonRpcRequest {
+                id, mut request, ..
+            })) => {
+                tracing::debug!(%id, ?request, "received request");
+                {
+                    let service = shared_service.clone();
+                    let sink = sink_proxy_tx.clone();
+                    let request_ct = cancel_token.child_token();
+                    let context_ct = request_ct.child_token();
+                    local_ct_pool.insert(id.clone(), request_ct);
+                    let mut extensions = Extensions::new();
+                    let mut meta = Meta::new();
+                    // avoid clone
+                    // swap meta firstly, otherwise progress token will be lost
+                    std::mem::swap(&mut meta, request.get_meta_mut());
+                    std::mem::swap(&mut extensions, request.extensions_mut());
+                    let context = RequestContext {
+                        ct: context_ct,
+                        id: id.clone(),
+                        peer: peer.clone(),
+                        meta,
+                        extensions,
+                    };
+                    let current_span = tracing::Span::current();
+                    let work = async move {
+                        let result = service.handle_request(request, context).await;
+                        let response = match result {
+                            Ok(result) => {
+                                tracing::debug!(%id, ?result, "response message");
+                                JsonRpcMessage::response(result, id)
+                            }
+                            Err(error) => {
+                                tracing::warn!(%id, ?error, "response error");
+                                JsonRpcMessage::error(error, id)
+                            }
+                        };
+                        let _send_result = sink.send(response).await;
+                    }
+                    .instrument(current_span)
+                    .boxed();
+                    side_effects_set.push(work);
+                }
+            }
+            Event::PeerMessage(JsonRpcMessage::Notification(JsonRpcNotification {
+                notification,
+                ..
+            })) => {
+                tracing::info!(?notification, "received notification");
+                // catch cancelled notification
+                let mut notification = match notification.try_into() {
+                    Ok::<CancelledNotification, _>(cancelled) => {
+                        if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
+                            tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
+                            ct.cancel();
+                        }
+                        cancelled.into()
+                    }
+                    Err(notification) => notification,
+                };
+                {
+                    let service = shared_service.clone();
+                    let mut extensions = Extensions::new();
+                    let mut meta = Meta::new();
+                    // avoid clone
+                    std::mem::swap(&mut extensions, notification.extensions_mut());
+                    std::mem::swap(&mut meta, notification.get_meta_mut());
+                    let context = NotificationContext {
+                        peer: peer.clone(),
+                        meta,
+                        extensions,
+                    };
+                    let current_span = tracing::Span::current();
+                    let work = async move {
+                        let result = service.handle_notification(notification, context).await;
+                        if let Err(error) = result {
+                            tracing::warn!(%error, "Error sending notification");
+                        }
+                    }
+                    .instrument(current_span)
+                    .boxed();
+                    side_effects_set.push(work);
+                }
+            }
+            Event::PeerMessage(JsonRpcMessage::Response(JsonRpcResponse {
+                result, id, ..
+            })) => {
+                if let Some(responder) = local_responder_pool.remove(&id) {
+                    let response_result = responder.send(Ok(result));
+                    if let Err(_error) = response_result {
+                        tracing::warn!(%id, "Error sending response");
+                    }
+                }
+            }
+            Event::PeerMessage(JsonRpcMessage::Error(JsonRpcError { error, id, .. })) => {
+                if let Some(responder) = local_responder_pool.remove(&id) {
+                    let _response_result = responder.send(Err(ServiceError::McpError(error)));
+                    if let Err(_error) = _response_result {
+                        tracing::warn!(%id, "Error sending response");
+                    }
+                }
+            }
         }
-        tracing::info!(?quit_reason, "serve finished");
-        quit_reason
-    }.instrument(current_span));
-    RunningService {
-        service,
-        peer: peer_return,
-        handle: Some(handle),
-        cancellation_token: ct.clone(),
-        dg: ct.drop_guard(),
+    };
+    let sink_close_result = transport.close().await;
+    if let Err(e) = sink_close_result {
+        tracing::error!(%e, "fail to close sink");
     }
+    tracing::info!(?quit_reason, "serve finished");
+    quit_reason
 }

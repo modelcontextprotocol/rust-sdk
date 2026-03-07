@@ -11,11 +11,13 @@ use rmcp::transport::streamable_http_server::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let service = TowerToHyperService::new(StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         || Ok(Counter::new()),
         LocalSessionManager::default().into(),
         Default::default(),
-    ));
+    );
+    tokio::spawn(http_work);
+    let service = TowerToHyperService::new(service);
     let listener = tokio::net::TcpListener::bind("[::1]:8080").await?;
     loop {
         let io = tokio::select! {

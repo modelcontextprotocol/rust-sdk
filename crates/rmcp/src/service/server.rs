@@ -95,7 +95,12 @@ impl<S: Service<RoleServer>> ServiceExt<RoleServer> for S {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<RoleServer, Self>, ServerInitializeError>> + Send
+    ) -> impl Future<
+        Output = Result<
+            (RunningService<RoleServer, Self>, impl Future<Output = ()>),
+            ServerInitializeError,
+        >,
+    > + Send
     where
         T: IntoTransport<RoleServer, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -108,7 +113,7 @@ impl<S: Service<RoleServer>> ServiceExt<RoleServer> for S {
 pub async fn serve_server<S, T, E, A>(
     service: S,
     transport: T,
-) -> Result<RunningService<RoleServer, S>, ServerInitializeError>
+) -> Result<(RunningService<RoleServer, S>, impl Future<Output = ()>), ServerInitializeError>
 where
     S: Service<RoleServer>,
     T: IntoTransport<RoleServer, E, A>,
@@ -167,7 +172,7 @@ pub async fn serve_server_with_ct<S, T, E, A>(
     service: S,
     transport: T,
     ct: CancellationToken,
-) -> Result<RunningService<RoleServer, S>, ServerInitializeError>
+) -> Result<(RunningService<RoleServer, S>, impl Future<Output = ()>), ServerInitializeError>
 where
     S: Service<RoleServer>,
     T: IntoTransport<RoleServer, E, A>,
@@ -181,11 +186,14 @@ where
     }
 }
 
+/// Performs handshake and initial protocol setup through the transport,
+/// and returns a [RunningService] with a separate work future that will
+/// need polled to run the service.
 async fn serve_server_with_ct_inner<S, T>(
     service: S,
     transport: T,
     ct: CancellationToken,
-) -> Result<RunningService<RoleServer, S>, ServerInitializeError>
+) -> Result<(RunningService<RoleServer, S>, impl Future<Output = ()>), ServerInitializeError>
 where
     S: Service<RoleServer>,
     T: Transport<RoleServer> + 'static,
@@ -259,6 +267,7 @@ where
         peer: peer.clone(),
     };
     let _ = service.handle_notification(notification, context).await;
+    let peer_rx = ReceiverStream::new(peer_rx);
     // Continue processing service
     Ok(serve_inner(service, transport, peer, peer_rx, ct))
 }

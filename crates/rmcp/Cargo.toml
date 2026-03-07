@@ -19,7 +19,7 @@ async-trait = "0.1.89"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
+tokio = { version = "1", features = ["sync", "macros", "time"] }
 futures = "0.3"
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
@@ -58,13 +58,14 @@ process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 
 # for http-server transport
 rand = { version = "0.10", optional = true }
-tokio-stream = { version = "0.1", optional = true }
+tokio-stream = { version = "0.1", optional = true, features = ["sync"] }
 uuid = { version = "1", features = ["v4"], optional = true }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 # macro
 rmcp-macros = { workspace = true, optional = true }
+futures-timeout = "0.1.3"
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 chrono = { version = "0.4.38", features = ["serde"] }
 
@@ -79,7 +80,12 @@ chrono = { version = "0.4.38", default-features = false, features = [
 [features]
 default = ["base64", "macros", "server"]
 client = ["dep:tokio-stream"]
-server = ["transport-async-rw", "dep:schemars", "dep:pastey"]
+server = [
+  "transport-async-rw",
+  "dep:schemars",
+  "dep:pastey",
+  "dep:tokio-stream",
+]
 macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
 
@@ -111,14 +117,18 @@ client-side-sse = ["dep:sse-stream", "dep:http"]
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
-transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "__reqwest"]
+transport-streamable-http-client-reqwest = [
+  "transport-streamable-http-client",
+  "__reqwest",
+]
 
-transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
+transport-async-rw = ["tokio/io-util", "tokio-util/codec", "tokio-util/compat"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
-transport-child-process = [
+transport-child-process = ["transport-async-rw", "tokio/process"]
+transport-child-process-tokio = [
   "transport-async-rw",
   "tokio/process",
-  "dep:process-wrap",
+  "tokio/rt",
 ]
 transport-streamable-http-server = [
   "transport-streamable-http-server-session",
@@ -138,7 +148,10 @@ schemars = ["dep:schemars"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 schemars = { version = "1.1.0", features = ["chrono04"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8", default-features = false, features = [
+  "http1",
+  "tokio",
+] }
 url = "2.4"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
@@ -159,6 +172,7 @@ required-features = [
   "server",
   "client",
   "transport-child-process",
+  "transport-child-process-tokio",
 ]
 path = "tests/test_with_python.rs"
 
@@ -168,8 +182,10 @@ required-features = [
   "server",
   "client",
   "transport-child-process",
+  "transport-child-process-tokio",
   "transport-streamable-http-server",
   "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
   "__reqwest",
 ]
 path = "tests/test_with_js.rs"
@@ -211,12 +227,22 @@ path = "tests/test_task.rs"
 
 [[test]]
 name = "test_streamable_http_priming"
-required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+required-features = [
+  "server",
+  "client",
+  "transport-streamable-http-server",
+  "reqwest",
+]
 path = "tests/test_streamable_http_priming.rs"
 
 [[test]]
 name = "test_streamable_http_json_response"
-required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+required-features = [
+  "server",
+  "client",
+  "transport-streamable-http-server",
+  "reqwest",
+]
 path = "tests/test_streamable_http_json_response.rs"
 
 
@@ -253,7 +279,13 @@ path = "tests/test_custom_headers.rs"
 
 [[test]]
 name = "test_sse_concurrent_streams"
-required-features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client", "reqwest"]
+required-features = [
+  "server",
+  "client",
+  "transport-streamable-http-server",
+  "transport-streamable-http-client",
+  "reqwest",
+]
 path = "tests/test_sse_concurrent_streams.rs"
 
 [[test]]

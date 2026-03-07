@@ -1,7 +1,7 @@
 use std::{convert::Infallible, fmt::Display, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use futures::{StreamExt, future::BoxFuture};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use http::{Method, Request, Response, header::ALLOW};
 use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -27,6 +27,7 @@ use crate::{
             },
         },
     },
+    util::PinnedFuture,
 };
 
 #[derive(Debug, Clone)]
@@ -189,6 +190,8 @@ pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManag
     pub config: StreamableHttpServerConfig,
     session_manager: Arc<M>,
     service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
+    /// Used to spawn work on the session task, which drives all session and request work to completion.
+    work_tx: tokio::sync::mpsc::UnboundedSender<PinnedFuture<'static, ()>>,
 }
 
 impl<S, M> Clone for StreamableHttpService<S, M> {
@@ -197,6 +200,7 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
             config: self.config.clone(),
             session_manager: self.session_manager.clone(),
             service_factory: self.service_factory.clone(),
+            work_tx: self.work_tx.clone(),
         }
     }
 }
@@ -232,16 +236,49 @@ where
     S: crate::Service<RoleServer> + Send + 'static,
     M: SessionManager,
 {
+    /// Create a new `StreamableHttpService` using the service factory, session manager, and configuration provided.
+    ///
+    /// This function returns a handle to the service, and a future that must be polled to drive the execution
+    /// of the service and its sessions. The caller is responsible for polling or spawning the future returned
+    /// by this function.
+    ///
+    /// If you drop the [StreamableHttpService] handle, the async work loop future will exit.
     pub fn new(
         service_factory: impl Fn() -> Result<S, std::io::Error> + Send + Sync + 'static,
         session_manager: Arc<M>,
         config: StreamableHttpServerConfig,
-    ) -> Self {
-        Self {
+    ) -> (Self, impl Future<Output = ()> + Send + 'static) {
+        let (work_tx, mut work_rx) =
+            tokio::sync::mpsc::unbounded_channel::<PinnedFuture<'static, ()>>();
+
+        let session_work = async move {
+            let mut work_set = FuturesUnordered::new();
+
+            loop {
+                tokio::select! {
+                    Some(work) = work_rx.recv(), if !work_rx.is_closed() => {
+                        work_set.push(work);
+                    }
+                    _ = work_set.next(), if !work_set.is_empty() => {
+                        // just drive the work futures to completion, no need to check results here
+                    },
+                    else => {
+                        // both channels closed and all work completed, we can shut down the session task
+                        tracing::info!("Streamable HTTP server session work task is shutting down");
+                        break;
+                    }
+                }
+            }
+        };
+
+        let this = Self {
             config,
             session_manager,
             service_factory: Arc::new(service_factory),
-        }
+            work_tx,
+        };
+
+        (this, session_work)
     }
     fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
@@ -493,11 +530,16 @@ where
                     }
                 }
             } else {
-                let (session_id, transport) = self
+                let (session_id, transport, work) = self
                     .session_manager
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
+
+                self.work_tx
+                    .send(work.boxed())
+                    .map_err(internal_error_response("spawn session task"))?;
+
                 if let ClientJsonRpcMessage::Request(req) = &mut message {
                     if !matches!(req.request, ClientRequest::InitializeRequest(_)) {
                         return Err(unexpected_message_response("initialize request"));
@@ -511,18 +553,25 @@ where
                     .get_service()
                     .map_err(internal_error_response("get service"))?;
                 // spawn a task to serve the session
-                tokio::spawn({
+
+                let work = {
                     let session_manager = self.session_manager.clone();
                     let session_id = session_id.clone();
+                    let work_tx = self.work_tx.clone();
                     async move {
-                        let service = serve_server::<S, M::Transport, _, TransportAdapterIdentity>(
-                            service, transport,
-                        )
-                        .await;
-                        match service {
-                            Ok(service) => {
+                        let serve_result =
+                            serve_server::<S, M::Transport, _, TransportAdapterIdentity>(
+                                service, transport,
+                            )
+                            .await;
+                        match serve_result {
+                            Ok((service, work)) => {
                                 // on service created
-                                let _ = service.waiting().await;
+                                if let Err(e) = work_tx.send(work.boxed()) {
+                                    tracing::error!("Failed to spawn session work: {e}");
+                                } else {
+                                    let _ = service.waiting().await;
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("Failed to create service: {e}");
@@ -535,7 +584,12 @@ where
                                 tracing::error!("Failed to close session {session_id}: {e}");
                             });
                     }
-                });
+                };
+
+                self.work_tx
+                    .send(work.boxed())
+                    .map_err(internal_error_response("spawn async work"))?;
+
                 // get initialize response
                 let response = self
                     .session_manager
@@ -593,11 +647,17 @@ where
                     request.request.extensions_mut().insert(part);
                     let (transport, mut receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
-                    let service = serve_directly(service, transport, None);
-                    tokio::spawn(async move {
-                        // on service created
-                        let _ = service.waiting().await;
-                    });
+                    let (service, work) = serve_directly(service, transport, None);
+
+                    let work = async move {
+                        work.await;
+                        // Need to keep the service handle alive, because if it is dropped it will cancel its work.
+                        service.waiting().await;
+                    };
+
+                    self.work_tx
+                        .send(work.boxed())
+                        .map_err(internal_error_response("spawn async work"))?;
                     if self.config.json_response {
                         // JSON-direct mode: await the single response and return as
                         // application/json, eliminating SSE framing overhead.

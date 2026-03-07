@@ -23,7 +23,7 @@ use common::calculator::Calculator;
 #[tokio::test]
 async fn test_stale_session_id_returns_status_aware_error() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+    let (service, http_work): (StreamableHttpService<Calculator, LocalSessionManager>, _) =
         StreamableHttpService::new(
             || Ok(Calculator::new()),
             Default::default(),
@@ -34,6 +34,7 @@ async fn test_stale_session_id_returns_status_aware_error() -> anyhow::Result<()
                 ..Default::default()
             },
         );
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

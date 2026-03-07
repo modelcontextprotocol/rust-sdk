@@ -162,7 +162,12 @@ impl<S: Service<RoleClient>> ServiceExt<RoleClient> for S {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<RoleClient, Self>, ClientInitializeError>> + Send
+    ) -> impl Future<
+        Output = Result<
+            (RunningService<RoleClient, Self>, impl Future<Output = ()>),
+            ClientInitializeError,
+        >,
+    > + Send
     where
         T: IntoTransport<RoleClient, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -175,7 +180,7 @@ impl<S: Service<RoleClient>> ServiceExt<RoleClient> for S {
 pub async fn serve_client<S, T, E, A>(
     service: S,
     transport: T,
-) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
+) -> Result<(RunningService<RoleClient, S>, impl Future<Output = ()>), ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: IntoTransport<RoleClient, E, A>,
@@ -188,7 +193,7 @@ pub async fn serve_client_with_ct<S, T, E, A>(
     service: S,
     transport: T,
     ct: CancellationToken,
-) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
+) -> Result<(RunningService<RoleClient, S>, impl Future<Output = ()>), ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: IntoTransport<RoleClient, E, A>,
@@ -206,7 +211,7 @@ async fn serve_client_with_ct_inner<S, T>(
     service: S,
     transport: T,
     ct: CancellationToken,
-) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
+) -> Result<(RunningService<RoleClient, S>, impl Future<Output = ()>), ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: Transport<RoleClient> + 'static,
@@ -264,6 +269,7 @@ where
     transport.send(notification).await.map_err(|error| {
         ClientInitializeError::transport::<T>(error, "send initialized notification")
     })?;
+    let peer_rx = ReceiverStream::new(peer_rx);
     Ok(serve_inner(service, transport, peer, peer_rx, ct))
 }
 
