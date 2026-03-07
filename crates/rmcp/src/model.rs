@@ -3834,4 +3834,15 @@ mod tests {
         });
         assert_eq!(json_url, expected_url_json);
     }
+
+    #[test]
+    fn notification_without_params_should_deserialize_as_bare_jsonrpc_message() {
+        let payload = b"{\"method\":\"notifications/initialized\",\"jsonrpc\":\"2.0\"}";
+        let result: Result<JsonRpcMessage, _> = serde_json::from_slice(payload);
+        assert!(
+            matches!(result, Ok(JsonRpcMessage::Notification(_))),
+            "Expected Ok(Notification), got: {:?}",
+            result
+        );
+    }
 }
