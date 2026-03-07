@@ -947,12 +947,23 @@ impl AuthorizationManager {
         attempts < self.scope_upgrade_config.max_upgrade_attempts
     }
 
+    /// select scopes to request from authorization server
+    pub fn select_scopes(
+        &self,
+        www_authenticate_scope: Option<&str>,
+        default_scopes: &[&str],
+    ) -> Vec<String> {
+        let mut scopes = self.select_base_scopes(www_authenticate_scope, default_scopes);
+        self.add_offline_access_if_supported(&mut scopes);
+        scopes
+    }
+
     /// select scopes based on SEP-835 priority:
     /// 1. scope from WWW-Authenticate header (argument or stored from initial 401 probe)
     /// 2. scopes_supported from protected resource metadata (RFC 9728)
     /// 3. scopes_supported from authorization server metadata
     /// 4. provided default scopes
-    pub fn select_scopes(
+    fn select_base_scopes(
         &self,
         www_authenticate_scope: Option<&str>,
         default_scopes: &[&str],
@@ -985,6 +996,21 @@ impl AuthorizationManager {
         }
 
         default_scopes.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// SEP-2207: when the AS advertises `offline_access` in `scopes_supported`, append
+    /// it so OIDC-flavored Authorization Servers will issue refresh tokens.
+    fn add_offline_access_if_supported(&self, scopes: &mut Vec<String>) {
+        if scopes.is_empty() || scopes.iter().any(|s| s == "offline_access") {
+            return;
+        }
+        if let Some(metadata) = &self.metadata {
+            if let Some(supported) = &metadata.scopes_supported {
+                if supported.iter().any(|s| s == "offline_access") {
+                    scopes.push("offline_access".to_string());
+                }
+            }
+        }
     }
 
     /// attempt to upgrade scopes after receiving a 403 insufficient_scope error.
@@ -1119,7 +1145,11 @@ impl AuthorizationManager {
     /// to avoid races between token retrieval and the actual HTTP request.
     const REFRESH_BUFFER_SECS: u64 = 30;
 
-    /// get access token, if expired, refresh it automatically
+    /// Get access token from local credential store.
+    /// If expired, refresh it automatically when a refresh token is available.
+    /// When the access token has expired and no refresh token is available (or
+    /// the refresh itself fails), returns [`AuthError::AuthorizationRequired`]
+    /// so the caller can re-authenticate.
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
         let stored = self.credential_store.load().await?;
         let Some(stored_creds) = stored else {
@@ -2246,7 +2276,9 @@ impl OAuthState {
             let selected_scopes: Vec<String> = if scopes.is_empty() {
                 manager.select_scopes(None, &[])
             } else {
-                scopes.iter().map(|s| s.to_string()).collect()
+                let mut s: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
+                manager.add_offline_access_if_supported(&mut s);
+                s
             };
             let scope_refs: Vec<&str> = selected_scopes.iter().map(|s| s.as_str()).collect();
             debug!("start session");
@@ -3210,6 +3242,141 @@ mod tests {
         assert!(result.contains(&"read".to_string()));
         assert!(result.contains(&"write".to_string()));
         assert_eq!(result.len(), 2);
+    }
+
+    // -- SEP-2207: offline_access --
+
+    #[tokio::test]
+    async fn select_scopes_adds_offline_access_when_as_supports_it() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        *mgr.resource_scopes.write().await = vec!["profile".to_string()];
+
+        let scopes = mgr.select_scopes(None, &[]);
+        assert!(
+            scopes.contains(&"offline_access".to_string()),
+            "offline_access should be added when AS supports it"
+        );
+        assert!(scopes.contains(&"profile".to_string()));
+    }
+
+    #[tokio::test]
+    async fn select_scopes_does_not_add_offline_access_when_as_does_not_support_it() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "email".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        *mgr.resource_scopes.write().await = vec!["profile".to_string()];
+
+        let scopes = mgr.select_scopes(None, &[]);
+        assert!(
+            !scopes.contains(&"offline_access".to_string()),
+            "offline_access should not be added when AS does not support it"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_scopes_falls_back_to_defaults() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: None,
+            ..Default::default()
+        }))
+        .await;
+
+        let scopes = mgr.select_scopes(None, &["default_scope"]);
+        assert_eq!(scopes, vec!["default_scope".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn select_scopes_does_not_duplicate_offline_access() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+
+        // When AS metadata is the scope source and already contains offline_access,
+        // it should appear exactly once.
+        let scopes = mgr.select_scopes(None, &[]);
+        let count = scopes.iter().filter(|s| *s == "offline_access").count();
+        assert_eq!(count, 1, "offline_access should not be duplicated");
+    }
+
+    #[tokio::test]
+    async fn select_scopes_adds_offline_access_to_www_authenticate_scopes() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        *mgr.www_auth_scopes.write().await = vec!["profile".to_string()];
+
+        let scopes = mgr.select_scopes(None, &[]);
+        assert!(scopes.contains(&"offline_access".to_string()));
+        assert!(scopes.contains(&"profile".to_string()));
+    }
+
+    #[tokio::test]
+    async fn select_scopes_adds_offline_access_to_www_authenticate_argument() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+
+        let scopes = mgr.select_scopes(Some("profile email"), &[]);
+        assert!(scopes.contains(&"offline_access".to_string()));
+        assert!(scopes.contains(&"profile".to_string()));
+        assert!(scopes.contains(&"email".to_string()));
+    }
+
+    #[tokio::test]
+    async fn add_offline_access_if_supported_works_with_explicit_scopes() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+
+        let mut explicit = vec!["read".to_string(), "write".to_string()];
+        mgr.add_offline_access_if_supported(&mut explicit);
+        assert!(explicit.contains(&"offline_access".to_string()));
+    }
+
+    #[tokio::test]
+    async fn add_offline_access_if_supported_skips_empty_scopes() {
+        let mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+
+        let mut empty: Vec<String> = vec![];
+        mgr.add_offline_access_if_supported(&mut empty);
+        assert!(
+            empty.is_empty(),
+            "offline_access should not be the only scope"
+        );
     }
 
     #[test]
