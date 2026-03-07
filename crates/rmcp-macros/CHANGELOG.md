@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.1.0...rmcp-macros-v1.1.1) - 2026-03-07
+
+### Fixed
+
+- *(rmcp-macros)* replace deprecated *Param type aliases with *Params ([#727](https://github.com/modelcontextprotocol/rust-sdk/pull/727))
+
 ## [1.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.0.0...rmcp-macros-v1.1.0) - 2026-03-04
 
 ### Other
