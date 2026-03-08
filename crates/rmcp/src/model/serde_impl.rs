@@ -246,8 +246,19 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let body = Proxy::deserialize(deserializer)?;
-        let _meta = body.params._meta.map(|m| m.into_owned());
+        let body = ProxyOptionalParam::<'_, _, R>::deserialize(deserializer)?;
+        let (_meta, params) = match body.params {
+            Some(with_meta) => {
+                let meta = with_meta._meta.map(|m| m.into_owned());
+                (meta, with_meta._rest)
+            }
+            None => {
+                // JSON-RPC 2.0: params is optional. Treat absent params as {}.
+                let empty = serde_json::Value::Object(serde_json::Map::new());
+                let r = R::deserialize(empty).map_err(serde::de::Error::custom)?;
+                (None, r)
+            }
+        };
         let mut extensions = Extensions::new();
         if let Some(meta) = _meta {
             extensions.insert(meta);
@@ -255,7 +266,7 @@ where
         Ok(Notification {
             extensions,
             method: body.method,
-            params: body.params._rest,
+            params,
         })
     }
 }
