@@ -193,7 +193,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                                     if let Some(tool) = boxed.as_any().downcast_ref::<rmcp::task_manager::ToolCallTaskResult>() {
                                         match &tool.result {
                                             Ok(call_tool) => {
-                                                let value = ::rmcp::serde_json::to_value(call_tool).unwrap_or(::rmcp::serde_json::Value::Null);
+                                                let value = ::rmcp::serde_json::to_value(call_tool).unwrap_or_default();
                                                 return Ok(rmcp::model::GetTaskPayloadResult::new(value));
                                             }
                                             Err(err) => return Err(McpError::internal_error(
