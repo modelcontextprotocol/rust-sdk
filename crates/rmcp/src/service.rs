@@ -1,6 +1,8 @@
+use futures::FutureExt;
+#[cfg(not(feature = "local"))]
+use futures::future::BoxFuture;
 #[cfg(feature = "local")]
 use futures::future::LocalBoxFuture;
-use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------

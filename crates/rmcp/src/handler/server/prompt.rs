@@ -6,8 +6,8 @@
 
 use std::{future::Future, marker::PhantomData};
 
+#[cfg(not(feature = "local"))]
 use futures::future::BoxFuture;
-#[allow(unused_imports)]
 use serde::de::DeserializeOwned;
 
 use super::common::{AsRequestContext, FromContextPart};

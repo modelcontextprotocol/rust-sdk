@@ -4,6 +4,7 @@ use std::{
     marker::PhantomData,
 };
 
+#[cfg(not(feature = "local"))]
 use futures::future::BoxFuture;
 use serde::de::DeserializeOwned;
 

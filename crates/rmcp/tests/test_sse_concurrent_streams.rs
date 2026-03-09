@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 /// Tests for concurrent SSE stream handling (shadow channels)
 ///
 /// These tests verify that multiple GET SSE streams on the same session
