@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use futures::StreamExt;
 use rmcp::{
     ClientHandler, Peer, RoleServer, ServerHandler, ServiceExt,

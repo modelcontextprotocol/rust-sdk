@@ -95,7 +95,8 @@ impl<S: Service<RoleServer>> ServiceExt<RoleServer> for S {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<RoleServer, Self>, ServerInitializeError>> + Send
+    ) -> impl Future<Output = Result<RunningService<RoleServer, Self>, ServerInitializeError>>
+    + MaybeSendFuture
     where
         T: IntoTransport<RoleServer, E, A>,
         E: std::error::Error + Send + Sync + 'static,

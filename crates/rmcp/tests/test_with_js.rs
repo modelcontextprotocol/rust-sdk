@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use rmcp::{
     ServiceExt,
     service::QuitReason,

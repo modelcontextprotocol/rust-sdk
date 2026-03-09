@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use std::process::Stdio;
 
 use rmcp::{

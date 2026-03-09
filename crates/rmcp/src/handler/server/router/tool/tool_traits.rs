@@ -1,4 +1,4 @@
-use std::{borrow::Cow, pin::Pin, sync::Arc};
+use std::{borrow::Cow, future::Future, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,7 @@ use crate::{
     },
     model::{Icon, JsonObject, Meta, ToolAnnotations, ToolExecution},
     schemars::JsonSchema,
+    service::{MaybeSend, MaybeSendFuture},
 };
 
 /// Base trait to define attributes of a tool.
@@ -84,7 +85,8 @@ pub trait ToolBase {
 ///
 /// Consider using [`AsyncTool`] if your workflow involves asynchronous operations.
 /// Examples are shown in [the module-level documentation][crate::handler::server::router::tool].
-pub trait SyncTool<S: Sync + Send + 'static>: ToolBase {
+#[allow(private_bounds)]
+pub trait SyncTool<S: MaybeSend + 'static>: ToolBase {
     fn invoke(service: &S, param: Self::Parameter) -> Result<Self::Output, Self::Error>;
 }
 
@@ -92,11 +94,12 @@ pub trait SyncTool<S: Sync + Send + 'static>: ToolBase {
 ///
 /// Consider using [`SyncTool`] if your workflow does not involve asynchronous operations.
 /// Examples are shown in [the module-level documentation][crate::handler::server::router::tool].
-pub trait AsyncTool<S: Sync + Send + 'static>: ToolBase {
+#[allow(private_bounds)]
+pub trait AsyncTool<S: MaybeSend + 'static>: ToolBase {
     fn invoke(
         service: &S,
         param: Self::Parameter,
-    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> + MaybeSendFuture;
 }
 
 pub(crate) fn tool_attribute<T: ToolBase>() -> crate::model::Tool {
@@ -113,14 +116,14 @@ pub(crate) fn tool_attribute<T: ToolBase>() -> crate::model::Tool {
     }
 }
 
-pub(crate) fn sync_tool_wrapper<S: Sync + Send + 'static, T: SyncTool<S>>(
+pub(crate) fn sync_tool_wrapper<S: MaybeSend + 'static, T: SyncTool<S>>(
     service: &S,
     Parameters(params): Parameters<T::Parameter>,
 ) -> Result<Json<T::Output>, ErrorData> {
     T::invoke(service, params).map(Json).map_err(Into::into)
 }
 
-pub(crate) fn sync_tool_wrapper_with_empty_params<S: Sync + Send + 'static, T: SyncTool<S>>(
+pub(crate) fn sync_tool_wrapper_with_empty_params<S: MaybeSend + 'static, T: SyncTool<S>>(
     service: &S,
 ) -> Result<Json<T::Output>, ErrorData> {
     T::invoke(service, T::Parameter::default())
@@ -128,11 +131,10 @@ pub(crate) fn sync_tool_wrapper_with_empty_params<S: Sync + Send + 'static, T: S
         .map_err(Into::into)
 }
 
-#[expect(clippy::type_complexity)]
-pub(crate) fn async_tool_wrapper<S: Sync + Send + 'static, T: AsyncTool<S>>(
+pub(crate) fn async_tool_wrapper<S: MaybeSend + 'static, T: AsyncTool<S>>(
     service: &S,
     Parameters(params): Parameters<T::Parameter>,
-) -> Pin<Box<dyn Future<Output = Result<Json<T::Output>, ErrorData>> + Send + '_>> {
+) -> crate::service::MaybeBoxFuture<'_, Result<Json<T::Output>, ErrorData>> {
     Box::pin(async move {
         T::invoke(service, params)
             .await
@@ -141,10 +143,9 @@ pub(crate) fn async_tool_wrapper<S: Sync + Send + 'static, T: AsyncTool<S>>(
     })
 }
 
-#[expect(clippy::type_complexity)]
-pub(crate) fn async_tool_wrapper_with_empty_params<S: Sync + Send + 'static, T: AsyncTool<S>>(
+pub(crate) fn async_tool_wrapper_with_empty_params<S: MaybeSend + 'static, T: AsyncTool<S>>(
     service: &S,
-) -> Pin<Box<dyn Future<Output = Result<Json<T::Output>, ErrorData>> + Send + '_>> {
+) -> crate::service::MaybeBoxFuture<'_, Result<Json<T::Output>, ErrorData>> {
     Box::pin(async move {
         T::invoke(service, T::Parameter::default())
             .await

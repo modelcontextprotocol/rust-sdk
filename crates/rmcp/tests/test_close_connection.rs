@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 //cargo test --test test_close_connection --features "client server"
 
 mod common;

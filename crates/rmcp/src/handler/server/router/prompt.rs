@@ -1,10 +1,9 @@
 use std::{borrow::Cow, sync::Arc};
 
-use futures::future::BoxFuture;
-
 use crate::{
     handler::server::prompt::{DynGetPromptHandler, GetPromptHandler, PromptContext},
     model::{GetPromptResult, Prompt},
+    service::{MaybeBoxFuture, MaybeSend},
 };
 
 pub struct PromptRoute<S> {
@@ -32,10 +31,10 @@ impl<S> Clone for PromptRoute<S> {
     }
 }
 
-impl<S: Send + Sync + 'static> PromptRoute<S> {
+impl<S: MaybeSend + 'static> PromptRoute<S> {
     pub fn new<H, A: 'static>(attr: impl Into<Prompt>, handler: H) -> Self
     where
-        H: GetPromptHandler<S, A> + Send + Sync + Clone + 'static,
+        H: GetPromptHandler<S, A> + MaybeSend + Clone + 'static,
     {
         Self {
             get: Arc::new(move |context: PromptContext<S>| {
@@ -50,9 +49,8 @@ impl<S: Send + Sync + 'static> PromptRoute<S> {
     where
         H: for<'a> Fn(
                 PromptContext<'a, S>,
-            ) -> BoxFuture<'a, Result<GetPromptResult, crate::ErrorData>>
-            + Send
-            + Sync
+            ) -> MaybeBoxFuture<'a, Result<GetPromptResult, crate::ErrorData>>
+            + MaybeSend
             + 'static,
     {
         Self {
@@ -72,9 +70,9 @@ pub trait IntoPromptRoute<S, A> {
 
 impl<S, H, A, P> IntoPromptRoute<S, A> for (P, H)
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
     A: 'static,
-    H: GetPromptHandler<S, A> + Send + Sync + Clone + 'static,
+    H: GetPromptHandler<S, A> + MaybeSend + Clone + 'static,
     P: Into<Prompt>,
 {
     fn into_prompt_route(self) -> PromptRoute<S> {
@@ -84,7 +82,7 @@ where
 
 impl<S> IntoPromptRoute<S, ()> for PromptRoute<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     fn into_prompt_route(self) -> PromptRoute<S> {
         self
@@ -96,7 +94,7 @@ pub struct PromptAttrGenerateFunctionAdapter;
 
 impl<S, F> IntoPromptRoute<S, PromptAttrGenerateFunctionAdapter> for F
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
     F: Fn() -> PromptRoute<S>,
 {
     fn into_prompt_route(self) -> PromptRoute<S> {
@@ -137,7 +135,7 @@ impl<S> IntoIterator for PromptRouter<S> {
 
 impl<S> PromptRouter<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     pub fn new() -> Self {
         Self {
@@ -195,7 +193,7 @@ where
 
 impl<S> std::ops::Add<PromptRouter<S>> for PromptRouter<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     type Output = Self;
 
@@ -207,7 +205,7 @@ where
 
 impl<S> std::ops::AddAssign<PromptRouter<S>> for PromptRouter<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     fn add_assign(&mut self, other: PromptRouter<S>) {
         self.merge(other);

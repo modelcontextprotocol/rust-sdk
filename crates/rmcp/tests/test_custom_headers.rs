@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use std::collections::HashMap;
 
 use http::{HeaderName, HeaderValue};

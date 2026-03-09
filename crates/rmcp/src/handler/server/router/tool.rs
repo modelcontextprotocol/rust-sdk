@@ -124,7 +124,6 @@ mod tool_traits;
 
 use std::{borrow::Cow, sync::Arc};
 
-use futures::{FutureExt, future::BoxFuture};
 use schemars::JsonSchema;
 pub use tool_traits::{AsyncTool, SyncTool, ToolBase};
 
@@ -134,6 +133,7 @@ use crate::{
         tool_name_validation::validate_and_warn_tool_name,
     },
     model::{CallToolResult, Tool, ToolAnnotations},
+    service::{MaybeBoxFuture, MaybeSend},
 };
 
 pub struct ToolRoute<S> {
@@ -161,15 +161,15 @@ impl<S> Clone for ToolRoute<S> {
     }
 }
 
-impl<S: Send + Sync + 'static> ToolRoute<S> {
+impl<S: MaybeSend + 'static> ToolRoute<S> {
     pub fn new<C, A>(attr: impl Into<Tool>, call: C) -> Self
     where
-        C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+        C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
     {
         Self {
             call: Arc::new(move |context: ToolCallContext<S>| {
                 let call = call.clone();
-                context.invoke(call).boxed()
+                context.invoke(call)
             }),
             attr: attr.into(),
         }
@@ -178,9 +178,8 @@ impl<S: Send + Sync + 'static> ToolRoute<S> {
     where
         C: for<'a> Fn(
                 ToolCallContext<'a, S>,
-            ) -> BoxFuture<'a, Result<CallToolResult, crate::ErrorData>>
-            + Send
-            + Sync
+            ) -> MaybeBoxFuture<'a, Result<CallToolResult, crate::ErrorData>>
+            + MaybeSend
             + 'static,
     {
         Self {
@@ -199,8 +198,8 @@ pub trait IntoToolRoute<S, A> {
 
 impl<S, C, A, T> IntoToolRoute<S, A> for (T, C)
 where
-    S: Send + Sync + 'static,
-    C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+    S: MaybeSend + 'static,
+    C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
     T: Into<Tool>,
 {
     fn into_tool_route(self) -> ToolRoute<S> {
@@ -210,7 +209,7 @@ where
 
 impl<S> IntoToolRoute<S, ()> for ToolRoute<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     fn into_tool_route(self) -> ToolRoute<S> {
         self
@@ -220,7 +219,7 @@ where
 pub struct ToolAttrGenerateFunctionAdapter;
 impl<S, F> IntoToolRoute<S, ToolAttrGenerateFunctionAdapter> for F
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
     F: Fn() -> ToolRoute<S>,
 {
     fn into_tool_route(self) -> ToolRoute<S> {
@@ -230,14 +229,14 @@ where
 
 pub trait CallToolHandlerExt<S, A>: Sized
 where
-    Self: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+    Self: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
 {
     fn name(self, name: impl Into<Cow<'static, str>>) -> WithToolAttr<Self, S, A>;
 }
 
 impl<C, S, A> CallToolHandlerExt<S, A> for C
 where
-    C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+    C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
 {
     fn name(self, name: impl Into<Cow<'static, str>>) -> WithToolAttr<Self, S, A> {
         WithToolAttr {
@@ -254,7 +253,7 @@ where
 
 pub struct WithToolAttr<C, S, A>
 where
-    C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+    C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
 {
     pub attr: crate::model::Tool,
     pub call: C,
@@ -263,8 +262,8 @@ where
 
 impl<C, S, A> IntoToolRoute<S, A> for WithToolAttr<C, S, A>
 where
-    C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
-    S: Send + Sync + 'static,
+    C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
+    S: MaybeSend + 'static,
 {
     fn into_tool_route(self) -> ToolRoute<S> {
         ToolRoute::new(self.attr, self.call)
@@ -273,7 +272,7 @@ where
 
 impl<C, S, A> WithToolAttr<C, S, A>
 where
-    C: CallToolHandler<S, A> + Send + Sync + Clone + 'static,
+    C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
 {
     pub fn description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.attr.description = Some(description.into());
@@ -328,7 +327,7 @@ impl<S> IntoIterator for ToolRouter<S> {
 
 impl<S> ToolRouter<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     pub fn new() -> Self {
         Self {
@@ -428,7 +427,7 @@ where
 
 impl<S> std::ops::Add<ToolRouter<S>> for ToolRouter<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     type Output = Self;
 
@@ -440,7 +439,7 @@ where
 
 impl<S> std::ops::AddAssign<ToolRouter<S>> for ToolRouter<S>
 where
-    S: Send + Sync + 'static,
+    S: MaybeSend + 'static,
 {
     fn add_assign(&mut self, other: ToolRouter<S>) {
         self.merge(other);

@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 //cargo test --test test_prompt_macros --features "client server"
 #![allow(dead_code)]
 use std::sync::Arc;

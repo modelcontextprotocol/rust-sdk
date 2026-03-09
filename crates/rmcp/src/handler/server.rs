@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::{
     error::ErrorData as McpError,
     model::{TaskSupport, *},
-    service::{NotificationContext, RequestContext, RoleServer, Service, ServiceRole},
+    service::{
+        MaybeSend, MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service,
+        ServiceRole,
+    },
 };
 
 pub mod common;
@@ -159,12 +162,16 @@ impl<H: ServerHandler> Service<RoleServer> for H {
 }
 
 #[allow(unused_variables)]
-pub trait ServerHandler: Sized + Send + Sync + 'static {
+#[allow(
+    private_bounds,
+    reason = "MaybeSend is a sealed conditional Send + Sync alias"
+)]
+pub trait ServerHandler: Sized + MaybeSend + 'static {
     fn enqueue_task(
         &self,
         _request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::internal_error(
             "Task processing not implemented".to_string(),
             None,
@@ -173,7 +180,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
     fn ping(
         &self,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Ok(()))
     }
     // handle requests
@@ -181,7 +188,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
         }
@@ -191,49 +198,50 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: CompleteRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CompleteResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Ok(CompleteResult::default()))
     }
     fn set_level(
         &self,
         request: SetLevelRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::method_not_found::<SetLevelRequestMethod>()))
     }
     fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::method_not_found::<GetPromptRequestMethod>()))
     }
     fn list_prompts(
         &self,
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Ok(ListPromptsResult::default()))
     }
     fn list_resources(
         &self,
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Ok(ListResourcesResult::default()))
     }
     fn list_resource_templates(
         &self,
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + MaybeSendFuture + '_
+    {
         std::future::ready(Ok(ListResourceTemplatesResult::default()))
     }
     fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(
             McpError::method_not_found::<ReadResourceRequestMethod>(),
         ))
@@ -242,28 +250,28 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: SubscribeRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::method_not_found::<SubscribeRequestMethod>()))
     }
     fn unsubscribe(
         &self,
         request: UnsubscribeRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::method_not_found::<UnsubscribeRequestMethod>()))
     }
     fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::method_not_found::<CallToolRequestMethod>()))
     }
     fn list_tools(
         &self,
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Ok(ListToolsResult::default()))
     }
     /// Get a tool definition by name.
@@ -277,7 +285,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: CustomRequest,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CustomResult, McpError>> + MaybeSendFuture + '_ {
         let CustomRequest { method, .. } = request;
         let _ = context;
         std::future::ready(Err(McpError::new(
@@ -291,34 +299,34 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         notification: CancelledNotificationParam,
         context: NotificationContext<RoleServer>,
-    ) -> impl Future<Output = ()> + Send + '_ {
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         std::future::ready(())
     }
     fn on_progress(
         &self,
         notification: ProgressNotificationParam,
         context: NotificationContext<RoleServer>,
-    ) -> impl Future<Output = ()> + Send + '_ {
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         std::future::ready(())
     }
     fn on_initialized(
         &self,
         context: NotificationContext<RoleServer>,
-    ) -> impl Future<Output = ()> + Send + '_ {
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         tracing::info!("client initialized");
         std::future::ready(())
     }
     fn on_roots_list_changed(
         &self,
         context: NotificationContext<RoleServer>,
-    ) -> impl Future<Output = ()> + Send + '_ {
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         std::future::ready(())
     }
     fn on_custom_notification(
         &self,
         notification: CustomNotification,
         context: NotificationContext<RoleServer>,
-    ) -> impl Future<Output = ()> + Send + '_ {
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         let _ = (notification, context);
         std::future::ready(())
     }
@@ -331,7 +339,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + MaybeSendFuture + '_ {
         std::future::ready(Err(McpError::method_not_found::<ListTasksMethod>()))
     }
 
@@ -339,7 +347,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: GetTaskInfoParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetTaskResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
         let _ = (request, context);
         std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
     }
@@ -348,7 +356,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: GetTaskResultParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
         let _ = (request, context);
         std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
     }
@@ -357,7 +365,7 @@ pub trait ServerHandler: Sized + Send + Sync + 'static {
         &self,
         request: CancelTaskParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
         let _ = (request, context);
         std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
     }
@@ -370,14 +378,14 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CallToolRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<CreateTaskResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).enqueue_task(request, context)
             }
 
             fn ping(
                 &self,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
                 (**self).ping(context)
             }
 
@@ -385,7 +393,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: InitializeRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).initialize(request, context)
             }
 
@@ -393,7 +401,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CompleteRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<CompleteResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).complete(request, context)
             }
 
@@ -401,7 +409,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: SetLevelRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
                 (**self).set_level(request, context)
             }
 
@@ -409,7 +417,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: GetPromptRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<GetPromptResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_prompt(request, context)
             }
 
@@ -417,7 +425,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).list_prompts(request, context)
             }
 
@@ -425,7 +433,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).list_resources(request, context)
             }
 
@@ -433,7 +441,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_
+            ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + MaybeSendFuture + '_
             {
                 (**self).list_resource_templates(request, context)
             }
@@ -442,7 +450,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: ReadResourceRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).read_resource(request, context)
             }
 
@@ -450,7 +458,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: SubscribeRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
                 (**self).subscribe(request, context)
             }
 
@@ -458,7 +466,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: UnsubscribeRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
                 (**self).unsubscribe(request, context)
             }
 
@@ -466,7 +474,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CallToolRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).call_tool(request, context)
             }
 
@@ -474,7 +482,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).list_tools(request, context)
             }
 
@@ -486,7 +494,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CustomRequest,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CustomResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<CustomResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).on_custom_request(request, context)
             }
 
@@ -494,7 +502,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 notification: CancelledNotificationParam,
                 context: NotificationContext<RoleServer>,
-            ) -> impl Future<Output = ()> + Send + '_ {
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_cancelled(notification, context)
             }
 
@@ -502,21 +510,21 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 notification: ProgressNotificationParam,
                 context: NotificationContext<RoleServer>,
-            ) -> impl Future<Output = ()> + Send + '_ {
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_progress(notification, context)
             }
 
             fn on_initialized(
                 &self,
                 context: NotificationContext<RoleServer>,
-            ) -> impl Future<Output = ()> + Send + '_ {
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_initialized(context)
             }
 
             fn on_roots_list_changed(
                 &self,
                 context: NotificationContext<RoleServer>,
-            ) -> impl Future<Output = ()> + Send + '_ {
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_roots_list_changed(context)
             }
 
@@ -524,7 +532,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 notification: CustomNotification,
                 context: NotificationContext<RoleServer>,
-            ) -> impl Future<Output = ()> + Send + '_ {
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_custom_notification(notification, context)
             }
 
@@ -536,7 +544,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: Option<PaginatedRequestParams>,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ListTasksResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<ListTasksResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).list_tasks(request, context)
             }
 
@@ -544,7 +552,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: GetTaskInfoParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<GetTaskResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_task_info(request, context)
             }
 
@@ -552,7 +560,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: GetTaskResultParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_task_result(request, context)
             }
 
@@ -560,7 +568,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CancelTaskParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + Send + '_ {
+            ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).cancel_task(request, context)
             }
         }
