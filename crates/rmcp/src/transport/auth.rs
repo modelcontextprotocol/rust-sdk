@@ -1176,17 +1176,22 @@ impl AuthorizationManager {
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
         let stored = self.credential_store.load().await?;
-        let current_credentials = stored
-            .and_then(|s| s.token_response)
-            .ok_or_else(|| AuthError::AuthorizationRequired)?;
+        let stored_credentials = stored.ok_or(AuthError::AuthorizationRequired)?;
+        let current_credentials = stored_credentials
+            .token_response
+            .ok_or(AuthError::AuthorizationRequired)?;
 
         let refresh_token = current_credentials.refresh_token().ok_or_else(|| {
             AuthError::TokenRefreshFailed("No refresh token available".to_string())
         })?;
         debug!("refresh token present, attempting refresh");
 
-        let token_result = oauth_client
-            .exchange_refresh_token(&RefreshToken::new(refresh_token.secret().to_string()))
+        let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
+        let mut refresh_request = oauth_client.exchange_refresh_token(&refresh_token_value);
+        for scope in &stored_credentials.granted_scopes {
+            refresh_request = refresh_request.add_scope(Scope::new(scope.clone()));
+        }
+        let token_result = refresh_request
             .request_async(&OAuthReqwestClient(self.http_client.clone()))
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
@@ -3578,6 +3583,172 @@ mod tests {
         assert_eq!(
             super::EXTENSION_OAUTH_CLIENT_CREDENTIALS,
             "io.modelcontextprotocol/oauth-client-credentials"
+        );
+    }
+
+    // -- refresh_token --
+
+    fn make_token_response_with_refresh(
+        access_token: &str,
+        refresh_token: &str,
+    ) -> OAuthTokenResponse {
+        use oauth2::RefreshToken;
+        let mut resp = make_token_response(access_token, Some(3600));
+        resp.set_refresh_token(Some(RefreshToken::new(refresh_token.to_string())));
+        resp
+    }
+
+    #[tokio::test]
+    async fn refresh_token_returns_error_when_no_stored_credentials() {
+        let mut manager = manager_with_metadata(None).await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let err = manager.refresh_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "expected AuthorizationRequired when no credentials stored, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_returns_error_when_no_token_response() {
+        let mut manager = manager_with_metadata(None).await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: None,
+            granted_scopes: vec![],
+            token_received_at: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let err = manager.refresh_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "expected AuthorizationRequired when token_response is None, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_returns_error_when_no_refresh_token() {
+        let mut manager = manager_with_metadata(None).await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("old-token", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let err = manager.refresh_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::TokenRefreshFailed(_)),
+            "expected TokenRefreshFailed when no refresh token, got: {err:?}"
+        );
+    }
+
+    async fn start_token_server() -> (String, Arc<std::sync::Mutex<Option<String>>>) {
+        use axum::{Router, body::Body, http::Response, routing::post};
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        let app = Router::new().route(
+            "/token",
+            post(move |body: axum::body::Bytes| {
+                let cap = Arc::clone(&captured_clone);
+                async move {
+                    *cap.lock().unwrap() =
+                        Some(String::from_utf8(body.to_vec()).unwrap());
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600}"#,
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        (format!("http://{}", addr), captured)
+    }
+
+    #[tokio::test]
+    async fn refresh_token_sends_granted_scopes_in_request() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string(), "write".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        let scope = params
+            .get("scope")
+            .expect("scope should be present in refresh request");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["read", "write"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_omits_scope_when_granted_scopes_is_empty() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        assert!(
+            !params.contains_key("scope"),
+            "scope should be absent when granted_scopes is empty, body: {body}"
         );
     }
 }

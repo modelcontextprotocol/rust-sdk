@@ -127,7 +127,7 @@ cargo run -p mcp-client-examples --example clients_oauth_client
 6. **Authorization Request**: Build authorization URL with PKCE (S256) and RFC 8707 resource parameter
 7. **Authorization Code Exchange**: After user authorization, exchange code for access token (with resource parameter)
 8. **Token Usage**: Use access token for API calls via `AuthClient` or `AuthorizedHttpClient`
-9. **Token Refresh**: Automatically use refresh token to get new access token when current one expires
+9. **Token Refresh**: Automatically use refresh token to get new access token when current one expires; previously granted scopes are forwarded in the refresh request so providers that require them (e.g. Azure AD v2) work correctly
 10. **Scope Upgrade**: On 403 insufficient_scope, compute scope union and re-authorize with upgraded scopes
 
 ## Security Considerations
@@ -158,3 +158,4 @@ If you encounter authorization issues, check the following:
 - [RFC 8707: Resource Indicators for OAuth 2.0](https://datatracker.ietf.org/doc/html/rfc8707)
 - [RFC 9728: OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 7636: Proof Key for Code Exchange (PKCE)](https://datatracker.ietf.org/doc/html/rfc7636)
+- [RFC 6749 §6: Refreshing an Access Token](https://www.rfc-editor.org/rfc/rfc6749#section-6)
