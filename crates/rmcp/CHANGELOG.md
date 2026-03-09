@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.1.0...rmcp-v1.1.1) - 2026-03-09
+
+### Fixed
+
+- accept logging/setLevel and ping before initialized notification ([#730](https://github.com/modelcontextprotocol/rust-sdk/pull/730))
+
 ## [1.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.0.0...rmcp-v1.1.0) - 2026-03-04
 
 ### Added
