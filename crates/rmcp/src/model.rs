@@ -1262,6 +1262,16 @@ pub struct UnsubscribeRequestParams {
     pub uri: String,
 }
 
+impl UnsubscribeRequestParams {
+    /// Creates a new `UnsubscribeRequestParams` for the given URI.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            uri: uri.into(),
+        }
+    }
+}
+
 impl RequestParamsMeta for UnsubscribeRequestParams {
     fn meta(&self) -> Option<&Meta> {
         self.meta.as_ref()
@@ -2354,6 +2364,22 @@ pub struct PromptReference {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+impl PromptReference {
+    /// Creates a new `PromptReference` with the given name. `title` defaults to `None`.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            title: None,
+        }
+    }
+
+    /// Sets the human-readable title for this prompt reference.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
 }
 
 const_string!(CompleteRequestMethod = "completion/complete");
