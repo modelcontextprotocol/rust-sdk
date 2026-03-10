@@ -1262,6 +1262,16 @@ pub struct UnsubscribeRequestParams {
     pub uri: String,
 }
 
+impl UnsubscribeRequestParams {
+    /// Creates a new `UnsubscribeRequestParams` for the given URI.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            uri: uri.into(),
+        }
+    }
+}
+
 impl RequestParamsMeta for UnsubscribeRequestParams {
     fn meta(&self) -> Option<&Meta> {
         self.meta.as_ref()
@@ -2356,6 +2366,22 @@ pub struct PromptReference {
     pub title: Option<String>,
 }
 
+impl PromptReference {
+    /// Creates a new `PromptReference` with the given name. `title` defaults to `None`.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            title: None,
+        }
+    }
+
+    /// Sets the human-readable title for this prompt reference.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+}
+
 const_string!(CompleteRequestMethod = "completion/complete");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -2378,6 +2404,22 @@ pub struct Root {
     pub name: Option<String>,
 }
 
+impl Root {
+    /// Creates a new `Root` with the given URI. `name` defaults to `None`.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            name: None,
+        }
+    }
+
+    /// Sets the human-readable name for this root.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
 const_string!(ListRootsRequestMethod = "roots/list");
 pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 
@@ -2387,6 +2429,13 @@ pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 #[non_exhaustive]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
+}
+
+impl ListRootsResult {
+    /// Creates a new `ListRootsResult` with the given roots.
+    pub fn new(roots: Vec<Root>) -> Self {
+        Self { roots }
+    }
 }
 
 const_string!(RootsListChangedNotificationMethod = "notifications/roots/list_changed");
