@@ -2378,6 +2378,20 @@ pub struct Root {
     pub name: Option<String>,
 }
 
+impl Root {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            name: None,
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
 const_string!(ListRootsRequestMethod = "roots/list");
 pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 
@@ -2387,6 +2401,12 @@ pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 #[non_exhaustive]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
+}
+
+impl ListRootsResult {
+    pub fn new(roots: Vec<Root>) -> Self {
+        Self { roots }
+    }
 }
 
 const_string!(RootsListChangedNotificationMethod = "notifications/roots/list_changed");
