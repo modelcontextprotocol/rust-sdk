@@ -59,7 +59,7 @@ impl<'c> AsyncHttpClient<'c> for OAuthReqwestClient {
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
 /// Stored credentials for OAuth2 authorization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredCredentials {
     pub client_id: String,
     pub token_response: Option<OAuthTokenResponse>,
@@ -67,6 +67,17 @@ pub struct StoredCredentials {
     pub granted_scopes: Vec<String>,
     #[serde(default)]
     pub token_received_at: Option<u64>,
+}
+
+impl std::fmt::Debug for StoredCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredCredentials")
+            .field("client_id", &self.client_id)
+            .field("token_response", &self.token_response.as_ref().map(|_| "[REDACTED]"))
+            .field("granted_scopes", &self.granted_scopes)
+            .field("token_received_at", &self.token_received_at)
+            .finish()
+    }
 }
 
 /// Trait for storing and retrieving OAuth2 credentials
@@ -119,11 +130,21 @@ impl CredentialStore for InMemoryCredentialStore {
 }
 
 /// Stored authorization state for OAuth2 PKCE flow
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredAuthorizationState {
     pub pkce_verifier: String,
     pub csrf_token: String,
     pub created_at: u64,
+}
+
+impl std::fmt::Debug for StoredAuthorizationState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredAuthorizationState")
+            .field("pkce_verifier", &"[REDACTED]")
+            .field("csrf_token", &"[REDACTED]")
+            .field("created_at", &self.created_at)
+            .finish()
+    }
 }
 
 /// A transparent wrapper around a JSON object that captures any extra fields returned by the
