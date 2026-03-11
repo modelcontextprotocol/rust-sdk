@@ -33,21 +33,23 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_stdio() -> anyhow::Result<()> {
     let server = ProgressDemo::new();
-    let service = server.serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = server.serve(stdio()).await.inspect_err(|e| {
         tracing::error!("stdio serving error: {:?}", e);
     })?;
+    tokio::spawn(work);
 
-    service.waiting().await?;
+    service.waiting().await;
     Ok(())
 }
 
 async fn run_streamable_http() -> anyhow::Result<()> {
     println!("Running Streamable HTTP server");
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         || Ok(ProgressDemo::new()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(HTTP_BIND_ADDRESS).await?;
@@ -69,11 +71,12 @@ async fn run_all_transports() -> anyhow::Result<()> {
     println!("Running all transports");
 
     // Start Streamable HTTP server
-    let http_service = StreamableHttpService::new(
+    let (http_service, http_work) = StreamableHttpService::new(
         || Ok(ProgressDemo::new()),
         LocalSessionManager::default().into(),
         Default::default(),
     );
+    tokio::spawn(http_work);
     let http_router = axum::Router::new().nest_service("/mcp", http_service);
     let http_listener = tokio::net::TcpListener::bind(HTTP_BIND_ADDRESS).await?;
 

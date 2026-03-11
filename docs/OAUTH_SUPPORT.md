@@ -81,7 +81,9 @@ If you know the scopes you need, you can still pass them explicitly:
 
     // create client and connect to MCP server
     let client_service = ClientInfo::default();
-    let client = client_service.serve(transport).await?;
+    let (client, work) = client_service.serve(transport).await?;
+    // poll the async work loop, ex spawn it on the background
+    tokio::spawn(work);
 ```
 
 ### 5. Handle scope upgrades

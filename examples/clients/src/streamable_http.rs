@@ -16,14 +16,19 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+    let (transport, http_work) =
+        StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+    tokio::spawn(http_work);
+
     let client_info = ClientInfo::new(
         ClientCapabilities::default(),
         Implementation::new("test sse client", "0.0.1"),
     );
-    let client = client_info.serve(transport).await.inspect_err(|e| {
+    let (client, work) = client_info.serve(transport).await.inspect_err(|e| {
         tracing::error!("client error: {:?}", e);
     })?;
+
+    tokio::spawn(work);
 
     // Initialize
     let server_info = client.peer_info();
@@ -40,6 +45,6 @@ async fn main() -> Result<()> {
         )
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }

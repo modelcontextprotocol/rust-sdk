@@ -16,10 +16,12 @@ async fn main() -> Result<()> {
     tracing::info!("Starting MCP server");
 
     // Create an instance of our counter router
-    let service = Counter::new().serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = Counter::new().serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {:?}", e);
     })?;
 
-    service.waiting().await?;
+    tokio::spawn(work);
+
+    service.waiting().await;
     Ok(())
 }

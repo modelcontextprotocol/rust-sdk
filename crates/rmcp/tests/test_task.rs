@@ -21,7 +21,10 @@ impl OperationResultTransport for DummyTransport {
 
 #[tokio::test]
 async fn executes_enqueued_future() {
-    let mut processor = OperationProcessor::new();
+    let (mut processor, work) = OperationProcessor::new();
+
+    tokio::spawn(work);
+
     let descriptor = OperationDescriptor::new("op1", "dummy");
     let future = Box::pin(async {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -50,7 +53,10 @@ async fn executes_enqueued_future() {
 
 #[tokio::test]
 async fn rejects_duplicate_operation_ids() {
-    let mut processor = OperationProcessor::new();
+    let (mut processor, work) = OperationProcessor::new();
+
+    tokio::spawn(work);
+
     let descriptor = OperationDescriptor::new("dup", "dummy");
     let future = Box::pin(async {
         Ok(Box::new(DummyTransport {

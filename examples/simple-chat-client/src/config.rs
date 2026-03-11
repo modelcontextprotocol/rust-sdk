@@ -1,7 +1,14 @@
-use std::{collections::HashMap, path::Path, process::Stdio};
+use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
-use rmcp::{RoleClient, ServiceExt, service::RunningService, transport::ConfigureCommandExt};
+use rmcp::{
+    RoleClient, ServiceExt,
+    service::RunningService,
+    transport::{
+        CommandBuilder,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,24 +52,28 @@ impl McpServerTransportConfig {
     pub async fn start(&self) -> Result<RunningService<RoleClient, ()>> {
         let client = match self {
             McpServerTransportConfig::Streamable { url } => {
-                let transport =
+                let (transport, http_work) =
                     rmcp::transport::StreamableHttpClientTransport::from_uri(url.to_string());
-                ().serve(transport).await?
+                tokio::spawn(http_work);
+                let (service, work) = ().serve(transport).await?;
+                tokio::spawn(work);
+                service
             }
             McpServerTransportConfig::Stdio {
                 command,
                 args,
                 envs,
             } => {
-                let transport = rmcp::transport::child_process::TokioChildProcess::new(
-                    tokio::process::Command::new(command).configure(|cmd| {
-                        cmd.args(args)
-                            .envs(envs)
-                            .stderr(Stdio::inherit())
-                            .stdout(Stdio::inherit());
-                    }),
-                )?;
-                ().serve(transport).await?
+                let cmd = CommandBuilder::<TokioChildProcessRunner>::new(command)
+                    .args(args)
+                    .envs(envs)
+                    .spawn_dyn()?;
+
+                let transport = ChildProcessTransport::new(cmd)
+                    .map_err(|e| anyhow::anyhow!("Failed to wrap child process: {e}"))?;
+                let (service, work) = ().serve(transport).await?;
+                tokio::spawn(work);
+                service
             }
         };
         Ok(client)

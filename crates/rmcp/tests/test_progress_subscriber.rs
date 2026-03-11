@@ -100,11 +100,13 @@ async fn test_progress_subscriber() -> anyhow::Result<()> {
     let server = MyServer::new();
     let (transport_server, transport_client) = tokio::io::duplex(4096);
     tokio::spawn(async move {
-        let service = server.serve(transport_server).await?;
-        service.waiting().await?;
+        let (service, work) = server.serve(transport_server).await?;
+        tokio::spawn(work);
+        service.waiting().await;
         anyhow::Ok(())
     });
-    let client_service = client.serve(transport_client).await?;
+    let (client_service, client_work) = client.serve(transport_client).await?;
+    tokio::spawn(client_work);
     let handle = client_service
         .send_cancellable_request(
             ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(

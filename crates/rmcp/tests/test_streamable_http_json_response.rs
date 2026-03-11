@@ -12,8 +12,10 @@ async fn spawn_server(
     config: StreamableHttpServerConfig,
 ) -> (reqwest::Client, String, CancellationToken) {
     let ct = config.cancellation_token.clone();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+    let (service, http_work): (StreamableHttpService<Calculator, LocalSessionManager>, _) =
         StreamableHttpService::new(|| Ok(Calculator::new()), Default::default(), config);
+
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

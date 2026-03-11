@@ -2,8 +2,11 @@ use rmcp::{
     ServiceExt,
     service::QuitReason,
     transport::{
-        ConfigureCommandExt, StreamableHttpClientTransport, StreamableHttpServerConfig,
-        TokioChildProcess,
+        CommandBuilder, StreamableHttpClientTransport, StreamableHttpServerConfig,
+        child_process::{
+            runner::ChildProcessControl, tokio::TokioChildProcessRunner,
+            transport::ChildProcessTransport,
+        },
         streamable_http_server::{
             session::local::LocalSessionManager, tower::StreamableHttpService,
         },
@@ -32,18 +35,26 @@ async fn test_with_js_stdio_server() -> anyhow::Result<()> {
         .spawn()?
         .wait()
         .await?;
-    let transport =
-        TokioChildProcess::new(tokio::process::Command::new("node").configure(|cmd| {
-            cmd.arg("tests/test_with_js/server.js");
-        }))?;
 
-    let client = ().serve(transport).await?;
+    let node_cmd = CommandBuilder::<TokioChildProcessRunner>::new("node")
+        .args(["tests/test_with_js/server.js"])
+        .spawn_dyn()?;
+
+    tracing::info!("Spawned child process with PID: {}", node_cmd.pid());
+
+    let transport = ChildProcessTransport::new(node_cmd)
+        .map_err(|e| anyhow::anyhow!("Failed to wrap child process: {e}"))?;
+
+    let (client, work) = ().serve(transport).await?;
+
+    tokio::spawn(work);
+
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -64,7 +75,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         .await?;
 
     let ct = CancellationToken::new();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+    let (service, http_work): (StreamableHttpService<Calculator, LocalSessionManager>, _) =
         StreamableHttpService::new(
             || Ok(Calculator::new()),
             Default::default(),
@@ -77,6 +88,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         );
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(STREAMABLE_HTTP_BIND_ADDRESS).await?;
+    tokio::spawn(http_work);
 
     let handle = tokio::spawn({
         let ct = ct.clone();
@@ -113,9 +125,10 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
         .wait()
         .await?;
 
-    let transport = StreamableHttpClientTransport::from_uri(format!(
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(format!(
         "http://{STREAMABLE_HTTP_JS_BIND_ADDRESS}/mcp"
     ));
+    tokio::spawn(http_work);
 
     let mut server = tokio::process::Command::new("node")
         .arg("tests/test_with_js/streamable_server.js")
@@ -124,12 +137,13 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
     // waiting for server up
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-    let client = ().serve(transport).await?;
+    let (client, work) = ().serve(transport).await?;
+    tokio::spawn(work);
     let resources = client.list_all_resources().await?;
     tracing::info!("{:#?}", resources);
     let tools = client.list_all_tools().await?;
     tracing::info!("{:#?}", tools);
-    let quit_reason = client.cancel().await?;
+    let quit_reason = client.cancel().await;
     server.kill().await?;
     assert!(matches!(quit_reason, QuitReason::Cancelled));
     Ok(())

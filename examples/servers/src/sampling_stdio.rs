@@ -130,10 +130,12 @@ async fn main() -> Result<()> {
     tracing::info!("Starting Sampling Demo Server");
 
     // Create and serve the sampling demo server
-    let service = SamplingDemoServer.serve(stdio()).await.inspect_err(|e| {
+    let (service, work) = SamplingDemoServer.serve(stdio()).await.inspect_err(|e| {
         tracing::error!("Serving error: {:?}", e);
     })?;
 
-    service.waiting().await?;
+    tokio::spawn(work);
+
+    service.waiting().await;
     Ok(())
 }

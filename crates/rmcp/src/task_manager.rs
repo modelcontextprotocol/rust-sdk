@@ -1,21 +1,26 @@
-use std::{any::Any, collections::HashMap, pin::Pin};
+use std::{any::Any, collections::HashMap};
 
-use futures::Future;
-use tokio::{
-    sync::mpsc,
-    time::{Duration, timeout},
+use futures::{
+    Future, FutureExt, StreamExt,
+    future::abortable,
+    stream::{AbortHandle, FuturesUnordered},
 };
+use futures_timeout::TimeoutExt;
+use tokio::{sync::mpsc, time::Duration};
 
 use crate::{
     RoleServer,
     error::{ErrorData as McpError, RmcpError as Error},
     model::{CallToolResult, ClientRequest},
     service::RequestContext,
+    util::PinnedFuture,
 };
 
+/// Result of running an operation
+pub type OperationResult = Result<Box<dyn OperationResultTransport>, Error>;
+
 /// Boxed future that represents an asynchronous operation managed by the processor.
-pub type OperationFuture =
-    Pin<Box<dyn Future<Output = Result<Box<dyn OperationResultTransport>, Error>> + Send>>;
+pub type OperationFuture<'a> = PinnedFuture<'a, OperationResult>;
 
 /// Describes metadata associated with an enqueued task.
 #[derive(Debug, Clone)]
@@ -57,11 +62,11 @@ impl OperationDescriptor {
 /// Operation message describing a unit of asynchronous work.
 pub struct OperationMessage {
     pub descriptor: OperationDescriptor,
-    pub future: OperationFuture,
+    pub future: OperationFuture<'static>,
 }
 
 impl OperationMessage {
-    pub fn new(descriptor: OperationDescriptor, future: OperationFuture) -> Self {
+    pub fn new(descriptor: OperationDescriptor, future: OperationFuture<'static>) -> Self {
         Self { descriptor, future }
     }
 }
@@ -80,17 +85,23 @@ pub struct OperationProcessor {
     running_tasks: HashMap<String, RunningTask>,
     /// Completed results waiting to be collected
     completed_results: Vec<TaskResult>,
+    /// Receiver for asynchronously completed task results. Used
+    /// to collect back into `completed_results`
     task_result_receiver: mpsc::UnboundedReceiver<TaskResult>,
-    task_result_sender: mpsc::UnboundedSender<TaskResult>,
+    /// Sender to spawn futures on the worker task associated with this
+    /// processor. The worker future is created as part of [OperationProcessor::new]
+    spawn_tx: mpsc::UnboundedSender<(OperationDescriptor, OperationFuture<'static>)>,
 }
 
+/// A handle to a running operation.
 struct RunningTask {
-    task_handle: tokio::task::JoinHandle<()>,
+    task_handle: AbortHandle,
     started_at: std::time::Instant,
     timeout: Option<u64>,
     descriptor: OperationDescriptor,
 }
 
+/// The result of a running operation.
 pub struct TaskResult {
     pub descriptor: OperationDescriptor,
     pub result: Result<Box<dyn OperationResultTransport>, Error>,
@@ -126,21 +137,63 @@ impl OperationResultTransport for ToolCallTaskResult {
     }
 }
 
-impl Default for OperationProcessor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl OperationProcessor {
-    pub fn new() -> Self {
+    /// Create a new operation processor.
+    ///
+    /// This function will return the new [OperationProcessor]
+    /// facade you can use to queue operations, and also a future
+    /// that must be polled to handle these operations.
+    ///
+    /// Spawn the work function on your runtime of choice, or poll it
+    /// manually.
+    pub fn new() -> (Self, impl Future<Output = ()>) {
         let (task_result_sender, task_result_receiver) = mpsc::unbounded_channel();
-        Self {
+        let (spawn_tx, mut spawn_rx) =
+            mpsc::unbounded_channel::<(OperationDescriptor, OperationFuture)>();
+
+        let work = async move {
+            let mut work_set =
+                FuturesUnordered::<PinnedFuture<(OperationDescriptor, OperationResult)>>::new();
+
+            // Loop and listen for new operations incoming that need to be added to the future pool,
+            // and also listen to operation completions via the future pool.
+            loop {
+                tokio::select! {
+                    spawn_req = spawn_rx.recv(), if !spawn_rx.is_closed() => {
+                        if let Some((descriptor, fut)) = spawn_req {
+                            // Map the future back to a descriptor and result tuple
+                            let operation_work = fut.map(|result| (descriptor, result)).boxed();
+                            // Add it to the set we are polling
+                            work_set.push(operation_work);
+                        }
+                    },
+                    operation_result = work_set.next(), if !work_set.is_empty() => {
+                        if let Some((descriptor, result)) = operation_result {
+                            match task_result_sender.send(TaskResult { descriptor, result }) {
+                                Err(e) => {
+                                    tracing::error!("Failed to send completed task result: {e}");
+                                }
+                                _ => {}
+                            }
+                        };
+                    },
+                    else => {
+                        // Work was empty, and spawn channel was closed. Time
+                        // to break the loop.
+                        break;
+                    }
+                }
+            }
+        };
+
+        let this = Self {
             running_tasks: HashMap::new(),
             completed_results: Vec::new(),
             task_result_receiver,
-            task_result_sender,
-        }
+            spawn_tx,
+        };
+
+        (this, work)
     }
 
     /// Submit an operation for asynchronous execution.
@@ -159,16 +212,15 @@ impl OperationProcessor {
         Ok(())
     }
 
+    /// Spawns an operation to be executed to completion.
     fn spawn_async_task(&mut self, message: OperationMessage) {
         let OperationMessage { descriptor, future } = message;
         let task_id = descriptor.operation_id.clone();
         let timeout_secs = descriptor.ttl.or(Some(DEFAULT_TASK_TIMEOUT_SECS));
-        let sender = self.task_result_sender.clone();
-        let descriptor_for_result = descriptor.clone();
 
         let timed_future = async move {
             if let Some(secs) = timeout_secs {
-                match timeout(Duration::from_secs(secs), future).await {
+                match future.timeout(Duration::from_secs(secs)).await {
                     Ok(result) => result,
                     Err(_) => Err(Error::TaskError("Operation timed out".to_string())),
                 }
@@ -177,16 +229,32 @@ impl OperationProcessor {
             }
         };
 
-        let handle = tokio::spawn(async move {
-            let result = timed_future.await;
-            let task_result = TaskResult {
-                descriptor: descriptor_for_result,
-                result,
-            };
-            let _ = sender.send(task_result);
+        // Below, we want to give the user a handle to the long-running operation,
+        // but we don't want to send the result to the user's handle. Rather the
+        // result gets consumed in the worker task created in the `Self::new`
+        // function. So here we will use the `Abortable` future utility.
+        let (work, abort_handle) = abortable(timed_future);
+
+        // Map the error type of abortion (for now)
+        let work = work.map(|result| {
+            match result {
+                // Was not aborted, true operation result
+                Ok(inner_result) => inner_result,
+                // Was aborted, flatten to expected error type
+                Err(e) => Err(Error::TaskError(e.to_string())),
+            }
         });
+
+        // Then send the work to be executed
+        match self.spawn_tx.send((descriptor.clone(), work.boxed())) {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!("Failed to spawn task on worker: {e}");
+            }
+        }
+
         let running_task = RunningTask {
-            task_handle: handle,
+            task_handle: abort_handle,
             started_at: std::time::Instant::now(),
             timeout: timeout_secs,
             descriptor,

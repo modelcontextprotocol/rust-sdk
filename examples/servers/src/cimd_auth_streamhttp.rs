@@ -478,12 +478,12 @@ async fn main() -> Result<()> {
     let state = AppState::new();
 
     // Create streamable HTTP service for MCP
-    let mcp_service: StreamableHttpService<Counter, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(Counter::new()),
-            LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
-        );
+    let (mcp_service, http_work) = StreamableHttpService::new(
+        || Ok(Counter::new()),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+    tokio::spawn(http_work);
 
     let addr = BIND_ADDRESS.parse::<SocketAddr>()?;
 

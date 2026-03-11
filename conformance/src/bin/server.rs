@@ -851,11 +851,12 @@ async fn main() -> anyhow::Result<()> {
         stateful_mode: true,
         ..Default::default()
     };
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
         config,
     );
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
 

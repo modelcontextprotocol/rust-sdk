@@ -17,6 +17,7 @@ toml = "1.0"
 rmcp = { workspace = true, features = [
     "client",
     "transport-child-process",
-    "transport-streamable-http-client-reqwest"
+    "transport-child-process-tokio",
+    "transport-streamable-http-client-reqwest",
 ] }
 clap = { version = "4.0", features = ["derive"] }

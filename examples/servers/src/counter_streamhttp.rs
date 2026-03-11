@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let ct = tokio_util::sync::CancellationToken::new();
 
-    let service = StreamableHttpService::new(
+    let (service, http_work) = StreamableHttpService::new(
         || Ok(Counter::new()),
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig {
@@ -30,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
             ..Default::default()
         },
     );
+    tokio::spawn(http_work);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(BIND_ADDRESS).await?;

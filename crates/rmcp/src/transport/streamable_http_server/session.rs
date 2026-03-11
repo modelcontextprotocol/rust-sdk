@@ -43,9 +43,26 @@ pub trait SessionManager: Send + Sync + 'static {
 
     /// Create a new session and return its ID together with the transport
     /// that will be used to exchange MCP messages within this session.
+    ///
+    /// The result of this async creation will be the [SessionId], the
+    /// [Self::Transport], and a future that drives the session's execution.
+    ///
+    /// The session will be active and able to receive messages once the future is polled or spawned.
+    /// The caller is responsible for polling or spawning the work future returned by this function.
+    ///
+    /// If the [Self::Transport] handle is dropped, the session's async work loop future will exit.
     fn create_session(
         &self,
-    ) -> impl Future<Output = Result<(SessionId, Self::Transport), Self::Error>> + Send;
+    ) -> impl Future<
+        Output = Result<
+            (
+                SessionId,
+                Self::Transport,
+                impl Future<Output = ()> + Send + 'static,
+            ),
+            Self::Error,
+        >,
+    > + Send;
 
     /// Forward the first message (the `initialize` request) to the session.
     fn initialize_session(

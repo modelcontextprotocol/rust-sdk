@@ -75,21 +75,23 @@ async fn test_server_notification() -> anyhow::Result<()> {
         .try_init();
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     tokio::spawn(async move {
-        let server = Server {}.serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = Server {}.serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
     let receive_signal = Arc::new(Notify::new());
-    let client = Client {
+    let (client, work) = Client {
         receive_signal: receive_signal.clone(),
     }
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
     client
         .subscribe(SubscribeRequestParams::new("test://test-resource"))
         .await?;
     receive_signal.notified().await;
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -130,18 +132,20 @@ async fn test_custom_client_notification_reaches_server() -> anyhow::Result<()> 
         let receive_signal = receive_signal.clone();
         let payload = payload.clone();
         tokio::spawn(async move {
-            let server = CustomServer {
+            let (server, work) = CustomServer {
                 receive_signal,
                 payload,
             }
             .serve(server_transport)
             .await?;
-            server.waiting().await?;
+            tokio::spawn(work);
+            server.waiting().await;
             anyhow::Ok(())
         });
     }
 
-    let client = ().serve(client_transport).await?;
+    let (client, work) = ().serve(client_transport).await?;
+    tokio::spawn(work);
 
     client
         .send_notification(ClientNotification::CustomNotification(
@@ -155,7 +159,7 @@ async fn test_custom_client_notification_reaches_server() -> anyhow::Result<()> 
     assert_eq!("notifications/custom-test", method);
     assert_eq!(Some(json!({ "foo": "bar" })), params);
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }
 
@@ -206,20 +210,22 @@ async fn test_custom_server_notification_reaches_client() -> anyhow::Result<()> 
 
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     tokio::spawn(async move {
-        let server = CustomServerNotifier {}.serve(server_transport).await?;
-        server.waiting().await?;
+        let (server, work) = CustomServerNotifier {}.serve(server_transport).await?;
+        tokio::spawn(work);
+        server.waiting().await;
         anyhow::Ok(())
     });
 
     let receive_signal = Arc::new(Notify::new());
     let payload = Arc::new(Mutex::new(None));
 
-    let client = CustomClient {
+    let (client, work) = CustomClient {
         receive_signal: receive_signal.clone(),
         payload: payload.clone(),
     }
     .serve(client_transport)
     .await?;
+    tokio::spawn(work);
 
     tokio::time::timeout(std::time::Duration::from_secs(5), receive_signal.notified()).await?;
 
@@ -227,6 +233,6 @@ async fn test_custom_server_notification_reaches_client() -> anyhow::Result<()> 
     assert_eq!("notifications/custom-test", method);
     assert_eq!(Some(json!({ "hello": "world" })), params);
 
-    client.cancel().await?;
+    client.cancel().await;
     Ok(())
 }

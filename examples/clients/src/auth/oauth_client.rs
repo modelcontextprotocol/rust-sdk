@@ -173,14 +173,16 @@ async fn main() -> Result<()> {
         .into_authorization_manager()
         .ok_or_else(|| anyhow::anyhow!("Failed to get authorization manager"))?;
     let client = AuthClient::new(reqwest::Client::default(), am);
-    let transport = StreamableHttpClientTransport::with_client(
+    let (transport, http_work) = StreamableHttpClientTransport::with_client(
         client,
         StreamableHttpClientTransportConfig::with_uri(server_url.as_str()),
     );
+    tokio::spawn(http_work);
 
     // Create client and connect to MCP server
     let client_service = ClientInfo::default();
-    let client = client_service.serve(transport).await?;
+    let (client, work) = client_service.serve(transport).await?;
+    tokio::spawn(work);
     tracing::info!("Successfully connected to MCP server");
 
     // Test API requests

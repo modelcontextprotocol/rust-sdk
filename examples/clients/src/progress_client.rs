@@ -12,9 +12,12 @@ use rmcp::{
         ProgressNotificationParam,
     },
     service::{NotificationContext, RoleClient},
-    transport::{StreamableHttpClientTransport, TokioChildProcess},
+    transport::{
+        CommandBuilder, StreamableHttpClientTransport,
+        child_process::{tokio::TokioChildProcessRunner, transport::ChildProcessTransport},
+    },
 };
-use tokio::{process::Command, time::sleep};
+use tokio::time::sleep;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -142,23 +145,25 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     let servers_dir = workspace_root.join("examples").join("servers");
 
     // Start server process
-    let mut server_cmd = Command::new("cargo");
-    server_cmd
+    let server_cmd = CommandBuilder::<TokioChildProcessRunner>::new("cargo")
         .current_dir(servers_dir)
         .arg("run")
         .arg("--example")
         .arg("servers_progress_demo")
         .arg("--")
-        .arg("stdio");
+        .arg("stdio")
+        .spawn_dyn()?;
 
     // Create progress-aware client handler
     let client_handler = ProgressAwareClient::new();
     client_handler.start_tracking();
     let client_handler_clone = client_handler.clone();
 
-    let service = client_handler
-        .serve(TokioChildProcess::new(server_cmd)?)
-        .await?;
+    let server_transport = ChildProcessTransport::new(server_cmd)?;
+
+    let (service, work) = client_handler.serve(server_transport).await?;
+
+    tokio::spawn(work);
 
     // Initialize
     let server_info = service.peer_info();
@@ -185,7 +190,7 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
         }
     }
 
-    service.cancel().await?;
+    service.cancel().await;
     client_handler_clone.stop_tracking();
     tracing::info!("STDIO transport test completed successfully!");
     Ok(())
@@ -200,16 +205,18 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     // Wait a bit for server to be ready
     sleep(Duration::from_secs(1)).await;
 
-    let transport = StreamableHttpClientTransport::from_uri(http_url);
+    let (transport, http_work) = StreamableHttpClientTransport::from_uri(http_url);
+    tokio::spawn(http_work);
 
     // Create progress-aware client handler
     let client_handler = ProgressAwareClient::new();
     client_handler.start_tracking();
     let client_handler_clone = client_handler.clone();
 
-    let client = client_handler.serve(transport).await.inspect_err(|e| {
+    let (client, work) = client_handler.serve(transport).await.inspect_err(|e| {
         tracing::error!("HTTP client error: {:?}", e);
     })?;
+    tokio::spawn(work);
 
     // Initialize
     let server_info = client.peer_info();
@@ -236,7 +243,7 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
         }
     }
 
-    client.cancel().await?;
+    client.cancel().await;
     client_handler_clone.stop_tracking();
     tracing::info!("HTTP transport test completed successfully!");
     Ok(())
