@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.1.1...rmcp-v1.2.0) - 2026-03-11
+
+### Added
+
+- add missing constructors for non-exhaustive model types ([#739](https://github.com/modelcontextprotocol/rust-sdk/pull/739))
+- include granted scopes in OAuth refresh token request ([#731](https://github.com/modelcontextprotocol/rust-sdk/pull/731))
+
+### Fixed
+
+- handle ping requests sent before initialize handshake ([#745](https://github.com/modelcontextprotocol/rust-sdk/pull/745))
+- allow deserializing notifications without params field ([#729](https://github.com/modelcontextprotocol/rust-sdk/pull/729))
+
+### Other
+
+- *(deps)* update jsonwebtoken requirement from 9 to 10 ([#737](https://github.com/modelcontextprotocol/rust-sdk/pull/737))
+
 ## [1.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.1.0...rmcp-v1.1.1) - 2026-03-09
 
 ### Fixed

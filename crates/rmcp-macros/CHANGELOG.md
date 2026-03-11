@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.1.1...rmcp-macros-v1.2.0) - 2026-03-11
+
+### Fixed
+
+- *(rmcp-macros)* use re-exported serde_json path in task_handler ([#735](https://github.com/modelcontextprotocol/rust-sdk/pull/735))
+
 ## [1.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.1.0...rmcp-macros-v1.1.1) - 2026-03-09
 
 ### Fixed
