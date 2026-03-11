@@ -2798,6 +2798,41 @@ mod tests {
     }
 
     #[test]
+    fn test_stored_authorization_state_debug_redacts_secrets() {
+        let pkce = PkceCodeVerifier::new("super-secret-verifier".to_string());
+        let csrf = CsrfToken::new("super-secret-csrf".to_string());
+        let state = StoredAuthorizationState::new(&pkce, &csrf);
+        let debug_output = format!("{:?}", state);
+
+        assert!(!debug_output.contains("super-secret-verifier"));
+        assert!(!debug_output.contains("super-secret-csrf"));
+        assert!(debug_output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_stored_credentials_debug_redacts_token_response() {
+        use super::{OAuthTokenResponse, StoredCredentials, VendorExtraTokenFields};
+        use oauth2::{AccessToken, basic::BasicTokenType};
+
+        let token_response = OAuthTokenResponse::new(
+            AccessToken::new("super-secret-access-token".to_string()),
+            BasicTokenType::Bearer,
+            VendorExtraTokenFields::default(),
+        );
+        let creds = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(token_response),
+            granted_scopes: vec![],
+            token_received_at: None,
+        };
+        let debug_output = format!("{:?}", creds);
+
+        assert!(!debug_output.contains("super-secret-access-token"));
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(debug_output.contains("my-client"));
+    }
+
+    #[test]
     fn test_stored_authorization_state_into_pkce_verifier() {
         let pkce = PkceCodeVerifier::new("original-verifier".to_string());
         let csrf = CsrfToken::new("csrf-token".to_string());
