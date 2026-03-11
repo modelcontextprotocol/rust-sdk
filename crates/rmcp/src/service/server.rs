@@ -131,22 +131,6 @@ where
         .ok_or_else(|| ServerInitializeError::ConnectionClosed(context.to_string()))
 }
 
-/// Helper function to expect a request from the stream
-async fn expect_request<T>(
-    transport: &mut T,
-    context: &str,
-) -> Result<(ClientRequest, RequestId), ServerInitializeError>
-where
-    T: Transport<RoleServer>,
-{
-    let msg = expect_next_message(transport, context).await?;
-    let msg_clone = msg.clone();
-    msg.into_request()
-        .ok_or(ServerInitializeError::ExpectedInitializeRequest(Some(
-            msg_clone,
-        )))
-}
-
 pub async fn serve_server_with_ct<S, T, E, A>(
     service: S,
     transport: T,
@@ -177,8 +161,35 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    // Get initialize request
-    let (request, id) = expect_request(&mut transport, "initialized request").await?;
+    // Get initialize request; the MCP spec permits ping before initialize.
+    // See: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
+    let (request, id) = loop {
+        let msg = expect_next_message(&mut transport, "initialize request").await?;
+        match msg {
+            ClientJsonRpcMessage::Request(req)
+                if matches!(req.request, ClientRequest::PingRequest(_)) =>
+            {
+                transport
+                    .send(ServerJsonRpcMessage::response(
+                        ServerResult::EmptyResult(EmptyResult {}),
+                        req.id,
+                    ))
+                    .await
+                    .map_err(|error| {
+                        ServerInitializeError::transport::<T>(
+                            error,
+                            "sending pre-init ping response",
+                        )
+                    })?;
+            }
+            ClientJsonRpcMessage::Request(req) => break (req.request, req.id),
+            other => {
+                return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
+                    other,
+                )));
+            }
+        }
+    };
 
     let ClientRequest::InitializeRequest(peer_info) = &request else {
         return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
