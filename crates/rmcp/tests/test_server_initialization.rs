@@ -96,6 +96,47 @@ async fn server_init_succeeds_after_set_level_before_initialized() {
     result.unwrap().cancel().await.unwrap();
 }
 
+// Server responds with EmptyResult to ping received before initialize request.
+#[tokio::test]
+async fn server_init_ping_response_is_empty_result_before_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let _server = tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client.send(ping_request(1)).await.unwrap();
+
+    let response = client.receive().await.unwrap();
+    assert!(
+        matches!(
+            response,
+            ServerJsonRpcMessage::Response(ref r)
+                if matches!(r.result, ServerResult::EmptyResult(_))
+        ),
+        "expected EmptyResult for pre-initialize ping, got: {response:?}"
+    );
+}
+
+// Server initializes successfully when ping is sent before the initialize request.
+#[tokio::test]
+async fn server_init_succeeds_after_ping_before_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client.send(ping_request(1)).await.unwrap();
+    let _pong = client.receive().await.unwrap();
+    do_initialize(&mut client).await;
+    client.send(initialized_notification()).await.unwrap();
+
+    let result = server_handle.await.unwrap();
+    assert!(
+        result.is_ok(),
+        "server should initialize successfully after pre-initialize ping"
+    );
+    result.unwrap().cancel().await.unwrap();
+}
+
 // Server responds with EmptyResult to ping received before initialized.
 #[tokio::test]
 async fn server_init_ping_response_is_empty_result() {
