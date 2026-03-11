@@ -122,16 +122,10 @@ impl ClientHandler for ProgressAwareClient {
     }
 
     fn get_info(&self) -> ClientInfo {
-        ClientInfo {
-            meta: None,
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "progress-test-client".to_string(),
-                version: "1.0.0".to_string(),
-                ..Default::default()
-            },
-        }
+        ClientInfo::new(
+            ClientCapabilities::default(),
+            Implementation::new("progress-test-client", "1.0.0"),
+        )
     }
 }
 
@@ -182,12 +176,7 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     // Call stream processor tool
     tracing::info!("Starting to process {} records...", records);
     let tool_result = service
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "stream_processor".into(),
-            arguments: None,
-            task: None,
-        })
+        .call_tool(CallToolRequestParams::new("stream_processor"))
         .await?;
 
     if let Some(content) = tool_result.content.first() {
@@ -238,12 +227,7 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     // Call stream processor tool
     tracing::info!("Starting to process {} records...", records);
     let tool_result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "stream_processor".into(),
-            arguments: None,
-            task: None,
-        })
+        .call_tool(CallToolRequestParams::new("stream_processor"))
         .await?;
 
     if let Some(content) = tool_result.content.first() {

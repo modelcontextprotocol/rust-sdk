@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.1.1...rmcp-v1.2.0) - 2026-03-11
+
+### Added
+
+- add missing constructors for non-exhaustive model types ([#739](https://github.com/modelcontextprotocol/rust-sdk/pull/739))
+- include granted scopes in OAuth refresh token request ([#731](https://github.com/modelcontextprotocol/rust-sdk/pull/731))
+
+### Fixed
+
+- handle ping requests sent before initialize handshake ([#745](https://github.com/modelcontextprotocol/rust-sdk/pull/745))
+- allow deserializing notifications without params field ([#729](https://github.com/modelcontextprotocol/rust-sdk/pull/729))
+
+### Other
+
+- *(deps)* update jsonwebtoken requirement from 9 to 10 ([#737](https://github.com/modelcontextprotocol/rust-sdk/pull/737))
+
+## [1.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.1.0...rmcp-v1.1.1) - 2026-03-09
+
+### Fixed
+
+- accept logging/setLevel and ping before initialized notification ([#730](https://github.com/modelcontextprotocol/rust-sdk/pull/730))
+
+## [1.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.0.0...rmcp-v1.1.0) - 2026-03-04
+
+### Added
+
+- implement OAuth 2.0 Client Credentials flow ([#707](https://github.com/modelcontextprotocol/rust-sdk/pull/707))
+
+### Other
+
+- add McpMux to Built with rmcp section ([#717](https://github.com/modelcontextprotocol/rust-sdk/pull/717))
+
+## [1.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.0.0-alpha...rmcp-v1.0.0) - 2026-03-03
+
+### Fixed
+
+- *(auth)* pass WWW-Authenticate scopes to DCR registration request ([#705](https://github.com/modelcontextprotocol/rust-sdk/pull/705))
+- api ergonomics follow-up ([#720](https://github.com/modelcontextprotocol/rust-sdk/pull/720))
+- *(streamable-http)* map stale session 401 to status-aware error ([#709](https://github.com/modelcontextprotocol/rust-sdk/pull/709))
+
+## [1.0.0-alpha](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.17.0...rmcp-v1.0.0-alpha) - 2026-03-03
+
+### Added
+
+- docs update ([#718](https://github.com/modelcontextprotocol/rust-sdk/pull/718))
+- *(auth)* [**breaking**] support returning extra fields from token exchange ([#700](https://github.com/modelcontextprotocol/rust-sdk/pull/700))
+
+### Fixed
+
+- downgrade logging of message to `TRACE` to avoid spamming logs ([#699](https://github.com/modelcontextprotocol/rust-sdk/pull/699))
+
+### Other
+
+- add #[non_exhaustive] and mutation methods to improve compatibility ([#715](https://github.com/modelcontextprotocol/rust-sdk/pull/715))
+
+## [0.17.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.16.0...rmcp-v0.17.0) - 2026-02-27
+
+### Added
+
+- *(streamable-http)* add json_response option for stateless server mode ([#683](https://github.com/modelcontextprotocol/rust-sdk/pull/683))
+- mcp sdk conformance ([#687](https://github.com/modelcontextprotocol/rust-sdk/pull/687))
+- add default value support to string, number, and integer schemas ([#686](https://github.com/modelcontextprotocol/rust-sdk/pull/686))
+- add trait-based tool declaration ([#677](https://github.com/modelcontextprotocol/rust-sdk/pull/677))
+- send and validate MCP-Protocol-Version header ([#675](https://github.com/modelcontextprotocol/rust-sdk/pull/675))
+
+### Fixed
+
+- improve error logging and remove token secret from logs ([#685](https://github.com/modelcontextprotocol/rust-sdk/pull/685))
+- refresh token expiry ([#680](https://github.com/modelcontextprotocol/rust-sdk/pull/680))
+- gate optional dependencies behind feature flags ([#672](https://github.com/modelcontextprotocol/rust-sdk/pull/672))
+- allow empty content in CallToolResult ([#681](https://github.com/modelcontextprotocol/rust-sdk/pull/681))
+- *(schema)* remove AddNullable from draft2020_12 settings ([#664](https://github.com/modelcontextprotocol/rust-sdk/pull/664))
+
+### Other
+
+- add prose documentation for core features to meet conformance ([#702](https://github.com/modelcontextprotocol/rust-sdk/pull/702))
+- Fix/sse channel replacement conflict ([#682](https://github.com/modelcontextprotocol/rust-sdk/pull/682))
+- document session management for streamable HTTP transport ([#674](https://github.com/modelcontextprotocol/rust-sdk/pull/674))
+
 ## [0.16.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.15.0...rmcp-v0.16.0) - 2026-02-17
 
 ### Added

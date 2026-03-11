@@ -17,19 +17,10 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
     let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
-    let client_info = ClientInfo {
-        meta: None,
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test sse client".to_string(),
-            title: None,
-            version: "0.0.1".to_string(),
-            description: None,
-            website_url: None,
-            icons: None,
-        },
-    };
+    let client_info = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("test sse client", "0.0.1"),
+    );
     let client = client_info.serve(transport).await.inspect_err(|e| {
         tracing::error!("client error: {:?}", e);
     })?;
@@ -43,12 +34,10 @@ async fn main() -> Result<()> {
     tracing::info!("Available tools: {tools:#?}");
 
     let tool_result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "increment".into(),
-            arguments: serde_json::json!({}).as_object().cloned(),
-            task: None,
-        })
+        .call_tool(
+            CallToolRequestParams::new("increment")
+                .with_arguments(serde_json::json!({}).as_object().cloned().unwrap()),
+        )
         .await?;
     tracing::info!("Tool result: {tool_result:#?}");
     client.cancel().await?;

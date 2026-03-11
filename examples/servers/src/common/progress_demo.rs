@@ -118,15 +118,13 @@ impl ProgressDemo {
 #[tool_handler]
 impl ServerHandler for ProgressDemo {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(
                 "This server demonstrates progress notifications during long-running operations. \
                  Use the tools to see real-time progress updates for batch processing"
                     .to_string(),
-            ),
-        }
+            )
     }
 }

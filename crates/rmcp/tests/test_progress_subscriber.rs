@@ -107,12 +107,9 @@ async fn test_progress_subscriber() -> anyhow::Result<()> {
     let client_service = client.serve(transport_client).await?;
     let handle = client_service
         .send_cancellable_request(
-            ClientRequest::CallToolRequest(Request::new(CallToolRequestParams {
-                meta: None,
-                name: "some_progress".into(),
-                arguments: None,
-                task: None,
-            })),
+            ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(
+                "some_progress",
+            ))),
             PeerRequestOptions::no_options(),
         )
         .await?;

@@ -33,7 +33,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let list_fn = quote! {
             async fn list_tasks(
                 &self,
-                _request: Option<rmcp::model::PaginatedRequestParam>,
+                _request: Option<rmcp::model::PaginatedRequestParams>,
                 _: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::ListTasksResult, McpError> {
                 let running_ids = (#processor).lock().await.list_running();
@@ -42,23 +42,16 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                     .into_iter()
                     .map(|task_id| {
                         let timestamp = rmcp::task_manager::current_timestamp();
-                        rmcp::model::Task {
+                        rmcp::model::Task::new(
                             task_id,
-                            status: rmcp::model::TaskStatus::Working,
-                            status_message: None,
-                            created_at: timestamp.clone(),
-                            last_updated_at: timestamp,
-                            ttl: None,
-                            poll_interval: None,
-                        }
+                            rmcp::model::TaskStatus::Working,
+                            timestamp.clone(),
+                            timestamp,
+                        )
                     })
                     .collect::<Vec<_>>();
 
-                Ok(rmcp::model::ListTasksResult {
-                    tasks,
-                    next_cursor: None,
-                    total: Some(total),
-                })
+                Ok(rmcp::model::ListTasksResult::new(tasks))
             }
         };
         item_impl.items.push(syn::parse2::<ImplItem>(list_fn)?);
@@ -68,7 +61,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let enqueue_fn = quote! {
             async fn enqueue_task(
                 &self,
-                request: rmcp::model::CallToolRequestParam,
+                request: rmcp::model::CallToolRequestParams,
                 context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::CreateTaskResult, McpError> {
                 use rmcp::task_manager::{
@@ -106,17 +99,14 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                     ))?;
 
                 let timestamp = current_timestamp();
-                let task = rmcp::model::Task {
+                let task = rmcp::model::Task::new(
                     task_id,
-                    status: rmcp::model::TaskStatus::Working,
-                    status_message: Some("Task accepted".to_string()),
-                    created_at: timestamp.clone(),
-                    last_updated_at: timestamp,
-                    ttl: None,
-                    poll_interval: None,
-                };
+                    rmcp::model::TaskStatus::Working,
+                    timestamp.clone(),
+                    timestamp,
+                ).with_status_message("Task accepted");
 
-                Ok(rmcp::model::CreateTaskResult { task })
+                Ok(rmcp::model::CreateTaskResult::new(task))
             }
         };
         item_impl.items.push(syn::parse2::<ImplItem>(enqueue_fn)?);
@@ -126,7 +116,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let get_info_fn = quote! {
             async fn get_task_info(
                 &self,
-                request: rmcp::model::GetTaskInfoParam,
+                request: rmcp::model::GetTaskInfoParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::GetTaskResult, McpError> {
                 use rmcp::task_manager::current_timestamp;
@@ -151,15 +141,15 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                         Err(_) => rmcp::model::TaskStatus::Failed,
                     };
                     let timestamp = current_timestamp();
-                    let task = rmcp::model::Task {
+                    let mut task = rmcp::model::Task::new(
                         task_id,
                         status,
-                        status_message: None,
-                        created_at: timestamp.clone(),
-                        last_updated_at: timestamp,
-                        ttl: completed_result.descriptor.ttl,
-                        poll_interval: None,
-                    };
+                        timestamp.clone(),
+                        timestamp,
+                    );
+                    if let Some(ttl) = completed_result.descriptor.ttl {
+                        task = task.with_ttl(ttl);
+                    }
                     return Ok(rmcp::model::GetTaskResult { meta: None, task });
                 }
 
@@ -167,15 +157,12 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                 let running = processor.list_running();
                 if running.into_iter().any(|id| id == task_id) {
                     let timestamp = current_timestamp();
-                    let task = rmcp::model::Task {
+                    let task = rmcp::model::Task::new(
                         task_id,
-                        status: rmcp::model::TaskStatus::Working,
-                        status_message: None,
-                        created_at: timestamp.clone(),
-                        last_updated_at: timestamp,
-                        ttl: None,
-                        poll_interval: None,
-                    };
+                        rmcp::model::TaskStatus::Working,
+                        timestamp.clone(),
+                        timestamp,
+                    );
                     return Ok(rmcp::model::GetTaskResult { meta: None, task });
                 }
 
@@ -189,7 +176,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let get_result_fn = quote! {
             async fn get_task_result(
                 &self,
-                request: rmcp::model::GetTaskResultParam,
+                request: rmcp::model::GetTaskResultParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::GetTaskPayloadResult, McpError> {
                 use std::time::Duration;
@@ -206,8 +193,8 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                                     if let Some(tool) = boxed.as_any().downcast_ref::<rmcp::task_manager::ToolCallTaskResult>() {
                                         match &tool.result {
                                             Ok(call_tool) => {
-                                                let value = ::serde_json::to_value(call_tool).unwrap_or(::serde_json::Value::Null);
-                                                return Ok(rmcp::model::GetTaskPayloadResult(value));
+                                                let value = ::rmcp::serde_json::to_value(call_tool).unwrap_or_default();
+                                                return Ok(rmcp::model::GetTaskPayloadResult::new(value));
                                             }
                                             Err(err) => return Err(McpError::internal_error(
                                                 format!("task failed: {}", err),
@@ -245,7 +232,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let cancel_fn = quote! {
             async fn cancel_task(
                 &self,
-                request: rmcp::model::CancelTaskParam,
+                request: rmcp::model::CancelTaskParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::CancelTaskResult, McpError> {
                 use rmcp::task_manager::current_timestamp;
@@ -254,15 +241,12 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
 
                 if processor.cancel_task(&task_id) {
                     let timestamp = current_timestamp();
-                    let task = rmcp::model::Task {
+                    let task = rmcp::model::Task::new(
                         task_id,
-                        status: rmcp::model::TaskStatus::Cancelled,
-                        status_message: None,
-                        created_at: timestamp.clone(),
-                        last_updated_at: timestamp,
-                        ttl: None,
-                        poll_interval: None,
-                    };
+                        rmcp::model::TaskStatus::Cancelled,
+                        timestamp.clone(),
+                        timestamp,
+                    );
                     return Ok(rmcp::model::CancelTaskResult { meta: None, task });
                 }
 

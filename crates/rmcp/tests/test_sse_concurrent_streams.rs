@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use rmcp::{
     RoleServer, ServerHandler,
-    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo, ToolsCapability},
+    model::{Implementation, ServerCapabilities, ServerInfo, ToolsCapability},
     service::NotificationContext,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -45,20 +45,14 @@ impl TestServer {
 
 impl ServerHandler for TestServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools_with(ToolsCapability {
                     list_changed: Some(true),
                 })
                 .build(),
-            server_info: Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-                ..Default::default()
-            },
-            instructions: None,
-        }
+        )
+        .with_server_info(Implementation::new("test-server", "1.0.0"))
     }
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
@@ -84,6 +78,7 @@ async fn start_test_server(ct: CancellationToken, trigger: Arc<Notify>) -> Strin
             sse_keep_alive: Some(Duration::from_secs(15)),
             sse_retry: Some(Duration::from_secs(3)),
             cancellation_token: ct.child_token(),
+            ..Default::default()
         },
     );
 

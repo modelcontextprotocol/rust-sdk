@@ -18,7 +18,7 @@ use rmcp::transport::{
     StreamableHttpServerConfig,
     streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
@@ -35,8 +35,8 @@ const BIND_ADDRESS: &str = "127.0.0.1:3000";
 /// In-memory authorization code record
 #[derive(Clone, Debug)]
 struct AuthCodeRecord {
-    client_id: String,
-    redirect_uri: String,
+    _client_id: String,
+    _redirect_uri: String,
     expires_at: SystemTime,
 }
 
@@ -368,8 +368,8 @@ async fn handle_authorize(
             codes.insert(
                 code.clone(),
                 AuthCodeRecord {
-                    client_id: client_id_url,
-                    redirect_uri: redirect_uri.to_string(),
+                    _client_id: client_id_url,
+                    _redirect_uri: redirect_uri.to_string(),
                     expires_at,
                 },
             );

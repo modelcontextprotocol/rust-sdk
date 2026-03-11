@@ -144,6 +144,7 @@ impl StreamableHttpClient for reqwest::Client {
         }
 
         request = apply_custom_headers(request, custom_headers)?;
+        let session_was_attached = session_id.is_some();
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());
         }
@@ -185,6 +186,18 @@ impl StreamableHttpClient for reqwest::Client {
             reqwest::StatusCode::ACCEPTED | reqwest::StatusCode::NO_CONTENT
         ) {
             return Ok(StreamableHttpPostResponse::Accepted);
+        }
+        if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
+            return Err(StreamableHttpError::SessionExpired);
+        }
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                format!("HTTP {status}: {body}"),
+            )));
         }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
         let session_id = response.headers().get(HEADER_SESSION_ID);

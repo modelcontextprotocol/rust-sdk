@@ -64,13 +64,11 @@ async fn async_function(Parameters(Request { fields }): Parameters<Request>) -> 
 #[rmcp::prompt]
 fn async_function2<T>(_callee: &TestHandler<T>) -> BoxFuture<'_, GetPromptResult> {
     Box::pin(async move {
-        GetPromptResult {
-            description: Some("Async function 2".to_string()),
-            messages: vec![PromptMessage::new_text(
-                PromptMessageRole::Assistant,
-                "Async function 2 response",
-            )],
-        }
+        GetPromptResult::new(vec![PromptMessage::new_text(
+            PromptMessageRole::Assistant,
+            "Async function 2 response",
+        )])
+        .with_description("Async function 2")
     })
 }
 

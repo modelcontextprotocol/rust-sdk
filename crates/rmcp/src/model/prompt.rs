@@ -7,9 +7,10 @@ use super::{
 };
 
 /// A prompt that can be used to generate text from a model
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct Prompt {
     /// The name of the prompt
     pub name: String,
@@ -49,11 +50,46 @@ impl Prompt {
             meta: None,
         }
     }
+
+    /// Create a new prompt from raw fields (used by the macro)
+    pub fn from_raw(
+        name: impl Into<String>,
+        description: Option<impl Into<String>>,
+        arguments: Option<Vec<PromptArgument>>,
+    ) -> Self {
+        Prompt {
+            name: name.into(),
+            title: None,
+            description: description.map(Into::into),
+            arguments,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    /// Set the human-readable title
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the icons
+    pub fn with_icons(mut self, icons: Vec<Icon>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set the metadata
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 }
 
 /// Represents a prompt argument that can be passed to customize the prompt
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct PromptArgument {
     /// The name of the argument
     pub name: String,
@@ -66,6 +102,36 @@ pub struct PromptArgument {
     /// Whether this argument is required
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
+}
+
+impl PromptArgument {
+    /// Create a new prompt argument
+    pub fn new<N: Into<String>>(name: N) -> Self {
+        PromptArgument {
+            name: name.into(),
+            title: None,
+            description: None,
+            required: None,
+        }
+    }
+
+    /// Set the title
+    pub fn with_title<T: Into<String>>(mut self, title: T) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the description
+    pub fn with_description<D: Into<String>>(mut self, description: D) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the required flag
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
 }
 
 /// Represents the role of a message sender in a prompt conversation
@@ -112,6 +178,7 @@ impl PromptMessageContent {
 /// A message in a prompt conversation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct PromptMessage {
     /// The role of the message sender
     pub role: PromptMessageRole,
@@ -120,6 +187,11 @@ pub struct PromptMessage {
 }
 
 impl PromptMessage {
+    /// Create a new prompt message with the given role and content
+    pub fn new(role: PromptMessageRole, content: PromptMessageContent) -> Self {
+        Self { role, content }
+    }
+
     /// Create a new text message with the given role and text content
     pub fn new_text<S: Into<String>>(role: PromptMessageRole, text: S) -> Self {
         Self {

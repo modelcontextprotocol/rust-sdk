@@ -16,7 +16,7 @@ use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParams, CreateMessageResult, ErrorData, ListRootsRequest,
+        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData, ListRootsRequest,
         ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
         ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
         ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
@@ -47,6 +47,7 @@ impl ServiceRole for RoleServer {
 ///
 /// if you want to handle the error, you can use `serve_server_with_ct` or `serve_server` with `Result<RunningService<RoleServer, S>, ServerError>`
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ServerInitializeError {
     #[error("expect initialized request, but received: {0:?}")]
     ExpectedInitializeRequest(Option<ClientJsonRpcMessage>),
@@ -130,38 +131,6 @@ where
         .ok_or_else(|| ServerInitializeError::ConnectionClosed(context.to_string()))
 }
 
-/// Helper function to expect a request from the stream
-async fn expect_request<T>(
-    transport: &mut T,
-    context: &str,
-) -> Result<(ClientRequest, RequestId), ServerInitializeError>
-where
-    T: Transport<RoleServer>,
-{
-    let msg = expect_next_message(transport, context).await?;
-    let msg_clone = msg.clone();
-    msg.into_request()
-        .ok_or(ServerInitializeError::ExpectedInitializeRequest(Some(
-            msg_clone,
-        )))
-}
-
-/// Helper function to expect a notification from the stream
-async fn expect_notification<T>(
-    transport: &mut T,
-    context: &str,
-) -> Result<ClientNotification, ServerInitializeError>
-where
-    T: Transport<RoleServer>,
-{
-    let msg = expect_next_message(transport, context).await?;
-    let msg_clone = msg.clone();
-    msg.into_notification()
-        .ok_or(ServerInitializeError::ExpectedInitializedNotification(
-            Some(msg_clone),
-        ))
-}
-
 pub async fn serve_server_with_ct<S, T, E, A>(
     service: S,
     transport: T,
@@ -192,8 +161,35 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    // Get initialize request
-    let (request, id) = expect_request(&mut transport, "initialized request").await?;
+    // Get initialize request; the MCP spec permits ping before initialize.
+    // See: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
+    let (request, id) = loop {
+        let msg = expect_next_message(&mut transport, "initialize request").await?;
+        match msg {
+            ClientJsonRpcMessage::Request(req)
+                if matches!(req.request, ClientRequest::PingRequest(_)) =>
+            {
+                transport
+                    .send(ServerJsonRpcMessage::response(
+                        ServerResult::EmptyResult(EmptyResult {}),
+                        req.id,
+                    ))
+                    .await
+                    .map_err(|error| {
+                        ServerInitializeError::transport::<T>(
+                            error,
+                            "sending pre-init ping response",
+                        )
+                    })?;
+            }
+            ClientJsonRpcMessage::Request(req) => break (req.request, req.id),
+            other => {
+                return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
+                    other,
+                )));
+            }
+        }
+    };
 
     let ClientRequest::InitializeRequest(peer_info) = &request else {
         return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
@@ -245,12 +241,41 @@ where
             ServerInitializeError::transport::<T>(error, "sending initialize response")
         })?;
 
-    // Wait for initialize notification
-    let notification = expect_notification(&mut transport, "initialize notification").await?;
-    let ClientNotification::InitializedNotification(_) = notification else {
-        return Err(ServerInitializeError::ExpectedInitializedNotification(
-            Some(ClientJsonRpcMessage::notification(notification)),
-        ));
+    // Wait for initialized notification. The MCP spec permits logging/setLevel and ping
+    // before initialized; VS Code sends setLevel immediately after the initialize response.
+    let notification = loop {
+        let msg = expect_next_message(&mut transport, "initialize notification").await?;
+        match msg {
+            ClientJsonRpcMessage::Notification(n)
+                if matches!(
+                    n.notification,
+                    ClientNotification::InitializedNotification(_)
+                ) =>
+            {
+                break n.notification;
+            }
+            ClientJsonRpcMessage::Request(req)
+                if matches!(
+                    req.request,
+                    ClientRequest::SetLevelRequest(_) | ClientRequest::PingRequest(_)
+                ) =>
+            {
+                transport
+                    .send(ServerJsonRpcMessage::response(
+                        ServerResult::EmptyResult(EmptyResult {}),
+                        req.id,
+                    ))
+                    .await
+                    .map_err(|error| {
+                        ServerInitializeError::transport::<T>(error, "sending pre-init response")
+                    })?;
+            }
+            other => {
+                return Err(ServerInitializeError::ExpectedInitializedNotification(
+                    Some(other),
+                ));
+            }
+        }
     };
     let context = NotificationContext {
         meta: notification.get_meta().clone(),
@@ -457,6 +482,7 @@ impl Peer<RoleServer> {
 /// Errors that can occur during typed elicitation operations
 #[cfg(feature = "elicitation")]
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ElicitationError {
     /// The elicitation request failed at the service level
     #[error("Service error: {0}")]
@@ -808,6 +834,7 @@ impl Peer<RoleServer> {
     ///     ElicitationAction::Cancel => {
     ///         println!("User cancelled/dismissed the request");
     ///     }
+    ///     _ => {}
     ///  }
     ///  Ok(())
     /// }
@@ -858,6 +885,7 @@ impl Peer<RoleServer> {
     ///     ElicitationAction::Cancel => {
     ///         println!("User cancelled/dismissed the request");
     ///     }
+    ///     _ => {}
     ///  }
     ///  Ok(())
     /// }

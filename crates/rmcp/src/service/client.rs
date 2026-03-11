@@ -25,6 +25,7 @@ use crate::{
 ///
 /// if you want to handle the error, you can use `serve_client_with_ct` or `serve_client` with `Result<RunningService<RoleClient, S>, ClientError>`
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ClientInitializeError {
     #[error("expect initialized response, but received: {0:?}")]
     ExpectedInitResponse(Option<ServerJsonRpcMessage>),

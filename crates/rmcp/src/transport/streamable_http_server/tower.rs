@@ -38,6 +38,11 @@ pub struct StreamableHttpServerConfig {
     /// If true, the server will create a session for each request and keep it alive.
     /// When enabled, SSE priming events are sent to enable client reconnection.
     pub stateful_mode: bool,
+    /// When true and `stateful_mode` is false, the server returns
+    /// `Content-Type: application/json` directly instead of `text/event-stream`.
+    /// This eliminates SSE framing overhead for simple request-response tools,
+    /// allowed by the MCP Streamable HTTP spec (2025-06-18).
+    pub json_response: bool,
     /// Cancellation token for the Streamable HTTP server.
     ///
     /// When this token is cancelled, all active sessions are terminated and
@@ -51,6 +56,7 @@ impl Default for StreamableHttpServerConfig {
             sse_keep_alive: Some(Duration::from_secs(15)),
             sse_retry: Some(Duration::from_secs(3)),
             stateful_mode: true,
+            json_response: false,
             cancellation_token: CancellationToken::new(),
         }
     }
@@ -585,27 +591,56 @@ where
             match message {
                 ClientJsonRpcMessage::Request(mut request) => {
                     request.request.extensions_mut().insert(part);
-                    let (transport, receiver) =
+                    let (transport, mut receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
                     let service = serve_directly(service, transport, None);
                     tokio::spawn(async move {
                         // on service created
                         let _ = service.waiting().await;
                     });
-                    // Stateless mode: no priming (no session to resume)
-                    let stream = ReceiverStream::new(receiver).map(|message| {
-                        tracing::info!(?message);
-                        ServerSseMessage {
-                            event_id: None,
-                            message: Some(Arc::new(message)),
-                            retry: None,
+                    if self.config.json_response {
+                        // JSON-direct mode: await the single response and return as
+                        // application/json, eliminating SSE framing overhead.
+                        // Allowed by MCP Streamable HTTP spec (2025-06-18).
+                        let cancel = self.config.cancellation_token.child_token();
+                        match tokio::select! {
+                            res = receiver.recv() => res,
+                            _ = cancel.cancelled() => None,
+                        } {
+                            Some(message) => {
+                                tracing::trace!(?message);
+                                let body = serde_json::to_vec(&message).map_err(|e| {
+                                    internal_error_response("serialize json response")(e)
+                                })?;
+                                Ok(Response::builder()
+                                    .status(http::StatusCode::OK)
+                                    .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+                                    .body(Full::new(Bytes::from(body)).boxed())
+                                    .expect("valid response"))
+                            }
+                            None => Err(internal_error_response("empty response")(
+                                std::io::Error::new(
+                                    std::io::ErrorKind::UnexpectedEof,
+                                    "no response message received from handler",
+                                ),
+                            )),
                         }
-                    });
-                    Ok(sse_stream_response(
-                        stream,
-                        self.config.sse_keep_alive,
-                        self.config.cancellation_token.child_token(),
-                    ))
+                    } else {
+                        // SSE mode (default): original behaviour preserved unchanged
+                        let stream = ReceiverStream::new(receiver).map(|message| {
+                            tracing::trace!(?message);
+                            ServerSseMessage {
+                                event_id: None,
+                                message: Some(Arc::new(message)),
+                                retry: None,
+                            }
+                        });
+                        Ok(sse_stream_response(
+                            stream,
+                            self.config.sse_keep_alive,
+                            self.config.cancellation_token.child_token(),
+                        ))
+                    }
                 }
                 ClientJsonRpcMessage::Notification(_notification) => {
                     // ignore

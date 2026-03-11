@@ -1,12 +1,9 @@
-use std::future::Future;
-
 use rmcp::{
     ClientHandler, ErrorData, RoleClient, ServiceExt,
     model::*,
     service::RequestContext,
     transport::{
-        AuthClient, AuthorizationManager, StreamableHttpClientTransport,
-        auth::{OAuthClientConfig, OAuthState},
+        AuthClient, AuthorizationManager, StreamableHttpClientTransport, auth::OAuthState,
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
@@ -18,9 +15,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Debug, Default, serde::Deserialize)]
 struct ConformanceContext {
     #[serde(default)]
-    name: Option<String>,
-    // pre-registration / client-credentials-basic
-    #[serde(default)]
     client_id: Option<String>,
     #[serde(default)]
     client_secret: Option<String>,
@@ -29,15 +23,6 @@ struct ConformanceContext {
     private_key_pem: Option<String>,
     #[serde(default)]
     signing_algorithm: Option<String>,
-    // cross-app-access
-    #[serde(default)]
-    idp_client_id: Option<String>,
-    #[serde(default)]
-    idp_id_token: Option<String>,
-    #[serde(default)]
-    idp_issuer: Option<String>,
-    #[serde(default)]
-    idp_token_endpoint: Option<String>,
 }
 
 fn load_context() -> ConformanceContext {
@@ -68,82 +53,76 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
         info
     }
 
-    fn create_elicitation(
+    async fn create_elicitation(
         &self,
         request: CreateElicitationRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateElicitationResult, ErrorData>> + Send + '_ {
-        async move {
-            let content = match &request {
-                CreateElicitationRequestParams::FormElicitationParams {
-                    requested_schema, ..
-                } => {
-                    let mut defaults = serde_json::Map::new();
-                    for (name, prop) in &requested_schema.properties {
-                        match prop {
-                            PrimitiveSchema::String(s) => {
-                                if let Some(d) = &s.default {
-                                    defaults.insert(name.clone(), Value::String(d.clone()));
-                                }
+    ) -> Result<CreateElicitationResult, ErrorData> {
+        let content = match &request {
+            CreateElicitationRequestParams::FormElicitationParams {
+                requested_schema, ..
+            } => {
+                let mut defaults = serde_json::Map::new();
+                for (name, prop) in &requested_schema.properties {
+                    match prop {
+                        PrimitiveSchema::String(s) => {
+                            if let Some(d) = &s.default {
+                                defaults.insert(name.clone(), Value::String(d.clone()));
                             }
-                            PrimitiveSchema::Number(n) => {
-                                if let Some(d) = n.default {
-                                    defaults.insert(name.clone(), json!(d));
-                                }
+                        }
+                        PrimitiveSchema::Number(n) => {
+                            if let Some(d) = n.default {
+                                defaults.insert(name.clone(), json!(d));
                             }
-                            PrimitiveSchema::Integer(i) => {
-                                if let Some(d) = i.default {
-                                    defaults.insert(name.clone(), json!(d));
-                                }
+                        }
+                        PrimitiveSchema::Integer(i) => {
+                            if let Some(d) = i.default {
+                                defaults.insert(name.clone(), json!(d));
                             }
-                            PrimitiveSchema::Boolean(b) => {
-                                if let Some(d) = b.default {
-                                    defaults.insert(name.clone(), Value::Bool(d));
-                                }
+                        }
+                        PrimitiveSchema::Boolean(b) => {
+                            if let Some(d) = b.default {
+                                defaults.insert(name.clone(), Value::Bool(d));
                             }
-                            PrimitiveSchema::Enum(e) => {
-                                let val = match e {
-                                    EnumSchema::Single(SingleSelectEnumSchema::Untitled(u)) => {
-                                        u.default.as_ref().map(|d| Value::String(d.clone()))
-                                    }
-                                    EnumSchema::Single(SingleSelectEnumSchema::Titled(t)) => {
-                                        t.default.as_ref().map(|d| Value::String(d.clone()))
-                                    }
-                                    EnumSchema::Multi(MultiSelectEnumSchema::Untitled(u)) => {
-                                        u.default.as_ref().map(|d| {
-                                            Value::Array(
-                                                d.iter()
-                                                    .map(|s| Value::String(s.clone()))
-                                                    .collect(),
-                                            )
-                                        })
-                                    }
-                                    EnumSchema::Multi(MultiSelectEnumSchema::Titled(t)) => {
-                                        t.default.as_ref().map(|d| {
-                                            Value::Array(
-                                                d.iter()
-                                                    .map(|s| Value::String(s.clone()))
-                                                    .collect(),
-                                            )
-                                        })
-                                    }
-                                    EnumSchema::Legacy(_) => None,
-                                };
-                                if let Some(v) = val {
-                                    defaults.insert(name.clone(), v);
+                        }
+                        PrimitiveSchema::Enum(e) => {
+                            let val = match e {
+                                EnumSchema::Single(SingleSelectEnumSchema::Untitled(u)) => {
+                                    u.default.as_ref().map(|d| Value::String(d.clone()))
                                 }
+                                EnumSchema::Single(SingleSelectEnumSchema::Titled(t)) => {
+                                    t.default.as_ref().map(|d| Value::String(d.clone()))
+                                }
+                                EnumSchema::Multi(MultiSelectEnumSchema::Untitled(u)) => {
+                                    u.default.as_ref().map(|d| {
+                                        Value::Array(
+                                            d.iter().map(|s| Value::String(s.clone())).collect(),
+                                        )
+                                    })
+                                }
+                                EnumSchema::Multi(MultiSelectEnumSchema::Titled(t)) => {
+                                    t.default.as_ref().map(|d| {
+                                        Value::Array(
+                                            d.iter().map(|s| Value::String(s.clone())).collect(),
+                                        )
+                                    })
+                                }
+                                EnumSchema::Legacy(_) => None,
+                            };
+                            if let Some(v) = val {
+                                defaults.insert(name.clone(), v);
                             }
                         }
                     }
-                    Some(Value::Object(defaults))
                 }
-                _ => Some(json!({})),
-            };
-            Ok(CreateElicitationResult {
-                action: ElicitationAction::Accept,
-                content,
-            })
-        }
+                Some(Value::Object(defaults))
+            }
+            _ => Some(json!({})),
+        };
+        Ok(CreateElicitationResult {
+            action: ElicitationAction::Accept,
+            content,
+        })
     }
 }
 
@@ -162,44 +141,40 @@ impl ClientHandler for FullClientHandler {
         info
     }
 
-    fn create_message(
+    async fn create_message(
         &self,
         params: CreateMessageRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateMessageResult, ErrorData>> + Send + '_ {
-        async move {
-            let prompt_text = params
-                .messages
-                .first()
-                .and_then(|m| m.content.first())
-                .and_then(|c| c.as_text())
-                .map(|t| t.text.clone())
-                .unwrap_or_default();
-            Ok(CreateMessageResult {
-                message: SamplingMessage::new(
-                    Role::Assistant,
-                    SamplingMessageContent::text(format!(
-                        "This is a mock LLM response to: {}",
-                        prompt_text
-                    )),
-                ),
-                model: "mock-model".into(),
-                stop_reason: Some("endTurn".into()),
-            })
-        }
+    ) -> Result<CreateMessageResult, ErrorData> {
+        let prompt_text = params
+            .messages
+            .first()
+            .and_then(|m| m.content.first())
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .unwrap_or_default();
+        Ok(CreateMessageResult::new(
+            SamplingMessage::new(
+                Role::Assistant,
+                SamplingMessageContent::text(format!(
+                    "This is a mock LLM response to: {}",
+                    prompt_text
+                )),
+            ),
+            "mock-model".into(),
+        )
+        .with_stop_reason("endTurn"))
     }
 
-    fn create_elicitation(
+    async fn create_elicitation(
         &self,
         _request: CreateElicitationRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateElicitationResult, ErrorData>> + Send + '_ {
-        async move {
-            Ok(CreateElicitationResult {
-                action: ElicitationAction::Accept,
-                content: Some(json!({"username": "testuser", "email": "test@example.com"})),
-            })
-        }
+    ) -> Result<CreateElicitationResult, ErrorData> {
+        Ok(CreateElicitationResult {
+            action: ElicitationAction::Accept,
+            content: Some(json!({"username": "testuser", "email": "test@example.com"})),
+        })
     }
 }
 
@@ -216,7 +191,7 @@ const REDIRECT_URI: &str = "http://localhost:3000/callback";
 /// 4. Return an `AuthClient` wrapping `reqwest::Client`
 async fn perform_oauth_flow(
     server_url: &str,
-    ctx: &ConformanceContext,
+    _ctx: &ConformanceContext,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
     let mut oauth = OAuthState::new(server_url, None).await?;
 
@@ -335,12 +310,7 @@ async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: args,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), args))
             .await;
     }
 
@@ -352,7 +322,7 @@ async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::
 /// then call tool which triggers 403 → re-auth with expanded scopes → retry.
 async fn run_auth_scope_step_up_client(
     server_url: &str,
-    ctx: &ConformanceContext,
+    _ctx: &ConformanceContext,
 ) -> anyhow::Result<()> {
     // First auth
     let mut oauth = OAuthState::new(server_url, None).await?;
@@ -388,12 +358,7 @@ async fn run_auth_scope_step_up_client(
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
         match client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: args.clone(),
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), args.clone()))
             .await
         {
             Ok(_) => {
@@ -428,12 +393,7 @@ async fn run_auth_scope_step_up_client(
                 );
                 let client2 = BasicClientHandler.serve(transport2).await?;
                 let _ = client2
-                    .call_tool(CallToolRequestParams {
-                        meta: None,
-                        name: tool.name.clone(),
-                        arguments: args,
-                        task: None,
-                    })
+                    .call_tool(call_tool_params(tool.name.clone(), args))
                     .await;
                 client2.cancel().await.ok();
                 return Ok(());
@@ -481,12 +441,7 @@ async fn run_auth_scope_retry_limit_client(
         for tool in &tools.tools {
             let args = build_tool_arguments(tool);
             match client
-                .call_tool(CallToolRequestParams {
-                    meta: None,
-                    name: tool.name.clone(),
-                    arguments: args,
-                    task: None,
-                })
+                .call_tool(call_tool_params(tool.name.clone(), args))
                 .await
             {
                 Ok(_) => {}
@@ -539,12 +494,7 @@ async fn run_auth_preregistered_client(
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: args,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), args))
             .await;
     }
     client.cancel().await?;
@@ -597,12 +547,7 @@ async fn run_client_credentials_basic(
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: args,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), args))
             .await;
     }
     client.cancel().await?;
@@ -667,12 +612,7 @@ async fn run_client_credentials_jwt(
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: args,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), args))
             .await;
     }
     client.cancel().await?;
@@ -783,6 +723,18 @@ async fn headless_authorize(auth_url: &str) -> anyhow::Result<(String, String)> 
     Ok((code, state))
 }
 
+/// Build a `CallToolRequestParams` for a tool, optionally with arguments.
+fn call_tool_params(
+    name: std::borrow::Cow<'static, str>,
+    arguments: Option<serde_json::Map<String, Value>>,
+) -> CallToolRequestParams {
+    let mut p = CallToolRequestParams::new(name);
+    if let Some(a) = arguments {
+        p = p.with_arguments(a);
+    }
+    p
+}
+
 /// Build arguments for a tool based on its input schema.
 fn build_tool_arguments(tool: &Tool) -> Option<serde_json::Map<String, Value>> {
     let schema = &tool.input_schema;
@@ -797,9 +749,7 @@ fn build_tool_arguments(tool: &Tool) -> Option<serde_json::Map<String, Value>> {
         })
         .unwrap_or_default();
 
-    let Some(properties) = properties else {
-        return None;
-    };
+    let properties = properties?;
     if properties.is_empty() && required.is_empty() {
         return None;
     }
@@ -840,12 +790,7 @@ async fn run_tools_call_client(server_url: &str) -> anyhow::Result<()> {
     for tool in &tools.tools {
         let args = build_tool_arguments(tool);
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: args,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), args))
             .await?;
     }
     client.cancel().await?;
@@ -862,12 +807,7 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
     });
     if let Some(tool) = test_tool {
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: None,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), None))
             .await?;
     }
     client.cancel().await?;
@@ -884,12 +824,7 @@ async fn run_sse_retry_client(server_url: &str) -> anyhow::Result<()> {
         .find(|t| t.name.as_ref() == "test_reconnection")
     {
         let _ = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: tool.name.clone(),
-                arguments: None,
-                task: None,
-            })
+            .call_tool(call_tool_params(tool.name.clone(), None))
             .await?;
     }
     client.cancel().await?;
