@@ -5,7 +5,7 @@
 //! - Use `#[schemars(inline)]` to ensure the enum is inlined in the schema.
 //! - Use `#[schemars(extend("type" = "string"))]` to manually add the required type field, since `schemars` does not provide it for enums.
 //! - Optionally, use `#[schemars(title = "...")]` to provide titles for enum variants.
-//! For more details, see: https://docs.rs/schemars/latest/schemars/
+//!   For more details, see: https://docs.rs/schemars/latest/schemars/
 use std::{
     fmt::{Display, Formatter},
     sync::Arc,
