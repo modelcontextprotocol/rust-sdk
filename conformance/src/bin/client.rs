@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use rmcp::{
     ClientHandler, ErrorData, RoleClient, ServiceExt,
     model::*,
@@ -55,82 +53,76 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
         info
     }
 
-    fn create_elicitation(
+    async fn create_elicitation(
         &self,
         request: CreateElicitationRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateElicitationResult, ErrorData>> + Send + '_ {
-        async move {
-            let content = match &request {
-                CreateElicitationRequestParams::FormElicitationParams {
-                    requested_schema, ..
-                } => {
-                    let mut defaults = serde_json::Map::new();
-                    for (name, prop) in &requested_schema.properties {
-                        match prop {
-                            PrimitiveSchema::String(s) => {
-                                if let Some(d) = &s.default {
-                                    defaults.insert(name.clone(), Value::String(d.clone()));
-                                }
+    ) -> Result<CreateElicitationResult, ErrorData> {
+        let content = match &request {
+            CreateElicitationRequestParams::FormElicitationParams {
+                requested_schema, ..
+            } => {
+                let mut defaults = serde_json::Map::new();
+                for (name, prop) in &requested_schema.properties {
+                    match prop {
+                        PrimitiveSchema::String(s) => {
+                            if let Some(d) = &s.default {
+                                defaults.insert(name.clone(), Value::String(d.clone()));
                             }
-                            PrimitiveSchema::Number(n) => {
-                                if let Some(d) = n.default {
-                                    defaults.insert(name.clone(), json!(d));
-                                }
+                        }
+                        PrimitiveSchema::Number(n) => {
+                            if let Some(d) = n.default {
+                                defaults.insert(name.clone(), json!(d));
                             }
-                            PrimitiveSchema::Integer(i) => {
-                                if let Some(d) = i.default {
-                                    defaults.insert(name.clone(), json!(d));
-                                }
+                        }
+                        PrimitiveSchema::Integer(i) => {
+                            if let Some(d) = i.default {
+                                defaults.insert(name.clone(), json!(d));
                             }
-                            PrimitiveSchema::Boolean(b) => {
-                                if let Some(d) = b.default {
-                                    defaults.insert(name.clone(), Value::Bool(d));
-                                }
+                        }
+                        PrimitiveSchema::Boolean(b) => {
+                            if let Some(d) = b.default {
+                                defaults.insert(name.clone(), Value::Bool(d));
                             }
-                            PrimitiveSchema::Enum(e) => {
-                                let val = match e {
-                                    EnumSchema::Single(SingleSelectEnumSchema::Untitled(u)) => {
-                                        u.default.as_ref().map(|d| Value::String(d.clone()))
-                                    }
-                                    EnumSchema::Single(SingleSelectEnumSchema::Titled(t)) => {
-                                        t.default.as_ref().map(|d| Value::String(d.clone()))
-                                    }
-                                    EnumSchema::Multi(MultiSelectEnumSchema::Untitled(u)) => {
-                                        u.default.as_ref().map(|d| {
-                                            Value::Array(
-                                                d.iter()
-                                                    .map(|s| Value::String(s.clone()))
-                                                    .collect(),
-                                            )
-                                        })
-                                    }
-                                    EnumSchema::Multi(MultiSelectEnumSchema::Titled(t)) => {
-                                        t.default.as_ref().map(|d| {
-                                            Value::Array(
-                                                d.iter()
-                                                    .map(|s| Value::String(s.clone()))
-                                                    .collect(),
-                                            )
-                                        })
-                                    }
-                                    EnumSchema::Legacy(_) => None,
-                                };
-                                if let Some(v) = val {
-                                    defaults.insert(name.clone(), v);
+                        }
+                        PrimitiveSchema::Enum(e) => {
+                            let val = match e {
+                                EnumSchema::Single(SingleSelectEnumSchema::Untitled(u)) => {
+                                    u.default.as_ref().map(|d| Value::String(d.clone()))
                                 }
+                                EnumSchema::Single(SingleSelectEnumSchema::Titled(t)) => {
+                                    t.default.as_ref().map(|d| Value::String(d.clone()))
+                                }
+                                EnumSchema::Multi(MultiSelectEnumSchema::Untitled(u)) => {
+                                    u.default.as_ref().map(|d| {
+                                        Value::Array(
+                                            d.iter().map(|s| Value::String(s.clone())).collect(),
+                                        )
+                                    })
+                                }
+                                EnumSchema::Multi(MultiSelectEnumSchema::Titled(t)) => {
+                                    t.default.as_ref().map(|d| {
+                                        Value::Array(
+                                            d.iter().map(|s| Value::String(s.clone())).collect(),
+                                        )
+                                    })
+                                }
+                                EnumSchema::Legacy(_) => None,
+                            };
+                            if let Some(v) = val {
+                                defaults.insert(name.clone(), v);
                             }
                         }
                     }
-                    Some(Value::Object(defaults))
                 }
-                _ => Some(json!({})),
-            };
-            Ok(CreateElicitationResult {
-                action: ElicitationAction::Accept,
-                content,
-            })
-        }
+                Some(Value::Object(defaults))
+            }
+            _ => Some(json!({})),
+        };
+        Ok(CreateElicitationResult {
+            action: ElicitationAction::Accept,
+            content,
+        })
     }
 }
 
@@ -149,44 +141,40 @@ impl ClientHandler for FullClientHandler {
         info
     }
 
-    fn create_message(
+    async fn create_message(
         &self,
         params: CreateMessageRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateMessageResult, ErrorData>> + Send + '_ {
-        async move {
-            let prompt_text = params
-                .messages
-                .first()
-                .and_then(|m| m.content.first())
-                .and_then(|c| c.as_text())
-                .map(|t| t.text.clone())
-                .unwrap_or_default();
-            Ok(CreateMessageResult::new(
-                SamplingMessage::new(
-                    Role::Assistant,
-                    SamplingMessageContent::text(format!(
-                        "This is a mock LLM response to: {}",
-                        prompt_text
-                    )),
-                ),
-                "mock-model".into(),
-            )
-            .with_stop_reason("endTurn"))
-        }
+    ) -> Result<CreateMessageResult, ErrorData> {
+        let prompt_text = params
+            .messages
+            .first()
+            .and_then(|m| m.content.first())
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .unwrap_or_default();
+        Ok(CreateMessageResult::new(
+            SamplingMessage::new(
+                Role::Assistant,
+                SamplingMessageContent::text(format!(
+                    "This is a mock LLM response to: {}",
+                    prompt_text
+                )),
+            ),
+            "mock-model".into(),
+        )
+        .with_stop_reason("endTurn"))
     }
 
-    fn create_elicitation(
+    async fn create_elicitation(
         &self,
         _request: CreateElicitationRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateElicitationResult, ErrorData>> + Send + '_ {
-        async move {
-            Ok(CreateElicitationResult {
-                action: ElicitationAction::Accept,
-                content: Some(json!({"username": "testuser", "email": "test@example.com"})),
-            })
-        }
+    ) -> Result<CreateElicitationResult, ErrorData> {
+        Ok(CreateElicitationResult {
+            action: ElicitationAction::Accept,
+            content: Some(json!({"username": "testuser", "email": "test@example.com"})),
+        })
     }
 }
 
@@ -761,9 +749,7 @@ fn build_tool_arguments(tool: &Tool) -> Option<serde_json::Map<String, Value>> {
         })
         .unwrap_or_default();
 
-    let Some(properties) = properties else {
-        return None;
-    };
+    let properties = properties?;
     if properties.is_empty() && required.is_empty() {
         return None;
     }
