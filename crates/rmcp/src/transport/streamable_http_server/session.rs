@@ -33,7 +33,7 @@ pub mod never;
 
 /// Controls how MCP sessions are created, validated, and closed.
 ///
-/// The [`StreamableHttpService`](super::StreamableHttpService) calls into this
+/// The `StreamableHttpService` calls into this
 /// trait for every HTTP request that carries (or should carry) a session ID.
 ///
 /// See the [module-level docs](self) for background on sessions.

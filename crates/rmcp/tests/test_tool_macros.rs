@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 //! Test tool macros, including documentation for generated fns.
 
 //cargo test --test test_tool_macros --features "client server"

@@ -95,6 +95,9 @@ pub struct ToolAttribute {
     pub icons: Option<Expr>,
     /// Optional metadata for the tool
     pub meta: Option<Expr>,
+    /// When true, the generated future will not require `Send`. Useful for `!Send` handlers
+    /// (e.g. single-threaded database connections). Also enabled globally by the `local` crate feature.
+    pub local: bool,
 }
 
 #[derive(FromMeta, Debug, Default)]
@@ -333,7 +336,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
         // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> + Send + '_>>`
+        //    (omit `+ Send` when the `local` crate feature is active or `#[tool(local)]` is used)
         // 3. make body: { Box::pin(async move { #body }) }
+        let omit_send = cfg!(feature = "local") || attribute.local;
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
             if let Some(receiver) = fn_item.sig.receiver() {
@@ -347,10 +352,18 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
             }
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send + #lt>> }
+                    if omit_send {
+                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + #lt>> }
+                    } else {
+                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send + #lt>> }
+                    }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + Send + #lt>> }
+                    if omit_send {
+                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + #lt>> }
+                    } else {
+                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + Send + #lt>> }
+                    }
                 }
             }
         })?;

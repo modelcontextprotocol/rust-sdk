@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };

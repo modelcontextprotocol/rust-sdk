@@ -1,5 +1,5 @@
 // cargo test --features "server client" --package rmcp test_client_initialization
-#![cfg(feature = "client")]
+#![cfg(all(feature = "client", not(feature = "local")))]
 
 mod common;
 

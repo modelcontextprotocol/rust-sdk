@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 mod common;
 
 use anyhow::Result;

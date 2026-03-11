@@ -1,6 +1,6 @@
 pub mod session;
-#[cfg(feature = "transport-streamable-http-server")]
+#[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
 pub mod tower;
 pub use session::{SessionId, SessionManager};
-#[cfg(feature = "transport-streamable-http-server")]
+#[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
 pub use tower::{StreamableHttpServerConfig, StreamableHttpService};

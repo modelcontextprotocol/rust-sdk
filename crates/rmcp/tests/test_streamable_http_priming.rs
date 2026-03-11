@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use std::time::Duration;
 
 use rmcp::transport::streamable_http_server::{

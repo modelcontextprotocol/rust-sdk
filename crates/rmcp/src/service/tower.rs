@@ -3,7 +3,7 @@ use std::{future::poll_fn, marker::PhantomData};
 use tower_service::Service as TowerService;
 
 use super::NotificationContext;
-use crate::service::{RequestContext, Service, ServiceRole};
+use crate::service::{MaybeSendFuture, RequestContext, Service, ServiceRole};
 
 pub struct TowerHandler<S, R: ServiceRole> {
     pub service: S,
@@ -44,7 +44,7 @@ where
         &self,
         _notification: R::PeerNot,
         _context: NotificationContext<R>,
-    ) -> impl Future<Output = Result<(), crate::ErrorData>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), crate::ErrorData>> + MaybeSendFuture + '_ {
         std::future::ready(Ok(()))
     }
 
