@@ -2811,6 +2811,7 @@ mod tests {
         assert!(!debug_output.contains("super-secret-csrf"));
         assert!(debug_output.contains("[REDACTED]"));
         assert!(debug_output.contains("created_at"));
+        assert!(debug_output.contains("created_at"));
     }
 
     #[test]
