@@ -84,9 +84,13 @@ async fn mcp_handler(
         }
     }
 
+    let request_id = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|j| j.get("id").cloned())
+        .unwrap_or(serde_json::Value::Null);
     let response = json!({
         "jsonrpc": "2.0",
-        "id": 1,
+        "id": request_id,
         "result": {}
     });
     (
@@ -178,8 +182,6 @@ async fn test_unix_socket_custom_headers() -> anyhow::Result<()> {
     let server_handle = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let mut custom_headers = HashMap::new();
     custom_headers.insert(

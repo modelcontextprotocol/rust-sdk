@@ -44,6 +44,10 @@ impl From<UnixSocketError> for StreamableHttpError<UnixSocketError> {
 /// enabling MCP hosts in Kubernetes environments to connect through Envoy sidecars
 /// or other Unix socket-based proxies.
 ///
+/// Each request opens a new Unix socket connection (no connection pooling).
+/// This is appropriate when connecting through a sidecar proxy that manages
+/// its own upstream connection pool.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -69,7 +73,16 @@ impl UnixSocketHttpClient {
     ///   abstract sockets (e.g., `@egress.sock` becomes `\0egress.sock`).
     /// * `uri` - The MCP server URI. The authority (host:port) is extracted for the
     ///   HTTP `Host` header, since hyper does not auto-set it for Unix socket connections.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `socket_path` is empty or is `@` with no name (empty abstract socket).
     pub fn new(socket_path: &str, uri: &str) -> Self {
+        assert!(
+            !socket_path.is_empty() && socket_path != "@",
+            "socket_path must not be empty or a bare '@' (empty abstract socket name)"
+        );
+
         let host_header = uri
             .parse::<http::Uri>()
             .ok()
@@ -469,6 +482,18 @@ mod tests {
     #[test]
     fn resolve_empty_abstract() {
         assert_eq!(resolve_socket_path("@"), "\0");
+    }
+
+    #[test]
+    #[should_panic(expected = "socket_path must not be empty")]
+    fn rejects_bare_at_symbol() {
+        UnixSocketHttpClient::new("@", "http://localhost/mcp");
+    }
+
+    #[test]
+    #[should_panic(expected = "socket_path must not be empty")]
+    fn rejects_empty_path() {
+        UnixSocketHttpClient::new("", "http://localhost/mcp");
     }
 
     #[test]

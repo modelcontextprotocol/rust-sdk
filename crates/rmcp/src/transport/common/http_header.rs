@@ -10,7 +10,7 @@ pub const JSON_MIME_TYPE: &str = "application/json";
 pub(crate) const RESERVED_HEADERS: &[&str] = &[
     "accept",
     HEADER_SESSION_ID,
-    HEADER_MCP_PROTOCOL_VERSION,
+    HEADER_MCP_PROTOCOL_VERSION, // allowed through by validate_custom_header; worker injects it post-init
     HEADER_LAST_EVENT_ID,
 ];
 
