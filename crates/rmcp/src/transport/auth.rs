@@ -2817,7 +2817,6 @@ mod tests {
     #[test]
     fn test_stored_credentials_debug_redacts_token_response() {
         use oauth2::{AccessToken, basic::BasicTokenType};
-        
         use super::{OAuthTokenResponse, StoredCredentials};
 
         let token_response = OAuthTokenResponse::new(
