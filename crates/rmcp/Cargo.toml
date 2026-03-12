@@ -62,6 +62,10 @@ uuid = { version = "1", features = ["v4"], optional = true }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
+
+# for unix socket transport
+hyper = { version = "1", features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 # macro
 rmcp-macros = { workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -111,6 +115,14 @@ client-side-sse = ["dep:sse-stream", "dep:http"]
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
 transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "__reqwest"]
+transport-streamable-http-client-unix-socket = [
+  "transport-streamable-http-client",
+  "dep:hyper",
+  "dep:hyper-util",
+  "dep:http-body-util",
+  "dep:bytes",
+  "tokio/net",
+]
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
 transport-io = ["transport-async-rw", "tokio/io-std"]
@@ -259,3 +271,12 @@ path = "tests/test_sse_concurrent_streams.rs"
 name = "test_client_credentials"
 required-features = ["auth"]
 path = "tests/test_client_credentials.rs"
+
+[[test]]
+name = "test_unix_socket_transport"
+required-features = [
+  "client",
+  "server",
+  "transport-streamable-http-client-unix-socket",
+]
+path = "tests/test_unix_socket_transport.rs"

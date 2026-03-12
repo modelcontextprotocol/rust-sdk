@@ -14,3 +14,6 @@ pub mod client_side_sse;
 
 #[cfg(feature = "auth")]
 pub mod auth;
+
+#[cfg(all(unix, feature = "transport-streamable-http-client-unix-socket"))]
+pub mod unix_socket;

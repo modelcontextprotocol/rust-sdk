@@ -112,6 +112,8 @@ pub use streamable_http_server::tower::{StreamableHttpServerConfig, StreamableHt
 
 #[cfg(feature = "transport-streamable-http-client")]
 pub mod streamable_http_client;
+#[cfg(all(unix, feature = "transport-streamable-http-client-unix-socket"))]
+pub use common::unix_socket::UnixSocketHttpClient;
 #[cfg(feature = "transport-streamable-http-client")]
 pub use streamable_http_client::StreamableHttpClientTransport;
 

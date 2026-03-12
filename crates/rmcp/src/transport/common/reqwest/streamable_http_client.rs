@@ -9,8 +9,8 @@ use crate::{
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::http_header::{
-            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_MCP_PROTOCOL_VERSION,
-            HEADER_SESSION_ID, JSON_MIME_TYPE,
+            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
+            extract_scope_from_header, validate_custom_header,
         },
         streamable_http_client::*,
     },
@@ -22,38 +22,13 @@ impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
     }
 }
 
-/// Reserved headers that must not be overridden by user-supplied custom headers.
-/// `MCP-Protocol-Version` is in this list but is allowed through because the worker
-/// injects it after initialization.
-const RESERVED_HEADERS: &[&str] = &[
-    "accept",
-    HEADER_SESSION_ID,
-    HEADER_MCP_PROTOCOL_VERSION,
-    HEADER_LAST_EVENT_ID,
-];
-
-/// Applies custom headers to a request builder, rejecting reserved headers
-/// except `MCP-Protocol-Version` (which the worker injects after init).
+/// Applies custom headers to a request builder, rejecting reserved headers.
 fn apply_custom_headers(
     mut builder: reqwest::RequestBuilder,
     custom_headers: HashMap<HeaderName, HeaderValue>,
 ) -> Result<reqwest::RequestBuilder, StreamableHttpError<reqwest::Error>> {
     for (name, value) in custom_headers {
-        if RESERVED_HEADERS
-            .iter()
-            .any(|&r| name.as_str().eq_ignore_ascii_case(r))
-        {
-            if name
-                .as_str()
-                .eq_ignore_ascii_case(HEADER_MCP_PROTOCOL_VERSION)
-            {
-                builder = builder.header(name, value);
-                continue;
-            }
-            return Err(StreamableHttpError::ReservedHeaderConflict(
-                name.to_string(),
-            ));
-        }
+        validate_custom_header(&name).map_err(StreamableHttpError::ReservedHeaderConflict)?;
         builder = builder.header(name, value);
     }
     Ok(builder)
@@ -280,65 +255,9 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     }
 }
 
-/// extract scope parameter from WWW-Authenticate header
-fn extract_scope_from_header(header: &str) -> Option<String> {
-    let header_lowercase = header.to_ascii_lowercase();
-    let scope_key = "scope=";
-
-    if let Some(pos) = header_lowercase.find(scope_key) {
-        let start = pos + scope_key.len();
-        let value_slice = &header[start..];
-
-        if let Some(stripped) = value_slice.strip_prefix('"') {
-            if let Some(end_quote) = stripped.find('"') {
-                return Some(stripped[..end_quote].to_string());
-            }
-        } else {
-            let end = value_slice
-                .find(|c: char| c == ',' || c == ';' || c.is_whitespace())
-                .unwrap_or(value_slice.len());
-            if end > 0 {
-                return Some(value_slice[..end].to_string());
-            }
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
-    use super::extract_scope_from_header;
     use crate::transport::streamable_http_client::InsufficientScopeError;
-
-    #[test]
-    fn extract_scope_quoted() {
-        let header = r#"Bearer error="insufficient_scope", scope="files:read files:write""#;
-        assert_eq!(
-            extract_scope_from_header(header),
-            Some("files:read files:write".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_scope_unquoted() {
-        let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
-        assert_eq!(
-            extract_scope_from_header(header),
-            Some("read:data".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_scope_missing() {
-        let header = r#"Bearer error="invalid_token""#;
-        assert_eq!(extract_scope_from_header(header), None);
-    }
-
-    #[test]
-    fn extract_scope_empty_header() {
-        assert_eq!(extract_scope_from_header("Bearer"), None);
-    }
 
     #[test]
     fn insufficient_scope_error_can_upgrade() {
