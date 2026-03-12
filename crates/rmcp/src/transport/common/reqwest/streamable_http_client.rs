@@ -190,15 +190,10 @@ impl StreamableHttpClient for reqwest::Client {
         if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
             return Err(StreamableHttpError::SessionExpired);
         }
-        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
-        let is_json = content_type
-            .map(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
-            .unwrap_or(false);
-        let is_sse = content_type
-            .map(|ct| ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()))
-            .unwrap_or(false);
-        let content_type =
-            content_type.map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
         let session_id = response
             .headers()
             .get(HEADER_SESSION_ID)
@@ -213,7 +208,10 @@ impl StreamableHttpClient for reqwest::Client {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
-            if is_json {
+            if content_type
+                .as_deref()
+                .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
+            {
                 match serde_json::from_str::<ServerJsonRpcMessage>(&body) {
                     Ok(message) => {
                         return Ok(StreamableHttpPostResponse::Json(message, session_id));
@@ -227,26 +225,30 @@ impl StreamableHttpClient for reqwest::Client {
                 format!("HTTP {status}: {body}"),
             )));
         }
-        if is_sse {
-            let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
-            Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
-        } else if is_json {
-            // Try to parse as a valid JSON-RPC message. If the body is
-            // malformed (e.g. a 200 response to a notification that lacks
-            // an `id` field), treat it as accepted rather than failing.
-            match response.json::<ServerJsonRpcMessage>().await {
-                Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
-                Err(e) => {
-                    tracing::warn!(
-                        "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
-                    );
-                    Ok(StreamableHttpPostResponse::Accepted)
+        match content_type.as_deref() {
+            Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
+                let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+                Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
+            }
+            Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
+                // Try to parse as a valid JSON-RPC message. If the body is
+                // malformed (e.g. a 200 response to a notification that lacks
+                // an `id` field), treat it as accepted rather than failing.
+                match response.json::<ServerJsonRpcMessage>().await {
+                    Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
+                        );
+                        Ok(StreamableHttpPostResponse::Accepted)
+                    }
                 }
             }
-        } else {
-            // unexpected content type
-            tracing::error!("unexpected content type: {:?}", content_type);
-            Err(StreamableHttpError::UnexpectedContentType(content_type))
+            _ => {
+                // unexpected content type
+                tracing::error!("unexpected content type: {:?}", content_type);
+                Err(StreamableHttpError::UnexpectedContentType(content_type))
+            }
         }
     }
 }
