@@ -95,6 +95,10 @@ pub struct ToolAttribute {
     pub icons: Option<Expr>,
     /// Optional metadata for the tool
     pub meta: Option<Expr>,
+    /// Whether the generated future should be `Send`. Defaults to `true`.
+    /// Set to `false` for tools that hold non-Send state (e.g., `Rc`, `RefCell`).
+    /// Note: tools with `send = false` are incompatible with the built-in tool router.
+    pub send: Option<bool>,
 }
 
 #[derive(FromMeta, Debug, Default)]
@@ -330,9 +334,10 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
     // modify the the input function
+    let is_send = attribute.send.unwrap_or(true);
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
-        // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> + Send + '_>>`
+        // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> (+ Send)? + '_>>`
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
@@ -345,12 +350,17 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
                     }
                 }
             }
+            let send_bound = if is_send {
+                quote! { Send + }
+            } else {
+                quote! {}
+            };
             match &fn_item.sig.output {
                 syn::ReturnType::Default => {
-                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send + #lt>> }
+                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + #send_bound #lt>> }
                 }
                 syn::ReturnType::Type(_, ty) => {
-                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + Send + #lt>> }
+                    quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + #send_bound #lt>> }
                 }
             }
         })?;
@@ -441,6 +451,45 @@ mod test {
         // see the include_str invocation in the generated function source.
         let result_str = result.to_string();
         assert!(result_str.contains("include_str"));
+        Ok(())
+    }
+
+    #[test]
+    fn async_tool_future_includes_send_bound_by_default() -> syn::Result<()> {
+        let attr = quote! {};
+        let input = quote! {
+            async fn my_tool(&self) -> String {
+                "hello".to_string()
+            }
+        };
+        let result = tool(attr, input)?;
+        assert!(result.to_string().contains("Send"));
+        Ok(())
+    }
+
+    #[test]
+    fn async_tool_future_omits_send_bound_when_send_is_false() -> syn::Result<()> {
+        let attr = quote! { send = false };
+        let input = quote! {
+            async fn my_tool(&self) -> String {
+                "hello".to_string()
+            }
+        };
+        let result = tool(attr, input)?;
+        assert!(!result.to_string().contains("Send"));
+        Ok(())
+    }
+
+    #[test]
+    fn async_tool_future_includes_send_bound_when_send_is_true() -> syn::Result<()> {
+        let attr = quote! { send = true };
+        let input = quote! {
+            async fn my_tool(&self) -> String {
+                "hello".to_string()
+            }
+        };
+        let result = tool(attr, input)?;
+        assert!(result.to_string().contains("Send"));
         Ok(())
     }
 }
