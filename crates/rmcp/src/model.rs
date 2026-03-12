@@ -2697,6 +2697,7 @@ pub type ElicitationCompletionNotification =
 #[non_exhaustive]
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
+    #[serde(default)]
     pub content: Vec<Content>,
     /// An optional JSON object that represents the structured result of the tool call
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3247,16 +3248,16 @@ ts_union!(
     | ListResourcesResult
     | ListResourceTemplatesResult
     | ReadResourceResult
-    | CallToolResult
     | ListToolsResult
     | CreateElicitationResult
-    | EmptyResult
     | CreateTaskResult
     | ListTasksResult
     | GetTaskResult
     | CancelTaskResult
-    | CustomResult
+    | CallToolResult
     | GetTaskPayloadResult
+    | EmptyResult
+    | CustomResult
     ;
 );
 

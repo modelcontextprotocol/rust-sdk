@@ -388,6 +388,7 @@
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
+          "default": [],
           "items": {
             "$ref": "#/definitions/Annotated"
           }
@@ -402,10 +403,7 @@
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
-      },
-      "required": [
-        "content"
-      ]
+      }
     },
     "CancelTaskResult": {
       "description": "Response to a `tasks/cancel` request.\n\nPer spec, `CancelTaskResult = allOf[Result, Task]` — same shape as `GetTaskResult`.",
@@ -2814,16 +2812,10 @@
           "$ref": "#/definitions/ReadResourceResult"
         },
         {
-          "$ref": "#/definitions/CallToolResult"
-        },
-        {
           "$ref": "#/definitions/ListToolsResult"
         },
         {
           "$ref": "#/definitions/CreateElicitationResult"
-        },
-        {
-          "$ref": "#/definitions/EmptyObject"
         },
         {
           "$ref": "#/definitions/CreateTaskResult"
@@ -2838,10 +2830,16 @@
           "$ref": "#/definitions/CancelTaskResult"
         },
         {
-          "$ref": "#/definitions/CustomResult"
+          "$ref": "#/definitions/CallToolResult"
         },
         {
           "$ref": "#/definitions/GetTaskPayloadResult"
+        },
+        {
+          "$ref": "#/definitions/EmptyObject"
+        },
+        {
+          "$ref": "#/definitions/CustomResult"
         }
       ]
     },
