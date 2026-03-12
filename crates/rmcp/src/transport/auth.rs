@@ -73,7 +73,10 @@ impl std::fmt::Debug for StoredCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoredCredentials")
             .field("client_id", &self.client_id)
-            .field("token_response", &self.token_response.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "token_response",
+                &self.token_response.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("granted_scopes", &self.granted_scopes)
             .field("token_received_at", &self.token_received_at)
             .finish()
@@ -2807,11 +2810,12 @@ mod tests {
         assert!(!debug_output.contains("super-secret-verifier"));
         assert!(!debug_output.contains("super-secret-csrf"));
         assert!(debug_output.contains("[REDACTED]"));
+        assert!(debug_output.contains("created_at"));
     }
 
     #[test]
     fn test_stored_credentials_debug_redacts_token_response() {
-        use super::{OAuthTokenResponse, StoredCredentials, VendorExtraTokenFields};
+        use super::{OAuthTokenResponse, StoredCredentials};
         use oauth2::{AccessToken, basic::BasicTokenType};
 
         let token_response = OAuthTokenResponse::new(
