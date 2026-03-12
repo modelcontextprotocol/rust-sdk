@@ -190,46 +190,63 @@ impl StreamableHttpClient for reqwest::Client {
         if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
             return Err(StreamableHttpError::SessionExpired);
         }
+        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
+        let is_json = content_type
+            .map(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
+            .unwrap_or(false);
+        let is_sse = content_type
+            .map(|ct| ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()))
+            .unwrap_or(false);
+        let content_type =
+            content_type.map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
+        let session_id = response
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        // For non-success responses, attempt to parse JSON-RPC error bodies
+        // before falling back to a transport error. HTTP 4xx responses with
+        // Content-Type: application/json may carry valid JSON-RPC error
+        // payloads that should be surfaced as McpError, not TransportSend.
         if !status.is_success() {
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            if is_json {
+                match serde_json::from_str::<ServerJsonRpcMessage>(&body) {
+                    Ok(message) => {
+                        return Ok(StreamableHttpPostResponse::Json(message, session_id));
+                    }
+                    Err(e) => tracing::warn!(
+                        "HTTP {status}: could not parse JSON response as ServerJsonRpcMessage: {e}"
+                    ),
+                }
+            }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                 format!("HTTP {status}: {body}"),
             )));
         }
-        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
-        let session_id = response.headers().get(HEADER_SESSION_ID);
-        let session_id = session_id
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        match content_type {
-            Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
-                Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
-            }
-            Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-                // Try to parse as a valid JSON-RPC message. If the body is
-                // malformed (e.g. a 200 response to a notification that lacks
-                // an `id` field), treat it as accepted rather than failing.
-                match response.json::<ServerJsonRpcMessage>().await {
-                    Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
-                    Err(e) => {
-                        tracing::warn!(
-                            "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
-                        );
-                        Ok(StreamableHttpPostResponse::Accepted)
-                    }
+        if is_sse {
+            let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+            Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
+        } else if is_json {
+            // Try to parse as a valid JSON-RPC message. If the body is
+            // malformed (e.g. a 200 response to a notification that lacks
+            // an `id` field), treat it as accepted rather than failing.
+            match response.json::<ServerJsonRpcMessage>().await {
+                Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
+                Err(e) => {
+                    tracing::warn!(
+                        "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
+                    );
+                    Ok(StreamableHttpPostResponse::Accepted)
                 }
             }
-            _ => {
-                // unexpected content type
-                tracing::error!("unexpected content type: {:?}", content_type);
-                Err(StreamableHttpError::UnexpectedContentType(
-                    content_type.map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string()),
-                ))
-            }
+        } else {
+            // unexpected content type
+            tracing::error!("unexpected content type: {:?}", content_type);
+            Err(StreamableHttpError::UnexpectedContentType(content_type))
         }
     }
 }
