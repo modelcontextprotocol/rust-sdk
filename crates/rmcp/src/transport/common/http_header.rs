@@ -17,6 +17,7 @@ pub(crate) const RESERVED_HEADERS: &[&str] = &[
 /// Checks whether a custom header name is allowed.
 /// Returns `Ok(())` if allowed, `Err(name)` if rejected as reserved.
 /// `MCP-Protocol-Version` is reserved but allowed through (the worker injects it post-init).
+#[cfg(feature = "client-side-sse")]
 pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), String> {
     if RESERVED_HEADERS
         .iter()
@@ -93,24 +94,28 @@ mod tests {
         assert_eq!(extract_scope_from_header("Bearer"), None);
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn validate_rejects_reserved_accept() {
         let name = http::HeaderName::from_static("accept");
         assert!(validate_custom_header(&name).is_err());
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn validate_rejects_reserved_session_id() {
         let name = http::HeaderName::from_static("mcp-session-id");
         assert!(validate_custom_header(&name).is_err());
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn validate_allows_mcp_protocol_version() {
         let name = http::HeaderName::from_static("mcp-protocol-version");
         assert!(validate_custom_header(&name).is_ok());
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn validate_allows_custom_header() {
         let name = http::HeaderName::from_static("x-custom");

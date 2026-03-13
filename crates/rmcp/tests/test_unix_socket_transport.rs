@@ -107,7 +107,7 @@ async fn mcp_handler(
 }
 
 /// Integration test: MCP client connects and completes handshake over a Unix domain socket.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_unix_socket_mcp_handshake() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("rmcp-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
@@ -162,7 +162,7 @@ async fn test_unix_socket_mcp_handshake() -> anyhow::Result<()> {
 }
 
 /// Integration test: Custom headers are sent through the Unix socket transport.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_unix_socket_custom_headers() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("rmcp-test-headers-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
@@ -229,7 +229,7 @@ async fn test_unix_socket_custom_headers() -> anyhow::Result<()> {
 }
 
 /// Integration test: Convenience constructor `from_unix_socket` works end-to-end.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn test_unix_socket_convenience_constructor() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("rmcp-test-conv-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;

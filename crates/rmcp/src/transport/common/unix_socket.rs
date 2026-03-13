@@ -119,7 +119,7 @@ async fn connect_unix(socket_path: &str) -> Result<UnixStream, std::io::Error> {
             Ok::<_, std::io::Error>(stream)
         })
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))??;
+        .map_err(std::io::Error::other)??;
         return UnixStream::from_std(std_stream);
     }
 
