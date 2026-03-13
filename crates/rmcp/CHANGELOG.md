@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.2.0...rmcp-v2.0.0) - 2026-03-13
+
+### Added
+
+- add local feature for !Send tool handler support ([#740](https://github.com/modelcontextprotocol/rust-sdk/pull/740))
+
+### Fixed
+
+- default CallToolResult content to empty vec on missing field ([#752](https://github.com/modelcontextprotocol/rust-sdk/pull/752))
+- *(auth)* redact secrets in Debug output for StoredCredentials and StoredAuthorizationState ([#744](https://github.com/modelcontextprotocol/rust-sdk/pull/744))
+
+### Other
+
+- fix all clippy warnings across workspace ([#746](https://github.com/modelcontextprotocol/rust-sdk/pull/746))
+
 ## [1.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.1.1...rmcp-v1.2.0) - 2026-03-11
 
 ### Added
