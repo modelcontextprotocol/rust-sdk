@@ -1,7 +1,7 @@
 {
   "client_id": "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/refs/heads/main/client-metadata.json",
   "redirect_uris": ["http://127.0.0.1:8080/callback"],
-  "grant_types": ["authorization_code"],
+  "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "token_endpoint_auth_method": "none"
 }
