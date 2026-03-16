@@ -6,6 +6,7 @@ use axum::{
     Router, body::Bytes, extract::State, http::StatusCode, response::IntoResponse, routing::post,
 };
 use http::{HeaderName, HeaderValue};
+use hyper_util::rt::TokioIo;
 use rmcp::{
     ServiceExt,
     transport::{
@@ -106,14 +107,42 @@ async fn mcp_handler(
     )
 }
 
+/// Spawns an HTTP/1.1 server on a Unix socket using hyper directly.
+/// Avoids `axum::serve(UnixListener, ...)` which uses `spawn_local` on Linux.
+fn spawn_unix_server(
+    listener: tokio::net::UnixListener,
+    app: Router,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let tower_service = app.clone();
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let hyper_service = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| {
+                        let mut tower_service = tower_service.clone();
+                        async move {
+                            use tower_service::Service;
+                            tower_service.call(req).await
+                        }
+                    },
+                );
+                hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, hyper_service)
+                    .await
+                    .ok();
+            });
+        }
+    })
+}
+
 /// Integration test: MCP client connects and completes handshake over a Unix domain socket.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn test_unix_socket_mcp_handshake() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("rmcp-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let socket_path = dir.join("mcp.sock");
 
-    // Clean up any leftover socket from a previous run
     let _ = std::fs::remove_file(&socket_path);
 
     let state = ServerState {
@@ -126,9 +155,7 @@ async fn test_unix_socket_mcp_handshake() -> anyhow::Result<()> {
         .with_state(state.clone());
 
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
-    let server_handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let server_handle = spawn_unix_server(listener, app);
 
     let socket_str = socket_path.to_str().unwrap();
     let uri = "http://mcp-server.internal/mcp";
@@ -145,7 +172,6 @@ async fn test_unix_socket_mcp_handshake() -> anyhow::Result<()> {
     .await
     .expect("Initialize request should be received");
 
-    // Verify Host header was set correctly
     let headers = state.received_headers.lock().await;
     assert_eq!(
         headers.get("host"),
@@ -162,7 +188,7 @@ async fn test_unix_socket_mcp_handshake() -> anyhow::Result<()> {
 }
 
 /// Integration test: Custom headers are sent through the Unix socket transport.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn test_unix_socket_custom_headers() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("rmcp-test-headers-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
@@ -179,9 +205,7 @@ async fn test_unix_socket_custom_headers() -> anyhow::Result<()> {
         .with_state(state.clone());
 
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
-    let server_handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let server_handle = spawn_unix_server(listener, app);
 
     let mut custom_headers = HashMap::new();
     custom_headers.insert(
@@ -229,7 +253,7 @@ async fn test_unix_socket_custom_headers() -> anyhow::Result<()> {
 }
 
 /// Integration test: Convenience constructor `from_unix_socket` works end-to-end.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn test_unix_socket_convenience_constructor() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("rmcp-test-conv-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
@@ -246,9 +270,7 @@ async fn test_unix_socket_convenience_constructor() -> anyhow::Result<()> {
         .with_state(state.clone());
 
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
-    let server_handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let server_handle = spawn_unix_server(listener, app);
 
     let socket_str = socket_path.to_str().unwrap();
     let transport =
