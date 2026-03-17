@@ -6,7 +6,7 @@ use reqwest::header::ACCEPT;
 use sse_stream::{Sse, SseStream};
 
 use crate::{
-    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
+    model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::http_header::{
             EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_MCP_PROTOCOL_VERSION,
@@ -57,6 +57,15 @@ fn apply_custom_headers(
         builder = builder.header(name, value);
     }
     Ok(builder)
+}
+
+/// Attempts to parse `body` as a JSON-RPC error message.
+/// Returns `None` if the body is not parseable or is not a `JsonRpcMessage::Error`.
+fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
+    match serde_json::from_str::<ServerJsonRpcMessage>(body) {
+        Ok(message @ JsonRpcMessage::Error(_)) => Some(message),
+        _ => None,
+    }
 }
 
 impl StreamableHttpClient for reqwest::Client {
@@ -190,21 +199,40 @@ impl StreamableHttpClient for reqwest::Client {
         if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
             return Err(StreamableHttpError::SessionExpired);
         }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
+        let session_id = response
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        // Non-success responses may carry valid JSON-RPC error payloads that
+        // should be surfaced as McpError rather than lost in TransportSend.
         if !status.is_success() {
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            if content_type
+                .as_deref()
+                .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
+            {
+                match parse_json_rpc_error(&body) {
+                    Some(message) => {
+                        return Ok(StreamableHttpPostResponse::Json(message, session_id));
+                    }
+                    None => tracing::warn!(
+                        "HTTP {status}: could not parse JSON body as a JSON-RPC error"
+                    ),
+                }
+            }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                 format!("HTTP {status}: {body}"),
             )));
         }
-        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE);
-        let session_id = response.headers().get(HEADER_SESSION_ID);
-        let session_id = session_id
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        match content_type {
+        match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
                 let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
@@ -226,9 +254,7 @@ impl StreamableHttpClient for reqwest::Client {
             _ => {
                 // unexpected content type
                 tracing::error!("unexpected content type: {:?}", content_type);
-                Err(StreamableHttpError::UnexpectedContentType(
-                    content_type.map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string()),
-                ))
+                Err(StreamableHttpError::UnexpectedContentType(content_type))
             }
         }
     }
@@ -308,8 +334,8 @@ fn extract_scope_from_header(header: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_scope_from_header;
-    use crate::transport::streamable_http_client::InsufficientScopeError;
+    use super::{extract_scope_from_header, parse_json_rpc_error};
+    use crate::{model::JsonRpcMessage, transport::streamable_http_client::InsufficientScopeError};
 
     #[test]
     fn extract_scope_quoted() {
@@ -355,5 +381,37 @@ mod tests {
         };
         assert!(!without_scope.can_upgrade());
         assert_eq!(without_scope.get_required_scope(), None);
+    }
+
+    #[test]
+    fn parse_json_rpc_error_returns_error_variant() {
+        let body =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+        assert!(matches!(
+            parse_json_rpc_error(body),
+            Some(JsonRpcMessage::Error(_))
+        ));
+    }
+
+    #[test]
+    fn parse_json_rpc_error_rejects_non_error_request() {
+        // A valid JSON-RPC request (method + id) must not be accepted as an error.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        assert!(parse_json_rpc_error(body).is_none());
+    }
+
+    #[test]
+    fn parse_json_rpc_error_rejects_notification() {
+        // A notification (method, no id) must not be accepted as an error.
+        let body =
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#;
+        assert!(parse_json_rpc_error(body).is_none());
+    }
+
+    #[test]
+    fn parse_json_rpc_error_rejects_malformed_json() {
+        assert!(parse_json_rpc_error("not json at all").is_none());
+        assert!(parse_json_rpc_error("").is_none());
+        assert!(parse_json_rpc_error(r#"{"broken":"#).is_none());
     }
 }
