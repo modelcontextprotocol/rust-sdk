@@ -7,7 +7,11 @@ use std::{
 use rmcp::service::NotificationContext;
 #[cfg(feature = "client")]
 use rmcp::{ClientHandler, RoleClient};
-use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext};
+use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler,
+    model::*,
+    service::{MaybeSendFuture, RequestContext},
+};
 #[cfg(feature = "client")]
 use serde_json::json;
 use tokio::sync::Notify;
@@ -85,7 +89,7 @@ impl ClientHandler for TestClientHandler {
         &self,
         params: LoggingMessageNotificationParam,
         _context: NotificationContext<RoleClient>,
-    ) -> impl Future<Output = ()> + Send + '_ {
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         let receive_signal = self.receive_signal.clone();
         let received_messages = self.received_messages.clone();
 
@@ -116,7 +120,7 @@ impl ServerHandler for TestServer {
         &self,
         request: SetLevelRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
         let peer = context.peer;
         async move {
             let (data, logger) = match request.level {

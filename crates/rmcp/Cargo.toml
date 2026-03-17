@@ -82,6 +82,7 @@ chrono = { version = "0.4.38", default-features = false, features = [
 
 [features]
 default = ["base64", "macros", "server"]
+local = ["rmcp-macros?/local"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "dep:schemars", "dep:pastey"]
 macros = ["dep:rmcp-macros", "dep:pastey"]
@@ -234,6 +235,11 @@ path = "tests/test_streamable_http_priming.rs"
 name = "test_streamable_http_json_response"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_json_response.rs"
+
+[[test]]
+name = "test_streamable_http_4xx_error_body"
+required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]
+path = "tests/test_streamable_http_4xx_error_body.rs"
 
 
 [[test]]

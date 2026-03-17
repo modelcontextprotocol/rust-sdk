@@ -1,7 +1,8 @@
 #![cfg(all(
     feature = "transport-streamable-http-client",
     feature = "transport-streamable-http-client-reqwest",
-    feature = "transport-streamable-http-server"
+    feature = "transport-streamable-http-server",
+    not(feature = "local")
 ))]
 
 use std::{collections::HashMap, sync::Arc};

@@ -52,7 +52,7 @@ The transport layer is pluggable. Two built-in pairs cover the most common cases
 | | Client | Server |
 |:-:|:-:|:-:|
 | **stdio** | [`TokioChildProcess`](crate::transport::TokioChildProcess) | [`stdio`](crate::transport::stdio) |
-| **Streamable HTTP** | [`StreamableHttpClientTransport`](crate::transport::StreamableHttpClientTransport) | [`StreamableHttpService`](crate::transport::StreamableHttpService) |
+| **Streamable HTTP** | [`StreamableHttpClientTransport`](crate::transport::StreamableHttpClientTransport) | `StreamableHttpService` |
 
 Any type that implements the [`Transport`](crate::transport::Transport) trait can be used. The [`IntoTransport`](crate::transport::IntoTransport) helper trait provides automatic conversions from:
 

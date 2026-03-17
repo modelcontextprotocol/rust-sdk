@@ -1,5 +1,46 @@
-use futures::{FutureExt, future::BoxFuture};
+use futures::FutureExt;
+#[cfg(not(feature = "local"))]
+use futures::future::BoxFuture;
+#[cfg(feature = "local")]
+use futures::future::LocalBoxFuture;
 use thiserror::Error;
+
+// ---------------------------------------------------------------------------
+// Conditional Send helpers
+//
+// `MaybeSend`       – supertrait alias: `Send + Sync` without `local`, empty with `local`
+// `MaybeSendFuture` – future bound alias: `Send` without `local`, empty with `local`
+// `MaybeBoxFuture`  – boxed future type: `BoxFuture` without `local`, `LocalBoxFuture` with `local`
+// ---------------------------------------------------------------------------
+
+#[cfg(not(feature = "local"))]
+#[doc(hidden)]
+pub trait MaybeSend: Send + Sync {}
+#[cfg(not(feature = "local"))]
+impl<T: Send + Sync> MaybeSend for T {}
+
+#[cfg(feature = "local")]
+#[doc(hidden)]
+pub trait MaybeSend {}
+#[cfg(feature = "local")]
+impl<T> MaybeSend for T {}
+
+#[cfg(not(feature = "local"))]
+#[doc(hidden)]
+pub trait MaybeSendFuture: Send {}
+#[cfg(not(feature = "local"))]
+impl<T: Send> MaybeSendFuture for T {}
+
+#[cfg(feature = "local")]
+#[doc(hidden)]
+pub trait MaybeSendFuture {}
+#[cfg(feature = "local")]
+impl<T> MaybeSendFuture for T {}
+
+#[cfg(not(feature = "local"))]
+pub(crate) type MaybeBoxFuture<'a, T> = BoxFuture<'a, T>;
+#[cfg(feature = "local")]
+pub(crate) type MaybeBoxFuture<'a, T> = LocalBoxFuture<'a, T>;
 
 #[cfg(feature = "server")]
 use crate::model::ServerJsonRpcMessage;
@@ -87,17 +128,21 @@ pub type RxJsonRpcMessage<R> = JsonRpcMessage<
     <R as ServiceRole>::PeerNot,
 >;
 
-pub trait Service<R: ServiceRole>: Send + Sync + 'static {
+#[allow(
+    private_bounds,
+    reason = "MaybeSend is a sealed conditional Send + Sync alias"
+)]
+pub trait Service<R: ServiceRole>: MaybeSend + 'static {
     fn handle_request(
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> impl Future<Output = Result<R::Resp, McpError>> + Send + '_;
+    ) -> impl Future<Output = Result<R::Resp, McpError>> + MaybeSendFuture + '_;
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_;
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
     fn get_info(&self) -> R::Info;
 }
 
@@ -111,7 +156,7 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn serve<T, E, A>(
         self,
         transport: T,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + MaybeSendFuture
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -123,7 +168,7 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
         self,
         transport: T,
         ct: CancellationToken,
-    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + Send
+    ) -> impl Future<Output = Result<RunningService<R, Self>, R::InitializeError>> + MaybeSendFuture
     where
         T: IntoTransport<R, E, A>,
         E: std::error::Error + Send + Sync + 'static,
@@ -135,7 +180,7 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> impl Future<Output = Result<R::Resp, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<R::Resp, McpError>> + MaybeSendFuture + '_ {
         DynService::handle_request(self.as_ref(), request, context)
     }
 
@@ -143,7 +188,7 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
         DynService::handle_notification(self.as_ref(), notification, context)
     }
 
@@ -152,17 +197,21 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
     }
 }
 
-pub trait DynService<R: ServiceRole>: Send + Sync {
+#[allow(
+    private_bounds,
+    reason = "MaybeSend is a sealed conditional Send + Sync alias"
+)]
+pub trait DynService<R: ServiceRole>: MaybeSend {
     fn handle_request(
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> BoxFuture<'_, Result<R::Resp, McpError>>;
+    ) -> MaybeBoxFuture<'_, Result<R::Resp, McpError>>;
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> BoxFuture<'_, Result<(), McpError>>;
+    ) -> MaybeBoxFuture<'_, Result<(), McpError>>;
     fn get_info(&self) -> R::Info;
 }
 
@@ -171,14 +220,14 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
         &self,
         request: R::PeerReq,
         context: RequestContext<R>,
-    ) -> BoxFuture<'_, Result<R::Resp, McpError>> {
+    ) -> MaybeBoxFuture<'_, Result<R::Resp, McpError>> {
         Box::pin(self.handle_request(request, context))
     }
     fn handle_notification(
         &self,
         notification: R::PeerNot,
         context: NotificationContext<R>,
-    ) -> BoxFuture<'_, Result<(), McpError>> {
+    ) -> MaybeBoxFuture<'_, Result<(), McpError>> {
         Box::pin(self.handle_notification(notification, context))
     }
     fn get_info(&self) -> R::Info {
@@ -639,6 +688,28 @@ where
     serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
 }
 
+/// Spawn a task that may hold `!Send` state when the `local` feature is active.
+///
+/// Without the `local` feature this is `tokio::spawn` (requires `Future: Send + 'static`).
+/// With `local` it uses `tokio::task::spawn_local` (requires only `Future: 'static`).
+#[cfg(not(feature = "local"))]
+fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::spawn(future)
+}
+
+#[cfg(feature = "local")]
+fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + 'static,
+    F::Output: 'static,
+{
+    tokio::task::spawn_local(future)
+}
+
 #[instrument(skip_all)]
 fn serve_inner<R, S, T>(
     service: S,
@@ -674,7 +745,7 @@ where
     let serve_loop_ct = ct.child_token();
     let peer_return: Peer<R> = peer.clone();
     let current_span = tracing::Span::current();
-    let handle = tokio::spawn(async move {
+    let handle = spawn_service_task(async move {
         let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
@@ -860,7 +931,7 @@ where
                             extensions,
                         };
                         let current_span = tracing::Span::current();
-                        tokio::spawn(async move {
+                        spawn_service_task(async move {
                             let result = service
                                 .handle_request(request, context)
                                 .await;
@@ -907,7 +978,7 @@ where
                             extensions,
                         };
                         let current_span = tracing::Span::current();
-                        tokio::spawn(async move {
+                        spawn_service_task(async move {
                             let result = service.handle_notification(notification, context).await;
                             if let Err(error) = result {
                                 tracing::warn!(%error, "Error sending notification");

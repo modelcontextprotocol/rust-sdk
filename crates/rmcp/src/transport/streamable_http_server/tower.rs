@@ -204,7 +204,7 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
 impl<RequestBody, S, M> tower_service::Service<Request<RequestBody>> for StreamableHttpService<S, M>
 where
     RequestBody: Body + Send + 'static,
-    S: crate::Service<RoleServer>,
+    S: crate::Service<RoleServer> + Send + 'static,
     M: SessionManager,
     RequestBody::Error: Display,
     RequestBody::Data: Send + 'static,

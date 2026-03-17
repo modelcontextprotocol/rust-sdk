@@ -7,7 +7,7 @@
 //! | transport         | client                                                    | server                                                |
 //! |:-:                |:-:                                                        |:-:                                                    |
 //! | std IO            | [`child_process::TokioChildProcess`]                      | [`io::stdio`]                                         |
-//! | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | [`streamable_http_server::StreamableHttpService`]     |
+//! | streamable http   | [`streamable_http_client::StreamableHttpClientTransport`] | `streamable_http_server::StreamableHttpService`     |
 //!
 //！## Helper Transport Types
 //! Thers are several helper transport types that can help you to create transport quickly.
@@ -107,7 +107,7 @@ pub use auth::{
 // pub mod ws;
 #[cfg(feature = "transport-streamable-http-server-session")]
 pub mod streamable_http_server;
-#[cfg(feature = "transport-streamable-http-server")]
+#[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
 pub use streamable_http_server::tower::{StreamableHttpServerConfig, StreamableHttpService};
 
 #[cfg(feature = "transport-streamable-http-client")]

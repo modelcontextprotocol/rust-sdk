@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 //! Tests for task support validation in tool calls.
 //!
 //! Verifies that the server correctly validates `execution.taskSupport` settings

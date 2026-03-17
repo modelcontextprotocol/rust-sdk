@@ -1,3 +1,4 @@
+#![cfg(not(feature = "local"))]
 use std::sync::Arc;
 
 use rmcp::{
