@@ -749,6 +749,7 @@ where
         let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
+        let mut response_send_tasks = tokio::task::JoinSet::<()>::new();
         #[derive(Debug)]
         enum SendTaskResult {
             Request {
@@ -860,7 +861,7 @@ where
                         }
                         let send = transport.send(m);
                         let current_span = tracing::Span::current();
-                        tokio::spawn(async move {
+                        response_send_tasks.spawn(async move {
                             let send_result = send.await;
                             if let Err(error) = send_result {
                                 tracing::error!(%error, "fail to response message");
@@ -1008,6 +1009,44 @@ where
                 }
             }
         };
+
+        // Drain in-flight handler responses before closing the transport.
+        // When stdin EOF or cancellation arrives, spawned handler tasks may still
+        // be finishing. We need to:
+        // 1. Wait for response sends that were already spawned in the main loop
+        // 2. Drain any remaining handler responses from the channel
+        let drain_timeout = match &quit_reason {
+            QuitReason::Closed => Some(Duration::from_secs(5)),
+            QuitReason::Cancelled => Some(Duration::from_secs(2)),
+            _ => None,
+        };
+        if let Some(timeout_duration) = drain_timeout {
+            // Drop our sender so the channel closes once all handler task
+            // clones finish sending their responses (or are dropped).
+            drop(sink_proxy_tx);
+            let drain_result = tokio::time::timeout(timeout_duration, async {
+                // First, wait for any response sends already dispatched by the
+                // main loop (these hold transport write futures).
+                while let Some(result) = response_send_tasks.join_next().await {
+                    if let Err(error) = result {
+                        tracing::error!(%error, "response send task failed during drain");
+                    }
+                }
+                // Then drain any handler responses still in the channel
+                // (handlers that finished after the loop broke).
+                while let Some(m) = sink_proxy_rx.recv().await {
+                    if let Err(error) = transport.send(m).await {
+                        tracing::error!(%error, "failed to send pending response during drain");
+                        break;
+                    }
+                }
+            })
+            .await;
+            if drain_result.is_err() {
+                tracing::warn!("timed out draining in-flight responses");
+            }
+        }
+
         let sink_close_result = transport.close().await;
         if let Err(e) = sink_close_result {
             tracing::error!(%e, "fail to close sink");
