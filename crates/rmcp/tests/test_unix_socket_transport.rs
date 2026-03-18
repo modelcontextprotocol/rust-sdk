@@ -1,4 +1,8 @@
-#![cfg(all(unix, feature = "transport-streamable-http-client-unix-socket"))]
+#![cfg(all(
+    unix,
+    feature = "transport-streamable-http-client-unix-socket",
+    not(feature = "local")
+))]
 
 use std::{collections::HashMap, sync::Arc};
 
