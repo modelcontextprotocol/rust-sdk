@@ -185,7 +185,7 @@ fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), Box
 ///     # todo!()
 /// }
 /// ```
-pub struct StreamableHttpService<S, M = super::session::local::LocalSessionManager> {
+pub struct StreamableHttpService<S, M> {
     pub config: StreamableHttpServerConfig,
     session_manager: Arc<M>,
     service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
