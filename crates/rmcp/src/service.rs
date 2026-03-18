@@ -128,11 +128,23 @@ pub type RxJsonRpcMessage<R> = JsonRpcMessage<
     <R as ServiceRole>::PeerNot,
 >;
 
-#[allow(
-    private_bounds,
-    reason = "MaybeSend is a sealed conditional Send + Sync alias"
-)]
-pub trait Service<R: ServiceRole>: MaybeSend + 'static {
+#[cfg(not(feature = "local"))]
+pub trait Service<R: ServiceRole>: Send + Sync + 'static {
+    fn handle_request(
+        &self,
+        request: R::PeerReq,
+        context: RequestContext<R>,
+    ) -> impl Future<Output = Result<R::Resp, McpError>> + MaybeSendFuture + '_;
+    fn handle_notification(
+        &self,
+        notification: R::PeerNot,
+        context: NotificationContext<R>,
+    ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
+    fn get_info(&self) -> R::Info;
+}
+
+#[cfg(feature = "local")]
+pub trait Service<R: ServiceRole>: 'static {
     fn handle_request(
         &self,
         request: R::PeerReq,
@@ -197,11 +209,23 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
     }
 }
 
-#[allow(
-    private_bounds,
-    reason = "MaybeSend is a sealed conditional Send + Sync alias"
-)]
-pub trait DynService<R: ServiceRole>: MaybeSend {
+#[cfg(not(feature = "local"))]
+pub trait DynService<R: ServiceRole>: Send + Sync {
+    fn handle_request(
+        &self,
+        request: R::PeerReq,
+        context: RequestContext<R>,
+    ) -> MaybeBoxFuture<'_, Result<R::Resp, McpError>>;
+    fn handle_notification(
+        &self,
+        notification: R::PeerNot,
+        context: NotificationContext<R>,
+    ) -> MaybeBoxFuture<'_, Result<(), McpError>>;
+    fn get_info(&self) -> R::Info;
+}
+
+#[cfg(feature = "local")]
+pub trait DynService<R: ServiceRole> {
     fn handle_request(
         &self,
         request: R::PeerReq,
