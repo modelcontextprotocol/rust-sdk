@@ -8,7 +8,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rmcp::{
-    ServiceExt,
+    ServiceError, ServiceExt,
     model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
     transport::{
         StreamableHttpClientTransport,
@@ -126,7 +126,8 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
 
     // Connect a full client transport (this performs initialize + notifications/initialized)
     let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
+            .reinit_on_expired_session(true),
     );
     let client = ().serve(transport).await?;
 
@@ -163,6 +164,72 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
             new_session_id, &original_session_id,
             "new session ID should differ from the original"
         );
+    }
+
+    let _ = client.cancel().await;
+    ct.cancel();
+    server_handle.await?;
+
+    Ok(())
+}
+
+/// Verify that when `reinit_on_expired_session` is false and the server loses the session,
+/// the client receives a `SessionExpired` transport error instead of retrying.
+#[tokio::test]
+async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()> {
+    let ct = CancellationToken::new();
+    let session_manager = Arc::new(LocalSessionManager::default());
+
+    let service = StreamableHttpService::new(
+        || Ok(Calculator::new()),
+        session_manager.clone(),
+        StreamableHttpServerConfig {
+            stateful_mode: true,
+            sse_keep_alive: None,
+            cancellation_token: ct.child_token(),
+            ..Default::default()
+        },
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+
+    let server_handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
+            .reinit_on_expired_session(false),
+    );
+    let client = ().serve(transport).await?;
+
+    // Verify the session is established
+    let _resources = client.list_all_resources().await?;
+
+    // Force session expiry by removing all sessions from the server-side manager
+    {
+        let mut sessions = session_manager.sessions.write().await;
+        sessions.clear();
+    }
+
+    // This call should fail with a SessionExpired transport error
+    let result = client.list_all_resources().await;
+    match result {
+        Err(ServiceError::TransportSend(ref dyn_err)) => {
+            let err_msg = format!("{dyn_err}");
+            assert!(
+                err_msg.contains("Session expired"),
+                "expected 'Session expired' in error message, got: {err_msg}"
+            );
+        }
+        other => panic!("expected TransportSend(SessionExpired), got: {other:?}"),
     }
 
     let _ = client.cancel().await;
