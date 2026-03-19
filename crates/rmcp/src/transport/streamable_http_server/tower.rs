@@ -602,28 +602,56 @@ where
                         // JSON-direct mode: await the single response and return as
                         // application/json, eliminating SSE framing overhead.
                         // Allowed by MCP Streamable HTTP spec (2025-06-18).
+                        //
+                        // Tools may emit progress notifications before their
+                        // final response. In JSON-direct mode there is no
+                        // secondary channel for those notifications, so keep
+                        // draining until we receive the terminal response/error
+                        // message that should satisfy the HTTP request.
                         let cancel = self.config.cancellation_token.child_token();
-                        match tokio::select! {
-                            res = receiver.recv() => res,
-                            _ = cancel.cancelled() => None,
-                        } {
-                            Some(message) => {
-                                tracing::trace!(?message);
-                                let body = serde_json::to_vec(&message).map_err(|e| {
-                                    internal_error_response("serialize json response")(e)
-                                })?;
-                                Ok(Response::builder()
-                                    .status(http::StatusCode::OK)
-                                    .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
-                                    .body(Full::new(Bytes::from(body)).boxed())
-                                    .expect("valid response"))
+                        loop {
+                            match tokio::select! {
+                                res = receiver.recv() => res,
+                                _ = cancel.cancelled() => None,
+                            } {
+                                Some(
+                                    message @ (crate::model::ServerJsonRpcMessage::Response(_)
+                                    | crate::model::ServerJsonRpcMessage::Error(_)),
+                                ) => {
+                                    tracing::trace!(?message);
+                                    let body = serde_json::to_vec(&message).map_err(|e| {
+                                        internal_error_response("serialize json response")(e)
+                                    })?;
+                                    break Ok(Response::builder()
+                                        .status(http::StatusCode::OK)
+                                        .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+                                        .body(Full::new(Bytes::from(body)).boxed())
+                                        .expect("valid response"));
+                                }
+                                Some(crate::model::ServerJsonRpcMessage::Notification(
+                                    notification,
+                                )) => {
+                                    tracing::debug!(
+                                        ?notification,
+                                        "dropping server notification while awaiting JSON response"
+                                    );
+                                }
+                                Some(crate::model::ServerJsonRpcMessage::Request(request)) => {
+                                    tracing::warn!(
+                                        ?request,
+                                        "cannot deliver server request over JSON-direct response"
+                                    );
+                                    break Err(unexpected_message_response("response or error"));
+                                }
+                                None => {
+                                    break Err(internal_error_response("empty response")(
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::UnexpectedEof,
+                                            "no response message received from handler",
+                                        ),
+                                    ));
+                                }
                             }
-                            None => Err(internal_error_response("empty response")(
-                                std::io::Error::new(
-                                    std::io::ErrorKind::UnexpectedEof,
-                                    "no response message received from handler",
-                                ),
-                            )),
                         }
                     } else {
                         // SSE mode (default): original behaviour preserved unchanged
