@@ -1115,7 +1115,7 @@ impl StreamableHttpClientTransportConfig {
     }
 
     /// Set whether the transport should attempt transparent re-initialization on session expiration
-    /// See [`Self::enable_reinit_on_expired_session`] for details.
+    /// See [`Self::reinit_on_expired_session`] for details.
     /// # Example
     /// ```rust,no_run
     /// use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
