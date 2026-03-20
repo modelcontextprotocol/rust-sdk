@@ -600,7 +600,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         .await;
                     let send_result = match response {
                         Err(StreamableHttpError::SessionExpired) => {
-                            if !config.enable_reinit_on_expired_session {
+                            if !config.reinit_on_expired_session {
                                 Err(StreamableHttpError::SessionExpired)
                             } else {
                                 // The server discarded the session (HTTP 404). Perform a
@@ -1065,7 +1065,7 @@ pub struct StreamableHttpClientTransportConfig {
     ///
     /// This recovery is best-effort and bounded to a single attempt. If recovery fails,
     /// the original failure path is preserved and the error is returned to the caller.
-    pub enable_reinit_on_expired_session: bool,
+    pub reinit_on_expired_session: bool,
 }
 
 impl StreamableHttpClientTransportConfig {
@@ -1123,7 +1123,7 @@ impl StreamableHttpClientTransportConfig {
     ///     .reinit_on_expired_session(true);
     /// ```
     pub fn reinit_on_expired_session(mut self, enable: bool) -> Self {
-        self.enable_reinit_on_expired_session = enable;
+        self.reinit_on_expired_session = enable;
         self
     }
 }
@@ -1137,7 +1137,7 @@ impl Default for StreamableHttpClientTransportConfig {
             allow_stateless: true,
             auth_header: None,
             custom_headers: HashMap::new(),
-            enable_reinit_on_expired_session: false,
+            reinit_on_expired_session: true,
         }
     }
 }
