@@ -1,0 +1,5 @@
+[[package]]
+name = "rmcp"
+# Only check default features for semver compatibility.
+# The `local` feature intentionally changes the API surface.
+semver_check_features = ["default"]
