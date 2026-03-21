@@ -1,0 +1,5 @@
+[[package]]
+name = "rmcp"
+# Non-default features can cause false-positive semver breaks.
+# A separate CI job handles semver checking instead.
+semver_check = false

@@ -208,6 +208,24 @@ jobs:
       - name: Run cargo-audit
         run: cargo audit
 
+  semver:
+    name: Semver Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks@0.46.0
+
+      # Run with --default-features to avoid false positives
+      - name: Check semver (rmcp)
+        run: cargo semver-checks --package rmcp --default-features
+
   doc:
     name: Generate Documentation
     runs-on: ubuntu-latest
