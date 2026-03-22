@@ -30,6 +30,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StreamableHttpServerConfig {
     /// The ping message duration for SSE connections.
     pub sse_keep_alive: Option<Duration>,

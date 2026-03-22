@@ -60,6 +60,7 @@ const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
 /// Stored credentials for OAuth2 authorization
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredCredentials {
     pub client_id: String,
     pub token_response: Option<OAuthTokenResponse>,
@@ -134,6 +135,7 @@ impl CredentialStore for InMemoryCredentialStore {
 
 /// Stored authorization state for OAuth2 PKCE flow
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StoredAuthorizationState {
     pub pkce_verifier: String,
     pub csrf_token: String,
@@ -257,6 +259,7 @@ impl StateStore for InMemoryStateStore {
 
 /// HTTP client with OAuth 2.0 authorization
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct AuthClient<C> {
     pub http_client: C,
     pub auth_manager: Arc<Mutex<AuthorizationManager>>,
@@ -350,6 +353,7 @@ pub enum AuthError {
 
 /// oauth2 metadata
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[non_exhaustive]
 pub struct AuthorizationMetadata {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
@@ -373,6 +377,7 @@ struct ResourceServerMetadata {
 
 /// Parameters extracted from WWW-Authenticate header
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct WWWAuthenticateParams {
     pub resource_metadata_url: Option<Url>,
     pub scope: Option<String>,
@@ -394,11 +399,33 @@ impl WWWAuthenticateParams {
 
 /// oauth2 client config
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OAuthClientConfig {
     pub client_id: String,
     pub client_secret: Option<String>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
+}
+
+impl OAuthClientConfig {
+    pub fn new(client_id: impl Into<String>, redirect_uri: impl Into<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: None,
+            scopes: Vec::new(),
+            redirect_uri: redirect_uri.into(),
+        }
+    }
+
+    pub fn with_client_secret(mut self, secret: impl Into<String>) -> Self {
+        self.client_secret = Some(secret.into());
+        self
+    }
+
+    pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.scopes = scopes;
+        self
+    }
 }
 
 // add type aliases for oauth2 types
@@ -534,6 +561,7 @@ impl ClientCredentialsConfig {
 
 /// Configuration for scope upgrade behavior
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ScopeUpgradeConfig {
     /// Maximum number of scope upgrade attempts before giving up
     pub max_upgrade_attempts: u32,

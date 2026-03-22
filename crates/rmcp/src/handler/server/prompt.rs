@@ -20,6 +20,7 @@ use crate::{
 };
 
 /// Context for prompt retrieval operations
+#[non_exhaustive]
 pub struct PromptContext<'a, S> {
     pub server: &'a S,
     pub name: String,

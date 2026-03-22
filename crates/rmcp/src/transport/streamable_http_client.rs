@@ -212,6 +212,7 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     + '_;
 }
 
+#[non_exhaustive]
 pub struct RetryConfig {
     pub max_times: Option<usize>,
     pub min_duration: Duration,
@@ -1046,6 +1047,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     }
 }
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StreamableHttpClientTransportConfig {
     pub uri: Arc<str>,
     pub retry_config: Arc<dyn SseRetryPolicy>,

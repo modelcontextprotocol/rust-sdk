@@ -51,12 +51,9 @@ impl McpOAuthStore {
         let mut clients = HashMap::new();
         clients.insert(
             "mcp-client".to_string(),
-            OAuthClientConfig {
-                client_id: "mcp-client".to_string(),
-                client_secret: Some("mcp-client-secret".to_string()),
-                scopes: vec!["profile".to_string(), "email".to_string()],
-                redirect_uri: "http://localhost:8080/callback".to_string(),
-            },
+            OAuthClientConfig::new("mcp-client", "http://localhost:8080/callback")
+                .with_client_secret("mcp-client-secret")
+                .with_scopes(vec!["profile".to_string(), "email".to_string()]),
         );
 
         Self {

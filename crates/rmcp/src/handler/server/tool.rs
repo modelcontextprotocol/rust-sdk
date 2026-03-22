@@ -29,6 +29,7 @@ pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, cr
         )
     })
 }
+#[non_exhaustive]
 pub struct ToolCallContext<'s, S> {
     pub request_context: RequestContext<RoleServer>,
     pub service: &'s S,

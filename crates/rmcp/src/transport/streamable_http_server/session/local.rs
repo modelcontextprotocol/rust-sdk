@@ -1059,6 +1059,7 @@ impl Worker for LocalSessionWorker {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SessionConfig {
     /// the capacity of the channel for the session. Default is 16.
     pub channel_capacity: usize,
