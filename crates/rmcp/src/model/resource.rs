@@ -214,6 +214,7 @@ mod tests {
     use serde_json;
 
     use super::*;
+    use crate::model::IconTheme;
 
     #[test]
     fn test_resource_serialization() {
@@ -265,6 +266,7 @@ mod tests {
                 src: "https://example.com/icon.png".to_string(),
                 mime_type: Some("image/png".to_string()),
                 sizes: Some(vec!["48x48".to_string()]),
+                theme: Some(IconTheme::Light),
             }]),
         };
 
@@ -272,6 +274,7 @@ mod tests {
         assert!(json["icons"].is_array());
         assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
         assert_eq!(json["icons"][0]["sizes"][0], "48x48");
+        assert_eq!(json["icons"][0]["theme"], "light");
     }
 
     #[test]

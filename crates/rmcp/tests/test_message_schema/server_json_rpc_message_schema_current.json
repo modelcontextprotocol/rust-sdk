@@ -1090,10 +1090,29 @@
         "src": {
           "description": "A standard URI pointing to an icon resource",
           "type": "string"
+        },
+        "theme": {
+          "description": "Optional specifier for the theme this icon is designed for",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IconTheme"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "src"
+      ]
+    },
+    "IconTheme": {
+      "description": "Icon themes supported by the MCP specification",
+      "type": "string",
+      "enum": [
+        "light",
+        "dark"
       ]
     },
     "Implementation": {
