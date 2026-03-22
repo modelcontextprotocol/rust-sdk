@@ -59,7 +59,9 @@ async fn main() -> Result<()> {
 
     // Read resource
     let resource = client
-        .read_resource(ReadResourceRequestParams::new("test://static/resource/3"))
+        .read_resource(ReadResourceRequestParams::new(
+            "demo://resource/static/document/architecture.md",
+        ))
         .await?;
     tracing::info!("Resource: {resource:#?}");
 
@@ -69,18 +71,18 @@ async fn main() -> Result<()> {
 
     // Get simple prompt
     let prompt = client
-        .get_prompt(GetPromptRequestParams::new("simple_prompt"))
+        .get_prompt(GetPromptRequestParams::new("simple-prompt"))
         .await?;
     tracing::info!("Prompt - simple: {prompt:#?}");
 
     // Get complex prompt (returns text & image)
     let prompt = client
         .get_prompt(
-            GetPromptRequestParams::new("complex_prompt")
-                .with_arguments(object!({ "temperature": "0.5", "style": "formal" })),
+            GetPromptRequestParams::new("args-prompt")
+                .with_arguments(object!({ "city": "Dallas", "state": "Texas" })),
         )
         .await?;
-    tracing::info!("Prompt - complex: {prompt:#?}");
+    tracing::info!("Prompt - args: {prompt:#?}");
 
     // List resource templates
     let resource_templates = client.list_all_resource_templates().await?;
