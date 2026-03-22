@@ -4,12 +4,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(clippy::exhaustive_structs)]
 pub struct InputData {
     pub name: String,
     pub age: u32,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(clippy::exhaustive_structs)]
 pub struct OutputData {
     pub greeting: String,
     pub is_adult: bool,

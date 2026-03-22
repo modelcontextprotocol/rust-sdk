@@ -621,6 +621,18 @@ pub struct ClientRegistrationResponse {
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
+impl ClientRegistrationResponse {
+    pub fn new(client_id: impl Into<String>, redirect_uris: Vec<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: None,
+            client_name: None,
+            redirect_uris,
+            additional_fields: HashMap::new(),
+        }
+    }
+}
+
 /// SEP-991: URL-based Client IDs
 /// Validate that the client_id is a valid URL with https scheme and non-root pathname
 fn is_https_url(value: &str) -> bool {

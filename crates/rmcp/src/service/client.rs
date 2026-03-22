@@ -140,6 +140,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::exhaustive_structs)]
 pub struct RoleClient;
 
 impl ServiceRole for RoleClient {

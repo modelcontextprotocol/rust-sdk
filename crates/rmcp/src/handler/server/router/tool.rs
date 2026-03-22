@@ -217,6 +217,7 @@ where
     }
 }
 
+#[allow(clippy::exhaustive_structs)]
 pub struct ToolAttrGenerateFunctionAdapter;
 impl<S, F> IntoToolRoute<S, ToolAttrGenerateFunctionAdapter> for F
 where

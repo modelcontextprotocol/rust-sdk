@@ -25,10 +25,7 @@ async fn main() -> anyhow::Result<()> {
     let service = StreamableHttpService::new(
         || Ok(Counter::new()),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig {
-            cancellation_token: ct.child_token(),
-            ..Default::default()
-        },
+        StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);

@@ -27,6 +27,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::exhaustive_structs)]
 pub struct RoleServer;
 
 impl ServiceRole for RoleServer {

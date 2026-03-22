@@ -34,6 +34,7 @@ pub type ExtensionCapabilities = BTreeMap<String, JsonObject>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct PromptsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
@@ -42,6 +43,7 @@ pub struct PromptsCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct ResourcesCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<bool>,
@@ -52,6 +54,7 @@ pub struct ResourcesCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct ToolsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
@@ -60,6 +63,7 @@ pub struct ToolsCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct RootsCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
@@ -69,6 +73,7 @@ pub struct RootsCapabilities {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct TasksCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requests: Option<TaskRequestsCapability>,
@@ -82,6 +87,7 @@ pub struct TasksCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct TaskRequestsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<SamplingTaskCapability>,
@@ -94,6 +100,7 @@ pub struct TaskRequestsCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct SamplingTaskCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_message: Option<JsonObject>,
@@ -102,6 +109,7 @@ pub struct SamplingTaskCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct ElicitationTaskCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create: Option<JsonObject>,
@@ -110,6 +118,7 @@ pub struct ElicitationTaskCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct ToolsTaskCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call: Option<JsonObject>,
@@ -190,6 +199,7 @@ impl TasksCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct FormElicitationCapability {
     /// Whether the client supports JSON Schema validation for elicitation responses.
     /// When true, the client will validate user input against the requested_schema
@@ -201,6 +211,7 @@ pub struct FormElicitationCapability {
 /// Capability for URL mode elicitation.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct UrlElicitationCapability {}
 
 /// Elicitation allows servers to request interactive input from users during tool execution.
@@ -209,6 +220,7 @@ pub struct UrlElicitationCapability {}
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct ElicitationCapability {
     /// Whether client supports form-based elicitation.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -222,6 +234,7 @@ pub struct ElicitationCapability {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_structs)]
 pub struct SamplingCapability {
     /// Support for `tools` and `toolChoice` parameters
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -310,10 +323,12 @@ macro_rules! builder {
     ($Target: ident {$($f: ident: $T: ty),* $(,)?}) => {
         paste! {
             #[derive(Default, Clone, Copy, Debug)]
+            #[allow(clippy::exhaustive_structs)]
             pub struct [<$Target BuilderState>]<
                 $(const [<$f:upper>]: bool = false,)*
             >;
             #[derive(Debug, Default)]
+            #[allow(clippy::exhaustive_structs)]
             pub struct [<$Target Builder>]<S = [<$Target BuilderState>]> {
                 $(pub $f: Option<$T>,)*
                 pub state: PhantomData<S>

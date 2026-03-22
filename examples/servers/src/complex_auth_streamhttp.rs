@@ -517,17 +517,16 @@ async fn oauth_authorization_server() -> impl IntoResponse {
         "response_types_supported".into(),
         Value::Array(vec![Value::String("code".into())]),
     );
-    let metadata = AuthorizationMetadata {
-        authorization_endpoint: format!("http://{}/oauth/authorize", BIND_ADDRESS),
-        token_endpoint: format!("http://{}/oauth/token", BIND_ADDRESS),
-        scopes_supported: Some(vec!["profile".to_string(), "email".to_string()]),
-        registration_endpoint: Some(format!("http://{}/oauth/register", BIND_ADDRESS)),
-        response_types_supported: Some(vec!["code".to_string()]),
-        code_challenge_methods_supported: Some(vec!["S256".to_string()]),
-        issuer: Some(BIND_ADDRESS.to_string()),
-        jwks_uri: Some(format!("http://{}/oauth/jwks", BIND_ADDRESS)),
-        additional_fields,
-    };
+    let mut metadata = AuthorizationMetadata::default();
+    metadata.authorization_endpoint = format!("http://{}/oauth/authorize", BIND_ADDRESS);
+    metadata.token_endpoint = format!("http://{}/oauth/token", BIND_ADDRESS);
+    metadata.scopes_supported = Some(vec!["profile".to_string(), "email".to_string()]);
+    metadata.registration_endpoint = Some(format!("http://{}/oauth/register", BIND_ADDRESS));
+    metadata.response_types_supported = Some(vec!["code".to_string()]);
+    metadata.code_challenge_methods_supported = Some(vec!["S256".to_string()]);
+    metadata.issuer = Some(BIND_ADDRESS.to_string());
+    metadata.jwks_uri = Some(format!("http://{}/oauth/jwks", BIND_ADDRESS));
+    metadata.additional_fields = additional_fields;
     debug!("metadata: {:?}", metadata);
     (StatusCode::OK, Json(metadata))
 }
@@ -553,12 +552,8 @@ async fn oauth_register(
     let client_id = format!("client-{}", Uuid::new_v4());
     let client_secret = generate_random_string(32);
 
-    let client = OAuthClientConfig {
-        client_id: client_id.clone(),
-        client_secret: Some(client_secret.clone()),
-        redirect_uri: req.redirect_uris[0].clone(),
-        scopes: vec![],
-    };
+    let client = OAuthClientConfig::new(client_id.clone(), req.redirect_uris[0].clone())
+        .with_client_secret(client_secret.clone());
 
     state
         .clients
@@ -567,13 +562,9 @@ async fn oauth_register(
         .insert(client_id.clone(), client);
 
     // return client information
-    let response = ClientRegistrationResponse {
-        client_id,
-        client_secret: Some(client_secret),
-        client_name: Some(req.client_name),
-        redirect_uris: req.redirect_uris,
-        additional_fields: HashMap::new(),
-    };
+    let mut response = ClientRegistrationResponse::new(client_id, req.redirect_uris);
+    response.client_secret = Some(client_secret);
+    response.client_name = Some(req.client_name);
 
     (StatusCode::CREATED, Json(response)).into_response()
 }

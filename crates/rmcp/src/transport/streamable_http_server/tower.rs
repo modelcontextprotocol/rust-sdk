@@ -63,6 +63,13 @@ impl Default for StreamableHttpServerConfig {
     }
 }
 
+impl StreamableHttpServerConfig {
+    pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = token;
+        self
+    }
+}
+
 #[expect(
     clippy::result_large_err,
     reason = "BoxResponse is intentionally large; matches other handlers in this file"

@@ -9,6 +9,10 @@ readme = { workspace = true }
 description = "Rust SDK for Model Context Protocol"
 documentation = "https://docs.rs/rmcp"
 
+[lints.clippy]
+exhaustive_structs = "warn"
+exhaustive_enums = "warn"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

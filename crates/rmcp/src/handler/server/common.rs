@@ -138,6 +138,7 @@ where
     }
 }
 
+#[allow(clippy::exhaustive_structs)]
 pub struct Extension<T>(pub T);
 
 impl<C, T> FromContextPart<C> for Extension<T>
@@ -182,6 +183,7 @@ where
     }
 }
 
+#[allow(clippy::exhaustive_structs)]
 pub struct RequestId(pub crate::model::RequestId);
 
 impl<C> FromContextPart<C> for RequestId

@@ -138,6 +138,7 @@ impl PromptArgument {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_enums)]
 pub enum PromptMessageRole {
     User,
     Assistant,
@@ -147,6 +148,7 @@ pub enum PromptMessageRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[allow(clippy::exhaustive_enums)]
 pub enum PromptMessageContent {
     /// Plain text content
     Text { text: String },

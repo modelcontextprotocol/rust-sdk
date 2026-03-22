@@ -195,6 +195,7 @@ variant_extension! {
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(transparent)]
+#[allow(clippy::exhaustive_structs)]
 pub struct Meta(pub JsonObject);
 const PROGRESS_TOKEN_FIELD: &str = "progressToken";
 impl Meta {

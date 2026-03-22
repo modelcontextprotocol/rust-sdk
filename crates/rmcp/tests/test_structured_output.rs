@@ -10,18 +10,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(clippy::exhaustive_structs)]
 pub struct CalculationRequest {
     pub a: i32,
     pub b: i32,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(clippy::exhaustive_structs)]
 pub struct CalculationResult {
     pub sum: i32,
     pub product: i32,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(clippy::exhaustive_structs)]
 pub struct UserInfo {
     pub name: String,
     pub age: u32,

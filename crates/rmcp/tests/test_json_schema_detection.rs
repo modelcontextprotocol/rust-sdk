@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[allow(clippy::exhaustive_structs)]
 pub struct TestData {
     pub value: String,
 }
