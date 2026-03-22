@@ -153,6 +153,7 @@ where
     fn into_transport(self) -> impl Transport<R, Error = E> + 'static;
 }
 
+#[non_exhaustive]
 pub enum TransportAdapterIdentity {}
 impl<R, T, E> IntoTransport<R, E, TransportAdapterIdentity> for T
 where
@@ -233,6 +234,7 @@ where
 
 #[derive(Debug, thiserror::Error)]
 #[error("Transport [{transport_name}] error: {error}")]
+#[non_exhaustive]
 pub struct DynamicTransportError {
     pub transport_name: Cow<'static, str>,
     pub transport_type_id: std::any::TypeId,

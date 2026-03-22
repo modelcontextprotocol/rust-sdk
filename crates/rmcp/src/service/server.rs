@@ -571,6 +571,7 @@ macro_rules! elicit_safe {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ElicitationMode {
     Form,
     Url,

@@ -16,6 +16,7 @@ use tokio_util::{
 use super::{IntoTransport, Transport};
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
+#[non_exhaustive]
 pub enum TransportAdapterAsyncRW {}
 
 impl<Role, R, W> IntoTransport<Role, std::io::Error, TransportAdapterAsyncRW> for (R, W)
@@ -29,6 +30,7 @@ where
     }
 }
 
+#[non_exhaustive]
 pub enum TransportAdapterAsyncCombinedRW {}
 impl<Role, S> IntoTransport<Role, std::io::Error, TransportAdapterAsyncCombinedRW> for S
 where
@@ -277,6 +279,7 @@ fn try_parse_with_compatibility<T: serde::de::DeserializeOwned>(
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum JsonRpcMessageCodecError {
     #[error("max line length exceeded")]
     MaxLineLengthExceeded,

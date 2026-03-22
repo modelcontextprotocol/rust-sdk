@@ -17,6 +17,7 @@ pub trait SseRetryPolicy: std::fmt::Debug + Send + Sync {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FixedInterval {
     pub max_times: Option<usize>,
     pub duration: Duration,
@@ -47,6 +48,7 @@ impl Default for FixedInterval {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ExponentialBackoff {
     pub max_times: Option<usize>,
     pub base_duration: Duration,
@@ -77,6 +79,7 @@ impl SseRetryPolicy for ExponentialBackoff {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct NeverRetry;
 
 impl SseRetryPolicy for NeverRetry {
@@ -169,6 +172,7 @@ impl<E: std::error::Error + Send> SseAutoReconnectStream<NeverReconnect<E>> {
 
 pin_project_lite::pin_project! {
     #[project = SseAutoReconnectStreamStateProj]
+    #[non_exhaustive]
     pub enum SseAutoReconnectStreamState<F> {
         Connected {
             #[pin]

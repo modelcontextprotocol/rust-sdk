@@ -58,6 +58,7 @@ impl sse_stream::Timer for TokioTimer {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ServerSseMessage {
     /// The event ID for this message. When set, clients can use this ID
     /// with the `Last-Event-ID` header to resume the stream from this point.

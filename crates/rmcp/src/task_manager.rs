@@ -19,6 +19,7 @@ pub type OperationFuture =
 
 /// Describes metadata associated with an enqueued task.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OperationDescriptor {
     pub operation_id: String,
     pub name: String,
@@ -55,6 +56,7 @@ impl OperationDescriptor {
 }
 
 /// Operation message describing a unit of asynchronous work.
+#[non_exhaustive]
 pub struct OperationMessage {
     pub descriptor: OperationDescriptor,
     pub future: OperationFuture,
@@ -91,6 +93,7 @@ struct RunningTask {
     descriptor: OperationDescriptor,
 }
 
+#[non_exhaustive]
 pub struct TaskResult {
     pub descriptor: OperationDescriptor,
     pub result: Result<Box<dyn OperationResultTransport>, Error>,

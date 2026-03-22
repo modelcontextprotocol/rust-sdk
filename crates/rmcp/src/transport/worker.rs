@@ -53,6 +53,7 @@ pub trait Worker: Sized + Send + 'static {
     }
 }
 
+#[non_exhaustive]
 pub struct WorkerSendRequest<W: Worker> {
     pub message: TxJsonRpcMessage<W::Role>,
     pub responder: tokio::sync::oneshot::Sender<Result<(), W::Error>>,
@@ -66,6 +67,7 @@ pub struct WorkerTransport<W: Worker> {
     ct: CancellationToken,
 }
 
+#[non_exhaustive]
 pub struct WorkerConfig {
     pub name: Option<String>,
     pub channel_buffer_capacity: usize,
@@ -79,6 +81,7 @@ impl Default for WorkerConfig {
         }
     }
 }
+#[non_exhaustive]
 pub enum WorkerAdapter {}
 
 impl<W: Worker> IntoTransport<W::Role, W::Error, WorkerAdapter> for W {
@@ -143,11 +146,13 @@ impl<W: Worker> WorkerTransport<W> {
     }
 }
 
+#[non_exhaustive]
 pub struct SendRequest<W: Worker> {
     pub message: TxJsonRpcMessage<W::Role>,
     pub responder: tokio::sync::oneshot::Sender<RxJsonRpcMessage<W::Role>>,
 }
 
+#[non_exhaustive]
 pub struct WorkerContext<W: Worker> {
     pub to_handler_tx: tokio::sync::mpsc::Sender<RxJsonRpcMessage<W::Role>>,
     pub from_handler_rx: tokio::sync::mpsc::Receiver<WorkerSendRequest<W>>,

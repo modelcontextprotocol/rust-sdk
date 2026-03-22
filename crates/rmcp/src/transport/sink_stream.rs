@@ -50,6 +50,7 @@ where
     }
 }
 
+#[non_exhaustive]
 pub enum TransportAdapterSinkStream {}
 
 impl<Role, Si, St> IntoTransport<Role, Si::Error, TransportAdapterSinkStream> for (Si, St)
@@ -64,6 +65,7 @@ where
     }
 }
 
+#[non_exhaustive]
 pub enum TransportAdapterAsyncCombinedRW {}
 impl<Role, S> IntoTransport<Role, S::Error, TransportAdapterAsyncCombinedRW> for S
 where

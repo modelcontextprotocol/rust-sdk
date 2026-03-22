@@ -174,6 +174,7 @@ impl std::fmt::Debug for StoredAuthorizationState {
 /// }
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VendorExtraTokenFields(pub HashMap<String, Value>);
 
 impl ExtraTokenFields for VendorExtraTokenFields {}
@@ -467,6 +468,7 @@ pub const EXTENSION_OAUTH_CLIENT_CREDENTIALS: &str =
 /// JWT signing algorithm for private_key_jwt authentication (SEP-1046)
 #[cfg(feature = "auth-client-credentials-jwt")]
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum JwtSigningAlgorithm {
     RS256,
     RS384,
@@ -504,6 +506,7 @@ impl JwtSigningAlgorithm {
 /// - `ClientSecret`: credentials sent in the request body
 /// - `PrivateKeyJwt`: RFC 7523 signed JWT assertion (requires `auth-client-credentials-jwt` feature)
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ClientCredentialsConfig {
     /// Client secret authentication (credentials in request body)
     ClientSecret {
@@ -607,6 +610,7 @@ pub(crate) struct ClientRegistrationRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ClientRegistrationResponse {
     pub client_id: String,
     pub client_secret: Option<String>,
@@ -2073,6 +2077,7 @@ impl AuthorizationManager {
 }
 
 /// oauth2 authorization session, for guiding user to complete the authorization process
+#[non_exhaustive]
 pub struct AuthorizationSession {
     pub auth_manager: AuthorizationManager,
     pub auth_url: String,
@@ -2225,6 +2230,7 @@ impl AuthorizedHttpClient {
 /// OAuth state machine
 /// Use the OAuthState to manage the OAuth client is more recommend
 /// But also you can use the AuthorizationManager,AuthorizationSession,AuthorizedHttpClient directly
+#[non_exhaustive]
 pub enum OAuthState {
     /// the AuthorizationManager
     Unauthorized(AuthorizationManager),

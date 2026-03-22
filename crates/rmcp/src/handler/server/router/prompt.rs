@@ -6,6 +6,7 @@ use crate::{
     service::{MaybeBoxFuture, MaybeSend},
 };
 
+#[non_exhaustive]
 pub struct PromptRoute<S> {
     #[allow(clippy::type_complexity)]
     pub get: Arc<DynGetPromptHandler<S>>,
@@ -103,6 +104,7 @@ where
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct PromptRouter<S> {
     #[allow(clippy::type_complexity)]
     pub map: std::collections::HashMap<Cow<'static, str>, PromptRoute<S>>,

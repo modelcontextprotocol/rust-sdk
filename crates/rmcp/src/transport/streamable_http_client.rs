@@ -24,11 +24,13 @@ use crate::{
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct AuthRequiredError {
     pub www_authenticate_header: String,
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct InsufficientScopeError {
     pub www_authenticate_header: String,
     pub required_scope: Option<String>,
@@ -254,6 +256,7 @@ struct SessionCleanupInfo<C> {
 }
 
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct StreamableHttpClientWorker<C: StreamableHttpClient> {
     pub client: C,
     pub config: StreamableHttpClientTransportConfig,
