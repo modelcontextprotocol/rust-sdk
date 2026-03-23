@@ -2691,7 +2691,7 @@ pub type ElicitationCompletionNotification =
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Default, Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -2708,6 +2708,48 @@ pub struct CallToolResult {
     /// Optional protocol-level metadata for this result
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
+}
+
+// Custom Deserialize implementation that:
+// 1. Defaults `content` to `[]` when the field is missing (lenient per Postel's law)
+// 2. Requires at least one known field to be present, so that `CallToolResult` doesn't
+//    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
+//    (e.g. `ServerResult`), which would shadow `CustomResult`.
+impl<'de> Deserialize<'de> for CallToolResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Helper {
+            content: Option<Vec<Content>>,
+            structured_content: Option<Value>,
+            is_error: Option<bool>,
+            #[serde(rename = "_meta")]
+            meta: Option<Meta>,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+
+        if helper.content.is_none()
+            && helper.structured_content.is_none()
+            && helper.is_error.is_none()
+            && helper.meta.is_none()
+        {
+            return Err(serde::de::Error::custom(
+                "expected at least one known CallToolResult field \
+                 (content, structuredContent, isError, or _meta)",
+            ));
+        }
+
+        Ok(CallToolResult {
+            content: helper.content.unwrap_or_default(),
+            structured_content: helper.structured_content,
+            is_error: helper.is_error,
+            meta: helper.meta,
+        })
+    }
 }
 
 impl CallToolResult {

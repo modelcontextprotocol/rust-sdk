@@ -123,7 +123,7 @@ pub struct GetTaskResult {
 /// (e.g., `CallToolResult` for `tools/call`). This is represented as
 /// an open object. The payload is the original request's result
 /// serialized as a JSON value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GetTaskPayloadResult(pub Value);
@@ -132,6 +132,25 @@ impl GetTaskPayloadResult {
     /// Create a new GetTaskPayloadResult with the given value.
     pub fn new(value: Value) -> Self {
         Self(value)
+    }
+}
+
+// Custom Deserialize that always fails, so that `GetTaskPayloadResult` is skipped
+// during `#[serde(untagged)]` enum deserialization (e.g. `ServerResult`).
+// The payload has the same JSON shape as `CustomResult(Value)`, so they are
+// indistinguishable.  `CustomResult` acts as the catch-all instead.
+// `GetTaskPayloadResult` should be constructed programmatically via `::new()`.
+impl<'de> serde::Deserialize<'de> for GetTaskPayloadResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Consume the value so the deserializer state stays consistent.
+        serde::de::IgnoredAny::deserialize(deserializer)?;
+        Err(serde::de::Error::custom(
+            "GetTaskPayloadResult cannot be deserialized directly; \
+             use CustomResult as the catch-all",
+        ))
     }
 }
 
