@@ -291,3 +291,15 @@ required-features = [
   "transport-streamable-http-client-unix-socket",
 ]
 path = "tests/test_unix_socket_transport.rs"
+
+[[test]]
+name = "test_streamable_http_stale_session"
+required-features = [
+  "server", 
+  "client", 
+  "transport-streamable-http-server", 
+  "transport-streamable-http-client", 
+  "transport-streamable-http-client-reqwest"
+]
+path = "tests/test_streamable_http_stale_session.rs"
+
