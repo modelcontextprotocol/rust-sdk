@@ -70,7 +70,7 @@ see [servers/README.md](servers/README.md)
 
 # Integration
 
-- [Rig](rig-integration) A stream chatbot with rig
+- [Rig](https://github.com/0xPlaygrounds/rig/blob/main/rig/rig-core/examples/rmcp.rs) A stream chatbot with rig
 - [Simple Chat Client](simple-chat-client) A simple chat client implementation using the Model Context Protocol (MCP) SDK.
 
 # WASI
