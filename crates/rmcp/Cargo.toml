@@ -52,6 +52,9 @@ tower-service = { version = "0.3", optional = true }
 # for child process transport
 process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 
+# for cross-platform executable path resolution
+which = { version = "7", optional = true }
+
 # for ws transport
 # tokio-tungstenite ={ version = "0.26", optional = true }
 
@@ -133,6 +136,7 @@ transport-child-process = [
   "transport-async-rw",
   "tokio/process",
   "dep:process-wrap",
+  "dep:which",
 ]
 transport-streamable-http-server = [
   "transport-streamable-http-server-session",
