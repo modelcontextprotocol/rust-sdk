@@ -18,7 +18,7 @@ pub type SessionStoreError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// Implement this trait to back sessions with Redis, a database, or any
 /// key-value store. The simplest usage is to set
-/// [`StreamableHttpServerConfig::session_store`] to an `Arc<impl SessionStore>`.
+/// `StreamableHttpServerConfig::session_store` to an `Arc<impl SessionStore>`.
 ///
 /// # Example (in-memory, for testing)
 ///
