@@ -1,4 +1,4 @@
-use std::{convert::Infallible, fmt::Display, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, fmt::Display, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
@@ -8,10 +8,15 @@ use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use super::session::SessionManager;
+use super::session::{
+    RestoreOutcome, SessionId, SessionManager, SessionRestoreMarker, SessionState, SessionStore,
+};
 use crate::{
     RoleServer,
-    model::{ClientJsonRpcMessage, ClientRequest, GetExtensions, ProtocolVersion},
+    model::{
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, GetExtensions, InitializeRequest,
+        InitializedNotification, ProtocolVersion,
+    },
     serve_server,
     service::serve_directly,
     transport::{
@@ -49,6 +54,44 @@ pub struct StreamableHttpServerConfig {
     /// When this token is cancelled, all active sessions are terminated and
     /// the server stops accepting new requests.
     pub cancellation_token: CancellationToken,
+    /// Optional external session store for cross-instance recovery.
+    ///
+    /// When set, [`SessionState`] (the client's `initialize` parameters) is
+    /// persisted after a successful handshake and deleted when the session
+    /// closes. On any subsequent request that arrives at an instance with no
+    /// in-memory session, the store is consulted: if an entry is found the
+    /// session is transparently restored so the client does not need to
+    /// re-initialize.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use rmcp::transport::streamable_http_server::{
+    ///     StreamableHttpServerConfig, session::SessionStore,
+    /// };
+    ///
+    /// let config = StreamableHttpServerConfig {
+    ///     session_store: Some(Arc::new(MyRedisStore::new())),
+    ///     ..Default::default()
+    /// };
+    /// ```
+    pub session_store: Option<Arc<dyn SessionStore>>,
+}
+
+impl std::fmt::Debug for StreamableHttpServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamableHttpServerConfig")
+            .field("sse_keep_alive", &self.sse_keep_alive)
+            .field("sse_retry", &self.sse_retry)
+            .field("stateful_mode", &self.stateful_mode)
+            .field("json_response", &self.json_response)
+            .field("cancellation_token", &self.cancellation_token)
+            .field(
+                "session_store",
+                &self.session_store.as_ref().map(|_| "<SessionStore>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for StreamableHttpServerConfig {
@@ -59,6 +102,7 @@ impl Default for StreamableHttpServerConfig {
             stateful_mode: true,
             json_response: false,
             cancellation_token: CancellationToken::new(),
+            session_store: None,
         }
     }
 }
@@ -217,6 +261,13 @@ pub struct StreamableHttpService<S, M> {
     pub config: StreamableHttpServerConfig,
     session_manager: Arc<M>,
     service_factory: Arc<dyn Fn() -> Result<S, std::io::Error> + Send + Sync>,
+    /// Tracks in-progress session restores so that concurrent requests for the
+    /// same unknown session ID wait for the first restore to complete rather
+    /// than racing to replay the initialize handshake. `None` when no external
+    /// session store is configured (avoids allocating the map).
+    pending_restores: Option<
+        Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::watch::Sender<Option<bool>>>>>,
+    >,
 }
 
 impl<S, M> Clone for StreamableHttpService<S, M> {
@@ -225,6 +276,7 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
             config: self.config.clone(),
             session_manager: self.session_manager.clone(),
             service_factory: self.service_factory.clone(),
+            pending_restores: self.pending_restores.clone(),
         }
     }
 }
@@ -265,14 +317,248 @@ where
         session_manager: Arc<M>,
         config: StreamableHttpServerConfig,
     ) -> Self {
+        let pending_restores = config.session_store.is_some().then(|| {
+            Arc::new(tokio::sync::RwLock::new(HashMap::<
+                SessionId,
+                tokio::sync::watch::Sender<Option<bool>>,
+            >::new()))
+        });
         Self {
             config,
             session_manager,
             service_factory: Arc::new(service_factory),
+            pending_restores,
         }
     }
     fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
+    }
+
+    /// Spawn a task that runs `serve_server` for the given session, waits for
+    /// it to finish, and then calls `close_session`.
+    ///
+    /// `init_done_tx`: when `Some`, the sender is fired after `serve_server`
+    /// returns successfully, signalling to the caller that the MCP handshake
+    /// is complete. Used by `try_restore_from_store` to synchronise with the
+    /// restore `initialize` replay; `handle_post` passes `None`.
+    fn spawn_session_worker(
+        session_manager: Arc<M>,
+        session_id: SessionId,
+        service: S,
+        transport: M::Transport,
+        init_done_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    ) where
+        S: crate::Service<RoleServer> + Send + 'static,
+        M: SessionManager,
+    {
+        tokio::spawn(async move {
+            let svc =
+                serve_server::<S, M::Transport, _, TransportAdapterIdentity>(service, transport)
+                    .await;
+            match svc {
+                Ok(svc) => {
+                    if let Some(tx) = init_done_tx {
+                        let _ = tx.send(());
+                    }
+                    let _ = svc.waiting().await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to serve session: {e}");
+                    // Dropping init_done_tx (if Some) signals failure to the caller.
+                }
+            }
+            let _ = session_manager
+                .close_session(&session_id)
+                .await
+                .inspect_err(|e| {
+                    tracing::error!("Failed to close session {session_id}: {e}");
+                });
+        });
+    }
+
+    /// Attempt to restore a session from the external store.
+    ///
+    /// Returns `true` when the session is available and ready to serve the
+    /// current request (either just restored or already in memory). Returns
+    /// `false` when no store is configured or the session ID is unknown.
+    ///
+    /// Concurrent requests for the same unknown session ID are serialized: the
+    /// first caller performs the full restore and handshake replay while others
+    /// subscribe to a `watch` channel and wait, avoiding duplicate handshakes.
+    async fn try_restore_from_store(
+        &self,
+        session_id: &SessionId,
+        parts: &http::request::Parts,
+    ) -> Result<bool, std::io::Error>
+    where
+        S: crate::Service<RoleServer> + Send + 'static,
+        M: SessionManager,
+    {
+        // Both fields are Some iff a session store is configured.
+        let (Some(pending_restores), Some(store)) =
+            (&self.pending_restores, &self.config.session_store)
+        else {
+            return Ok(false);
+        };
+
+        // Serialize concurrent restores for the same session ID.
+        // Write-lock once: if another task is already restoring, subscribe and wait;
+        // otherwise, register ourselves as the restoring task.
+        // Channel value: None = in progress, Some(true) = restored, Some(false) = not found/failed.
+        let (watch_tx, _watch_rx) = tokio::sync::watch::channel(None::<bool>);
+        {
+            let mut pending = pending_restores.write().await;
+            if let Some(tx) = pending.get(session_id) {
+                let mut rx = tx.subscribe();
+                drop(pending);
+                // Wait for the restore to finish, then propagate the outcome.
+                let result = rx
+                    .wait_for(|r| r.is_some())
+                    .await
+                    .map(|r| r.unwrap_or(false))
+                    .unwrap_or(false);
+                return Ok(result);
+            }
+            pending.insert(session_id.clone(), watch_tx.clone());
+        }
+
+        // Helper: signal waiters with the outcome and remove from the pending map.
+        let finish = {
+            let pending_restores = pending_restores.clone();
+            let session_id = session_id.clone();
+            move |result: bool| {
+                let pending_restores = pending_restores.clone();
+                let session_id = session_id.clone();
+                tokio::spawn(async move {
+                    if let Some(tx) = pending_restores.write().await.remove(&session_id) {
+                        let _ = tx.send(Some(result));
+                    }
+                });
+            }
+        };
+
+        // --- Step 3: load from external store ---
+        let state = match store.load(session_id.as_ref()).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                finish(false);
+                return Ok(false);
+            }
+            Err(e) => {
+                tracing::error!(
+                    session_id = session_id.as_ref(),
+                    error = %e,
+                    "session store load failed during restore"
+                );
+                finish(false);
+                return Err(std::io::Error::other(e));
+            }
+        };
+
+        // --- Step 4: ask the session manager to allocate an in-memory worker ---
+        let transport = match self
+            .session_manager
+            .restore_session(session_id.clone())
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+        {
+            Ok(RestoreOutcome::Restored(t)) => t,
+            Ok(RestoreOutcome::AlreadyPresent) => {
+                // Invariant violation: pending_restores ensures only one task can call
+                // restore_session per session ID, so AlreadyPresent is impossible here.
+                finish(false);
+                return Err(std::io::Error::other(
+                    "restore_session returned AlreadyPresent unexpectedly; session manager might have modified the session store outside of the restore_session API",
+                ));
+            }
+            Ok(RestoreOutcome::NotSupported) => {
+                finish(false);
+                return Ok(false);
+            }
+            Err(e) => {
+                finish(false);
+                return Err(e);
+            }
+        };
+
+        // --- Step 5: replay the MCP initialize handshake ---
+        let service = match self.get_service() {
+            Ok(s) => s,
+            Err(e) => {
+                finish(false);
+                return Err(e);
+            }
+        };
+
+        // `serve_server` requires both the `initialize` request and the
+        // `notifications/initialized` notification before transitioning to
+        // the running state — we must send both before returning.
+        let mut restore_init = ClientJsonRpcMessage::request(
+            ClientRequest::InitializeRequest(InitializeRequest {
+                params: state.initialize_params,
+                ..Default::default()
+            }),
+            crate::model::NumberOrString::Number(0),
+        );
+        restore_init.insert_extension(parts.clone());
+        restore_init.insert_extension(SessionRestoreMarker {
+            id: session_id.clone(),
+        });
+        let mut restore_initialized = ClientJsonRpcMessage::notification(
+            ClientNotification::InitializedNotification(InitializedNotification {
+                ..Default::default()
+            }),
+        );
+        restore_initialized.insert_extension(parts.clone());
+        restore_initialized.insert_extension(SessionRestoreMarker {
+            id: session_id.clone(),
+        });
+        // Signal from the spawned task once serve_server finishes initialising.
+        let (init_done_tx, init_done_rx) = tokio::sync::oneshot::channel::<()>();
+
+        Self::spawn_session_worker(
+            self.session_manager.clone(),
+            session_id.clone(),
+            service,
+            transport,
+            Some(init_done_tx),
+        );
+
+        if let Err(e) = self
+            .session_manager
+            .initialize_session(session_id, restore_init)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+        {
+            finish(false);
+            return Err(e);
+        }
+
+        if let Err(e) = self
+            .session_manager
+            .accept_message(session_id, restore_initialized)
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+        {
+            finish(false);
+            return Err(e);
+        }
+
+        if init_done_rx.await.is_err() {
+            finish(false);
+            return Err(std::io::Error::other(
+                "serve_server initialization failed during restore",
+            ));
+        }
+
+        // Restore complete — wake any waiting concurrent requests.
+        finish(true);
+
+        tracing::debug!(
+            session_id = session_id.as_ref(),
+            "session restored from external store"
+        );
+        Ok(true)
     }
     pub async fn handle<B>(&self, request: Request<B>) -> Response<BoxBody<Bytes, Infallible>>
     where
@@ -345,18 +631,26 @@ where
             .has_session(&session_id)
             .await
             .map_err(internal_error_response("check session"))?;
+        let (parts, _) = request.into_parts();
         if !has_session {
-            // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
-            return Ok(Response::builder()
-                .status(http::StatusCode::NOT_FOUND)
-                .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
-                .expect("valid response"));
+            // Attempt transparent cross-instance restore from external store.
+            let restored = self
+                .try_restore_from_store(&session_id, &parts)
+                .await
+                .map_err(internal_error_response("restore session"))?;
+            if !restored {
+                // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
+                return Ok(Response::builder()
+                    .status(http::StatusCode::NOT_FOUND)
+                    .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
+                    .expect("valid response"));
+            }
         }
         // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
-        validate_protocol_version_header(request.headers())?;
+        validate_protocol_version_header(&parts.headers)?;
         // check if last event id is provided
-        let last_event_id = request
-            .headers()
+        let last_event_id = parts
+            .headers
             .get(HEADER_LAST_EVENT_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned());
@@ -460,11 +754,18 @@ where
                     .await
                     .map_err(internal_error_response("check session"))?;
                 if !has_session {
-                    // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
-                    return Ok(Response::builder()
-                        .status(http::StatusCode::NOT_FOUND)
-                        .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
-                        .expect("valid response"));
+                    // Attempt transparent cross-instance restore from external store.
+                    let restored = self
+                        .try_restore_from_store(&session_id, &part)
+                        .await
+                        .map_err(internal_error_response("restore session"))?;
+                    if !restored {
+                        // MCP spec: server MUST respond with 404 Not Found for terminated/unknown sessions
+                        return Ok(Response::builder()
+                            .status(http::StatusCode::NOT_FOUND)
+                            .body(Full::new(Bytes::from("Not Found: Session not found")).boxed())
+                            .expect("valid response"));
+                    }
                 }
 
                 // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
@@ -526,6 +827,21 @@ where
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
+                // Capture init params for external store persistence before
+                // extensions are injected (which would require Clone).
+                let stored_init_params = if self.config.session_store.is_some() {
+                    if let ClientJsonRpcMessage::Request(req) = &message {
+                        if let ClientRequest::InitializeRequest(init_req) = &req.request {
+                            Some(init_req.params.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 if let ClientJsonRpcMessage::Request(req) = &mut message {
                     if !matches!(req.request, ClientRequest::InitializeRequest(_)) {
                         return Err(unexpected_message_response("initialize request"));
@@ -539,37 +855,36 @@ where
                     .get_service()
                     .map_err(internal_error_response("get service"))?;
                 // spawn a task to serve the session
-                tokio::spawn({
-                    let session_manager = self.session_manager.clone();
-                    let session_id = session_id.clone();
-                    async move {
-                        let service = serve_server::<S, M::Transport, _, TransportAdapterIdentity>(
-                            service, transport,
-                        )
-                        .await;
-                        match service {
-                            Ok(service) => {
-                                // on service created
-                                let _ = service.waiting().await;
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to create service: {e}");
-                            }
-                        }
-                        let _ = session_manager
-                            .close_session(&session_id)
-                            .await
-                            .inspect_err(|e| {
-                                tracing::error!("Failed to close session {session_id}: {e}");
-                            });
-                    }
-                });
+                Self::spawn_session_worker(
+                    self.session_manager.clone(),
+                    session_id.clone(),
+                    service,
+                    transport,
+                    None,
+                );
                 // get initialize response
                 let response = self
                     .session_manager
                     .initialize_session(&session_id, message)
                     .await
                     .map_err(internal_error_response("create stream"))?;
+                // Persist session state to external store after a successful handshake.
+                if let (Some(store), Some(params)) =
+                    (&self.config.session_store, stored_init_params)
+                {
+                    let state = SessionState {
+                        initialize_params: params,
+                    };
+                    let _ = store
+                        .store(session_id.as_ref(), &state)
+                        .await
+                        .inspect_err(|e| {
+                            tracing::warn!(
+                                "Failed to persist session {} to store: {e}",
+                                session_id
+                            );
+                        });
+                }
                 let stream = futures::stream::once(async move {
                     ServerSseMessage {
                         event_id: None,
@@ -705,6 +1020,13 @@ where
             .close_session(&session_id)
             .await
             .map_err(internal_error_response("close session"))?;
+        // Remove from external store: a DELETE means the client intentionally
+        // ends the session, so the store entry is no longer needed.
+        if let Some(store) = &self.config.session_store {
+            let _ = store.delete(session_id.as_ref()).await.inspect_err(|e| {
+                tracing::warn!("Failed to delete session {} from store: {e}", session_id);
+            });
+        }
         Ok(accepted_response())
     }
 }

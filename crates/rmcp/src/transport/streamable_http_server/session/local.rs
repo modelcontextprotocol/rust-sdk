@@ -130,6 +130,20 @@ impl SessionManager for LocalSessionManager {
         handle.push_message(message, None).await?;
         Ok(())
     }
+
+    async fn restore_session(
+        &self,
+        id: SessionId,
+    ) -> Result<RestoreOutcome<Self::Transport>, Self::Error> {
+        let mut sessions = self.sessions.write().await;
+        if sessions.contains_key(&id) {
+            // A concurrent request already restored this session.
+            return Ok(RestoreOutcome::AlreadyPresent);
+        }
+        let (handle, worker) = create_local_session(id.clone(), self.session_config.clone());
+        sessions.insert(id, handle);
+        Ok(RestoreOutcome::Restored(WorkerTransport::spawn(worker)))
+    }
 }
 
 /// `<index>/request_id>`
@@ -182,7 +196,7 @@ impl std::str::FromStr for EventId {
     }
 }
 
-use super::{ServerSseMessage, SessionManager};
+use super::{RestoreOutcome, ServerSseMessage, SessionManager};
 
 struct CachedTx {
     tx: Sender<ServerSseMessage>,
