@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.2.0...rmcp-macros-v1.3.0) - 2026-03-24
+
+### Added
+
+- add local feature for !Send tool handler support ([#740](https://github.com/modelcontextprotocol/rust-sdk/pull/740))
+
+### Other
+
+- fix all clippy warnings across workspace ([#746](https://github.com/modelcontextprotocol/rust-sdk/pull/746))
+
 ## [1.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.1.1...rmcp-macros-v1.2.0) - 2026-03-11
 
 ### Fixed
