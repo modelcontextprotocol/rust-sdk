@@ -890,7 +890,7 @@ impl Default for ClientInfo {
 }
 
 /// Icon themes supported by the MCP specification
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Copy)]
 #[serde(rename_all = "lowercase")] //match spec
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
