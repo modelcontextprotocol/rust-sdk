@@ -9,7 +9,7 @@ use super::{AnnotateAble, Annotated, resource::ResourceContents};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RawTextContent {
     pub text: String,
     /// Optional protocol-level metadata for this content block
@@ -20,7 +20,7 @@ pub type TextContent = Annotated<RawTextContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RawImageContent {
     /// The base64-encoded image
     pub data: String,
@@ -34,7 +34,7 @@ pub type ImageContent = Annotated<RawImageContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RawEmbeddedResource {
     /// Optional protocol-level metadata for this content block
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -66,7 +66,7 @@ impl EmbeddedResource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RawAudioContent {
     pub data: String,
     pub mime_type: String,
@@ -149,7 +149,7 @@ impl ToolResultContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_enums)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),

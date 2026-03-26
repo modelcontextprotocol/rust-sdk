@@ -1,3 +1,4 @@
+#![allow(clippy::exhaustive_structs)]
 //cargo test --test test_json_schema_detection --features "client server macros"
 use rmcp::{
     Json, ServerHandler, handler::server::router::tool::ToolRouter, tool, tool_handler, tool_router,
@@ -6,7 +7,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-#[allow(clippy::exhaustive_structs)]
 pub struct TestData {
     pub value: String,
 }

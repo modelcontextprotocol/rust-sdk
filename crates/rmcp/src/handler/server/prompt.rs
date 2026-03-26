@@ -153,7 +153,7 @@ where
 }
 
 // Prompt-specific extractor for prompt name
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct PromptName(pub String);
 
 impl<S> FromContextPart<PromptContext<'_, S>> for PromptName {

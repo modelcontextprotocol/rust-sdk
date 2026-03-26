@@ -1,3 +1,5 @@
+#![allow(clippy::exhaustive_structs, clippy::exhaustive_enums)]
+
 use rmcp::{
     ErrorData as McpError, handler::server::wrapper::Parameters, model::*, schemars, tool,
     tool_router,
@@ -5,7 +7,6 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[allow(clippy::exhaustive_enums)]
 pub enum ChatRole {
     System,
     User,
@@ -14,21 +15,18 @@ pub enum ChatRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[allow(clippy::exhaustive_structs)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[allow(clippy::exhaustive_structs)]
 pub struct ChatRequest {
     pub system: Option<String>,
     pub messages: Vec<ChatMessage>,
 }
 
 #[derive(Clone, Default)]
-#[allow(clippy::exhaustive_structs)]
 pub struct Demo;
 
 #[tool_router]

@@ -14,7 +14,7 @@ use crate::{
 /// serialized as structured JSON content with an associated schema.
 /// The framework will place the JSON in the `structured_content` field
 /// of the tool result rather than the regular `content` field.
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Json<T>(pub T);
 
 // Implement JsonSchema for Json<T> to delegate to T's schema

@@ -74,13 +74,7 @@ async fn start_test_server(ct: CancellationToken, trigger: Arc<Notify>) -> Strin
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: Some(Duration::from_secs(15)),
-            sse_retry: Some(Duration::from_secs(3)),
-            cancellation_token: ct.child_token(),
-            ..Default::default()
-        },
+        StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);

@@ -39,7 +39,7 @@ impl Annotations {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Annotated<T: AnnotateAble> {
     #[serde(flatten)]
     pub raw: T,

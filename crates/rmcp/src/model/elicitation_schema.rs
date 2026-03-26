@@ -49,7 +49,7 @@ const_string!(ArrayTypeConst = "array");
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
-#[allow(clippy::exhaustive_enums)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum PrimitiveSchema {
     /// Enum property (explicit enum schema)
     Enum(EnumSchema),
@@ -71,7 +71,7 @@ pub enum PrimitiveSchema {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
-#[allow(clippy::exhaustive_enums)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum StringFormat {
     /// Email address format
     Email,
@@ -346,7 +346,7 @@ impl NumberSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct IntegerSchema {
     /// Type discriminator
     #[serde(rename = "type")]
@@ -513,7 +513,7 @@ impl BooleanSchema {
 /// Represent single entry for titled item
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ConstTitle {
     #[serde(rename = "const")]
     pub const_: String,
@@ -534,7 +534,7 @@ impl ConstTitle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct LegacyEnumSchema {
     #[serde(rename = "type")]
     pub type_: StringTypeConst,
@@ -600,7 +600,7 @@ impl TitledSingleSelectEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
-#[allow(clippy::exhaustive_enums)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum SingleSelectEnumSchema {
     Untitled(UntitledSingleSelectEnumSchema),
     Titled(TitledSingleSelectEnumSchema),
@@ -609,7 +609,7 @@ pub enum SingleSelectEnumSchema {
 /// Items for untitled multi-select options
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct UntitledItems {
     #[serde(rename = "type")]
     pub type_: StringTypeConst,
@@ -620,7 +620,7 @@ pub struct UntitledItems {
 /// Items for titled multi-select options
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct TitledItems {
     // MCP spec requires "anyOf" for multi-select enums (allows any combination)
     // Alias "oneOf" for compatibility with schemars
@@ -726,7 +726,7 @@ impl TitledMultiSelectEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
-#[allow(clippy::exhaustive_enums)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum MultiSelectEnumSchema {
     Untitled(UntitledMultiSelectEnumSchema),
     Titled(TitledMultiSelectEnumSchema),
@@ -750,7 +750,7 @@ pub enum MultiSelectEnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(untagged)]
-#[allow(clippy::exhaustive_enums)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum EnumSchema {
     Single(SingleSelectEnumSchema),
     Multi(MultiSelectEnumSchema),
@@ -759,11 +759,11 @@ pub enum EnumSchema {
 
 /// Marker type for single-select enum builder
 #[derive(Debug)]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct SingleSelect;
 /// Marker type for multi-select enum builder
 #[derive(Debug)]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct MultiSelect;
 /// Builder for EnumSchema
 /// Allows to create various enum schema types (single/multi select, titled/untitled)
@@ -1089,7 +1089,7 @@ impl EnumSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ElicitationSchema {
     /// Always "object" for elicitation schemas
     #[serde(rename = "type")]
@@ -1234,7 +1234,7 @@ impl ElicitationSchema {
 ///     .build();
 /// ```
 #[derive(Debug, Default)]
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ElicitationSchemaBuilder {
     pub properties: BTreeMap<String, PrimitiveSchema>,
     pub required: Vec<String>,

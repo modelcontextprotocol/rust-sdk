@@ -37,13 +37,13 @@ async fn spawn_server(
 #[tokio::test]
 async fn stateless_json_response_returns_application_json() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
-    let (client, url, ct) = spawn_server(StreamableHttpServerConfig {
-        stateful_mode: false,
-        json_response: true,
-        sse_keep_alive: None,
-        cancellation_token: ct.child_token(),
-        ..Default::default()
-    })
+    let (client, url, ct) = spawn_server(
+        StreamableHttpServerConfig::default()
+            .with_stateful_mode(false)
+            .with_json_response(true)
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    )
     .await;
 
     let response = client
@@ -79,13 +79,12 @@ async fn stateless_json_response_returns_application_json() -> anyhow::Result<()
 #[tokio::test]
 async fn stateless_sse_mode_default_unchanged() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
-    let (client, url, ct) = spawn_server(StreamableHttpServerConfig {
-        stateful_mode: false,
-        json_response: false,
-        sse_keep_alive: None,
-        cancellation_token: ct.child_token(),
-        ..Default::default()
-    })
+    let (client, url, ct) = spawn_server(
+        StreamableHttpServerConfig::default()
+            .with_stateful_mode(false)
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    )
     .await;
 
     let response = client
@@ -122,13 +121,12 @@ async fn stateless_sse_mode_default_unchanged() -> anyhow::Result<()> {
 async fn json_response_ignored_in_stateful_mode() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
     // json_response: true has no effect when stateful_mode: true — server still uses SSE
-    let (client, url, ct) = spawn_server(StreamableHttpServerConfig {
-        stateful_mode: true,
-        json_response: true,
-        sse_keep_alive: None,
-        cancellation_token: ct.child_token(),
-        ..Default::default()
-    })
+    let (client, url, ct) = spawn_server(
+        StreamableHttpServerConfig::default()
+            .with_json_response(true)
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    )
     .await;
 
     let response = client

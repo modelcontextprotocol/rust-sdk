@@ -165,7 +165,7 @@ pub type DynCallToolHandler<S> =
         -> futures::future::LocalBoxFuture<'s, Result<CallToolResult, crate::ErrorData>>;
 
 // Tool-specific extractor for tool name
-#[allow(clippy::exhaustive_structs)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ToolName(pub Cow<'static, str>);
 
 impl<S> FromContextPart<ToolCallContext<'_, S>> for ToolName {
