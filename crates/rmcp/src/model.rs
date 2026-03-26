@@ -893,6 +893,7 @@ impl Default for ClientInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy)]
 #[serde(rename_all = "lowercase")] //match spec
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum IconTheme {
     Light,
     Dark,
