@@ -84,6 +84,23 @@ impl std::fmt::Debug for StoredCredentials {
     }
 }
 
+impl StoredCredentials {
+    /// Create a new `StoredCredentials` instance.
+    pub fn new(
+        client_id: String,
+        token_response: Option<OAuthTokenResponse>,
+        granted_scopes: Vec<String>,
+        token_received_at: Option<u64>,
+    ) -> Self {
+        Self {
+            client_id,
+            token_response,
+            granted_scopes,
+            token_received_at,
+        }
+    }
+}
+
 /// Trait for storing and retrieving OAuth2 credentials
 ///
 /// Implementations of this trait can provide custom storage backends
