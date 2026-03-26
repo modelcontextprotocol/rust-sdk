@@ -907,6 +907,18 @@ impl Default for ClientInfo {
     }
 }
 
+/// Icon themes supported by the MCP specification
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Copy)]
+#[serde(rename_all = "lowercase")] //match spec
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum IconTheme {
+    /// Indicates the icon is designed to be used with a light background
+    Light,
+    /// Indicates the icon is designed to be used with a dark background
+    Dark,
+}
+
 /// A URL pointing to an icon resource or a base64-encoded data URI.
 ///
 /// Clients that support rendering icons MUST support at least the following MIME types:
@@ -929,6 +941,10 @@ pub struct Icon {
     /// Size specification, each string should be in WxH format (e.g., `\"48x48\"`, `\"96x96\"`) or `\"any\"` for scalable formats like SVG
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sizes: Option<Vec<String>>,
+    /// Optional specifier for the theme this icon is designed for
+    /// If not provided, the client should assume the icon can be used with any theme.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<IconTheme>,
 }
 
 impl Icon {
@@ -938,6 +954,7 @@ impl Icon {
             src: src.into(),
             mime_type: None,
             sizes: None,
+            theme: None,
         }
     }
 
@@ -950,6 +967,12 @@ impl Icon {
     /// Set the sizes.
     pub fn with_sizes(mut self, sizes: Vec<String>) -> Self {
         self.sizes = Some(sizes);
+        self
+    }
+
+    /// Set the theme.
+    pub fn with_theme(mut self, theme: IconTheme) -> Self {
+        self.theme = Some(theme);
         self
     }
 }
@@ -3725,12 +3748,14 @@ mod tests {
             src: "https://example.com/icon.png".to_string(),
             mime_type: Some("image/png".to_string()),
             sizes: Some(vec!["48x48".to_string()]),
+            theme: Some(IconTheme::Light),
         };
 
         let json = serde_json::to_value(&icon).unwrap();
         assert_eq!(json["src"], "https://example.com/icon.png");
         assert_eq!(json["mimeType"], "image/png");
         assert_eq!(json["sizes"][0], "48x48");
+        assert_eq!(json["theme"], "light");
 
         // Test deserialization
         let deserialized: Icon = serde_json::from_value(json).unwrap();
@@ -3743,12 +3768,14 @@ mod tests {
             src: "data:image/svg+xml;base64,PHN2Zy8+".to_string(),
             mime_type: None,
             sizes: None,
+            theme: None,
         };
 
         let json = serde_json::to_value(&icon).unwrap();
         assert_eq!(json["src"], "data:image/svg+xml;base64,PHN2Zy8+");
         assert!(json.get("mimeType").is_none());
         assert!(json.get("sizes").is_none());
+        assert!(json.get("theme").is_none());
     }
 
     #[test]
@@ -3763,11 +3790,13 @@ mod tests {
                     src: "https://example.com/icon.png".to_string(),
                     mime_type: Some("image/png".to_string()),
                     sizes: Some(vec!["48x48".to_string()]),
+                    theme: Some(IconTheme::Dark),
                 },
                 Icon {
                     src: "https://example.com/icon.svg".to_string(),
                     mime_type: Some("image/svg+xml".to_string()),
                     sizes: Some(vec!["any".to_string()]),
+                    theme: Some(IconTheme::Light),
                 },
             ]),
             website_url: Some("https://example.com".to_string()),
@@ -3782,6 +3811,8 @@ mod tests {
         assert_eq!(json["icons"][0]["sizes"][0], "48x48");
         assert_eq!(json["icons"][1]["mimeType"], "image/svg+xml");
         assert_eq!(json["icons"][1]["sizes"][0], "any");
+        assert_eq!(json["icons"][0]["theme"], "dark");
+        assert_eq!(json["icons"][1]["theme"], "light");
     }
 
     #[test]
@@ -3814,6 +3845,7 @@ mod tests {
                     src: "https://example.com/server.png".to_string(),
                     mime_type: Some("image/png".to_string()),
                     sizes: Some(vec!["48x48".to_string()]),
+                    theme: Some(IconTheme::Light),
                 }]),
                 website_url: Some("https://docs.example.com".to_string()),
             },
@@ -3827,6 +3859,7 @@ mod tests {
             "https://example.com/server.png"
         );
         assert_eq!(json["serverInfo"]["icons"][0]["sizes"][0], "48x48");
+        assert_eq!(json["serverInfo"]["icons"][0]["theme"], "light");
         assert_eq!(json["serverInfo"]["websiteUrl"], "https://docs.example.com");
     }
 
