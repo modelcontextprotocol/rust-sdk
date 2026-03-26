@@ -895,7 +895,9 @@ impl Default for ClientInfo {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum IconTheme {
+    /// Indicates the icon is designed to be used with a light background
     Light,
+    /// Indicates the icon is designed to be used with a dark background
     Dark,
 }
 
@@ -922,6 +924,7 @@ pub struct Icon {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sizes: Option<Vec<String>>,
     /// Optional specifier for the theme this icon is designed for
+    /// If not provided, the client should assume the icon can be used with any theme.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<IconTheme>,
 }
