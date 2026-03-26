@@ -1,3 +1,5 @@
+#![allow(clippy::exhaustive_structs, clippy::exhaustive_enums)]
+
 use rmcp::{
     ErrorData as McpError, handler::server::wrapper::Parameters, model::*, schemars, tool,
     tool_router,

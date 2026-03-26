@@ -20,6 +20,7 @@ use crate::{
 };
 
 /// Context for prompt retrieval operations
+#[non_exhaustive]
 pub struct PromptContext<'a, S> {
     pub server: &'a S,
     pub name: String,
@@ -117,6 +118,7 @@ impl<T: IntoGetPromptResult> IntoGetPromptResult for Result<T, crate::ErrorData>
 // Future wrapper that automatically handles IntoGetPromptResult conversion
 pin_project_lite::pin_project! {
     #[project = IntoGetPromptResultFutProj]
+    #[non_exhaustive]
     pub enum IntoGetPromptResultFut<F, R> {
         Pending {
             #[pin]
@@ -151,6 +153,7 @@ where
 }
 
 // Prompt-specific extractor for prompt name
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct PromptName(pub String);
 
 impl<S> FromContextPart<PromptContext<'_, S>> for PromptName {

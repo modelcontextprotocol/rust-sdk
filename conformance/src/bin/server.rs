@@ -818,10 +818,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting conformance server on {}", bind_addr);
 
     let server = ConformanceServer::new();
-    let config = StreamableHttpServerConfig {
-        stateful_mode: true,
-        ..Default::default()
-    };
+    let config = StreamableHttpServerConfig::default();
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),

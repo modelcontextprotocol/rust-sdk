@@ -388,7 +388,6 @@
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
-          "default": [],
           "items": {
             "$ref": "#/definitions/Annotated"
           }
@@ -403,7 +402,10 @@
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
-      }
+      },
+      "required": [
+        "content"
+      ]
     },
     "CancelTaskResult": {
       "description": "Response to a `tasks/cancel` request.\n\nPer spec, `CancelTaskResult = allOf[Result, Task]` — same shape as `GetTaskResult`.",

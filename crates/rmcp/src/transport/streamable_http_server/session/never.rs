@@ -10,9 +10,12 @@ use crate::{
 
 #[derive(Debug, Clone, Error)]
 #[error("Session management is not supported")]
+#[non_exhaustive]
 pub struct ErrorSessionManagementNotSupported;
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct NeverSessionManager {}
+#[non_exhaustive]
 pub enum NeverTransport {}
 impl Transport<RoleServer> for NeverTransport {
     type Error = ErrorSessionManagementNotSupported;

@@ -24,11 +24,13 @@ use crate::{
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct AuthRequiredError {
     pub www_authenticate_header: String,
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct InsufficientScopeError {
     pub www_authenticate_header: String,
     pub required_scope: Option<String>,
@@ -212,6 +214,7 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     + '_;
 }
 
+#[non_exhaustive]
 pub struct RetryConfig {
     pub max_times: Option<usize>,
     pub min_duration: Duration,
@@ -253,6 +256,7 @@ struct SessionCleanupInfo<C> {
 }
 
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct StreamableHttpClientWorker<C: StreamableHttpClient> {
     pub client: C,
     pub config: StreamableHttpClientTransportConfig,
@@ -1046,6 +1050,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     }
 }
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StreamableHttpClientTransportConfig {
     pub uri: Arc<str>,
     pub retry_config: Arc<dyn SseRetryPolicy>,

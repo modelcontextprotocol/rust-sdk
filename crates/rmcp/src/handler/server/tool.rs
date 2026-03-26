@@ -29,6 +29,7 @@ pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, cr
         )
     })
 }
+#[non_exhaustive]
 pub struct ToolCallContext<'s, S> {
     pub request_context: RequestContext<RoleServer>,
     pub service: &'s S,
@@ -104,6 +105,7 @@ impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
 
 pin_project_lite::pin_project! {
     #[project = IntoCallToolResultFutProj]
+    #[non_exhaustive]
     pub enum IntoCallToolResultFut<F, R> {
         Pending {
             #[pin]
@@ -163,6 +165,7 @@ pub type DynCallToolHandler<S> =
         -> futures::future::LocalBoxFuture<'s, Result<CallToolResult, crate::ErrorData>>;
 
 // Tool-specific extractor for tool name
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ToolName(pub Cow<'static, str>);
 
 impl<S> FromContextPart<ToolCallContext<'_, S>> for ToolName {

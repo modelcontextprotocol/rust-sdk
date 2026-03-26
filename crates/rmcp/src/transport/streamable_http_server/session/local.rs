@@ -29,12 +29,14 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct LocalSessionManager {
     pub sessions: tokio::sync::RwLock<HashMap<SessionId, LocalSessionHandle>>,
     pub session_config: SessionConfig,
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LocalSessionManagerError {
     #[error("Session not found: {0}")]
     SessionNotFound(SessionId),
@@ -148,6 +150,7 @@ impl std::fmt::Display for EventId {
 }
 
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum EventIdParseError {
     #[error("Invalid index: {0}")]
     InvalidIndex(ParseIntError),
@@ -310,6 +313,7 @@ impl LocalSessionWorker {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SessionError {
     #[error("Invalid request id: {0}")]
     DuplicatedRequestId(HttpRequestId),
@@ -339,6 +343,7 @@ enum OutboundChannel {
     Common,
 }
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct StreamableHttpMessageReceiver {
     pub http_request_id: Option<HttpRequestId>,
     pub inner: Receiver<ServerSseMessage>,
@@ -657,6 +662,7 @@ impl LocalSessionWorker {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SessionEvent {
     ClientMessage {
         message: ClientJsonRpcMessage,
@@ -1059,6 +1065,7 @@ impl Worker for LocalSessionWorker {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SessionConfig {
     /// the capacity of the channel for the session. Default is 16.
     pub channel_capacity: usize,

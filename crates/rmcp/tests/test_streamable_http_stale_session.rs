@@ -32,12 +32,9 @@ async fn test_stale_session_id_returns_status_aware_error() -> anyhow::Result<()
         StreamableHttpService::new(
             || Ok(Calculator::new()),
             Default::default(),
-            StreamableHttpServerConfig {
-                stateful_mode: true,
-                sse_keep_alive: None,
-                cancellation_token: ct.child_token(),
-                ..Default::default()
-            },
+            StreamableHttpServerConfig::default()
+                .with_sse_keep_alive(None)
+                .with_cancellation_token(ct.child_token()),
         );
 
     let router = axum::Router::new().nest_service("/mcp", service);
@@ -103,12 +100,9 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
     let service = StreamableHttpService::new(
         || Ok(Calculator::new()),
         session_manager.clone(),
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: None,
-            cancellation_token: ct.child_token(),
-            ..Default::default()
-        },
+        StreamableHttpServerConfig::default()
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);
@@ -183,12 +177,9 @@ async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()>
     let service = StreamableHttpService::new(
         || Ok(Calculator::new()),
         session_manager.clone(),
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: None,
-            cancellation_token: ct.child_token(),
-            ..Default::default()
-        },
+        StreamableHttpServerConfig::default()
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
     );
 
     let router = axum::Router::new().nest_service("/mcp", service);

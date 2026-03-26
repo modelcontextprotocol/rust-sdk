@@ -13,6 +13,7 @@ use crate::{
 pub mod prompt;
 pub mod tool;
 
+#[non_exhaustive]
 pub struct Router<S> {
     pub tool_router: tool::ToolRouter<S>,
     pub prompt_router: prompt::PromptRouter<S>,

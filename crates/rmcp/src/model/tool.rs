@@ -51,6 +51,7 @@ pub struct Tool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum TaskSupport {
     /// Clients MUST NOT invoke this tool as a task (default behavior).
     #[default]

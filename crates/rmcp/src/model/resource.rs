@@ -6,6 +6,7 @@ use super::{Annotated, Icon, Meta};
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RawResource {
     /// URI representing the resource location (e.g., "file:///path/to/file" or "str:///content")
     pub uri: String,
@@ -39,6 +40,7 @@ pub type Resource = Annotated<RawResource>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RawResourceTemplate {
     pub uri_template: String,
     pub name: String,
@@ -58,6 +60,7 @@ pub type ResourceTemplate = Annotated<RawResourceTemplate>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum ResourceContents {
     #[serde(rename_all = "camelCase")]
     TextResourceContents {

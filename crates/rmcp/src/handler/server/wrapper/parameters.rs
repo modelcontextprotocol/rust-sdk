@@ -42,6 +42,7 @@ use schemars::JsonSchema;
 /// - Returns appropriate error responses if deserialization fails
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Parameters<P>(pub P);
 
 impl<P: JsonSchema> JsonSchema for Parameters<P> {

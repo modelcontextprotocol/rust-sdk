@@ -1,3 +1,4 @@
+#![allow(clippy::exhaustive_structs)]
 //cargo test --test test_structured_output --features "client server macros"
 use rmcp::{
     Json, ServerHandler,

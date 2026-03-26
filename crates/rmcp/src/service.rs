@@ -307,6 +307,7 @@ type Responder<T> = tokio::sync::oneshot::Sender<T>;
 ///
 /// or wait for response by call [`RequestHandle::await_response`]
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RequestHandle<R: ServiceRole> {
     pub rx: tokio::sync::oneshot::Receiver<Result<R::PeerResp, ServiceError>>,
     pub options: PeerRequestOptions,
@@ -398,6 +399,7 @@ impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
 type ProxyOutbound<R> = mpsc::Receiver<PeerSinkMessage<R>>;
 
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct PeerRequestOptions {
     pub timeout: Option<Duration>,
     pub meta: Option<Meta>,
@@ -648,6 +650,7 @@ pub enum QuitReason {
 
 /// Request execution context
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RequestContext<R: ServiceRole> {
     /// this token will be cancelled when the [`CancelledNotification`] is received.
     pub ct: CancellationToken,
@@ -673,6 +676,7 @@ impl<R: ServiceRole> RequestContext<R> {
 
 /// Request execution context
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NotificationContext<R: ServiceRole> {
     pub meta: Meta,
     pub extensions: Extensions,

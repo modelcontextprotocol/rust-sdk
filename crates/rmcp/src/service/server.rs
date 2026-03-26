@@ -27,6 +27,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RoleServer;
 
 impl ServiceRole for RoleServer {
@@ -571,6 +572,7 @@ macro_rules! elicit_safe {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ElicitationMode {
     Form,
     Url,

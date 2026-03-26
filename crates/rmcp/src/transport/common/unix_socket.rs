@@ -21,6 +21,7 @@ use crate::{
 };
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum UnixSocketError {
     #[error("hyper error: {0}")]
     Hyper(#[from] hyper::Error),

@@ -1458,20 +1458,15 @@ async fn test_peer_request_options_timeout() {
 
     let timeout = Some(Duration::from_secs(15));
 
-    let options = PeerRequestOptions {
-        timeout,
-        meta: None,
-    };
+    let mut options = PeerRequestOptions::default();
+    options.timeout = timeout;
 
     // Verify timeout is properly stored
     assert_eq!(options.timeout, timeout);
     assert!(options.meta.is_none());
 
     // Test with no timeout
-    let options_no_timeout = PeerRequestOptions {
-        timeout: None,
-        meta: None,
-    };
+    let options_no_timeout = PeerRequestOptions::default();
 
     assert!(options_no_timeout.timeout.is_none());
 }

@@ -69,12 +69,9 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         StreamableHttpService::new(
             || Ok(Calculator::new()),
             Default::default(),
-            StreamableHttpServerConfig {
-                stateful_mode: true,
-                sse_keep_alive: None,
-                cancellation_token: ct.child_token(),
-                ..Default::default()
-            },
+            StreamableHttpServerConfig::default()
+                .with_sse_keep_alive(None)
+                .with_cancellation_token(ct.child_token()),
         );
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(STREAMABLE_HTTP_BIND_ADDRESS).await?;

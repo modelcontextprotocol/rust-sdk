@@ -252,12 +252,8 @@ async fn perform_oauth_flow_preregistered(
     manager.set_metadata(metadata);
 
     // Configure with pre-registered credentials
-    let config = rmcp::transport::auth::OAuthClientConfig {
-        client_id: client_id.to_string(),
-        client_secret: Some(client_secret.to_string()),
-        scopes: vec![],
-        redirect_uri: REDIRECT_URI.to_string(),
-    };
+    let config = rmcp::transport::auth::OAuthClientConfig::new(client_id, REDIRECT_URI)
+        .with_client_secret(client_secret);
     manager.configure_client(config)?;
 
     let scopes = manager.select_scopes(None, &[]);

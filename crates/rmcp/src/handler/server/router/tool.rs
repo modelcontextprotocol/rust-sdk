@@ -136,6 +136,7 @@ use crate::{
     service::{MaybeBoxFuture, MaybeSend},
 };
 
+#[non_exhaustive]
 pub struct ToolRoute<S> {
     #[allow(clippy::type_complexity)]
     pub call: Arc<DynCallToolHandler<S>>,
@@ -216,6 +217,7 @@ where
     }
 }
 
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ToolAttrGenerateFunctionAdapter;
 impl<S, F> IntoToolRoute<S, ToolAttrGenerateFunctionAdapter> for F
 where
@@ -251,6 +253,7 @@ where
     }
 }
 
+#[non_exhaustive]
 pub struct WithToolAttr<C, S, A>
 where
     C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
@@ -292,6 +295,7 @@ where
     }
 }
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ToolRouter<S> {
     #[allow(clippy::type_complexity)]
     pub map: std::collections::HashMap<Cow<'static, str>, ToolRoute<S>>,
