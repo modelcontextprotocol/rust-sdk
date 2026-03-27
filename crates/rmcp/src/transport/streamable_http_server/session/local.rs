@@ -1069,19 +1069,30 @@ impl Worker for LocalSessionWorker {
 pub struct SessionConfig {
     /// the capacity of the channel for the session. Default is 16.
     pub channel_capacity: usize,
-    /// if set, the session will be closed after this duration of inactivity.
+    /// The session will be closed after this duration of inactivity.
+    ///
+    /// This serves as a safety net for cleaning up sessions whose HTTP
+    /// connections have silently dropped (e.g., due to an HTTP/2
+    /// `RST_STREAM`). Without a timeout, such sessions become zombies:
+    /// the session worker keeps running indefinitely because the session
+    /// handle's sender is still held in the session manager, preventing
+    /// the worker's event channel from closing.
+    ///
+    /// Defaults to 5 minutes. Set to `None` to disable (not recommended
+    /// for long-running servers behind proxies).
     pub keep_alive: Option<Duration>,
 }
 
 impl SessionConfig {
     pub const DEFAULT_CHANNEL_CAPACITY: usize = 16;
+    pub const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(300);
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
-            keep_alive: None,
+            keep_alive: Some(Self::DEFAULT_KEEP_ALIVE),
         }
     }
 }
