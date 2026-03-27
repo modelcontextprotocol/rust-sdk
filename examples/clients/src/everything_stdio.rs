@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         .await?;
     tracing::info!("Prompt - simple: {prompt:#?}");
 
-    // Get complex prompt (returns text & image)
+    // Get prompt with arguments
     let prompt = client
         .get_prompt(
             GetPromptRequestParams::new("args-prompt")
