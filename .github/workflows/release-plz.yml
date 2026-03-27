@@ -25,10 +25,12 @@ jobs:
           fetch-depth: 0
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
-        uses: release-plz/action@v0.5
-        with:
-          command: release
+      # Using fork until semver_check_features support is released upstream.
+      # See: https://github.com/release-plz/release-plz/pull/2757
+      - name: Install release-plz from fork
+        run: cargo install --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
+      - name: Run release-plz release
+        run: release-plz release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -51,10 +53,12 @@ jobs:
           fetch-depth: 0
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
-        uses: release-plz/action@v0.5
-        with:
-          command: release-pr
+      # Using fork until semver_check_features support is released upstream.
+      # See: https://github.com/release-plz/release-plz/pull/2757
+      - name: Install release-plz from fork
+        run: cargo install --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
+      - name: Run release-plz release-pr
+        run: release-plz release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
