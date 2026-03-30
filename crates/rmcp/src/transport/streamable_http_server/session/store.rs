@@ -5,6 +5,7 @@ use crate::model::InitializeRequestParams;
 /// When a client reconnects to a different server instance, the new instance
 /// loads this state to transparently replay the `initialize` handshake without
 /// the client needing to re-initialize.
+#[non_exhaustive]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionState {
     /// Parameters from the client's original `initialize` request.

@@ -43,12 +43,14 @@ pub use store::{SessionState, SessionStore, SessionStoreError};
 ///     // this is a restore replay, not a fresh client connection
 /// }
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SessionRestoreMarker {
     pub id: SessionId,
 }
 
 /// The outcome of a [`SessionManager::restore_session`] call.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum RestoreOutcome<T> {
     /// The session was just re-created from external state; the caller must
