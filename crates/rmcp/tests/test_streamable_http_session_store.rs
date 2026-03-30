@@ -71,17 +71,14 @@ fn make_service(
     session_store: Arc<dyn SessionStore>,
     ct: &CancellationToken,
 ) -> StreamableHttpService<Calculator, LocalSessionManager> {
-    StreamableHttpService::new(
-        || Ok(Calculator::new()),
-        Default::default(),
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: None,
-            cancellation_token: ct.child_token(),
-            session_store: Some(session_store),
-            ..Default::default()
-        },
-    )
+    StreamableHttpService::new(|| Ok(Calculator::new()), Default::default(), {
+        let mut cfg = StreamableHttpServerConfig::default();
+        cfg.stateful_mode = true;
+        cfg.sse_keep_alive = None;
+        cfg.cancellation_token = ct.child_token();
+        cfg.session_store = Some(session_store);
+        cfg
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -148,17 +145,14 @@ async fn test_session_state_deleted_from_store_on_delete() -> anyhow::Result<()>
     let session_manager = Arc::new(LocalSessionManager::default());
     let ct = CancellationToken::new();
 
-    let service = StreamableHttpService::new(
-        || Ok(Calculator::new()),
-        session_manager.clone(),
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: None,
-            cancellation_token: ct.child_token(),
-            session_store: Some(store.clone()),
-            ..Default::default()
-        },
-    );
+    let service = StreamableHttpService::new(|| Ok(Calculator::new()), session_manager.clone(), {
+        let mut cfg = StreamableHttpServerConfig::default();
+        cfg.stateful_mode = true;
+        cfg.sse_keep_alive = None;
+        cfg.cancellation_token = ct.child_token();
+        cfg.session_store = Some(store.clone());
+        cfg
+    });
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -223,17 +217,14 @@ fn spawn_server(
     session_manager: Arc<LocalSessionManager>,
     ct: &CancellationToken,
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let svc = StreamableHttpService::new(
-        || Ok(Calculator::new()),
-        session_manager,
-        StreamableHttpServerConfig {
-            stateful_mode: true,
-            sse_keep_alive: None,
-            cancellation_token: ct.child_token(),
-            session_store,
-            ..Default::default()
-        },
-    );
+    let svc = StreamableHttpService::new(|| Ok(Calculator::new()), session_manager, {
+        let mut cfg = StreamableHttpServerConfig::default();
+        cfg.stateful_mode = true;
+        cfg.sse_keep_alive = None;
+        cfg.cancellation_token = ct.child_token();
+        cfg.session_store = session_store;
+        cfg
+    });
     // Use std::net::TcpListener so the port is bound synchronously before
     // we return — avoids a race between returning the addr and the server
     // actually starting to accept connections.
