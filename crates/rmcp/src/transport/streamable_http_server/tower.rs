@@ -78,19 +78,9 @@ pub struct StreamableHttpServerConfig {
     pub session_store: Option<Arc<dyn SessionStore>>,
 }
 
-impl std::fmt::Debug for StreamableHttpServerConfig {
+impl std::fmt::Debug for dyn SessionStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamableHttpServerConfig")
-            .field("sse_keep_alive", &self.sse_keep_alive)
-            .field("sse_retry", &self.sse_retry)
-            .field("stateful_mode", &self.stateful_mode)
-            .field("json_response", &self.json_response)
-            .field("cancellation_token", &self.cancellation_token)
-            .field(
-                "session_store",
-                &self.session_store.as_ref().map(|_| "<SessionStore>"),
-            )
-            .finish()
+        f.write_str("<SessionStore>")
     }
 }
 
@@ -307,6 +297,35 @@ where
     }
 }
 
+/// Guard used inside [`StreamableHttpService::try_restore_from_store`].
+///
+/// Ensures the `pending_restores` map entry is always cleaned up — even when
+/// the future is cancelled mid-await.
+///
+/// `result` defaults to `false` (failure / cancellation). Only the success path
+/// needs to set it to `true` before returning.
+struct PendingRestoreGuard {
+    pending_restores:
+        Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::watch::Sender<Option<bool>>>>>,
+    session_id: SessionId,
+    watch_tx: tokio::sync::watch::Sender<Option<bool>>,
+    /// The value that will be broadcast to waiting tasks on drop.
+    result: bool,
+}
+
+impl Drop for PendingRestoreGuard {
+    fn drop(&mut self) {
+        // `send` is synchronous — unblocks waiters immediately, no lock needed.
+        let _ = self.watch_tx.send(Some(self.result));
+        // Remove the map entry asynchronously (requires the async write lock).
+        let pending_restores = self.pending_restores.clone();
+        let session_id = self.session_id.clone();
+        tokio::spawn(async move {
+            pending_restores.write().await.remove(&session_id);
+        });
+    }
+}
+
 impl<S, M> StreamableHttpService<S, M>
 where
     S: crate::Service<RoleServer> + Send + 'static,
@@ -422,26 +441,18 @@ where
             pending.insert(session_id.clone(), watch_tx.clone());
         }
 
-        // Helper: signal waiters with the outcome and remove from the pending map.
-        let finish = {
-            let pending_restores = pending_restores.clone();
-            let session_id = session_id.clone();
-            move |result: bool| {
-                let pending_restores = pending_restores.clone();
-                let session_id = session_id.clone();
-                tokio::spawn(async move {
-                    if let Some(tx) = pending_restores.write().await.remove(&session_id) {
-                        let _ = tx.send(Some(result));
-                    }
-                });
-            }
+        // Guard: signals waiters and cleans up the map entry on drop
+        let mut guard = PendingRestoreGuard {
+            pending_restores: pending_restores.clone(),
+            session_id: session_id.clone(),
+            watch_tx: watch_tx.clone(),
+            result: false,
         };
 
         // --- Step 3: load from external store ---
         let state = match store.load(session_id.as_ref()).await {
             Ok(Some(s)) => s,
             Ok(None) => {
-                finish(false);
                 return Ok(false);
             }
             Err(e) => {
@@ -450,7 +461,6 @@ where
                     error = %e,
                     "session store load failed during restore"
                 );
-                finish(false);
                 return Err(std::io::Error::other(e));
             }
         };
@@ -466,17 +476,14 @@ where
             Ok(RestoreOutcome::AlreadyPresent) => {
                 // Invariant violation: pending_restores ensures only one task can call
                 // restore_session per session ID, so AlreadyPresent is impossible here.
-                finish(false);
                 return Err(std::io::Error::other(
                     "restore_session returned AlreadyPresent unexpectedly; session manager might have modified the session store outside of the restore_session API",
                 ));
             }
             Ok(RestoreOutcome::NotSupported) => {
-                finish(false);
                 return Ok(false);
             }
             Err(e) => {
-                finish(false);
                 return Err(e);
             }
         };
@@ -485,7 +492,6 @@ where
         let service = match self.get_service() {
             Ok(s) => s,
             Err(e) => {
-                finish(false);
                 return Err(e);
             }
         };
@@ -530,7 +536,6 @@ where
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))
         {
-            finish(false);
             return Err(e);
         }
 
@@ -540,19 +545,17 @@ where
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))
         {
-            finish(false);
             return Err(e);
         }
 
         if init_done_rx.await.is_err() {
-            finish(false);
             return Err(std::io::Error::other(
                 "serve_server initialization failed during restore",
             ));
         }
 
         // Restore complete — wake any waiting concurrent requests.
-        finish(true);
+        guard.result = true;
 
         tracing::debug!(
             session_id = session_id.as_ref(),
