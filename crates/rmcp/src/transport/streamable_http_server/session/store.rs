@@ -12,6 +12,12 @@ pub struct SessionState {
     pub initialize_params: InitializeRequestParams,
 }
 
+impl SessionState {
+    pub fn new(initialize_params: InitializeRequestParams) -> Self {
+        Self { initialize_params }
+    }
+}
+
 /// Type alias for boxed session store errors.
 pub type SessionStoreError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
