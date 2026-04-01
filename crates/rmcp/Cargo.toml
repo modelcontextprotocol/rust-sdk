@@ -14,7 +14,32 @@ exhaustive_structs = "warn"
 exhaustive_enums = "warn"
 
 [package.metadata.docs.rs]
-all-features = true
+features = [
+  "auth",
+  "auth-client-credentials-jwt",
+  "base64",
+  "client",
+  "client-side-sse",
+  "elicitation",
+  "macros",
+  "reqwest",
+  "reqwest-native-tls",
+  "reqwest-tls-no-provider",
+  "schemars",
+  "server",
+  "server-side-http",
+  "tower",
+  "transport-async-rw",
+  "transport-child-process",
+  "transport-io",
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+  "transport-streamable-http-client-unix-socket",
+  "transport-streamable-http-server",
+  "transport-streamable-http-server-session",
+  "transport-worker",
+  "uuid",
+]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
