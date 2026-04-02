@@ -3,6 +3,8 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{Expr, ImplItem, ItemImpl};
 
+use crate::common::{has_method, has_sibling_handler};
+
 #[derive(FromMeta)]
 #[darling(default)]
 struct TaskHandlerAttribute {
@@ -20,14 +22,7 @@ impl Default for TaskHandlerAttribute {
 pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let attr_args = NestedMeta::parse_meta_list(attr)?;
     let TaskHandlerAttribute { processor } = TaskHandlerAttribute::from_list(&attr_args)?;
-    let mut item_impl = syn::parse2::<ItemImpl>(input.clone())?;
-
-    let has_method = |name: &str, item_impl: &ItemImpl| -> bool {
-        item_impl.items.iter().any(|item| match item {
-            ImplItem::Fn(func) => func.sig.ident == name,
-            _ => false,
-        })
-    };
+    let mut item_impl = syn::parse2::<ItemImpl>(input)?;
 
     if !has_method("list_tasks", &item_impl) {
         let list_fn = quote! {
@@ -260,6 +255,22 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             }
         };
         item_impl.items.push(syn::parse2::<ImplItem>(cancel_fn)?);
+    }
+
+    // Auto-generate get_info() if not already provided and no sibling tool/prompt handler
+    // will generate it (they take priority since they run as outer attributes).
+    if !has_method("get_info", &item_impl)
+        && !has_sibling_handler(&item_impl, "tool_handler")
+        && !has_sibling_handler(&item_impl, "prompt_handler")
+    {
+        let get_info_fn = crate::tool_handler::build_get_info(
+            &item_impl,
+            None,
+            None,
+            None,
+            crate::tool_handler::CallerCapability::Tasks,
+        )?;
+        item_impl.items.push(get_info_fn);
     }
 
     Ok(item_impl.into_token_stream())

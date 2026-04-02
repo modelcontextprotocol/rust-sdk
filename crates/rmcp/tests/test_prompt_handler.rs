@@ -30,7 +30,7 @@ impl TestPromptServer {
     }
 }
 
-#[prompt_handler]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for TestPromptServer {}
 
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ impl<T: Send + Sync + 'static> GenericPromptServer<T> {
     }
 }
 
-#[prompt_handler]
+#[prompt_handler(router = self.prompt_router)]
 impl<T: Send + Sync + 'static> ServerHandler for GenericPromptServer<T> {}
 
 #[test]
@@ -148,7 +148,7 @@ mod nested {
         }
     }
 
-    #[prompt_handler]
+    #[prompt_handler(router = self.prompt_router)]
     impl ServerHandler for NestedServer {}
 
     #[test]
