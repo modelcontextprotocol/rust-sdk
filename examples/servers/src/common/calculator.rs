@@ -1,10 +1,7 @@
 #![allow(dead_code)]
 
 use rmcp::{
-    ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_handler, tool_router,
+    ServerHandler, handler::server::wrapper::Parameters, schemars, tool, tool_handler, tool_router,
 };
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -23,16 +20,12 @@ pub struct SubRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct Calculator {
-    tool_router: ToolRouter<Self>,
-}
+pub struct Calculator;
 
 #[tool_router]
 impl Calculator {
     pub fn new() -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-        }
+        Self
     }
 
     #[tool(description = "Calculate the sum of two numbers")]
@@ -46,10 +39,5 @@ impl Calculator {
     }
 }
 
-#[tool_handler]
-impl ServerHandler for Calculator {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("A simple calculator".to_string())
-    }
-}
+#[tool_handler(instructions = "A simple calculator")]
+impl ServerHandler for Calculator {}

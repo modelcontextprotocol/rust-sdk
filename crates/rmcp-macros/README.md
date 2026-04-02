@@ -38,12 +38,10 @@ For **getting started** and **full MCP feature documentation**, see the [main RE
 ## Quick Example
 
 ```rust,ignore
-use rmcp::{tool, tool_router, tool_handler, ServerHandler, model::*};
+use rmcp::{tool, tool_router, tool_handler, ServerHandler};
 
 #[derive(Clone)]
-struct MyServer {
-    tool_router: rmcp::handler::server::tool::ToolRouter<Self>,
-}
+struct MyServer;
 
 #[tool_router]
 impl MyServer {
@@ -54,11 +52,7 @@ impl MyServer {
 }
 
 #[tool_handler]
-impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default()
-    }
-}
+impl ServerHandler for MyServer {}
 ```
 
 See the [full documentation](https://docs.rs/rmcp-macros) for detailed usage of each macro.

@@ -5,14 +5,13 @@
 //!
 //! ```rust
 //! # use rmcp::{
-//! #     tool_router, tool,
+//! #     tool_router, tool, tool_handler, ServerHandler,
 //! #     handler::server::{wrapper::{Parameters, Json}, tool::ToolRouter},
 //! #     schemars
 //! # };
 //! # use serde::{Serialize, Deserialize};
-//! struct Server {
-//!     tool_router: ToolRouter<Self>,
-//! }
+//! struct Server;
+//!
 //! #[derive(Deserialize, schemars::JsonSchema, Default)]
 //! struct AddParameter {
 //!     left: usize,
@@ -32,6 +31,9 @@
 //!         Json(AddOutput { sum: left.wrapping_add(right) })
 //!     }
 //! }
+//!
+//! #[tool_handler]
+//! impl ServerHandler for Server {}
 //! ```
 //!
 //! Using the macro-based code pattern above is suitable for small MCP servers with simple interfaces.

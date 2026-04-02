@@ -47,7 +47,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// It creates a function that returns a `ToolRouter` instance.
 ///
-/// In most case, you need to add a field for handler to store the router information and initialize it when creating handler, or store it with a static variable.
+/// The generated function is used by `#[tool_handler]` by default (via `Self::tool_router()`),
+/// so in most cases you do not need to store the router in a field.
+///
 /// ## Usage
 ///
 /// | field     | type          | usage |
@@ -62,16 +64,13 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// impl MyToolHandler {
 ///     #[tool]
 ///     pub fn my_tool() {
-///         
-///     }
 ///
-///     pub fn new() -> Self {
-///         Self {
-///             // the default name of tool router will be `tool_router`
-///             tool_router: Self::tool_router(),
-///         }
 ///     }
 /// }
+///
+/// // #[tool_handler] calls Self::tool_router() automatically
+/// #[tool_handler]
+/// impl ServerHandler for MyToolHandler {}
 /// ```
 ///
 /// Or specify the visibility and router name, which would be helpful when you want to combine multiple routers into one:
