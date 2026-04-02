@@ -28,7 +28,7 @@ jobs:
       # Using fork until semver_check_features support is released upstream.
       # See: https://github.com/release-plz/release-plz/pull/2757
       - name: Install release-plz from fork
-        run: cargo install --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
+        run: cargo install --locked --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
       - name: Run release-plz release
         run: release-plz release
         env:
@@ -56,7 +56,7 @@ jobs:
       # Using fork until semver_check_features support is released upstream.
       # See: https://github.com/release-plz/release-plz/pull/2757
       - name: Install release-plz from fork
-        run: cargo install --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
+        run: cargo install --locked --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
       - name: Run release-plz release-pr
         run: release-plz release-pr
         env:
