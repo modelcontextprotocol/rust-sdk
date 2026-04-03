@@ -53,9 +53,6 @@ pub enum ServerInitializeError {
     #[error("expect initialized request, but received: {0:?}")]
     ExpectedInitializeRequest(Option<ClientJsonRpcMessage>),
 
-    #[error("expect initialized notification, but received: {0:?}")]
-    ExpectedInitializedNotification(Option<ClientJsonRpcMessage>),
-
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
 
@@ -243,49 +240,12 @@ where
             ServerInitializeError::transport::<T>(error, "sending initialize response")
         })?;
 
-    // Wait for initialized notification. The MCP spec permits logging/setLevel and ping
-    // before initialized; VS Code sends setLevel immediately after the initialize response.
-    let notification = loop {
-        let msg = expect_next_message(&mut transport, "initialize notification").await?;
-        match msg {
-            ClientJsonRpcMessage::Notification(n)
-                if matches!(
-                    n.notification,
-                    ClientNotification::InitializedNotification(_)
-                ) =>
-            {
-                break n.notification;
-            }
-            ClientJsonRpcMessage::Request(req)
-                if matches!(
-                    req.request,
-                    ClientRequest::SetLevelRequest(_) | ClientRequest::PingRequest(_)
-                ) =>
-            {
-                transport
-                    .send(ServerJsonRpcMessage::response(
-                        ServerResult::EmptyResult(EmptyResult {}),
-                        req.id,
-                    ))
-                    .await
-                    .map_err(|error| {
-                        ServerInitializeError::transport::<T>(error, "sending pre-init response")
-                    })?;
-            }
-            other => {
-                return Err(ServerInitializeError::ExpectedInitializedNotification(
-                    Some(other),
-                ));
-            }
-        }
-    };
-    let context = NotificationContext {
-        meta: notification.get_meta().clone(),
-        extensions: notification.extensions().clone(),
-        peer: peer.clone(),
-    };
-    let _ = service.handle_notification(notification, context).await;
-    // Continue processing service
+    // Enter the main service loop immediately after sending InitializeResult.
+    // The initialized notification will be handled as a regular notification by serve_inner.
+    // This matches the TypeScript SDK behavior: no init gate, no waiting for initialized.
+    // Streamable HTTP has no ordering guarantee between POSTs, and the MCP spec uses
+    // SHOULD NOT (not MUST NOT) for pre-initialized messages, so any request arriving
+    // before initialized is processed normally.
     Ok(serve_inner(service, transport, peer, peer_rx, ct))
 }
 
