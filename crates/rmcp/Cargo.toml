@@ -136,6 +136,9 @@ transport-child-process = [
   "transport-async-rw",
   "tokio/process",
   "dep:process-wrap",
+]
+which-command = [
+  "transport-child-process",
   "dep:which",
 ]
 transport-streamable-http-server = [

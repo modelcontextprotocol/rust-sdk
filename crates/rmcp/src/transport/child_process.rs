@@ -242,7 +242,7 @@ impl ConfigureCommandExt for tokio::process::Command {
 ///
 /// # Example
 /// ```rust,no_run
-/// use rmcp::transport::child_process::{which_command, ConfigureCommandExt};
+/// use rmcp::transport::{which_command, ConfigureCommandExt};
 ///
 /// # fn example() -> std::io::Result<()> {
 /// let cmd = which_command("npx")?
@@ -252,6 +252,7 @@ impl ConfigureCommandExt for tokio::process::Command {
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(feature = "which-command")]
 pub fn which_command(
     name: impl AsRef<std::ffi::OsStr>,
 ) -> std::io::Result<tokio::process::Command> {
@@ -260,6 +261,7 @@ pub fn which_command(
     Ok(tokio::process::Command::new(resolved))
 }
 
+#[cfg(feature = "which-command")]
 #[cfg(test)]
 mod tests_which {
     #[test]
