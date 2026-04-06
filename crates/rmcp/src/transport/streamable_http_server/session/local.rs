@@ -470,7 +470,7 @@ impl LocalSessionWorker {
                 {
                     OutboundChannel::RequestWise {
                         id: *id,
-                        close: false,
+                        close: true,
                     }
                 } else {
                     OutboundChannel::Common
@@ -483,7 +483,7 @@ impl LocalSessionWorker {
                 {
                     OutboundChannel::RequestWise {
                         id: *id,
-                        close: false,
+                        close: true,
                     }
                 } else {
                     OutboundChannel::Common
@@ -501,7 +501,11 @@ impl LocalSessionWorker {
                 if let Some(request_wise) = self.tx_router.get_mut(&id) {
                     request_wise.tx.send(message).await;
                     if close {
-                        self.tx_router.remove(&id);
+                        if let Some(channel) = self.tx_router.remove(&id) {
+                            for resource in channel.resources {
+                                self.resource_router.remove(&resource);
+                            }
+                        }
                     }
                 } else {
                     return Err(SessionError::ChannelClosed(Some(id)));
