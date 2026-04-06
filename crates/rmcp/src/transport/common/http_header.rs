@@ -7,6 +7,7 @@ pub const JSON_MIME_TYPE: &str = "application/json";
 /// Reserved headers that must not be overridden by user-supplied custom headers.
 /// `MCP-Protocol-Version` is in this list but is allowed through because the worker
 /// injects it after initialization.
+#[allow(dead_code)]
 pub(crate) const RESERVED_HEADERS: &[&str] = &[
     "accept",
     HEADER_SESSION_ID,
@@ -36,6 +37,7 @@ pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), Stri
 
 /// Extracts the `scope=` parameter from a `WWW-Authenticate` header value.
 /// Handles both quoted (`scope="files:read files:write"`) and unquoted (`scope=read:data`) forms.
+#[cfg(feature = "client-side-sse")]
 pub(crate) fn extract_scope_from_header(header: &str) -> Option<String> {
     let header_lowercase = header.to_ascii_lowercase();
     let scope_key = "scope=";

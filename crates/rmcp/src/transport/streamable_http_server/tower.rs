@@ -2,7 +2,7 @@ use std::{collections::HashMap, convert::Infallible, fmt::Display, sync::Arc, ti
 
 use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
-use http::{Method, Request, Response, header::ALLOW};
+use http::{HeaderMap, Method, Request, Response, header::ALLOW};
 use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use tokio_stream::wrappers::ReceiverStream;
@@ -34,8 +34,8 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone)]
 #[non_exhaustive]
+#[derive(Debug, Clone)]
 pub struct StreamableHttpServerConfig {
     /// The ping message duration for SSE connections.
     pub sse_keep_alive: Option<Duration>,
@@ -54,6 +54,16 @@ pub struct StreamableHttpServerConfig {
     /// When this token is cancelled, all active sessions are terminated and
     /// the server stops accepting new requests.
     pub cancellation_token: CancellationToken,
+    /// Allowed hostnames or `host:port` authorities for inbound `Host` validation.
+    ///
+    /// By default, Streamable HTTP servers only accept loopback hosts to
+    /// prevent DNS rebinding attacks against locally running servers. Public
+    /// deployments should override this list with their own hostnames.
+    /// examples:
+    ///     allowed_hosts = ["localhost", "127.0.0.1", "0.0.0.0"]
+    /// or with ports:
+    ///     allowed_hosts = ["example.com", "example.com:8080"]
+    pub allowed_hosts: Vec<String>,
     /// Optional external session store for cross-instance recovery.
     ///
     /// When set, [`SessionState`] (the client's `initialize` parameters) is
@@ -92,12 +102,25 @@ impl Default for StreamableHttpServerConfig {
             stateful_mode: true,
             json_response: false,
             cancellation_token: CancellationToken::new(),
+            allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
             session_store: None,
         }
     }
 }
 
 impl StreamableHttpServerConfig {
+    pub fn with_allowed_hosts(
+        mut self,
+        allowed_hosts: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_hosts = allowed_hosts.into_iter().map(Into::into).collect();
+        self
+    }
+    /// Disable allowed hosts. This will allow requests with any `Host` header, which is NOT recommended for public deployments.
+    pub fn disable_allowed_hosts(mut self) -> Self {
+        self.allowed_hosts.clear();
+        self
+    }
     pub fn with_sse_keep_alive(mut self, duration: Option<Duration>) -> Self {
         self.sse_keep_alive = duration;
         self
@@ -161,6 +184,97 @@ fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), Box
                 .expect("valid response"));
         }
     }
+    Ok(())
+}
+
+fn forbidden_response(message: impl Into<String>) -> BoxResponse {
+    Response::builder()
+        .status(http::StatusCode::FORBIDDEN)
+        .body(Full::new(Bytes::from(message.into())).boxed())
+        .expect("valid response")
+}
+
+fn normalize_host(host: &str) -> String {
+    host.trim_matches('[')
+        .trim_matches(']')
+        .to_ascii_lowercase()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedAuthority {
+    host: String,
+    port: Option<u16>,
+}
+
+fn normalize_authority(host: &str, port: Option<u16>) -> NormalizedAuthority {
+    NormalizedAuthority {
+        host: normalize_host(host),
+        port,
+    }
+}
+
+fn parse_allowed_authority(allowed: &str) -> Option<NormalizedAuthority> {
+    let allowed = allowed.trim();
+    if allowed.is_empty() {
+        return None;
+    }
+
+    if let Ok(authority) = http::uri::Authority::try_from(allowed) {
+        return Some(normalize_authority(authority.host(), authority.port_u16()));
+    }
+
+    Some(normalize_authority(allowed, None))
+}
+
+fn host_is_allowed(host: &NormalizedAuthority, allowed_hosts: &[String]) -> bool {
+    if allowed_hosts.is_empty() {
+        // If the allowed hosts list is empty, allow all hosts (not recommended).
+        return true;
+    }
+    allowed_hosts
+        .iter()
+        .filter_map(|allowed| parse_allowed_authority(allowed))
+        .any(|allowed| {
+            allowed.host == host.host
+                && match allowed.port {
+                    Some(port) => host.port == Some(port),
+                    None => true,
+                }
+        })
+}
+
+fn bad_request_response(message: &str) -> BoxResponse {
+    let body = Full::from(message.to_string()).boxed();
+
+    http::Response::builder()
+        .status(http::StatusCode::BAD_REQUEST)
+        .header(http::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(body)
+        .expect("failed to build bad request response")
+}
+
+fn parse_host_header(headers: &HeaderMap) -> Result<NormalizedAuthority, BoxResponse> {
+    let Some(host) = headers.get(http::header::HOST) else {
+        return Err(bad_request_response("Bad Request: missing Host header"));
+    };
+
+    let host = host
+        .to_str()
+        .map_err(|_| bad_request_response("Bad Request: Invalid Host header encoding"))?;
+    let authority = http::uri::Authority::try_from(host)
+        .map_err(|_| bad_request_response("Bad Request: Invalid Host header"))?;
+    Ok(normalize_authority(authority.host(), authority.port_u16()))
+}
+
+fn validate_dns_rebinding_headers(
+    headers: &HeaderMap,
+    config: &StreamableHttpServerConfig,
+) -> Result<(), BoxResponse> {
+    let host = parse_host_header(headers)?;
+    if !host_is_allowed(&host, &config.allowed_hosts) {
+        return Err(forbidden_response("Forbidden: Host header is not allowed"));
+    }
+
     Ok(())
 }
 
@@ -568,6 +682,9 @@ where
         B: Body + Send + 'static,
         B::Error: Display,
     {
+        if let Err(response) = validate_dns_rebinding_headers(request.headers(), &self.config) {
+            return response;
+        }
         let method = request.method().clone();
         let allowed_methods = match self.config.stateful_mode {
             true => "GET, POST, DELETE",

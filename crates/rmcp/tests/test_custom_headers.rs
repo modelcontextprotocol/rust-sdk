@@ -761,6 +761,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
         .method(Method::POST)
         .header("Accept", "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
         .body(Full::new(Bytes::from(init_body.to_string())))
         .unwrap();
 
@@ -785,6 +786,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
         .method(Method::POST)
         .header("Accept", "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
         .header("mcp-session-id", &session_id)
         .header("mcp-protocol-version", "2025-03-26")
         .body(Full::new(Bytes::from(initialized_body.to_string())))
@@ -802,6 +804,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
         .method(Method::POST)
         .header("Accept", "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
         .header("mcp-session-id", &session_id)
         .header("mcp-protocol-version", "2025-03-26")
         .body(Full::new(Bytes::from(valid_body.to_string())))
@@ -823,6 +826,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
         .method(Method::POST)
         .header("Accept", "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
         .header("mcp-session-id", &session_id)
         .header("mcp-protocol-version", "9999-01-01")
         .body(Full::new(Bytes::from(invalid_body.to_string())))
@@ -844,6 +848,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
         .method(Method::POST)
         .header("Accept", "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
         .header("mcp-session-id", &session_id)
         .body(Full::new(Bytes::from(no_version_body.to_string())))
         .unwrap();
@@ -869,4 +874,157 @@ fn test_protocol_version_utilities() {
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2024_11_05));
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2025_03_26));
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2025_06_18));
+}
+
+/// Integration test: Verify server validates only the Host header for DNS rebinding protection
+#[tokio::test]
+#[cfg(all(feature = "transport-streamable-http-server", feature = "server",))]
+async fn test_server_validates_host_header_for_dns_rebinding_protection() {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http::{Method, Request, header::CONTENT_TYPE};
+    use http_body_util::Full;
+    use rmcp::{
+        handler::server::ServerHandler,
+        model::{ServerCapabilities, ServerInfo},
+        transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    };
+    use serde_json::json;
+
+    #[derive(Clone)]
+    struct TestHandler;
+
+    impl ServerHandler for TestHandler {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().build())
+        }
+    }
+
+    let service = StreamableHttpService::new(
+        || Ok(TestHandler),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+
+    let init_body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "test-client",
+                "version": "1.0.0"
+            }
+        }
+    });
+
+    let allowed_request = Request::builder()
+        .method(Method::POST)
+        .header("Accept", "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
+        .header("Origin", "http://localhost:8080")
+        .body(Full::new(Bytes::from(init_body.to_string())))
+        .unwrap();
+
+    let response = service.handle(allowed_request).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let bad_host_request = Request::builder()
+        .method(Method::POST)
+        .header("Accept", "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Host", "attacker.example")
+        .body(Full::new(Bytes::from(init_body.to_string())))
+        .unwrap();
+
+    let response = service.handle(bad_host_request).await;
+    assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+
+    let ignored_origin_request = Request::builder()
+        .method(Method::POST)
+        .header("Accept", "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
+        .header("Origin", "http://attacker.example")
+        .body(Full::new(Bytes::from(init_body.to_string())))
+        .unwrap();
+
+    let response = service.handle(ignored_origin_request).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+}
+
+/// Integration test: Verify server can enforce an allowed Host port when configured
+#[tokio::test]
+#[cfg(all(feature = "transport-streamable-http-server", feature = "server",))]
+async fn test_server_validates_host_header_port_for_dns_rebinding_protection() {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http::{Method, Request, header::CONTENT_TYPE};
+    use http_body_util::Full;
+    use rmcp::{
+        handler::server::ServerHandler,
+        model::{ServerCapabilities, ServerInfo},
+        transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    };
+    use serde_json::json;
+
+    #[derive(Clone)]
+    struct TestHandler;
+
+    impl ServerHandler for TestHandler {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().build())
+        }
+    }
+
+    let service = StreamableHttpService::new(
+        || Ok(TestHandler),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default().with_allowed_hosts(["localhost:8080"]),
+    );
+
+    let init_body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "test-client",
+                "version": "1.0.0"
+            }
+        }
+    });
+
+    let allowed_request = Request::builder()
+        .method(Method::POST)
+        .header("Accept", "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:8080")
+        .body(Full::new(Bytes::from(init_body.to_string())))
+        .unwrap();
+
+    let response = service.handle(allowed_request).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let wrong_port_request = Request::builder()
+        .method(Method::POST)
+        .header("Accept", "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("Host", "localhost:3000")
+        .body(Full::new(Bytes::from(init_body.to_string())))
+        .unwrap();
+
+    let response = service.handle(wrong_port_request).await;
+    assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
 }
