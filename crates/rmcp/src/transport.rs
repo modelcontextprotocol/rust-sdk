@@ -83,6 +83,8 @@ pub use worker::WorkerTransport;
 
 #[cfg(feature = "transport-child-process")]
 pub mod child_process;
+#[cfg(feature = "which-command")]
+pub use child_process::which_command;
 #[cfg(feature = "transport-child-process")]
 pub use child_process::{ConfigureCommandExt, TokioChildProcess};
 
