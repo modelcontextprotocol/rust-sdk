@@ -1,7 +1,7 @@
 //! Common utilities shared between different macro implementations
 
 use quote::quote;
-use syn::{Attribute, Expr, FnArg, ImplItemFn, Signature, Type};
+use syn::{Attribute, Expr, FnArg, ImplItem, ImplItemFn, ItemImpl, Signature, Type};
 
 /// Parse a None expression
 pub fn none_expr() -> syn::Result<Expr> {
@@ -74,4 +74,25 @@ pub fn find_parameters_type_in_sig(sig: &Signature) -> Option<Box<Type>> {
 /// Find Parameters<T> type in ImplItemFn
 pub fn find_parameters_type_impl(fn_item: &ImplItemFn) -> Option<Box<Type>> {
     find_parameters_type_in_sig(&fn_item.sig)
+}
+
+/// Check whether an `impl` block already contains a method with the given name.
+pub fn has_method(name: &str, item_impl: &ItemImpl) -> bool {
+    item_impl.items.iter().any(|item| match item {
+        ImplItem::Fn(func) => func.sig.ident == name,
+        _ => false,
+    })
+}
+
+/// Check whether an `impl` block carries a sibling handler attribute (e.g.
+/// `#[prompt_handler]` visible from within `#[tool_handler]`).
+///
+/// Matches both bare (`prompt_handler`) and path-qualified (`rmcp::prompt_handler`) forms.
+pub fn has_sibling_handler(item_impl: &ItemImpl, handler_name: &str) -> bool {
+    item_impl.attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == handler_name)
+    })
 }

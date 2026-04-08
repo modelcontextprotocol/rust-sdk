@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
             let stream = server;
             server = ServerOptions::new().create(name)?;
             tokio::spawn(async move {
-                match serve_server(Calculator::new(), stream).await {
+                match serve_server(Calculator, stream).await {
                     Ok(server) => {
                         println!("Server initialized successfully");
                         if let Err(e) = server.waiting().await {

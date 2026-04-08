@@ -19,7 +19,7 @@ mod tests {
             format!("Direct: {}", input)
         }
     }
-    #[tool_handler]
+    #[tool_handler(router = self.tool_router)]
     impl ServerHandler for AnnotatedServer {}
 
     #[test]

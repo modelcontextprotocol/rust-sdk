@@ -3,6 +3,11 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ImplItem, ItemImpl, parse_quote};
 
+use crate::{
+    common::{has_method, has_sibling_handler},
+    tool_handler::{CallerCapability, build_get_info},
+};
+
 #[derive(FromMeta, Debug, Default)]
 #[darling(default)]
 pub struct PromptHandlerAttribute {
@@ -22,7 +27,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
 
     let router_expr = attribute
         .router
-        .unwrap_or_else(|| syn::parse2(quote! { self.prompt_router }).unwrap());
+        .unwrap_or_else(|| syn::parse2(quote! { Self::prompt_router() }).unwrap());
 
     // Add get_prompt implementation
     let get_prompt_impl: ImplItem = parse_quote! {
@@ -89,6 +94,17 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
     }
     if !has_list_prompts {
         impl_block.items.push(list_prompts_impl);
+    }
+
+    // Auto-generate get_info() if not already provided
+    if !has_method("get_info", &impl_block) {
+        // Detect whether tool_handler is also present — if so, it will generate get_info
+        // with both capabilities. Only generate here if tool_handler is NOT present.
+        if !has_sibling_handler(&impl_block, "tool_handler") {
+            let get_info_fn =
+                build_get_info(&impl_block, None, None, None, CallerCapability::Prompts)?;
+            impl_block.items.push(get_info_fn);
+        }
     }
 
     Ok(quote! {

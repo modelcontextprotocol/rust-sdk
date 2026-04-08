@@ -10,7 +10,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolRequestParams, ClientInfo},
+    model::{CallToolRequestParams, ClientInfo, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -364,4 +364,212 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     client.cancel().await?;
     server_handle.await??;
     Ok(())
+}
+
+// --- Tests for field-free minimal server pattern (issue #711) ---
+
+/// Minimal server: no tool_router field, no new(), no get_info().
+#[derive(Debug, Clone)]
+pub struct MinimalServer;
+
+#[tool_router]
+impl MinimalServer {
+    #[tool(description = "Say hello")]
+    fn hello(&self) -> String {
+        "hello".to_string()
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for MinimalServer {}
+
+#[test]
+fn test_minimal_server_get_info_auto_generated() {
+    let server = MinimalServer;
+    let info = server.get_info();
+
+    assert!(
+        info.capabilities.tools.is_some(),
+        "tools capability should be enabled"
+    );
+    assert!(
+        info.capabilities.prompts.is_none(),
+        "prompts should not be auto-enabled"
+    );
+    assert!(
+        info.capabilities.tasks.is_none(),
+        "tasks should not be auto-enabled"
+    );
+    assert!(
+        !info.server_info.name.is_empty(),
+        "server name should not be empty"
+    );
+    assert!(
+        !info.server_info.version.is_empty(),
+        "server version should not be empty"
+    );
+    assert!(
+        info.instructions.is_none(),
+        "instructions should be None by default"
+    );
+}
+
+#[tokio::test]
+async fn test_minimal_server_tool_call() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+
+    let server_handle = tokio::spawn(async move {
+        MinimalServer
+            .serve(server_transport)
+            .await?
+            .waiting()
+            .await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClientHandler::default()
+        .serve(client_transport)
+        .await?;
+
+    let result = client
+        .call_tool(CallToolRequestParams::new("hello"))
+        .await?;
+
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .expect("Expected text content");
+
+    assert_eq!(text, "hello");
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+/// Same minimal pattern as [`MinimalServer`], but `#[tool_handler]` is omitted using
+/// `#[tool_router(server_handler)]` (emits `#[tool_handler]` for a second macro pass).
+#[derive(Debug, Clone)]
+pub struct ElidedToolHandlerServer;
+
+#[tool_router(server_handler)]
+impl ElidedToolHandlerServer {
+    #[tool(description = "Say hi")]
+    fn hi(&self) -> String {
+        "hi".to_string()
+    }
+}
+
+#[test]
+fn test_tool_router_server_handler_flag_matches_minimal_server_get_info() {
+    let server = ElidedToolHandlerServer;
+    let info = server.get_info();
+
+    assert!(info.capabilities.tools.is_some());
+    assert!(
+        info.capabilities.prompts.is_none(),
+        "prompts should not be auto-enabled"
+    );
+}
+
+#[tokio::test]
+async fn test_tool_router_server_handler_flag_end_to_end_tool_call() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+
+    let server_handle = tokio::spawn(async move {
+        ElidedToolHandlerServer
+            .serve(server_transport)
+            .await?
+            .waiting()
+            .await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClientHandler::default()
+        .serve(client_transport)
+        .await?;
+
+    let result = client.call_tool(CallToolRequestParams::new("hi")).await?;
+
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .expect("Expected text content");
+
+    assert_eq!(text, "hi");
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
+/// Server with custom name/version/instructions via tool_handler attributes.
+#[derive(Debug, Clone)]
+pub struct CustomInfoServer;
+
+#[tool_router]
+impl CustomInfoServer {
+    #[tool(description = "Ping")]
+    fn ping(&self) -> String {
+        "pong".to_string()
+    }
+}
+
+#[tool_handler(
+    name = "my-custom-server",
+    version = "2.0.0",
+    instructions = "A custom server"
+)]
+impl ServerHandler for CustomInfoServer {}
+
+#[test]
+fn test_custom_info_server() {
+    let server = CustomInfoServer;
+    let info = server.get_info();
+
+    assert_eq!(info.server_info.name, "my-custom-server");
+    assert_eq!(info.server_info.version, "2.0.0");
+    assert_eq!(info.instructions.as_deref(), Some("A custom server"));
+    assert!(info.capabilities.tools.is_some());
+}
+
+/// Server that provides its own get_info() — macro should not override it.
+#[derive(Debug, Clone)]
+pub struct ManualInfoServer;
+
+#[tool_router]
+impl ManualInfoServer {
+    #[tool(description = "Noop")]
+    fn noop(&self) {}
+}
+
+#[tool_handler]
+impl ServerHandler for ManualInfoServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new("manual", "9.9.9"))
+    }
+}
+
+#[test]
+fn test_manual_get_info_not_overridden() {
+    let server = ManualInfoServer;
+    let info = server.get_info();
+
+    assert_eq!(info.server_info.name, "manual");
+    assert_eq!(info.server_info.version, "9.9.9");
+    assert!(info.capabilities.tools.is_some());
+    assert!(
+        info.capabilities.resources.is_some(),
+        "manual resources should be preserved"
+    );
 }

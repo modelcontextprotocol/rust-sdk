@@ -47,13 +47,16 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// It creates a function that returns a `ToolRouter` instance.
 ///
-/// In most case, you need to add a field for handler to store the router information and initialize it when creating handler, or store it with a static variable.
+/// The generated function is used by `#[tool_handler]` by default (via `Self::tool_router()`),
+/// so in most cases you do not need to store the router in a field.
+///
 /// ## Usage
 ///
-/// | field     | type          | usage |
-/// | :-        | :-            | :-    |
-/// | `router`  | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
-/// | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
+/// | field            | type          | usage |
+/// | :-               | :-            | :-    |
+/// | `router`         | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
+/// | `vis`            | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
+/// | `server_handler` | `flag`        | When set, also emits `#[::rmcp::tool_handler]` on `impl ServerHandler for Self` so you can omit a separate `#[tool_handler]` block. |
 ///
 /// ## Example
 ///
@@ -62,17 +65,32 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// impl MyToolHandler {
 ///     #[tool]
 ///     pub fn my_tool() {
-///         
-///     }
 ///
-///     pub fn new() -> Self {
-///         Self {
-///             // the default name of tool router will be `tool_router`
-///             tool_router: Self::tool_router(),
-///         }
 ///     }
 /// }
+///
+/// // #[tool_handler] calls Self::tool_router() automatically
+/// #[tool_handler]
+/// impl ServerHandler for MyToolHandler {}
 /// ```
+///
+/// ### Eliding `#[tool_handler]`
+///
+/// For a tools-only server, pass `server_handler` so the `impl ServerHandler` block is not written by hand:
+///
+/// ```rust,ignore
+/// #[tool_router(server_handler)]
+/// impl MyToolHandler {
+///     #[tool]
+///     fn my_tool() {}
+/// }
+/// ```
+///
+/// This expands in two steps: first `#[tool_router]` emits the inherent impl plus
+/// `#[::rmcp::tool_handler] impl ServerHandler for MyToolHandler {}`, then `#[tool_handler]`
+/// fills in `call_tool`, `list_tools`, `get_info`, and related methods. If you combine tools with
+/// prompts or tasks on the **same** `impl ServerHandler` block (stacked `#[tool_handler]` /
+/// `#[prompt_handler]` attributes), keep using an explicit `#[tool_handler]` impl instead of `server_handler`.
 ///
 /// Or specify the visibility and router name, which would be helpful when you want to combine multiple routers into one:
 ///
@@ -114,50 +132,62 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 
 /// # tool_handler
 ///
-/// This macro will generate the handler for `tool_call` and `list_tools` methods in the implementation block, by using an existing `ToolRouter` instance.
+/// This macro generates the `call_tool`, `list_tools`, `get_tool`, and (optionally)
+/// `get_info` methods for a `ServerHandler` implementation, using a `ToolRouter`.
 ///
 /// ## Usage
 ///
-/// | field     | type          | usage |
-/// | :-        | :-            | :-    |
-/// | `router`  | `Expr`        | The expression to access the `ToolRouter` instance. Defaults to `self.tool_router`. |
-/// ## Example
+/// | field          | type     | usage |
+/// | :-             | :-       | :-    |
+/// | `router`       | `Expr`   | The expression to access the `ToolRouter` instance. Defaults to `Self::tool_router()`. |
+/// | `meta`         | `Expr`   | Optional metadata for `ListToolsResult`. |
+/// | `name`         | `String` | Custom server name. Defaults to `CARGO_CRATE_NAME`. |
+/// | `version`      | `String` | Custom server version. Defaults to `CARGO_PKG_VERSION`. |
+/// | `instructions` | `String` | Optional human-readable instructions about using this server. |
+///
+/// ## Minimal example (no boilerplate)
+///
+/// The macro automatically generates `get_info()` with tools capability enabled
+/// and reads the server name/version from `Cargo.toml`:
+///
 /// ```rust,ignore
-/// #[tool_handler]
-/// impl ServerHandler for MyToolHandler {
-///     // ...implement other handler
+/// struct TimeServer;
+///
+/// #[tool_router]
+/// impl TimeServer {
+///     #[tool(description = "Get current time")]
+///     async fn get_time(&self) -> String { "12:00".into() }
 /// }
+///
+/// #[tool_handler]
+/// impl ServerHandler for TimeServer {}
 /// ```
 ///
-/// or using a custom router expression:
+/// ## Custom server info
+///
 /// ```rust,ignore
-/// #[tool_handler(router = self.get_router().await)]
+/// #[tool_handler(name = "my-server", version = "1.0.0", instructions = "A helpful server")]
+/// impl ServerHandler for MyToolHandler {}
+/// ```
+///
+/// ## Custom router expression
+///
+/// ```rust,ignore
+/// #[tool_handler(router = self.tool_router)]
 /// impl ServerHandler for MyToolHandler {
 ///    // ...implement other handler
 /// }
 /// ```
 ///
-/// ## Explain
+/// ## Manual `get_info()`
 ///
-/// This macro will be expended to something like this:
+/// If you provide your own `get_info()`, the macro will not generate one:
+///
 /// ```rust,ignore
+/// #[tool_handler]
 /// impl ServerHandler for MyToolHandler {
-///        async fn call_tool(
-///         &self,
-///         request: CallToolRequestParams,
-///         context: RequestContext<RoleServer>,
-///     ) -> Result<CallToolResult, rmcp::ErrorData> {
-///         let tcc = ToolCallContext::new(self, request, context);
-///         self.tool_router.call(tcc).await
-///     }
-///
-///     async fn list_tools(
-///         &self,
-///         _request: Option<PaginatedRequestParams>,
-///         _context: RequestContext<RoleServer>,
-///     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-///         let items = self.tool_router.list_all();
-///         Ok(ListToolsResult::with_all_items(items))
+///     fn get_info(&self) -> ServerInfo {
+///         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
 ///     }
 /// }
 /// ```
@@ -237,13 +267,16 @@ pub fn prompt_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 
 /// # prompt_handler
 ///
-/// This macro generates handler methods for `get_prompt` and `list_prompts` in the implementation block, using an existing `PromptRouter` instance.
+/// This macro generates handler methods for `get_prompt` and `list_prompts` in the
+/// implementation block, using a `PromptRouter`. It also auto-generates `get_info()`
+/// with prompts capability enabled if not already provided.
 ///
 /// ## Usage
 ///
 /// | field     | type   | usage |
 /// | :-        | :-     | :-    |
-/// | `router`  | `Expr` | The expression to access the `PromptRouter` instance. Defaults to `self.prompt_router`. |
+/// | `router`  | `Expr` | The expression to access the `PromptRouter` instance. Defaults to `Self::prompt_router()`. |
+/// | `meta`    | `Expr` | Optional metadata for `ListPromptsResult`. |
 ///
 /// ## Example
 /// ```rust,ignore
@@ -255,7 +288,7 @@ pub fn prompt_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// or using a custom router expression:
 /// ```rust,ignore
-/// #[prompt_handler(router = self.get_prompt_router())]
+/// #[prompt_handler(router = self.prompt_router)]
 /// impl ServerHandler for MyPromptHandler {
 ///    // ...implement other handler methods
 /// }
