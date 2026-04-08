@@ -57,7 +57,7 @@ impl sse_stream::Timer for TokioTimer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ServerSseMessage {
     /// The event ID for this message. When set, clients can use this ID
@@ -69,6 +69,28 @@ pub struct ServerSseMessage {
     /// The retry interval hint for clients. Clients should wait this duration
     /// before attempting to reconnect. This maps to the SSE `retry:` field.
     pub retry: Option<Duration>,
+}
+
+impl ServerSseMessage {
+    /// Create a message carrying a JSON-RPC response/notification with an event ID.
+    pub fn new(event_id: impl Into<String>, message: ServerJsonRpcMessage) -> Self {
+        Self {
+            event_id: Some(event_id.into()),
+            message: Some(Arc::new(message)),
+            retry: None,
+        }
+    }
+
+    /// Create a priming event that tells the client to reconnect after `retry`
+    /// if the connection drops.
+    /// See [SEP-1699](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1699).
+    pub fn priming(event_id: impl Into<String>, retry: Duration) -> Self {
+        Self {
+            event_id: Some(event_id.into()),
+            message: None,
+            retry: Some(retry),
+        }
+    }
 }
 
 pub(crate) fn sse_stream_response(
