@@ -122,6 +122,7 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
         Ok(CreateElicitationResult {
             action: ElicitationAction::Accept,
             content,
+            meta: None,
         })
     }
 }
@@ -174,6 +175,7 @@ impl ClientHandler for FullClientHandler {
         Ok(CreateElicitationResult {
             action: ElicitationAction::Accept,
             content: Some(json!({"username": "testuser", "email": "test@example.com"})),
+            meta: None,
         })
     }
 }

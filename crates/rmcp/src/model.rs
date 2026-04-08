@@ -2699,6 +2699,10 @@ pub struct CreateElicitationResult {
     /// Only present when action is Accept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Value>,
+
+    /// Optional protocol-level metadata for this result.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl CreateElicitationResult {
@@ -2707,12 +2711,19 @@ impl CreateElicitationResult {
         Self {
             action,
             content: None,
+            meta: None,
         }
     }
 
     /// Set the content on this result.
     pub fn with_content(mut self, content: Value) -> Self {
         self.content = Some(content);
+        self
+    }
+
+    /// Set the metadata on this result.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
         self
     }
 }

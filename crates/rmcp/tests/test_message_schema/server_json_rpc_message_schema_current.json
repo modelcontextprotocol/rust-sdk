@@ -388,6 +388,7 @@
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
+          "default": [],
           "items": {
             "$ref": "#/definitions/Annotated"
           }
@@ -402,10 +403,7 @@
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
-      },
-      "required": [
-        "content"
-      ]
+      }
     },
     "CancelTaskResult": {
       "description": "Response to a `tasks/cancel` request.\n\nPer spec, `CancelTaskResult = allOf[Result, Task]` — same shape as `GetTaskResult`.",
@@ -657,6 +655,14 @@
       "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this result.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "action": {
           "description": "The user's decision on how to handle the elicitation request",
           "allOf": [
