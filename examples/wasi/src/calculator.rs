@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 
 use rmcp::{
-    ServerHandler,
     handler::server::wrapper::{Json, Parameters},
-    schemars, tool, tool_handler, tool_router,
+    schemars, tool, tool_router,
 };
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -24,13 +23,7 @@ pub struct SubRequest {
 #[derive(Debug, Clone, Default)]
 pub struct Calculator;
 
-impl Calculator {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[tool_router]
+#[tool_router(server_handler)]
 impl Calculator {
     #[tool(description = "Calculate the sum of two numbers")]
     fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
@@ -42,6 +35,3 @@ impl Calculator {
         Json(a - b)
     }
 }
-
-#[tool_handler(instructions = "A simple calculator")]
-impl ServerHandler for Calculator {}

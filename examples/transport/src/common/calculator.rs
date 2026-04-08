@@ -24,12 +24,6 @@ pub struct SubRequest {
 #[derive(Debug, Clone)]
 pub struct Calculator;
 
-impl Calculator {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 #[tool_router]
 impl Calculator {
     #[tool(description = "Calculate the sum of two numbers")]
