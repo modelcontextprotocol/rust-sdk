@@ -449,6 +449,64 @@ async fn test_minimal_server_tool_call() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Same minimal pattern as [`MinimalServer`], but `#[tool_handler]` is omitted using
+/// `#[tool_router(server_handler)]` (emits `#[tool_handler]` for a second macro pass).
+#[derive(Debug, Clone)]
+pub struct ElidedToolHandlerServer;
+
+#[tool_router(server_handler)]
+impl ElidedToolHandlerServer {
+    #[tool(description = "Say hi")]
+    fn hi(&self) -> String {
+        "hi".to_string()
+    }
+}
+
+#[test]
+fn test_tool_router_server_handler_flag_matches_minimal_server_get_info() {
+    let server = ElidedToolHandlerServer;
+    let info = server.get_info();
+
+    assert!(info.capabilities.tools.is_some());
+    assert!(
+        info.capabilities.prompts.is_none(),
+        "prompts should not be auto-enabled"
+    );
+}
+
+#[tokio::test]
+async fn test_tool_router_server_handler_flag_end_to_end_tool_call() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+
+    let server_handle = tokio::spawn(async move {
+        ElidedToolHandlerServer
+            .serve(server_transport)
+            .await?
+            .waiting()
+            .await?;
+        anyhow::Ok(())
+    });
+
+    let client = DummyClientHandler::default()
+        .serve(client_transport)
+        .await?;
+
+    let result = client.call_tool(CallToolRequestParams::new("hi")).await?;
+
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.raw.as_text())
+        .map(|t| t.text.as_str())
+        .expect("Expected text content");
+
+    assert_eq!(text, "hi");
+
+    client.cancel().await?;
+    server_handle.await??;
+    Ok(())
+}
+
 /// Server with custom name/version/instructions via tool_handler attributes.
 #[derive(Debug, Clone)]
 pub struct CustomInfoServer;

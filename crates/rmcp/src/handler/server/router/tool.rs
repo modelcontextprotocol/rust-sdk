@@ -5,7 +5,7 @@
 //!
 //! ```rust
 //! # use rmcp::{
-//! #     tool_router, tool, tool_handler, ServerHandler,
+//! #     tool_router, tool,
 //! #     handler::server::{wrapper::{Parameters, Json}, tool::ToolRouter},
 //! #     schemars
 //! # };
@@ -21,7 +21,7 @@
 //! struct AddOutput {
 //!     sum: usize
 //! }
-//! #[tool_router]
+//! #[tool_router(server_handler)]
 //! impl Server {
 //!     #[tool(name = "adder", description = "Modular add two integers")]
 //!     fn add(
@@ -31,10 +31,12 @@
 //!         Json(AddOutput { sum: left.wrapping_add(right) })
 //!     }
 //! }
-//!
-//! #[tool_handler]
-//! impl ServerHandler for Server {}
 //! ```
+//!
+//! The `server_handler` flag emits `#[tool_handler]` for you (tools-only servers). For custom
+//! `#[tool_handler(...)]` options or multiple handler macros on one `impl ServerHandler`, write
+//! `#[tool_router]` and `#[tool_handler] impl ServerHandler for ...` explicitly—see
+//! [`tool_router`][crate::tool_router] and [`tool_handler`][crate::tool_handler].
 //!
 //! Using the macro-based code pattern above is suitable for small MCP servers with simple interfaces.
 //! When the business logic become larger, it is recommended that each tool should reside

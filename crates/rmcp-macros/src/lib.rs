@@ -52,10 +52,11 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ## Usage
 ///
-/// | field     | type          | usage |
-/// | :-        | :-            | :-    |
-/// | `router`  | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
-/// | `vis`     | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
+/// | field            | type          | usage |
+/// | :-               | :-            | :-    |
+/// | `router`         | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
+/// | `vis`            | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
+/// | `server_handler` | `flag`        | When set, also emits `#[::rmcp::tool_handler]` on `impl ServerHandler for Self` so you can omit a separate `#[tool_handler]` block. |
 ///
 /// ## Example
 ///
@@ -72,6 +73,24 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// #[tool_handler]
 /// impl ServerHandler for MyToolHandler {}
 /// ```
+///
+/// ### Eliding `#[tool_handler]`
+///
+/// For a tools-only server, pass `server_handler` so the `impl ServerHandler` block is not written by hand:
+///
+/// ```rust,ignore
+/// #[tool_router(server_handler)]
+/// impl MyToolHandler {
+///     #[tool]
+///     fn my_tool() {}
+/// }
+/// ```
+///
+/// This expands in two steps: first `#[tool_router]` emits the inherent impl plus
+/// `#[::rmcp::tool_handler] impl ServerHandler for MyToolHandler {}`, then `#[tool_handler]`
+/// fills in `call_tool`, `list_tools`, `get_info`, and related methods. If you combine tools with
+/// prompts or tasks on the **same** `impl ServerHandler` block (stacked `#[tool_handler]` /
+/// `#[prompt_handler]` attributes), keep using an explicit `#[tool_handler]` impl instead of `server_handler`.
 ///
 /// Or specify the visibility and router name, which would be helpful when you want to combine multiple routers into one:
 ///
