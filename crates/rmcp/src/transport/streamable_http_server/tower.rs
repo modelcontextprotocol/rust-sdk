@@ -679,11 +679,8 @@ where
                     .initialize_session(&session_id, message)
                     .await
                     .map_err(internal_error_response("create stream"))?;
-                let stream = futures::stream::once(async move {
-                    let mut msg = ServerSseMessage::default();
-                    msg.message = Some(Arc::new(response));
-                    msg
-                });
+                let stream =
+                    futures::stream::once(async move { ServerSseMessage::from_message(response) });
                 // Prepend priming event if sse_retry configured
                 let stream = if let Some(retry) = self.config.sse_retry {
                     let priming = ServerSseMessage::priming("0", retry);
@@ -760,9 +757,7 @@ where
                         // SSE mode (default): original behaviour preserved unchanged
                         let stream = ReceiverStream::new(receiver).map(|message| {
                             tracing::trace!(?message);
-                            let mut msg = ServerSseMessage::default();
-                            msg.message = Some(Arc::new(message));
-                            msg
+                            ServerSseMessage::from_message(message)
                         });
                         Ok(sse_stream_response(
                             stream,
