@@ -499,11 +499,7 @@ where
                 .map_err(internal_error_response("create standalone stream"))?;
             // Prepend priming event if sse_retry configured
             let stream = if let Some(retry) = self.config.sse_retry {
-                let priming = ServerSseMessage {
-                    event_id: Some("0".into()),
-                    message: None,
-                    retry: Some(retry),
-                };
+                let priming = ServerSseMessage::priming("0", retry);
                 futures::stream::once(async move { priming })
                     .chain(stream)
                     .left_stream()
@@ -609,11 +605,7 @@ where
                             .map_err(internal_error_response("get session"))?;
                         // Prepend priming event if sse_retry configured
                         let stream = if let Some(retry) = self.config.sse_retry {
-                            let priming = ServerSseMessage {
-                                event_id: Some("0".into()),
-                                message: None,
-                                retry: Some(retry),
-                            };
+                            let priming = ServerSseMessage::priming("0", retry);
                             futures::stream::once(async move { priming })
                                 .chain(stream)
                                 .left_stream()
@@ -687,20 +679,11 @@ where
                     .initialize_session(&session_id, message)
                     .await
                     .map_err(internal_error_response("create stream"))?;
-                let stream = futures::stream::once(async move {
-                    ServerSseMessage {
-                        event_id: None,
-                        message: Some(Arc::new(response)),
-                        retry: None,
-                    }
-                });
+                let stream =
+                    futures::stream::once(async move { ServerSseMessage::from_message(response) });
                 // Prepend priming event if sse_retry configured
                 let stream = if let Some(retry) = self.config.sse_retry {
-                    let priming = ServerSseMessage {
-                        event_id: Some("0".into()),
-                        message: None,
-                        retry: Some(retry),
-                    };
+                    let priming = ServerSseMessage::priming("0", retry);
                     futures::stream::once(async move { priming })
                         .chain(stream)
                         .left_stream()
@@ -774,11 +757,7 @@ where
                         // SSE mode (default): original behaviour preserved unchanged
                         let stream = ReceiverStream::new(receiver).map(|message| {
                             tracing::trace!(?message);
-                            ServerSseMessage {
-                                event_id: None,
-                                message: Some(Arc::new(message)),
-                                retry: None,
-                            }
+                            ServerSseMessage::from_message(message)
                         });
                         Ok(sse_stream_response(
                             stream,

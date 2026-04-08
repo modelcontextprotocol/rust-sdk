@@ -65,8 +65,10 @@ pub(crate) fn extract_scope_from_header(header: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "client-side-sse")]
     use super::*;
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn extract_scope_quoted() {
         let header = r#"Bearer error="insufficient_scope", scope="files:read files:write""#;
@@ -76,6 +78,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn extract_scope_unquoted() {
         let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
@@ -85,12 +88,14 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn extract_scope_missing() {
         let header = r#"Bearer error="invalid_token""#;
         assert_eq!(extract_scope_from_header(header), None);
     }
 
+    #[cfg(feature = "client-side-sse")]
     #[test]
     fn extract_scope_empty_header() {
         assert_eq!(extract_scope_from_header("Bearer"), None);

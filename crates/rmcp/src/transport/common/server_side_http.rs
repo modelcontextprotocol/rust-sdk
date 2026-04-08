@@ -57,7 +57,7 @@ impl sse_stream::Timer for TokioTimer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ServerSseMessage {
     /// The event ID for this message. When set, clients can use this ID
@@ -69,6 +69,37 @@ pub struct ServerSseMessage {
     /// The retry interval hint for clients. Clients should wait this duration
     /// before attempting to reconnect. This maps to the SSE `retry:` field.
     pub retry: Option<Duration>,
+}
+
+impl ServerSseMessage {
+    /// Create a message carrying a JSON-RPC response/notification with an event ID.
+    pub fn new(event_id: impl Into<String>, message: ServerJsonRpcMessage) -> Self {
+        Self {
+            event_id: Some(event_id.into()),
+            message: Some(Arc::new(message)),
+            retry: None,
+        }
+    }
+
+    /// Wrap a JSON-RPC message without an event ID or retry hint.
+    pub fn from_message(message: ServerJsonRpcMessage) -> Self {
+        Self {
+            event_id: None,
+            message: Some(Arc::new(message)),
+            retry: None,
+        }
+    }
+
+    /// Create a priming event that tells the client to reconnect after `retry`
+    /// if the connection drops.
+    /// See [SEP-1699](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1699).
+    pub fn priming(event_id: impl Into<String>, retry: Duration) -> Self {
+        Self {
+            event_id: Some(event_id.into()),
+            message: None,
+            retry: Some(retry),
+        }
+    }
 }
 
 pub(crate) fn sse_stream_response(
@@ -167,5 +198,51 @@ where
                 .expect("valid response");
             Err(response)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{EmptyResult, JsonRpcResponse, JsonRpcVersion2_0, RequestId, ServerResult};
+
+    fn dummy_message() -> ServerJsonRpcMessage {
+        ServerJsonRpcMessage::Response(JsonRpcResponse {
+            jsonrpc: JsonRpcVersion2_0,
+            id: RequestId::Number(1),
+            result: ServerResult::EmptyResult(EmptyResult {}),
+        })
+    }
+
+    #[test]
+    fn default_has_all_none() {
+        let msg = ServerSseMessage::default();
+        assert!(msg.event_id.is_none());
+        assert!(msg.message.is_none());
+        assert!(msg.retry.is_none());
+    }
+
+    #[test]
+    fn new_sets_event_id_and_message() {
+        let msg = ServerSseMessage::new("42", dummy_message());
+        assert_eq!(msg.event_id.as_deref(), Some("42"));
+        assert!(msg.message.is_some());
+        assert!(msg.retry.is_none());
+    }
+
+    #[test]
+    fn from_message_has_no_event_id() {
+        let msg = ServerSseMessage::from_message(dummy_message());
+        assert!(msg.event_id.is_none());
+        assert!(msg.message.is_some());
+        assert!(msg.retry.is_none());
+    }
+
+    #[test]
+    fn priming_sets_event_id_and_retry() {
+        let msg = ServerSseMessage::priming("0", Duration::from_secs(5));
+        assert_eq!(msg.event_id.as_deref(), Some("0"));
+        assert!(msg.message.is_none());
+        assert_eq!(msg.retry, Some(Duration::from_secs(5)));
     }
 }

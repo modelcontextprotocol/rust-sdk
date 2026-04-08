@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     num::ParseIntError,
-    sync::Arc,
     time::Duration,
 };
 
@@ -222,21 +221,13 @@ impl CachedTx {
 
     async fn send(&mut self, message: ServerJsonRpcMessage) {
         let event_id = self.next_event_id();
-        let message = ServerSseMessage {
-            event_id: Some(event_id.to_string()),
-            message: Some(Arc::new(message)),
-            retry: None,
-        };
+        let message = ServerSseMessage::new(event_id.to_string(), message);
         self.cache_and_send(message).await;
     }
 
     async fn send_priming(&mut self, retry: Duration) {
         let event_id = self.next_event_id();
-        let message = ServerSseMessage {
-            event_id: Some(event_id.to_string()),
-            message: None,
-            retry: Some(retry),
-        };
+        let message = ServerSseMessage::priming(event_id.to_string(), retry);
         self.cache_and_send(message).await;
     }
 
