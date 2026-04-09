@@ -53,6 +53,13 @@ pub enum ServerInitializeError {
     #[error("expect initialized request, but received: {0:?}")]
     ExpectedInitializeRequest(Option<ClientJsonRpcMessage>),
 
+    #[deprecated(
+        since = "1.4.0",
+        note = "The server no longer gates on the initialized notification. This variant is never constructed and will be removed in a future major release."
+    )]
+    #[error("expect initialized notification, but received: {0:?}")]
+    ExpectedInitializedNotification(Option<ClientJsonRpcMessage>),
+
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
 
