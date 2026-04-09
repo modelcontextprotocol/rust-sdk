@@ -1545,23 +1545,18 @@ pub enum Role {
 }
 
 /// Tool selection mode (SEP-1577).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum ToolChoiceMode {
     /// Model decides whether to use tools
+    #[default]
     Auto,
     /// Model must use at least one tool
     Required,
     /// Model must not use tools
     None,
-}
-
-impl Default for ToolChoiceMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Tool choice configuration (SEP-1577).
