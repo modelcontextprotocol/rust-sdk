@@ -25,6 +25,8 @@ jobs:
           fetch-depth: 0
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92"
       # Using fork until semver_check_features support is released upstream.
       # See: https://github.com/release-plz/release-plz/pull/2757
       - name: Install release-plz from fork
@@ -53,6 +55,8 @@ jobs:
           fetch-depth: 0
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92"
       # Using fork until semver_check_features support is released upstream.
       # See: https://github.com/release-plz/release-plz/pull/2757
       - name: Install release-plz from fork
