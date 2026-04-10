@@ -363,10 +363,15 @@ impl LocalSessionWorker {
                 if channel.resources.is_empty() || matches!(resource, ResourceKey::McpRequestId(_))
                 {
                     tracing::debug!(http_request_id, "close http request wise channel");
-                    if let Some(channel) = self.tx_router.remove(&http_request_id) {
-                        for resource in channel.resources {
+                    if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
+                        for resource in channel.resources.drain() {
                             self.resource_router.remove(&resource);
                         }
+                        // Replace the sender with a closed dummy so no new
+                        // messages are routed here, but the cache stays alive
+                        // for late resume requests.
+                        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
+                        channel.tx.tx = closed_tx;
                     }
                 }
             } else {
@@ -416,6 +421,7 @@ impl LocalSessionWorker {
     async fn establish_request_wise_channel(
         &mut self,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        self.tx_router.retain(|_, rw| !rw.tx.tx.is_closed());
         let http_request_id = self.next_http_request_id();
         let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
         let starting_index = usize::from(self.session_config.sse_retry.is_some());
@@ -535,24 +541,25 @@ impl LocalSessionWorker {
         match last_event_id.http_request_id {
             Some(http_request_id) => {
                 if let Some(request_wise) = self.tx_router.get_mut(&http_request_id) {
-                    // Resume existing request-wise channel
-                    let channel = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-                    let (tx, rx) = channel;
+                    let was_completed = request_wise.tx.tx.is_closed();
+                    let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
                     request_wise.tx.tx = tx;
                     let index = last_event_id.index;
-                    // sync messages after index
                     request_wise.tx.sync(index).await?;
+                    if was_completed {
+                        // Close the sender after replaying so the stream ends
+                        // instead of hanging indefinitely.
+                        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
+                        request_wise.tx.tx = closed_tx;
+                    }
                     Ok(StreamableHttpMessageReceiver {
                         http_request_id: Some(http_request_id),
                         inner: rx,
                     })
                 } else {
-                    // Request-wise channel completed (POST response already delivered).
-                    // The client's EventSource is reconnecting after the POST SSE stream
-                    // ended. Fall through to common channel handling below.
                     tracing::debug!(
                         http_request_id,
-                        "Request-wise channel completed, falling back to common channel"
+                        "Request-wise channel not found, falling back to common channel"
                     );
                     self.resume_or_shadow_common(last_event_id.index).await
                 }

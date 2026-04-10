@@ -198,6 +198,115 @@ async fn test_request_wise_priming_includes_http_request_id() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn test_resume_after_request_wise_channel_completed() -> anyhow::Result<()> {
+    let ct = CancellationToken::new();
+
+    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+        StreamableHttpService::new(
+            || Ok(Calculator::new()),
+            Default::default(),
+            StreamableHttpServerConfig::default()
+                .with_sse_keep_alive(None)
+                .with_cancellation_token(ct.child_token()),
+        );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = tcp_listener.local_addr()?;
+
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let client = reqwest::Client::new();
+
+    // Initialize session
+    let response = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 200);
+    let session_id: SessionId = response.headers()["mcp-session-id"].to_str()?.into();
+
+    // Complete handshake
+    let status = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?
+        .status();
+    assert_eq!(status, 202);
+
+    // Call a tool and consume the full response (channel completes)
+    let body = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sum","arguments":{"a":1,"b":2}}}"#)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let events: Vec<&str> = body.split("\n\n").filter(|e| !e.is_empty()).collect();
+    assert!(
+        events.len() >= 2,
+        "expected priming + response, got: {body}"
+    );
+    assert!(events[0].contains("id: 0/0"));
+    assert!(events[1].contains(r#""id":2"#));
+
+    // Resume with Last-Event-ID after the channel has completed.
+    // The cached events should be replayed and the stream should end.
+    let resume_response = client
+        .get(format!("http://{addr}/mcp"))
+        .header("Accept", "text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .header("last-event-id", "0/0")
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await?;
+    assert_eq!(resume_response.status(), 200);
+
+    let resume_body = resume_response.text().await?;
+    let resume_events: Vec<&str> = resume_body
+        .split("\n\n")
+        .filter(|e| !e.is_empty())
+        .collect();
+    assert!(
+        !resume_events.is_empty(),
+        "expected replayed events on resume, got empty"
+    );
+
+    // The replayed event should contain the original response
+    let replayed = resume_events[0];
+    assert!(
+        replayed.contains(r#""id":2"#),
+        "replayed event should contain the tool response, got: {replayed}"
+    );
+
+    ct.cancel();
+    handle.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_priming_on_stream_close() -> anyhow::Result<()> {
     use std::sync::Arc;
 
