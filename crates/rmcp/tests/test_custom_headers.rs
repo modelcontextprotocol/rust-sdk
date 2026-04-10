@@ -866,14 +866,16 @@ async fn test_server_rejects_unsupported_protocol_version() {
 fn test_protocol_version_utilities() {
     use rmcp::model::ProtocolVersion;
 
+    assert_eq!(ProtocolVersion::V_2025_11_25.as_str(), "2025-11-25");
     assert_eq!(ProtocolVersion::V_2025_06_18.as_str(), "2025-06-18");
     assert_eq!(ProtocolVersion::V_2025_03_26.as_str(), "2025-03-26");
     assert_eq!(ProtocolVersion::V_2024_11_05.as_str(), "2024-11-05");
 
-    assert_eq!(ProtocolVersion::KNOWN_VERSIONS.len(), 3);
+    assert_eq!(ProtocolVersion::KNOWN_VERSIONS.len(), 4);
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2024_11_05));
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2025_03_26));
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2025_06_18));
+    assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
 }
 
 /// Integration test: Verify server validates only the Host header for DNS rebinding protection
