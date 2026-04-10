@@ -89,17 +89,14 @@ impl SessionManager for LocalSessionManager {
         let http_request_id = receiver.http_request_id;
         handle.push_message(message, http_request_id).await?;
 
-        let priming_events: Vec<ServerSseMessage> = match self.session_config.sse_retry {
-            Some(retry) => {
-                let event_id = match http_request_id {
-                    Some(id) => format!("0/{id}"),
-                    None => "0".into(),
-                };
-                vec![ServerSseMessage::priming(event_id, retry)]
-            }
-            None => vec![],
-        };
-        Ok(futures::stream::iter(priming_events).chain(ReceiverStream::new(receiver.inner)))
+        let priming = self.session_config.sse_retry.map(|retry| {
+            let event_id = match http_request_id {
+                Some(id) => format!("0/{id}"),
+                None => "0".into(),
+            };
+            ServerSseMessage::priming(event_id, retry)
+        });
+        Ok(futures::stream::iter(priming).chain(ReceiverStream::new(receiver.inner)))
     }
 
     async fn create_standalone_stream(
@@ -421,11 +418,7 @@ impl LocalSessionWorker {
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
         let http_request_id = self.next_http_request_id();
         let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-        let starting_index = if self.session_config.sse_retry.is_some() {
-            1
-        } else {
-            0
-        };
+        let starting_index = usize::from(self.session_config.sse_retry.is_some());
         self.tx_router.insert(
             http_request_id,
             HttpRequestWise {
