@@ -282,9 +282,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 
 impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     /// Convert a raw SSE stream into a JSON-RPC message stream without
-    /// reconnection logic.  Used for per-request POST SSE responses where
-    /// we close the stream after the first response and want the underlying
-    /// HTTP connection to be returned to the pool promptly.
+    /// reconnection logic.
     fn raw_sse_to_jsonrpc(
         stream: BoxedSseStream,
     ) -> impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> + Send + 'static
@@ -347,11 +345,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             }
             if close_on_response && is_response {
                 tracing::debug!("got response, draining sse stream for connection reuse");
-                // Drain remaining stream bytes so the HTTP/1.1 connection can
-                // be returned to the pool instead of being discarded.  The
-                // server closes the channel shortly after sending the response,
-                // so this normally completes in microseconds on localhost.  The
-                // timeout guards against servers that keep the stream open.
+                // Consume the remaining stream so the HTTP/1.1 connection
+                // returns to the pool cleanly.
                 let _ = tokio::time::timeout(std::time::Duration::from_millis(50), async {
                     while sse_stream.next().await.is_some() {}
                 })
@@ -788,10 +783,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                         Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
-                            // Per-request POST SSE streams use a thin
-                            // adapter instead of SseAutoReconnectStream so
-                            // the stream ends immediately when the server
-                            // closes the channel, enabling connection reuse.
                             streams.spawn(Self::execute_sse_stream(
                                 Self::raw_sse_to_jsonrpc(stream),
                                 sse_worker_tx.clone(),

@@ -24,11 +24,11 @@ struct SumRequest {
 }
 
 #[derive(Debug, Clone)]
-struct EchoServer {
+struct SumServer {
     tool_router: ToolRouter<Self>,
 }
 
-impl EchoServer {
+impl SumServer {
     fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -37,7 +37,7 @@ impl EchoServer {
 }
 
 #[tool_router]
-impl EchoServer {
+impl SumServer {
     #[tool(description = "Sum two numbers")]
     fn sum(&self, Parameters(SumRequest { a, b }): Parameters<SumRequest>) -> String {
         (a + b).to_string()
@@ -45,7 +45,7 @@ impl EchoServer {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for EchoServer {
+impl ServerHandler for SumServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
@@ -59,14 +59,13 @@ impl ServerHandler for EchoServer {
 async fn test_subsequent_tool_calls_reuse_connections() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
 
-    let service: StreamableHttpService<EchoServer, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(EchoServer::new()),
-            Default::default(),
-            StreamableHttpServerConfig::default()
-                .with_sse_keep_alive(None)
-                .with_cancellation_token(ct.child_token()),
-        );
+    let service: StreamableHttpService<SumServer, LocalSessionManager> = StreamableHttpService::new(
+        || Ok(SumServer::new()),
+        Default::default(),
+        StreamableHttpServerConfig::default()
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    );
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
