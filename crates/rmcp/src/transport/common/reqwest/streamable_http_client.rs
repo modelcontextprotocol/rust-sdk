@@ -262,7 +262,7 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// This method requires the `transport-streamable-http-client-reqwest` feature.
     pub fn from_uri(uri: impl Into<Arc<str>>) -> Self {
         StreamableHttpClientTransport::with_client(
-            reqwest::Client::default(),
+            Self::default_http_client(),
             StreamableHttpClientTransportConfig {
                 uri: uri.into(),
                 auth_header: None,
@@ -277,7 +277,19 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     ///
     /// * `config` - The config to use with this transport
     pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
-        StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
+        StreamableHttpClientTransport::with_client(Self::default_http_client(), config)
+    }
+
+    /// Build the default reqwest client for this transport.
+    ///
+    /// Disables idle connection pooling to avoid ~40 ms stalls caused by
+    /// TCP Delayed ACK on Linux when the previous response body was not
+    /// fully consumed before the pool attempts to reuse the connection.
+    fn default_http_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(0)
+            .build()
+            .expect("failed to build default reqwest client")
     }
 }
 
