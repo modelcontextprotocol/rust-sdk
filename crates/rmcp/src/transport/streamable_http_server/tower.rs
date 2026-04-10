@@ -598,20 +598,14 @@ where
 
                 match message {
                     ClientJsonRpcMessage::Request(_) => {
+                        // Priming for request-wise streams is handled by the
+                        // session layer (SessionManager::create_stream) which
+                        // has access to the http_request_id for correct event IDs.
                         let stream = self
                             .session_manager
                             .create_stream(&session_id, message)
                             .await
                             .map_err(internal_error_response("get session"))?;
-                        // Prepend priming event if sse_retry configured
-                        let stream = if let Some(retry) = self.config.sse_retry {
-                            let priming = ServerSseMessage::priming("0", retry);
-                            futures::stream::once(async move { priming })
-                                .chain(stream)
-                                .left_stream()
-                        } else {
-                            stream.right_stream()
-                        };
                         Ok(sse_stream_response(
                             stream,
                             self.config.sse_keep_alive,

@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use thiserror::Error;
 use tokio::sync::{
     mpsc::{Receiver, Sender},
@@ -86,10 +86,20 @@ impl SessionManager for LocalSessionManager {
             .get(id)
             .ok_or(LocalSessionManagerError::SessionNotFound(id.clone()))?;
         let receiver = handle.establish_request_wise_channel().await?;
-        handle
-            .push_message(message, receiver.http_request_id)
-            .await?;
-        Ok(ReceiverStream::new(receiver.inner))
+        let http_request_id = receiver.http_request_id;
+        handle.push_message(message, http_request_id).await?;
+
+        let priming_events: Vec<ServerSseMessage> = match self.session_config.sse_retry {
+            Some(retry) => {
+                let event_id = match http_request_id {
+                    Some(id) => format!("0/{id}"),
+                    None => "0".into(),
+                };
+                vec![ServerSseMessage::priming(event_id, retry)]
+            }
+            None => vec![],
+        };
+        Ok(futures::stream::iter(priming_events).chain(ReceiverStream::new(receiver.inner)))
     }
 
     async fn create_standalone_stream(
@@ -188,23 +198,29 @@ struct CachedTx {
     cache: VecDeque<ServerSseMessage>,
     http_request_id: Option<HttpRequestId>,
     capacity: usize,
+    starting_index: usize,
 }
 
 impl CachedTx {
-    fn new(tx: Sender<ServerSseMessage>, http_request_id: Option<HttpRequestId>) -> Self {
+    fn new(
+        tx: Sender<ServerSseMessage>,
+        http_request_id: Option<HttpRequestId>,
+        starting_index: usize,
+    ) -> Self {
         Self {
             cache: VecDeque::with_capacity(tx.capacity()),
             capacity: tx.capacity(),
             tx,
             http_request_id,
+            starting_index,
         }
     }
     fn new_common(tx: Sender<ServerSseMessage>) -> Self {
-        Self::new(tx, None)
+        Self::new(tx, None, 0)
     }
 
     fn next_event_id(&self) -> EventId {
-        let index = self.cache.back().map_or(0, |m| {
+        let index = self.cache.back().map_or(self.starting_index, |m| {
             m.event_id
                 .as_deref()
                 .unwrap_or_default()
@@ -405,11 +421,16 @@ impl LocalSessionWorker {
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
         let http_request_id = self.next_http_request_id();
         let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
+        let starting_index = if self.session_config.sse_retry.is_some() {
+            1
+        } else {
+            0
+        };
         self.tx_router.insert(
             http_request_id,
             HttpRequestWise {
                 resources: Default::default(),
-                tx: CachedTx::new(tx, Some(http_request_id)),
+                tx: CachedTx::new(tx, Some(http_request_id), starting_index),
             },
         );
         tracing::debug!(http_request_id, "establish new request wise channel");
@@ -1072,11 +1093,17 @@ pub struct SessionConfig {
     /// Defaults to 5 minutes. Set to `None` to disable (not recommended
     /// for long-running servers behind proxies).
     pub keep_alive: Option<Duration>,
+    /// SSE retry interval for priming events on request-wise streams.
+    /// When set, the session layer prepends a priming event with the correct
+    /// stream-identifying event ID to each request-wise SSE stream.
+    /// Default is 3 seconds, matching `StreamableHttpServerConfig::default()`.
+    pub sse_retry: Option<Duration>,
 }
 
 impl SessionConfig {
     pub const DEFAULT_CHANNEL_CAPACITY: usize = 16;
     pub const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(300);
+    pub const DEFAULT_SSE_RETRY: Duration = Duration::from_secs(3);
 }
 
 impl Default for SessionConfig {
@@ -1084,6 +1111,7 @@ impl Default for SessionConfig {
         Self {
             channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
             keep_alive: Some(Self::DEFAULT_KEEP_ALIVE),
+            sse_retry: Some(Self::DEFAULT_SSE_RETRY),
         }
     }
 }
