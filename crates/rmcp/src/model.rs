@@ -152,14 +152,19 @@ impl std::fmt::Display for ProtocolVersion {
 }
 
 impl ProtocolVersion {
+    pub const V_2025_11_25: Self = Self(Cow::Borrowed("2025-11-25"));
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const LATEST: Self = Self::V_2025_06_18;
+    pub const LATEST: Self = Self::V_2025_11_25;
 
     /// All protocol versions known to this SDK.
-    pub const KNOWN_VERSIONS: &[Self] =
-        &[Self::V_2024_11_05, Self::V_2025_03_26, Self::V_2025_06_18];
+    pub const KNOWN_VERSIONS: &[Self] = &[
+        Self::V_2024_11_05,
+        Self::V_2025_03_26,
+        Self::V_2025_06_18,
+        Self::V_2025_11_25,
+    ];
 
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
@@ -187,6 +192,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
             "2024-11-05" => return Ok(ProtocolVersion::V_2024_11_05),
             "2025-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
             "2025-06-18" => return Ok(ProtocolVersion::V_2025_06_18),
+            "2025-11-25" => return Ok(ProtocolVersion::V_2025_11_25),
             _ => {}
         }
         Ok(ProtocolVersion(Cow::Owned(s)))
@@ -3745,7 +3751,11 @@ mod tests {
     fn test_protocol_version_order() {
         let v1 = ProtocolVersion::V_2024_11_05;
         let v2 = ProtocolVersion::V_2025_03_26;
+        let v3 = ProtocolVersion::V_2025_06_18;
+        let v4 = ProtocolVersion::V_2025_11_25;
         assert!(v1 < v2);
+        assert!(v2 < v3);
+        assert!(v3 < v4);
     }
 
     #[test]
