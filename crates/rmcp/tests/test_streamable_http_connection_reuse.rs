@@ -1,9 +1,4 @@
-#![cfg(all(
-    feature = "transport-streamable-http-client",
-    feature = "transport-streamable-http-client-reqwest",
-    feature = "transport-streamable-http-server",
-    not(feature = "local")
-))]
+#![cfg(not(feature = "local"))]
 
 use std::time::Instant;
 
@@ -110,11 +105,7 @@ async fn test_subsequent_tool_calls_reuse_connections() -> anyhow::Result<()> {
         let elapsed = start.elapsed();
         durations.push(elapsed);
 
-        assert!(
-            result.is_error != Some(true),
-            "tool call should succeed, got error: {:?}",
-            result.content
-        );
+        assert!(result.is_error != Some(true));
     }
 
     let _ = client.cancel().await;
@@ -124,14 +115,8 @@ async fn test_subsequent_tool_calls_reuse_connections() -> anyhow::Result<()> {
     // With connection reuse, localhost calls should complete well under 20 ms.
     // Before the fix, they consistently took ~42 ms due to new TCP connections.
     let max_allowed = std::time::Duration::from_millis(20);
-    for (i, d) in durations.iter().enumerate() {
-        assert!(
-            *d < max_allowed,
-            "call {} took {:?}, expected < {:?} (connection reuse may be broken)",
-            i + 1,
-            d,
-            max_allowed,
-        );
+    for d in &durations {
+        assert!(*d < max_allowed);
     }
 
     Ok(())
