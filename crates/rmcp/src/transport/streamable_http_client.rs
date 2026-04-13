@@ -29,6 +29,15 @@ pub struct AuthRequiredError {
     pub www_authenticate_header: String,
 }
 
+impl AuthRequiredError {
+    /// Create a new `AuthRequiredError` instance.
+    pub fn new(www_authenticate_header: String) -> Self {
+        Self {
+            www_authenticate_header,
+        }
+    }
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct InsufficientScopeError {
@@ -37,6 +46,14 @@ pub struct InsufficientScopeError {
 }
 
 impl InsufficientScopeError {
+    /// Create a new `InsufficientScopeError` instance.
+    pub fn new(www_authenticate_header: String, required_scope: Option<String>) -> Self {
+        Self {
+            www_authenticate_header,
+            required_scope,
+        }
+    }
+
     /// check if scope upgrade is possible (i.e., we know what scope is required)
     pub fn can_upgrade(&self) -> bool {
         self.required_scope.is_some()

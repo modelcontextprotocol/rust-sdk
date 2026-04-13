@@ -284,21 +284,28 @@ impl StreamableHttpClientTransport<reqwest::Client> {
 #[cfg(test)]
 mod tests {
     use super::parse_json_rpc_error;
-    use crate::{model::JsonRpcMessage, transport::streamable_http_client::InsufficientScopeError};
+    use crate::{
+        model::JsonRpcMessage,
+        transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
+    };
+
+    #[test]
+    fn auth_required_error_new() {
+        let err = AuthRequiredError::new("Bearer realm=\"test\"".to_string());
+        assert_eq!(err.www_authenticate_header, "Bearer realm=\"test\"");
+    }
 
     #[test]
     fn insufficient_scope_error_can_upgrade() {
-        let with_scope = InsufficientScopeError {
-            www_authenticate_header: "Bearer scope=\"admin\"".to_string(),
-            required_scope: Some("admin".to_string()),
-        };
+        let with_scope = InsufficientScopeError::new(
+            "Bearer scope=\"admin\"".to_string(),
+            Some("admin".to_string()),
+        );
         assert!(with_scope.can_upgrade());
         assert_eq!(with_scope.get_required_scope(), Some("admin"));
 
-        let without_scope = InsufficientScopeError {
-            www_authenticate_header: "Bearer error=\"insufficient_scope\"".to_string(),
-            required_scope: None,
-        };
+        let without_scope =
+            InsufficientScopeError::new("Bearer error=\"insufficient_scope\"".to_string(), None);
         assert!(!without_scope.can_upgrade());
         assert_eq!(without_scope.get_required_scope(), None);
     }
