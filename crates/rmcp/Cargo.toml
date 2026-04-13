@@ -82,7 +82,7 @@ tower-service = { version = "0.3", optional = true }
 process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 
 # for cross-platform executable path resolution
-which = { version = "7", optional = true }
+which = { version = "8", optional = true }
 
 # for ws transport
 # tokio-tungstenite ={ version = "0.26", optional = true }
