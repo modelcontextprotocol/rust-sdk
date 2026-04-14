@@ -282,9 +282,8 @@ async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
     // Small delay to ensure the eviction ran
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Resume after TTL — channel should be evicted, tower handler falls
-    // back to standalone stream whose priming uses "id: 0" (no request ID).
-    use futures::StreamExt;
+    // Resume after TTL — channel should be evicted. The server returns
+    // 200 with an empty stream (no events from a different stream).
     let resume = client
         .get(format!("http://{addr}/mcp"))
         .header("Accept", "text/event-stream")
@@ -295,27 +294,10 @@ async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
         .await?;
     assert_eq!(resume.status(), 200);
 
-    let mut stream = resume.bytes_stream();
-    let mut buf = String::new();
-    let read_result = tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(Ok(chunk)) = stream.next().await {
-            buf.push_str(&String::from_utf8_lossy(&chunk));
-            if buf.contains("id: 0\n") {
-                return true;
-            }
-        }
-        false
-    })
-    .await;
+    let body = resume.text().await?;
     assert!(
-        read_result.unwrap_or(false),
-        "expected standalone priming after TTL eviction, got: {buf}"
-    );
-    // The standalone priming uses "id: 0" (no request ID), confirming
-    // the completed channel was evicted and resume fell through.
-    assert!(
-        !buf.contains(r#""id":2"#),
-        "should NOT contain the old tool response after eviction"
+        !body.contains(r#""id":2"#),
+        "should NOT contain the old tool response after eviction, got: {body}"
     );
 
     ct.cancel();

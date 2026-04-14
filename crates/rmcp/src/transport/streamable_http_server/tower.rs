@@ -491,17 +491,21 @@ where
                     ));
                 }
                 Err(e) => {
-                    // Fall through to a fresh standalone stream so EventSource
-                    // auto-reconnection stays connected. We intentionally catch
-                    // all errors here: returning an HTTP error would cause
-                    // EventSource to retry with the same Last-Event-ID in an
-                    // infinite loop. Logging at warn so malformed IDs or
-                    // unexpected failures remain visible.
-                    tracing::warn!("Resume failed ({e}), creating standalone stream");
+                    // Return 200 with an immediately-closed empty stream.
+                    // Returning an HTTP error would cause EventSource to retry
+                    // with the same Last-Event-ID in an infinite loop. An empty
+                    // 200 cleanly terminates the EventSource without delivering
+                    // events from a different stream.
+                    tracing::warn!("Resume failed ({e}), returning empty stream");
+                    return Ok(sse_stream_response(
+                        futures::stream::empty(),
+                        None,
+                        self.config.cancellation_token.child_token(),
+                    ));
                 }
             }
         }
-        // Create standalone stream (also the fallback for failed resume)
+        // No Last-Event-ID — create standalone stream
         let stream = self
             .session_manager
             .create_standalone_stream(&session_id)
