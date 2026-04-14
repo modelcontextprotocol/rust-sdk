@@ -10,9 +10,8 @@
 //! #     schemars
 //! # };
 //! # use serde::{Serialize, Deserialize};
-//! struct Server {
-//!     tool_router: ToolRouter<Self>,
-//! }
+//! struct Server;
+//!
 //! #[derive(Deserialize, schemars::JsonSchema, Default)]
 //! struct AddParameter {
 //!     left: usize,
@@ -22,7 +21,7 @@
 //! struct AddOutput {
 //!     sum: usize
 //! }
-//! #[tool_router]
+//! #[tool_router(server_handler)]
 //! impl Server {
 //!     #[tool(name = "adder", description = "Modular add two integers")]
 //!     fn add(
@@ -33,6 +32,11 @@
 //!     }
 //! }
 //! ```
+//!
+//! The `server_handler` flag emits `#[tool_handler]` for you (tools-only servers). For custom
+//! `#[tool_handler(...)]` options or multiple handler macros on one `impl ServerHandler`, write
+//! `#[tool_router]` and `#[tool_handler] impl ServerHandler for ...` explicitly—see
+//! [`tool_router`][crate::tool_router] and [`tool_handler`][crate::tool_handler].
 //!
 //! Using the macro-based code pattern above is suitable for small MCP servers with simple interfaces.
 //! When the business logic become larger, it is recommended that each tool should reside

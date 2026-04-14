@@ -146,6 +146,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     ///          Ok(CreateElicitationResult {
     ///             action: ElicitationAction::Accept,
     ///              content: Some(user_input),
+    ///              meta: None,
     ///          })
     ///         }
     ///         CreateElicitationRequestParam::UrlElicitationParam {meta, message, url, elicitation_id,} => {
@@ -154,6 +155,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     ///          Ok(CreateElicitationResult {
     ///              action: ElicitationAction::Accept,
     ///             content: None,
+    ///             meta: None,
     ///             })
     ///         }
     ///     }
@@ -171,6 +173,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         std::future::ready(Ok(CreateElicitationResult {
             action: ElicitationAction::Decline,
             content: None,
+            meta: None,
         }))
     }
 

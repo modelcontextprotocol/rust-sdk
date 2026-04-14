@@ -22,6 +22,7 @@ For the full MCP specification, see [modelcontextprotocol.io](https://modelconte
 ## Table of Contents
 
 - [Usage](#usage)
+- [Tools](#tools)
 - [Resources](#resources)
 - [Prompts](#prompts)
 - [Sampling](#sampling)
@@ -126,6 +127,76 @@ let quit_reason = server.waiting().await?;
 let quit_reason = server.cancel().await?;
 ```
 </details>
+
+---
+
+## Tools
+
+Tools let servers expose callable functions to clients. Each tool has a name, description, and a JSON Schema for its parameters. Clients discover tools via `list_tools` and invoke them via `call_tool`.
+
+**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
+
+### Server-side
+
+The `#[tool]`, `#[tool_router]`, and `#[tool_handler]` macros handle all the wiring. For a tools-only server you can use `#[tool_router(server_handler)]` to skip the separate `ServerHandler` impl:
+
+```rust,ignore
+use rmcp::{tool, tool_router, ServiceExt, transport::stdio};
+
+#[derive(Clone)]
+struct Calculator;
+
+#[tool_router(server_handler)]
+impl Calculator {
+    #[tool(description = "Add two numbers")]
+    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+        (a + b).to_string()
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let service = Calculator.serve(stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}
+```
+
+When you need custom server metadata or multiple capabilities (tools + prompts), use explicit `#[tool_handler]`:
+
+```rust,ignore
+use rmcp::{tool, tool_router, tool_handler, ServerHandler, ServiceExt};
+
+#[derive(Clone)]
+struct Calculator;
+
+#[tool_router]
+impl Calculator {
+    #[tool(description = "Add two numbers")]
+    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+        (a + b).to_string()
+    }
+}
+
+#[tool_handler(name = "calculator", version = "1.0.0", instructions = "A simple calculator")]
+impl ServerHandler for Calculator {}
+```
+
+See [`crates/rmcp-macros`](crates/rmcp-macros/README.md) for full macro documentation.
+
+### Client-side
+
+```rust,ignore
+use rmcp::model::CallToolRequestParams;
+
+// List all tools
+let tools = client.list_all_tools().await?;
+
+// Call a tool by name
+let result = client.call_tool(CallToolRequestParams::new("add")).await?;
+```
+
+**Example:** [`examples/servers/src/common/calculator.rs`](examples/servers/src/common/calculator.rs) (server), [`examples/servers/src/calculator_stdio.rs`](examples/servers/src/calculator_stdio.rs) (stdio runner)
 
 ---
 

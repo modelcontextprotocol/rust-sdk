@@ -29,6 +29,15 @@ pub struct AuthRequiredError {
     pub www_authenticate_header: String,
 }
 
+impl AuthRequiredError {
+    /// Create a new `AuthRequiredError` instance.
+    pub fn new(www_authenticate_header: String) -> Self {
+        Self {
+            www_authenticate_header,
+        }
+    }
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct InsufficientScopeError {
@@ -37,6 +46,14 @@ pub struct InsufficientScopeError {
 }
 
 impl InsufficientScopeError {
+    /// Create a new `InsufficientScopeError` instance.
+    pub fn new(www_authenticate_header: String, required_scope: Option<String>) -> Self {
+        Self {
+            www_authenticate_header,
+            required_scope,
+        }
+    }
+
     /// check if scope upgrade is possible (i.e., we know what scope is required)
     pub fn can_upgrade(&self) -> bool {
         self.required_scope.is_some()
@@ -281,6 +298,37 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 }
 
 impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
+    /// Convert a raw SSE stream into a JSON-RPC message stream without
+    /// reconnection logic.
+    fn raw_sse_to_jsonrpc(
+        stream: BoxedSseStream,
+    ) -> impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> + Send + 'static
+    {
+        stream.filter_map(|event| async {
+            match event {
+                Err(e) => Some(Err(StreamableHttpError::Sse(e))),
+                Ok(sse) => {
+                    let is_message =
+                        matches!(sse.event.as_deref(), None | Some("") | Some("message"));
+                    if !is_message {
+                        return None;
+                    }
+                    let data = sse.data?;
+                    if data.trim().is_empty() {
+                        return None;
+                    }
+                    match serde_json::from_str::<ServerJsonRpcMessage>(&data) {
+                        Ok(msg) => Some(Ok(msg)),
+                        Err(e) => {
+                            tracing::debug!("failed to deserialize server message: {e}");
+                            None
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     async fn execute_sse_stream(
         sse_stream: impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>>
         + Send
@@ -303,14 +351,23 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             let Some(message) = message.transpose()? else {
                 break;
             };
-            let is_response = matches!(message, ServerJsonRpcMessage::Response(_));
+            let is_response = matches!(
+                message,
+                ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
+            );
             let yield_result = sse_worker_tx.send(message).await;
             if yield_result.is_err() {
                 tracing::trace!("streamable http transport worker dropped, exiting");
                 break;
             }
             if close_on_response && is_response {
-                tracing::debug!("got response, closing sse stream");
+                tracing::debug!("got response, draining sse stream for connection reuse");
+                // Consume the remaining stream so the HTTP/1.1 connection
+                // returns to the pool cleanly.
+                let _ = tokio::time::timeout(std::time::Duration::from_millis(50), async {
+                    while sse_stream.next().await.is_some() {}
+                })
+                .await;
                 break;
             }
         }
@@ -718,38 +775,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 Ok(())
                                             }
                                             Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
-                                                if let Some(sid) = &session_id {
-                                                    let sse_stream = SseAutoReconnectStream::new(
-                                                        stream,
-                                                        StreamableHttpClientReconnect {
-                                                            client: self.client.clone(),
-                                                            session_id: sid.clone(),
-                                                            uri: config.uri.clone(),
-                                                            auth_header: config.auth_header.clone(),
-                                                            custom_headers: protocol_headers
-                                                                .clone(),
-                                                        },
-                                                        self.config.retry_config.clone(),
-                                                    );
-                                                    streams.spawn(Self::execute_sse_stream(
-                                                        sse_stream,
-                                                        sse_worker_tx.clone(),
-                                                        true,
-                                                        transport_task_ct.child_token(),
-                                                    ));
-                                                } else {
-                                                    let sse_stream =
-                                                    SseAutoReconnectStream::never_reconnect(
-                                                        stream,
-                                                        StreamableHttpError::<C::Error>::UnexpectedEndOfStream,
-                                                    );
-                                                    streams.spawn(Self::execute_sse_stream(
-                                                        sse_stream,
-                                                        sse_worker_tx.clone(),
-                                                        true,
-                                                        transport_task_ct.child_token(),
-                                                    ));
-                                                }
+                                                streams.spawn(Self::execute_sse_stream(
+                                                    Self::raw_sse_to_jsonrpc(stream),
+                                                    sse_worker_tx.clone(),
+                                                    true,
+                                                    transport_task_ct.child_token(),
+                                                ));
                                                 tracing::trace!("got new sse stream after re-init");
                                                 Ok(())
                                             }
@@ -769,36 +800,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                         Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
-                            if let Some(session_id) = &session_id {
-                                let sse_stream = SseAutoReconnectStream::new(
-                                    stream,
-                                    StreamableHttpClientReconnect {
-                                        client: self.client.clone(),
-                                        session_id: session_id.clone(),
-                                        uri: config.uri.clone(),
-                                        auth_header: config.auth_header.clone(),
-                                        custom_headers: protocol_headers.clone(),
-                                    },
-                                    self.config.retry_config.clone(),
-                                );
-                                streams.spawn(Self::execute_sse_stream(
-                                    sse_stream,
-                                    sse_worker_tx.clone(),
-                                    true,
-                                    transport_task_ct.child_token(),
-                                ));
-                            } else {
-                                let sse_stream = SseAutoReconnectStream::never_reconnect(
-                                    stream,
-                                    StreamableHttpError::<C::Error>::UnexpectedEndOfStream,
-                                );
-                                streams.spawn(Self::execute_sse_stream(
-                                    sse_stream,
-                                    sse_worker_tx.clone(),
-                                    true,
-                                    transport_task_ct.child_token(),
-                                ));
-                            }
+                            streams.spawn(Self::execute_sse_stream(
+                                Self::raw_sse_to_jsonrpc(stream),
+                                sse_worker_tx.clone(),
+                                true,
+                                transport_task_ct.child_token(),
+                            ));
                             tracing::trace!("got new sse stream");
                             Ok(())
                         }

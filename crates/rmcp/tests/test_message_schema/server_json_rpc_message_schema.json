@@ -655,6 +655,14 @@
       "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this result.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "action": {
           "description": "The user's decision on how to handle the elicitation request",
           "allOf": [

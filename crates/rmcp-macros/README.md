@@ -20,7 +20,7 @@ For **getting started** and **full MCP feature documentation**, see the [main RE
 | Macro | Description |
 |-------|-------------|
 | [`#[tool]`][tool] | Mark a function as an MCP tool handler |
-| [`#[tool_router]`][tool_router] | Generate a tool router from an impl block |
+| [`#[tool_router]`][tool_router] | Generate a tool router from an impl block (optional `server_handler` flag elides a separate `#[tool_handler]` block for tools-only servers) |
 | [`#[tool_handler]`][tool_handler] | Generate `call_tool` and `list_tools` handler methods |
 | [`#[prompt]`][prompt] | Mark a function as an MCP prompt handler |
 | [`#[prompt_router]`][prompt_router] | Generate a prompt router from an impl block |
@@ -37,13 +37,30 @@ For **getting started** and **full MCP feature documentation**, see the [main RE
 
 ## Quick Example
 
+Tools-only server with a single `impl` block (`server_handler` expands `#[tool_handler]` in a second macro pass):
+
 ```rust,ignore
-use rmcp::{tool, tool_router, tool_handler, ServerHandler, model::*};
+use rmcp::{tool, tool_router};
 
 #[derive(Clone)]
-struct MyServer {
-    tool_router: rmcp::handler::server::tool::ToolRouter<Self>,
+struct MyServer;
+
+#[tool_router(server_handler)]
+impl MyServer {
+    #[tool(description = "Say hello")]
+    async fn hello(&self) -> String {
+        "Hello, world!".into()
+    }
 }
+```
+
+If you need custom `#[tool_handler(...)]` arguments (e.g. `instructions`, `name`, or stacked `#[prompt_handler]` on the same `impl ServerHandler`), use two blocks instead:
+
+```rust,ignore
+use rmcp::{tool, tool_router, tool_handler, ServerHandler};
+
+#[derive(Clone)]
+struct MyServer;
 
 #[tool_router]
 impl MyServer {
@@ -54,11 +71,7 @@ impl MyServer {
 }
 
 #[tool_handler]
-impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default()
-    }
-}
+impl ServerHandler for MyServer {}
 ```
 
 See the [full documentation](https://docs.rs/rmcp-macros) for detailed usage of each macro.

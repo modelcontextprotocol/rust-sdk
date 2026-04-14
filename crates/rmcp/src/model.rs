@@ -152,14 +152,19 @@ impl std::fmt::Display for ProtocolVersion {
 }
 
 impl ProtocolVersion {
+    pub const V_2025_11_25: Self = Self(Cow::Borrowed("2025-11-25"));
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const LATEST: Self = Self::V_2025_06_18;
+    pub const LATEST: Self = Self::V_2025_11_25;
 
     /// All protocol versions known to this SDK.
-    pub const KNOWN_VERSIONS: &[Self] =
-        &[Self::V_2024_11_05, Self::V_2025_03_26, Self::V_2025_06_18];
+    pub const KNOWN_VERSIONS: &[Self] = &[
+        Self::V_2024_11_05,
+        Self::V_2025_03_26,
+        Self::V_2025_06_18,
+        Self::V_2025_11_25,
+    ];
 
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
@@ -187,6 +192,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
             "2024-11-05" => return Ok(ProtocolVersion::V_2024_11_05),
             "2025-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
             "2025-06-18" => return Ok(ProtocolVersion::V_2025_06_18),
+            "2025-11-25" => return Ok(ProtocolVersion::V_2025_11_25),
             _ => {}
         }
         Ok(ProtocolVersion(Cow::Owned(s)))
@@ -1545,23 +1551,18 @@ pub enum Role {
 }
 
 /// Tool selection mode (SEP-1577).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum ToolChoiceMode {
     /// Model decides whether to use tools
+    #[default]
     Auto,
     /// Model must use at least one tool
     Required,
     /// Model must not use tools
     None,
-}
-
-impl Default for ToolChoiceMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Tool choice configuration (SEP-1577).
@@ -2699,6 +2700,10 @@ pub struct CreateElicitationResult {
     /// Only present when action is Accept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Value>,
+
+    /// Optional protocol-level metadata for this result.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl CreateElicitationResult {
@@ -2707,12 +2712,19 @@ impl CreateElicitationResult {
         Self {
             action,
             content: None,
+            meta: None,
         }
     }
 
     /// Set the content on this result.
     pub fn with_content(mut self, content: Value) -> Self {
         self.content = Some(content);
+        self
+    }
+
+    /// Set the metadata on this result.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
         self
     }
 }
@@ -3739,7 +3751,11 @@ mod tests {
     fn test_protocol_version_order() {
         let v1 = ProtocolVersion::V_2024_11_05;
         let v2 = ProtocolVersion::V_2025_03_26;
+        let v3 = ProtocolVersion::V_2025_06_18;
+        let v4 = ProtocolVersion::V_2025_11_25;
         assert!(v1 < v2);
+        assert!(v2 < v3);
+        assert!(v3 < v4);
     }
 
     #[test]

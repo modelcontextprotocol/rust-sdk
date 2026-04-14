@@ -262,7 +262,7 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// This method requires the `transport-streamable-http-client-reqwest` feature.
     pub fn from_uri(uri: impl Into<Arc<str>>) -> Self {
         StreamableHttpClientTransport::with_client(
-            reqwest::Client::default(),
+            Self::default_http_client(),
             StreamableHttpClientTransportConfig {
                 uri: uri.into(),
                 auth_header: None,
@@ -277,28 +277,47 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     ///
     /// * `config` - The config to use with this transport
     pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
-        StreamableHttpClientTransport::with_client(reqwest::Client::default(), config)
+        StreamableHttpClientTransport::with_client(Self::default_http_client(), config)
+    }
+
+    /// Build the default reqwest client for this transport.
+    ///
+    /// Disables idle connection pooling to avoid ~40 ms stalls caused by
+    /// TCP Delayed ACK on Linux when the previous response body was not
+    /// fully consumed before the pool attempts to reuse the connection.
+    fn default_http_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(0)
+            .build()
+            .expect("failed to build default reqwest client")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::parse_json_rpc_error;
-    use crate::{model::JsonRpcMessage, transport::streamable_http_client::InsufficientScopeError};
+    use crate::{
+        model::JsonRpcMessage,
+        transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
+    };
+
+    #[test]
+    fn auth_required_error_new() {
+        let err = AuthRequiredError::new("Bearer realm=\"test\"".to_string());
+        assert_eq!(err.www_authenticate_header, "Bearer realm=\"test\"");
+    }
 
     #[test]
     fn insufficient_scope_error_can_upgrade() {
-        let with_scope = InsufficientScopeError {
-            www_authenticate_header: "Bearer scope=\"admin\"".to_string(),
-            required_scope: Some("admin".to_string()),
-        };
+        let with_scope = InsufficientScopeError::new(
+            "Bearer scope=\"admin\"".to_string(),
+            Some("admin".to_string()),
+        );
         assert!(with_scope.can_upgrade());
         assert_eq!(with_scope.get_required_scope(), Some("admin"));
 
-        let without_scope = InsufficientScopeError {
-            www_authenticate_header: "Bearer error=\"insufficient_scope\"".to_string(),
-            required_scope: None,
-        };
+        let without_scope =
+            InsufficientScopeError::new("Bearer error=\"insufficient_scope\"".to_string(), None);
         assert!(!without_scope.can_upgrade());
         assert_eq!(without_scope.get_required_scope(), None);
     }

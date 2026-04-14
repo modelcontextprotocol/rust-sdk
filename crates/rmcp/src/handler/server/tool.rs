@@ -85,20 +85,29 @@ impl<T: IntoContents> IntoCallToolResult for T {
     }
 }
 
-impl<T: IntoContents, E: IntoContents> IntoCallToolResult for Result<T, E> {
+impl IntoCallToolResult for CallToolResult {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
-        match self {
-            Ok(value) => Ok(CallToolResult::success(value.into_contents())),
-            Err(error) => Ok(CallToolResult::error(error.into_contents())),
-        }
+        Ok(self)
     }
 }
 
-impl<T: IntoCallToolResult> IntoCallToolResult for Result<T, crate::ErrorData> {
+impl IntoCallToolResult for crate::ErrorData {
+    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
+        Err(self)
+    }
+}
+
+impl<T: IntoCallToolResult, E: IntoCallToolResult> IntoCallToolResult for Result<T, E> {
     fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
         match self {
             Ok(value) => value.into_call_tool_result(),
-            Err(error) => Err(error),
+            Err(error) => match error.into_call_tool_result() {
+                Ok(mut result) => {
+                    result.is_error = Some(true);
+                    Ok(result)
+                }
+                Err(e) => Err(e),
+            },
         }
     }
 }
@@ -136,12 +145,6 @@ where
             }
             IntoCallToolResultFutProj::Ready { result } => result.poll(cx),
         }
-    }
-}
-
-impl IntoCallToolResult for Result<CallToolResult, crate::ErrorData> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
-        self
     }
 }
 

@@ -22,6 +22,7 @@
 ## 目录
 
 - [使用](#使用)
+- [工具](#工具)
 - [资源](#资源)
 - [提示词](#提示词)
 - [采样](#采样)
@@ -126,6 +127,76 @@ let quit_reason = server.waiting().await?;
 let quit_reason = server.cancel().await?;
 ```
 </details>
+
+---
+
+## 工具
+
+工具允许服务端向客户端暴露可调用的函数。每个工具都有名称、描述和参数的 JSON Schema。客户端通过 `list_tools` 发现工具，通过 `call_tool` 调用工具。
+
+**MCP 规范：** [Tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
+
+### 服务端
+
+`#[tool]`、`#[tool_router]` 和 `#[tool_handler]` 宏负责所有连接工作。对于纯工具服务端，可以使用 `#[tool_router(server_handler)]` 来省略单独的 `ServerHandler` 实现：
+
+```rust,ignore
+use rmcp::{tool, tool_router, ServiceExt, transport::stdio};
+
+#[derive(Clone)]
+struct Calculator;
+
+#[tool_router(server_handler)]
+impl Calculator {
+    #[tool(description = "Add two numbers")]
+    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+        (a + b).to_string()
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let service = Calculator.serve(stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}
+```
+
+当需要自定义服务端元数据或多种能力（工具 + 提示词）时，使用显式的 `#[tool_handler]`：
+
+```rust,ignore
+use rmcp::{tool, tool_router, tool_handler, ServerHandler, ServiceExt};
+
+#[derive(Clone)]
+struct Calculator;
+
+#[tool_router]
+impl Calculator {
+    #[tool(description = "Add two numbers")]
+    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+        (a + b).to_string()
+    }
+}
+
+#[tool_handler(name = "calculator", version = "1.0.0", instructions = "A simple calculator")]
+impl ServerHandler for Calculator {}
+```
+
+完整的宏文档请参阅 [`crates/rmcp-macros`](../../crates/rmcp-macros/README.md)。
+
+### 客户端
+
+```rust,ignore
+use rmcp::model::CallToolRequestParams;
+
+// 列出所有工具
+let tools = client.list_all_tools().await?;
+
+// 按名称调用工具
+let result = client.call_tool(CallToolRequestParams::new("add")).await?;
+```
+
+**示例：** [`examples/servers/src/common/calculator.rs`](../../examples/servers/src/common/calculator.rs)（服务端），[`examples/servers/src/calculator_stdio.rs`](../../examples/servers/src/calculator_stdio.rs)（stdio 运行器）
 
 ---
 

@@ -1,6 +1,6 @@
 //cargo test --test test_elicitation --features "client server"
 
-use rmcp::{model::*, service::*};
+use rmcp::{model::*, object, service::*};
 // For typed elicitation tests
 #[cfg(feature = "schemars")]
 use schemars::JsonSchema;
@@ -98,6 +98,7 @@ async fn test_elicitation_result_serialization() {
     let accept_result = CreateElicitationResult {
         action: ElicitationAction::Accept,
         content: Some(json!({"email": "user@example.com"})),
+        meta: None,
     };
 
     let json = serde_json::to_value(&accept_result).unwrap();
@@ -111,6 +112,7 @@ async fn test_elicitation_result_serialization() {
     let decline_result = CreateElicitationResult {
         action: ElicitationAction::Decline,
         content: None,
+        meta: None,
     };
 
     let json = serde_json::to_value(&decline_result).unwrap();
@@ -124,6 +126,26 @@ async fn test_elicitation_result_serialization() {
     let deserialized: CreateElicitationResult = serde_json::from_value(expected).unwrap();
     assert_eq!(deserialized.action, ElicitationAction::Decline);
     assert_eq!(deserialized.content, None);
+    assert_eq!(deserialized.meta, None);
+
+    // Test protocol-level metadata round-trips as _meta.
+    let meta_result =
+        CreateElicitationResult::new(ElicitationAction::Accept).with_meta(Meta(object!({
+            "traceId": "elicitation-123"
+        })));
+
+    let json = serde_json::to_value(&meta_result).unwrap();
+    let expected = json!({
+        "action": "accept",
+        "_meta": {"traceId": "elicitation-123"}
+    });
+    assert_eq!(json, expected);
+
+    let deserialized: CreateElicitationResult = serde_json::from_value(expected).unwrap();
+    assert_eq!(
+        deserialized.meta,
+        Some(Meta(object!({ "traceId": "elicitation-123" })))
+    );
 }
 
 /// Test that elicitation requests can be created and handled through the JSON-RPC protocol
@@ -843,6 +865,7 @@ async fn test_elicitation_direction_server_to_client() {
     let client_result = ClientResult::CreateElicitationResult(CreateElicitationResult {
         action: ElicitationAction::Accept,
         content: Some(json!("John Doe")),
+        meta: None,
     });
 
     // Verify client result can be serialized
@@ -893,6 +916,7 @@ async fn test_elicitation_json_rpc_direction() {
         ClientResult::CreateElicitationResult(CreateElicitationResult {
             action: ElicitationAction::Accept,
             content: Some(json!(true)),
+            meta: None,
         }),
         RequestId::Number(1),
     );
@@ -928,6 +952,7 @@ async fn test_elicitation_actions_compliance() {
                 ElicitationAction::Accept => Some(serde_json::json!("some data")),
                 _ => None,
             },
+            meta: None,
         };
 
         let json = serde_json::to_value(&result).unwrap();
@@ -958,6 +983,7 @@ async fn test_elicitation_result_in_client_result() {
     let result = ClientResult::CreateElicitationResult(CreateElicitationResult {
         action: ElicitationAction::Decline,
         content: None,
+        meta: None,
     });
 
     match result {
@@ -2161,6 +2187,7 @@ async fn test_url_elicitation_action_workflow() {
     let accept_result = CreateElicitationResult {
         action: ElicitationAction::Accept,
         content: None, // URL elicitation doesn't return content, just confirmation
+        meta: None,
     };
 
     let json = serde_json::to_value(&accept_result).unwrap();
@@ -2172,6 +2199,7 @@ async fn test_url_elicitation_action_workflow() {
     let decline_result = CreateElicitationResult {
         action: ElicitationAction::Decline,
         content: None,
+        meta: None,
     };
 
     let json = serde_json::to_value(&decline_result).unwrap();
@@ -2181,6 +2209,7 @@ async fn test_url_elicitation_action_workflow() {
     let cancel_result = CreateElicitationResult {
         action: ElicitationAction::Cancel,
         content: None,
+        meta: None,
     };
 
     let json = serde_json::to_value(&cancel_result).unwrap();

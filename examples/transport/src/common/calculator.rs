@@ -2,11 +2,7 @@
 
 use rmcp::{
     ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        wrapper::{Json, Parameters},
-    },
-    model::{ServerCapabilities, ServerInfo},
+    handler::server::wrapper::{Json, Parameters},
     schemars, tool, tool_handler, tool_router,
 };
 
@@ -26,17 +22,7 @@ pub struct SubRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct Calculator {
-    tool_router: ToolRouter<Self>,
-}
-
-impl Calculator {
-    pub fn new() -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-        }
-    }
-}
+pub struct Calculator;
 
 #[tool_router]
 impl Calculator {
@@ -50,10 +36,5 @@ impl Calculator {
         Json(a - b)
     }
 }
-#[tool_handler]
-impl ServerHandler for Calculator {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("A simple calculator")
-    }
-}
+#[tool_handler(instructions = "A simple calculator")]
+impl ServerHandler for Calculator {}

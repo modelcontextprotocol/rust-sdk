@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_handler, tool_router,
+    ServerHandler, handler::server::wrapper::Parameters, schemars, tool, tool_handler, tool_router,
 };
 
 #[allow(dead_code)]
@@ -41,7 +38,6 @@ impl DataService for MemoryDataService {
 pub struct GenericService<DS: DataService> {
     #[allow(dead_code)]
     data_service: Arc<DS>,
-    tool_router: ToolRouter<Self>,
 }
 
 #[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
@@ -55,7 +51,6 @@ impl<DS: DataService> GenericService<DS> {
     pub fn new(data_service: DS) -> Self {
         Self {
             data_service: Arc::new(data_service),
-            tool_router: Self::tool_router(),
         }
     }
 
@@ -74,10 +69,5 @@ impl<DS: DataService> GenericService<DS> {
     }
 }
 
-#[tool_handler]
-impl<DS: DataService> ServerHandler for GenericService<DS> {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("generic data service".to_string())
-    }
-}
+#[tool_handler(instructions = "generic data service")]
+impl<DS: DataService> ServerHandler for GenericService<DS> {}

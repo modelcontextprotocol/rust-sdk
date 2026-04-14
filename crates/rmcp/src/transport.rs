@@ -83,6 +83,8 @@ pub use worker::WorkerTransport;
 
 #[cfg(feature = "transport-child-process")]
 pub mod child_process;
+#[cfg(feature = "which-command")]
+pub use child_process::which_command;
 #[cfg(feature = "transport-child-process")]
 pub use child_process::{ConfigureCommandExt, TokioChildProcess};
 
@@ -250,6 +252,24 @@ impl DynamicTransportError {
             error: Box::new(e),
         }
     }
+
+    /// Create a `DynamicTransportError` from raw parts.
+    ///
+    /// Unlike [`new`](Self::new), this does not require a concrete [`Transport`] type,
+    /// making it usable in test fixtures and other contexts where a real transport
+    /// implementation is not available.
+    pub fn from_parts(
+        transport_name: impl Into<Cow<'static, str>>,
+        transport_type_id: std::any::TypeId,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    ) -> Self {
+        Self {
+            transport_name: transport_name.into(),
+            transport_type_id,
+            error,
+        }
+    }
+
     pub fn downcast<T: Transport<R> + 'static, R: ServiceRole>(self) -> Result<T::Error, Self> {
         if !self.is::<T, R>() {
             Err(self)

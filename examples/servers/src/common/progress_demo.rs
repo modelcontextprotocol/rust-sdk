@@ -6,8 +6,8 @@ use std::{
 
 use futures::Stream;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, handler::server::tool::ToolRouter, model::*,
-    service::RequestContext, tool, tool_handler, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext, tool,
+    tool_handler, tool_router,
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -54,7 +54,6 @@ impl Stream for StreamDataSource {
 #[derive(Clone)]
 pub struct ProgressDemo {
     data_source: StreamDataSource,
-    tool_router: ToolRouter<Self>,
 }
 
 #[tool_router]
@@ -62,7 +61,6 @@ impl ProgressDemo {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
-            tool_router: Self::tool_router(),
             data_source: StreamDataSource::from_text("Hello, world!"),
         }
     }

@@ -233,6 +233,56 @@ impl ConfigureCommandExt for tokio::process::Command {
     }
 }
 
+/// Resolve the absolute path to an executable using the system `PATH`,
+/// then return a [`tokio::process::Command`] pointing at it.
+///
+/// This is especially useful on Windows where `.cmd` / `.exe` shim scripts
+/// (e.g. `npx.cmd`) are not reliably found by [`tokio::process::Command`]
+/// without a fully-qualified path.
+///
+/// # Example
+/// ```rust,no_run
+/// use rmcp::transport::{which_command, ConfigureCommandExt};
+///
+/// # fn example() -> std::io::Result<()> {
+/// let cmd = which_command("npx")?
+///     .configure(|cmd| {
+///         cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
+///     });
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "which-command")]
+pub fn which_command(
+    name: impl AsRef<std::ffi::OsStr>,
+) -> std::io::Result<tokio::process::Command> {
+    let resolved = which::which(name.as_ref())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
+    Ok(tokio::process::Command::new(resolved))
+}
+
+#[cfg(feature = "which-command")]
+#[cfg(test)]
+mod tests_which {
+    #[test]
+    fn which_command_resolves_known_binary() {
+        // `ls` exists on every Unix system, `cmd` on Windows
+        #[cfg(unix)]
+        let result = super::which_command("ls");
+        #[cfg(windows)]
+        let result = super::which_command("cmd");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn which_command_fails_for_nonexistent() {
+        let result = super::which_command("this_binary_definitely_does_not_exist_12345");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
+}
+
 #[cfg(unix)]
 #[cfg(test)]
 mod tests {
