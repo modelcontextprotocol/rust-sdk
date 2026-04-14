@@ -123,7 +123,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     // Modify the input function for async support (same as tool macro)
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
-        // 2. make return type: `futures::future::BoxFuture<'_, #ReturnType>`
+        // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> + Send + '_>>`
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
