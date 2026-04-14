@@ -198,6 +198,107 @@ async fn test_request_wise_priming_includes_http_request_id() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn test_resume_after_request_wise_channel_completed() -> anyhow::Result<()> {
+    let ct = CancellationToken::new();
+
+    let service: StreamableHttpService<Calculator, LocalSessionManager> =
+        StreamableHttpService::new(
+            || Ok(Calculator::new()),
+            Default::default(),
+            StreamableHttpServerConfig::default()
+                .with_sse_keep_alive(None)
+                .with_cancellation_token(ct.child_token()),
+        );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = tcp_listener.local_addr()?;
+
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let client = reqwest::Client::new();
+
+    // Initialize session
+    let response = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 200);
+    let session_id: SessionId = response.headers()["mcp-session-id"].to_str()?.into();
+
+    // Complete handshake
+    let status = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?
+        .status();
+    assert_eq!(status, 202);
+
+    // Call a tool and consume the full response (channel completes)
+    let body = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sum","arguments":{"a":1,"b":2}}}"#)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let events: Vec<&str> = body.split("\n\n").filter(|e| !e.is_empty()).collect();
+    assert!(
+        events.len() >= 2,
+        "expected priming + response, got: {body}"
+    );
+    assert!(events[0].contains("id: 0/0"));
+    assert!(events[1].contains(r#""id":2"#));
+
+    // Resume with Last-Event-ID after the channel has completed.
+    // The server returns 200 — either with replayed cached events
+    // (if the channel is still retained) or an empty stream (if the
+    // session worker hasn't processed the completion yet).
+    let resume = client
+        .get(format!("http://{addr}/mcp"))
+        .header("Accept", "text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .header("last-event-id", "0/0")
+        .send()
+        .await?;
+    assert_eq!(resume.status(), 200);
+
+    let resume_body = resume.text().await?;
+    // The stream should complete (not hang), regardless of whether
+    // it contains replayed events or is empty.
+    assert!(
+        !resume_body.contains("standalone"),
+        "should not receive events from a different stream"
+    );
+
+    ct.cancel();
+    handle.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
     use std::sync::Arc;
 
