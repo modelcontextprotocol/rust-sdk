@@ -491,11 +491,13 @@ where
                     ));
                 }
                 Err(e) => {
-                    // The referenced stream is gone (completed + evicted or
-                    // never existed). Fall through to create a fresh standalone
-                    // stream so EventSource auto-reconnection stays alive
-                    // without replaying events from a different stream.
-                    tracing::debug!("Resume failed ({e}), creating standalone stream");
+                    // Fall through to a fresh standalone stream so EventSource
+                    // auto-reconnection stays connected. We intentionally catch
+                    // all errors here: returning an HTTP error would cause
+                    // EventSource to retry with the same Last-Event-ID in an
+                    // infinite loop. Logging at warn so malformed IDs or
+                    // unexpected failures remain visible.
+                    tracing::warn!("Resume failed ({e}), creating standalone stream");
                 }
             }
         }
