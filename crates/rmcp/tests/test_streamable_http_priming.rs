@@ -198,6 +198,133 @@ async fn test_request_wise_priming_includes_http_request_id() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
+    use std::sync::Arc;
+
+    let ct = CancellationToken::new();
+    let mut session_manager = LocalSessionManager::default();
+    session_manager.session_config.completed_cache_ttl = Duration::from_millis(200);
+    let session_manager = Arc::new(session_manager);
+
+    let service = StreamableHttpService::new(
+        || Ok(Calculator::new()),
+        session_manager.clone(),
+        StreamableHttpServerConfig::default()
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = tcp_listener.local_addr()?;
+
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let client = reqwest::Client::new();
+
+    // Initialize session
+    let response = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 200);
+    let session_id: SessionId = response.headers()["mcp-session-id"].to_str()?.into();
+
+    // Complete handshake
+    client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?;
+
+    // Call a tool and consume the response (channel completes)
+    let body = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sum","arguments":{"a":1,"b":2}}}"#)
+        .send()
+        .await?
+        .text()
+        .await?;
+    assert!(body.contains(r#""id":2"#));
+
+    // Wait for TTL to expire (200ms) plus margin
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // Send a notification to trigger an event loop iteration (runs eviction)
+    client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?;
+
+    // Small delay to ensure the eviction ran
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Resume after TTL — channel should be evicted, tower handler falls
+    // back to standalone stream whose priming uses "id: 0" (no request ID).
+    use futures::StreamExt;
+    let resume = client
+        .get(format!("http://{addr}/mcp"))
+        .header("Accept", "text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .header("last-event-id", "0/0")
+        .send()
+        .await?;
+    assert_eq!(resume.status(), 200);
+
+    let mut stream = resume.bytes_stream();
+    let mut buf = String::new();
+    let read_result = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(Ok(chunk)) = stream.next().await {
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            if buf.contains("id: 0\n") {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(
+        read_result.unwrap_or(false),
+        "expected standalone priming after TTL eviction, got: {buf}"
+    );
+    // The standalone priming uses "id: 0" (no request ID), confirming
+    // the completed channel was evicted and resume fell through.
+    assert!(
+        !buf.contains(r#""id":2"#),
+        "should NOT contain the old tool response after eviction"
+    );
+
+    ct.cancel();
+    handle.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_priming_on_stream_close() -> anyhow::Result<()> {
     use std::sync::Arc;
 
