@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     num::ParseIntError,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::{Stream, StreamExt};
@@ -285,6 +285,7 @@ impl CachedTx {
 struct HttpRequestWise {
     resources: HashSet<ResourceKey>,
     tx: CachedTx,
+    completed_at: Option<Instant>,
 }
 
 type HttpRequestId = u64;
@@ -355,28 +356,27 @@ pub struct StreamableHttpMessageReceiver {
 
 impl LocalSessionWorker {
     fn unregister_resource(&mut self, resource: &ResourceKey) {
-        if let Some(http_request_id) = self.resource_router.remove(resource) {
-            tracing::trace!(?resource, http_request_id, "unregister resource");
-            if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
-                // It's okey to do so, since we don't handle batch json rpc request anymore
-                // and this can be refactored after the batch request is removed in the coming version.
-                if channel.resources.is_empty() || matches!(resource, ResourceKey::McpRequestId(_))
-                {
-                    tracing::debug!(http_request_id, "close http request wise channel");
-                    if let Some(channel) = self.tx_router.get_mut(&http_request_id) {
-                        for resource in channel.resources.drain() {
-                            self.resource_router.remove(&resource);
-                        }
-                        // Replace the sender with a closed dummy so no new
-                        // messages are routed here, but the cache stays alive
-                        // for late resume requests.
-                        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
-                        channel.tx.tx = closed_tx;
-                    }
-                }
-            } else {
-                tracing::warn!(http_request_id, "http request wise channel not found");
-            }
+        let Some(http_request_id) = self.resource_router.remove(resource) else {
+            return;
+        };
+        tracing::trace!(?resource, http_request_id, "unregister resource");
+        let Some(channel) = self.tx_router.get_mut(&http_request_id) else {
+            tracing::warn!(http_request_id, "http request wise channel not found");
+            return;
+        };
+        if !channel.resources.is_empty() && !matches!(resource, ResourceKey::McpRequestId(_)) {
+            return;
+        }
+        tracing::debug!(http_request_id, "close http request wise channel");
+        let resources: Vec<_> = channel.resources.drain().collect();
+        channel.completed_at = Some(Instant::now());
+        // Close the sender so the client's SSE stream ends,
+        // but keep the entry so the cache is available for
+        // late resume requests.
+        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
+        channel.tx.tx = closed_tx;
+        for resource in resources {
+            self.resource_router.remove(&resource);
         }
     }
     fn register_resource(&mut self, resource: ResourceKey, http_request_id: HttpRequestId) {
@@ -413,6 +413,11 @@ impl LocalSessionWorker {
             self.unregister_resource(&resource);
         }
     }
+    fn evict_expired_channels(&mut self) {
+        let ttl = self.session_config.completed_cache_ttl;
+        self.tx_router
+            .retain(|_, rw| rw.completed_at.is_none_or(|at| at.elapsed() < ttl));
+    }
     fn next_http_request_id(&mut self) -> HttpRequestId {
         let id = self.next_http_request_id;
         self.next_http_request_id = self.next_http_request_id.wrapping_add(1);
@@ -421,7 +426,6 @@ impl LocalSessionWorker {
     async fn establish_request_wise_channel(
         &mut self,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
-        self.tx_router.retain(|_, rw| !rw.tx.tx.is_closed());
         let http_request_id = self.next_http_request_id();
         let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
         let starting_index = usize::from(self.session_config.sse_retry.is_some());
@@ -430,6 +434,7 @@ impl LocalSessionWorker {
             HttpRequestWise {
                 resources: Default::default(),
                 tx: CachedTx::new(tx, Some(http_request_id), starting_index),
+                completed_at: None,
             },
         );
         tracing::debug!(http_request_id, "establish new request wise channel");
@@ -540,29 +545,25 @@ impl LocalSessionWorker {
 
         match last_event_id.http_request_id {
             Some(http_request_id) => {
-                if let Some(request_wise) = self.tx_router.get_mut(&http_request_id) {
-                    let was_completed = request_wise.tx.tx.is_closed();
-                    let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
-                    request_wise.tx.tx = tx;
-                    let index = last_event_id.index;
-                    request_wise.tx.sync(index).await?;
-                    if was_completed {
-                        // Close the sender after replaying so the stream ends
-                        // instead of hanging indefinitely.
-                        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
-                        request_wise.tx.tx = closed_tx;
-                    }
-                    Ok(StreamableHttpMessageReceiver {
-                        http_request_id: Some(http_request_id),
-                        inner: rx,
-                    })
-                } else {
-                    tracing::debug!(
-                        http_request_id,
-                        "Request-wise channel not found, falling back to common channel"
-                    );
-                    self.resume_or_shadow_common(last_event_id.index).await
+                let request_wise = self
+                    .tx_router
+                    .get_mut(&http_request_id)
+                    .ok_or(SessionError::ChannelClosed(Some(http_request_id)))?;
+                let is_completed = request_wise.completed_at.is_some();
+                let (tx, rx) = tokio::sync::mpsc::channel(self.session_config.channel_capacity);
+                request_wise.tx.tx = tx;
+                let index = last_event_id.index;
+                request_wise.tx.sync(index).await?;
+                if is_completed {
+                    // Drop the sender after replaying so the stream ends
+                    // instead of hanging indefinitely.
+                    let (closed_tx, _) = tokio::sync::mpsc::channel(1);
+                    request_wise.tx.tx = closed_tx;
                 }
+                Ok(StreamableHttpMessageReceiver {
+                    http_request_id: Some(http_request_id),
+                    inner: rx,
+                })
             }
             None => self.resume_or_shadow_common(last_event_id.index).await,
         }
@@ -972,6 +973,7 @@ impl Worker for LocalSessionWorker {
         let ct = context.cancellation_token.clone();
         let keep_alive = self.session_config.keep_alive.unwrap_or(Duration::MAX);
         loop {
+            self.evict_expired_channels();
             let keep_alive_timeout = tokio::time::sleep(keep_alive);
             let event = tokio::select! {
                 event = self.event_rx.recv() => {
@@ -1098,12 +1100,17 @@ pub struct SessionConfig {
     /// stream-identifying event ID to each request-wise SSE stream.
     /// Default is 3 seconds, matching `StreamableHttpServerConfig::default()`.
     pub sse_retry: Option<Duration>,
+    /// How long to retain completed request-wise channel caches for late
+    /// resume requests. After this duration, completed entries are evicted
+    /// and resume will return an error. Default is 60 seconds.
+    pub completed_cache_ttl: Duration,
 }
 
 impl SessionConfig {
     pub const DEFAULT_CHANNEL_CAPACITY: usize = 16;
     pub const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(300);
     pub const DEFAULT_SSE_RETRY: Duration = Duration::from_secs(3);
+    pub const DEFAULT_COMPLETED_CACHE_TTL: Duration = Duration::from_secs(60);
 }
 
 impl Default for SessionConfig {
@@ -1112,6 +1119,7 @@ impl Default for SessionConfig {
             channel_capacity: Self::DEFAULT_CHANNEL_CAPACITY,
             keep_alive: Some(Self::DEFAULT_KEEP_ALIVE),
             sse_retry: Some(Self::DEFAULT_SSE_RETRY),
+            completed_cache_ttl: Self::DEFAULT_COMPLETED_CACHE_TTL,
         }
     }
 }

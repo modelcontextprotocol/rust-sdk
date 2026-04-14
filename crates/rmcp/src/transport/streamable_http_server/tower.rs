@@ -478,40 +478,46 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned());
         if let Some(last_event_id) = last_event_id {
-            // check if session has this event id
-            let stream = self
+            match self
                 .session_manager
                 .resume(&session_id, last_event_id)
                 .await
-                .map_err(internal_error_response("resume session"))?;
-            // Resume doesn't need priming - client already has the event ID
-            Ok(sse_stream_response(
-                stream,
-                self.config.sse_keep_alive,
-                self.config.cancellation_token.child_token(),
-            ))
-        } else {
-            // create standalone stream
-            let stream = self
-                .session_manager
-                .create_standalone_stream(&session_id)
-                .await
-                .map_err(internal_error_response("create standalone stream"))?;
-            // Prepend priming event if sse_retry configured
-            let stream = if let Some(retry) = self.config.sse_retry {
-                let priming = ServerSseMessage::priming("0", retry);
-                futures::stream::once(async move { priming })
-                    .chain(stream)
-                    .left_stream()
-            } else {
-                stream.right_stream()
-            };
-            Ok(sse_stream_response(
-                stream,
-                self.config.sse_keep_alive,
-                self.config.cancellation_token.child_token(),
-            ))
+            {
+                Ok(stream) => {
+                    return Ok(sse_stream_response(
+                        stream,
+                        self.config.sse_keep_alive,
+                        self.config.cancellation_token.child_token(),
+                    ));
+                }
+                Err(e) => {
+                    // The referenced stream is gone (completed + evicted or
+                    // never existed). Fall through to create a fresh standalone
+                    // stream so EventSource auto-reconnection stays alive
+                    // without replaying events from a different stream.
+                    tracing::debug!("Resume failed ({e}), creating standalone stream");
+                }
+            }
         }
+        // Create standalone stream (also the fallback for failed resume)
+        let stream = self
+            .session_manager
+            .create_standalone_stream(&session_id)
+            .await
+            .map_err(internal_error_response("create standalone stream"))?;
+        let stream = if let Some(retry) = self.config.sse_retry {
+            let priming = ServerSseMessage::priming("0", retry);
+            futures::stream::once(async move { priming })
+                .chain(stream)
+                .left_stream()
+        } else {
+            stream.right_stream()
+        };
+        Ok(sse_stream_response(
+            stream,
+            self.config.sse_keep_alive,
+            self.config.cancellation_token.child_token(),
+        ))
     }
 
     async fn handle_post<B>(&self, request: Request<B>) -> Result<BoxResponse, BoxResponse>
