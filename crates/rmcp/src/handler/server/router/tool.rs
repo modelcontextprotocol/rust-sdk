@@ -305,6 +305,8 @@ pub struct ToolRouter<S> {
     pub map: std::collections::HashMap<Cow<'static, str>, ToolRoute<S>>,
 
     pub transparent_when_not_found: bool,
+
+    disabled: std::collections::HashSet<Cow<'static, str>>,
 }
 
 impl<S> Default for ToolRouter<S> {
@@ -312,6 +314,7 @@ impl<S> Default for ToolRouter<S> {
         Self {
             map: std::collections::HashMap::new(),
             transparent_when_not_found: false,
+            disabled: std::collections::HashSet::new(),
         }
     }
 }
@@ -320,6 +323,7 @@ impl<S> Clone for ToolRouter<S> {
         Self {
             map: self.map.clone(),
             transparent_when_not_found: self.transparent_when_not_found,
+            disabled: self.disabled.clone(),
         }
     }
 }
@@ -329,7 +333,11 @@ impl<S> IntoIterator for ToolRouter<S> {
     type IntoIter = std::collections::hash_map::IntoValues<Cow<'static, str>, ToolRoute<S>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.map.into_values()
+        let mut map = self.map;
+        for name in &self.disabled {
+            map.remove(name);
+        }
+        map.into_values()
     }
 }
 
@@ -341,6 +349,7 @@ where
         Self {
             map: std::collections::HashMap::new(),
             transparent_when_not_found: false,
+            disabled: std::collections::HashSet::new(),
         }
     }
     pub fn with_route<R, A>(mut self, route: R) -> Self
@@ -394,6 +403,7 @@ where
     }
 
     pub fn merge(&mut self, other: ToolRouter<S>) {
+        self.disabled.extend(other.disabled);
         for item in other.map.into_values() {
             self.add_route(item);
         }
@@ -401,17 +411,56 @@ where
 
     pub fn remove_route(&mut self, name: &str) {
         self.map.remove(name);
+        self.disabled.remove(name);
     }
+
     pub fn has_route(&self, name: &str) -> bool {
-        self.map.contains_key(name)
+        self.map.contains_key(name) && !self.disabled.contains(name)
     }
+
+    /// Disable a tool by name so it is hidden from `list_all`, `get`, and
+    /// rejected by `call`. The tool remains in the router and can be
+    /// re-enabled later with [`enable_route`](Self::enable_route).
+    ///
+    /// The name is recorded even if no matching route exists yet, so routes
+    /// added later (via [`add_route`](Self::add_route) or
+    /// [`merge`](Self::merge)) will inherit the disabled state.
+    pub fn disable_route(&mut self, name: &str) {
+        self.disabled.insert(Cow::Owned(name.to_owned()));
+    }
+
+    /// Re-enable a previously disabled tool.
+    pub fn enable_route(&mut self, name: &str) {
+        self.disabled.remove(name);
+    }
+
+    /// Returns `true` if the tool exists in the router but is currently
+    /// disabled.
+    pub fn is_disabled(&self, name: &str) -> bool {
+        self.map.contains_key(name) && self.disabled.contains(name)
+    }
+
+    /// Builder-style variant of [`disable_route`](Self::disable_route).
+    ///
+    /// The name is recorded even if no matching route has been added yet,
+    /// so it can be called before [`with_route`](Self::with_route) in a
+    /// builder chain.
+    pub fn with_disabled(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.disabled.insert(name.into());
+        self
+    }
+
     pub async fn call(
         &self,
         context: ToolCallContext<'_, S>,
     ) -> Result<CallToolResult, crate::ErrorData> {
+        let name = context.name();
+        if self.disabled.contains(name) {
+            return Err(crate::ErrorData::invalid_params("tool not found", None));
+        }
         let item = self
             .map
-            .get(context.name())
+            .get(name)
             .ok_or_else(|| crate::ErrorData::invalid_params("tool not found", None))?;
 
         let result = (item.call)(context).await?;
@@ -420,15 +469,24 @@ where
     }
 
     pub fn list_all(&self) -> Vec<crate::model::Tool> {
-        let mut tools: Vec<_> = self.map.values().map(|item| item.attr.clone()).collect();
+        let mut tools: Vec<_> = self
+            .map
+            .values()
+            .filter(|item| !self.disabled.contains(&item.attr.name))
+            .map(|item| item.attr.clone())
+            .collect();
         tools.sort_by(|a, b| a.name.cmp(&b.name));
         tools
     }
 
     /// Get a tool definition by name.
     ///
-    /// Returns the tool if found, or `None` if no tool with the given name exists.
+    /// Returns the tool if found and enabled, or `None` if the tool does not
+    /// exist or is disabled.
     pub fn get(&self, name: &str) -> Option<&crate::model::Tool> {
+        if self.disabled.contains(name) {
+            return None;
+        }
         self.map.get(name).map(|r| &r.attr)
     }
 }
