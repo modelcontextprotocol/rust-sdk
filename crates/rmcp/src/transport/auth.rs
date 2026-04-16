@@ -1609,12 +1609,13 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        let metadata = response
-            .json::<ResourceServerMetadata>()
-            .await
-            .map_err(|e| {
-                AuthError::MetadataError(format!("Failed to parse resource metadata: {}", e))
-            })?;
+        let metadata = match response.json::<ResourceServerMetadata>().await {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                debug!("failed to parse resource metadata as JSON: {}", e);
+                return Ok(None);
+            }
+        };
         Ok(Some(metadata))
     }
 
