@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.4.0...rmcp-macros-v1.5.0) - 2026-04-16
+
+### Fixed
+
+- *(macros)* respect `local` feature in `#[prompt]` macro — omit `+ Send` bound ([#803](https://github.com/modelcontextprotocol/rust-sdk/pull/803))
+
 ## [1.4.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.3.0...rmcp-macros-v1.4.0) - 2026-04-09
 
 ### Added
