@@ -83,8 +83,10 @@ where
     ) -> Result<<RoleServer as crate::service::ServiceRole>::Resp, crate::ErrorData> {
         match request {
             ClientRequest::CallToolRequest(request) => {
-                if self.tool_router.has_route(request.params.name.as_ref())
-                    || self.tool_router.is_disabled(request.params.name.as_ref())
+                if self
+                    .tool_router
+                    .map
+                    .contains_key(request.params.name.as_ref())
                     || !self.tool_router.transparent_when_not_found
                 {
                     let tool_call_context = crate::handler::server::tool::ToolCallContext::new(

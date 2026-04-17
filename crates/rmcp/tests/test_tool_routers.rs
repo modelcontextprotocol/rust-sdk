@@ -100,7 +100,7 @@ fn test_disable_route() {
     assert!(router.has_route("async_function"));
     assert!(router.get("async_function").is_some());
 
-    router.disable_route("async_function");
+    assert!(router.disable_route("async_function"));
 
     assert_eq!(router.list_all().len(), 3);
     assert!(!router.has_route("async_function"));
@@ -116,10 +116,10 @@ fn test_disable_route() {
 #[test]
 fn test_enable_route() {
     let mut router = build_router();
-    router.disable_route("async_function");
+    assert!(router.disable_route("async_function"));
     assert!(!router.has_route("async_function"));
 
-    router.enable_route("async_function");
+    assert!(router.enable_route("async_function"));
     assert!(router.has_route("async_function"));
     assert!(router.get("async_function").is_some());
     assert!(!router.is_disabled("async_function"));
@@ -143,7 +143,7 @@ fn test_with_disabled_builder() {
 fn test_disabled_tools_survive_merge() {
     let mut router_a = ToolRouter::<TestHandler<()>>::new()
         .with_route((async_function_tool_attr(), async_function));
-    router_a.disable_route("async_function");
+    assert!(router_a.disable_route("async_function"));
 
     let router_b = ToolRouter::<TestHandler<()>>::new()
         .with_route((async_function2_tool_attr(), async_function2));
@@ -158,22 +158,42 @@ fn test_disabled_tools_survive_merge() {
 #[test]
 fn test_disable_nonexistent_tool() {
     let mut router = build_router();
-    // should not panic
-    router.disable_route("does_not_exist");
+    // should not panic; returns true because the name is newly added to disabled set
+    assert!(router.disable_route("does_not_exist"));
     assert_eq!(router.list_all().len(), 4);
     // is_disabled returns false for tools not in the map
     assert!(!router.is_disabled("does_not_exist"));
 }
 
 #[test]
-fn test_remove_route_clears_disabled_state() {
+fn test_remove_route_preserves_disabled_state() {
     let mut router = build_router();
-    router.disable_route("async_function");
+    assert!(router.disable_route("async_function"));
     assert!(router.is_disabled("async_function"));
 
     router.remove_route("async_function");
-    assert!(!router.is_disabled("async_function"));
     assert!(!router.has_route("async_function"));
+    // Disabled marker is preserved — is_disabled returns false (no route in map)
+    // but re-adding will inherit the disabled state (tested separately)
+    assert!(!router.is_disabled("async_function"));
+}
+
+#[test]
+fn test_remove_route_then_readd_stays_disabled() {
+    let mut router = build_router();
+    assert!(router.disable_route("async_function"));
+
+    router.remove_route("async_function");
+    assert!(!router.has_route("async_function"));
+
+    // Re-add the route — it should inherit the disabled state
+    let other = ToolRouter::<TestHandler<()>>::new()
+        .with_route((async_function_tool_attr(), async_function));
+    router.merge(other);
+
+    assert!(!router.has_route("async_function"));
+    assert!(router.is_disabled("async_function"));
+    assert!(router.get("async_function").is_none());
 }
 
 #[test]
@@ -211,6 +231,42 @@ fn test_disabled_tool_invisible_across_all_queries() {
     assert!(router.get("async_function").is_none());
     // Not routable
     assert!(!router.has_route("async_function"));
-    // But still known as disabled
+    // But known as disabled
     assert!(router.is_disabled("async_function"));
+}
+
+#[test]
+fn test_disable_route_then_add_route_blocks_tool() {
+    // Full pre-disable lifecycle via runtime mutation (not builder)
+    let mut router = ToolRouter::<TestHandler<()>>::new();
+    router.disable_route("async_function");
+
+    // Add route after disabling — tool should be blocked
+    let other = ToolRouter::<TestHandler<()>>::new()
+        .with_route((async_function_tool_attr(), async_function));
+    router.merge(other);
+
+    assert!(router.is_disabled("async_function"));
+    assert!(!router.has_route("async_function"));
+    assert!(router.get("async_function").is_none());
+    assert_eq!(router.list_all().len(), 0);
+}
+
+#[test]
+fn test_disable_enable_return_false_cases() {
+    let mut router = build_router();
+
+    // Repeated disable returns false
+    assert!(router.disable_route("async_function"));
+    assert!(!router.disable_route("async_function"));
+
+    // Enable returns true, then false on repeat
+    assert!(router.enable_route("async_function"));
+    assert!(!router.enable_route("async_function"));
+
+    // Enable on name never disabled returns false
+    assert!(!router.enable_route("async_function2"));
+
+    // Enable on unknown name returns false
+    assert!(!router.enable_route("unknown"));
 }

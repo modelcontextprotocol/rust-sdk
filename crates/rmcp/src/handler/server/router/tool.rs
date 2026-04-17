@@ -409,11 +409,19 @@ where
         }
     }
 
+    /// Remove a tool route from the router.
+    ///
+    /// The disabled state is **preserved**: if the name was in the disabled
+    /// set, it stays there so that a future [`add_route`](Self::add_route)
+    /// or [`merge`](Self::merge) with the same name will inherit the
+    /// disabled state. To also clear the disabled marker, call
+    /// [`enable_route`](Self::enable_route) afterwards.
     pub fn remove_route(&mut self, name: &str) {
         self.map.remove(name);
-        self.disabled.remove(name);
     }
 
+    /// Returns `true` if the tool is registered **and** not currently
+    /// disabled.
     pub fn has_route(&self, name: &str) -> bool {
         self.map.contains_key(name) && !self.disabled.contains(name)
     }
@@ -422,20 +430,30 @@ where
     /// rejected by `call`. The tool remains in the router and can be
     /// re-enabled later with [`enable_route`](Self::enable_route).
     ///
+    /// Returns `true` if the name was newly added to the disabled set.
     /// The name is recorded even if no matching route exists yet, so routes
     /// added later (via [`add_route`](Self::add_route) or
     /// [`merge`](Self::merge)) will inherit the disabled state.
-    pub fn disable_route(&mut self, name: &str) {
-        self.disabled.insert(Cow::Owned(name.to_owned()));
+    ///
+    /// Callers should send `Peer::notify_tool_list_changed` when the
+    /// visible tool list changes. Accepts `&'static str` or `String`;
+    /// for a non-static `&str`, call `.to_owned()` first.
+    pub fn disable_route(&mut self, name: impl Into<Cow<'static, str>>) -> bool {
+        self.disabled.insert(name.into())
     }
 
-    /// Re-enable a previously disabled tool.
-    pub fn enable_route(&mut self, name: &str) {
-        self.disabled.remove(name);
+    /// Re-enable a previously disabled tool. Returns `true` if the name
+    /// was present in the disabled set and was removed.
+    ///
+    /// Callers should send `Peer::notify_tool_list_changed` when the
+    /// visible tool list changes.
+    pub fn enable_route(&mut self, name: &str) -> bool {
+        self.disabled.remove(name)
     }
 
-    /// Returns `true` if the tool exists in the router but is currently
-    /// disabled.
+    /// Returns `true` if the tool exists in the router **and** is currently
+    /// disabled. Returns `false` if the tool does not exist or if the name
+    /// was pre-disabled without a matching route.
     pub fn is_disabled(&self, name: &str) -> bool {
         self.map.contains_key(name) && self.disabled.contains(name)
     }
@@ -509,5 +527,51 @@ where
 {
     fn add_assign(&mut self, other: ToolRouter<S>) {
         self.merge(other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        RoleServer,
+        model::{CallToolRequestParams, ErrorCode, NumberOrString},
+        service::{AtomicU32RequestIdProvider, Peer, RequestContext},
+    };
+
+    struct DummyService;
+    impl crate::handler::server::ServerHandler for DummyService {}
+
+    #[tokio::test]
+    async fn test_call_disabled_tool_returns_error() {
+        let service = DummyService;
+        let mut router = ToolRouter::new().with_route(ToolRoute::new_dyn(
+            crate::model::Tool::new("test_tool", "a test tool", Arc::new(Default::default())),
+            |_ctx| Box::pin(async { Ok(CallToolResult::default()) }),
+        ));
+        router.disable_route("test_tool");
+
+        let id_provider: Arc<dyn crate::service::RequestIdProvider> =
+            Arc::new(AtomicU32RequestIdProvider::default());
+        let (peer, _rx) = Peer::<RoleServer>::new(id_provider, None);
+        let ctx = crate::handler::server::tool::ToolCallContext::new(
+            &service,
+            CallToolRequestParams {
+                meta: None,
+                name: Cow::Borrowed("test_tool"),
+                arguments: None,
+                task: None,
+            },
+            RequestContext::new(NumberOrString::Number(1), peer),
+        );
+
+        let err = router
+            .call(ctx)
+            .await
+            .expect_err("disabled tool should reject");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, "tool not found");
     }
 }
