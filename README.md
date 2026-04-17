@@ -141,7 +141,13 @@ Tools let servers expose callable functions to clients. Each tool has a name, de
 The `#[tool]`, `#[tool_router]`, and `#[tool_handler]` macros handle all the wiring. For a tools-only server you can use `#[tool_router(server_handler)]` to skip the separate `ServerHandler` impl:
 
 ```rust,ignore
-use rmcp::{tool, tool_router, ServiceExt, transport::stdio};
+use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, ServiceExt, transport::stdio};
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AddParams {
+    a: i32,
+    b: i32,
+}
 
 #[derive(Clone)]
 struct Calculator;
@@ -149,7 +155,7 @@ struct Calculator;
 #[tool_router(server_handler)]
 impl Calculator {
     #[tool(description = "Add two numbers")]
-    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+    fn add(&self, Parameters(AddParams { a, b }): Parameters<AddParams>) -> String {
         (a + b).to_string()
     }
 }
@@ -165,7 +171,13 @@ async fn main() -> anyhow::Result<()> {
 When you need custom server metadata or multiple capabilities (tools + prompts), use explicit `#[tool_handler]`:
 
 ```rust,ignore
-use rmcp::{tool, tool_router, tool_handler, ServerHandler, ServiceExt};
+use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, tool_handler, ServerHandler, ServiceExt};
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AddParams {
+    a: i32,
+    b: i32,
+}
 
 #[derive(Clone)]
 struct Calculator;
@@ -173,7 +185,7 @@ struct Calculator;
 #[tool_router]
 impl Calculator {
     #[tool(description = "Add two numbers")]
-    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+    fn add(&self, Parameters(AddParams { a, b }): Parameters<AddParams>) -> String {
         (a + b).to_string()
     }
 }

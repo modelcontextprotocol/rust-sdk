@@ -141,7 +141,13 @@ let quit_reason = server.cancel().await?;
 `#[tool]`、`#[tool_router]` 和 `#[tool_handler]` 宏负责所有连接工作。对于纯工具服务端，可以使用 `#[tool_router(server_handler)]` 来省略单独的 `ServerHandler` 实现：
 
 ```rust,ignore
-use rmcp::{tool, tool_router, ServiceExt, transport::stdio};
+use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, ServiceExt, transport::stdio};
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AddParams {
+    a: i32,
+    b: i32,
+}
 
 #[derive(Clone)]
 struct Calculator;
@@ -149,7 +155,7 @@ struct Calculator;
 #[tool_router(server_handler)]
 impl Calculator {
     #[tool(description = "Add two numbers")]
-    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+    fn add(&self, Parameters(AddParams { a, b }): Parameters<AddParams>) -> String {
         (a + b).to_string()
     }
 }
@@ -165,7 +171,13 @@ async fn main() -> anyhow::Result<()> {
 当需要自定义服务端元数据或多种能力（工具 + 提示词）时，使用显式的 `#[tool_handler]`：
 
 ```rust,ignore
-use rmcp::{tool, tool_router, tool_handler, ServerHandler, ServiceExt};
+use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, tool_handler, ServerHandler, ServiceExt};
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AddParams {
+    a: i32,
+    b: i32,
+}
 
 #[derive(Clone)]
 struct Calculator;
@@ -173,7 +185,7 @@ struct Calculator;
 #[tool_router]
 impl Calculator {
     #[tool(description = "Add two numbers")]
-    fn add(&self, #[tool(param)] a: i32, #[tool(param)] b: i32) -> String {
+    fn add(&self, Parameters(AddParams { a, b }): Parameters<AddParams>) -> String {
         (a + b).to_string()
     }
 }
