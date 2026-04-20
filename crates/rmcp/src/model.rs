@@ -3381,6 +3381,10 @@ ts_union!(
     box CreateMessageResult
     | ListRootsResult
     | CreateElicitationResult
+    | ListTasksResult
+    | GetTaskResult
+    | GetTaskPayloadResult
+    | CancelTaskResult
     | EmptyResult
     | CustomResult;
 );
@@ -3399,8 +3403,28 @@ ts_union!(
     | CreateMessageRequest
     | ListRootsRequest
     | CreateElicitationRequest
+    | GetTaskInfoRequest
+    | ListTasksRequest
+    | GetTaskResultRequest
+    | CancelTaskRequest
     | CustomRequest;
 );
+
+impl ServerRequest {
+    pub fn method(&self) -> &str {
+        match &self {
+            ServerRequest::PingRequest(r) => r.method.as_str(),
+            ServerRequest::CreateMessageRequest(r) => r.method.as_str(),
+            ServerRequest::ListRootsRequest(r) => r.method.as_str(),
+            ServerRequest::CreateElicitationRequest(r) => r.method.as_str(),
+            ServerRequest::GetTaskInfoRequest(r) => r.method.as_str(),
+            ServerRequest::ListTasksRequest(r) => r.method.as_str(),
+            ServerRequest::GetTaskResultRequest(r) => r.method.as_str(),
+            ServerRequest::CancelTaskRequest(r) => r.method.as_str(),
+            ServerRequest::CustomRequest(r) => r.method.as_str(),
+        }
+    }
+}
 
 ts_union!(
     export type ServerNotification =
