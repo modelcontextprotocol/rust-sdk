@@ -284,6 +284,11 @@ required-features = ["server", "client"]
 path = "tests/test_custom_request.rs"
 
 [[test]]
+name = "test_task_client_receiver"
+required-features = ["server", "client"]
+path = "tests/test_task_client_receiver.rs"
+
+[[test]]
 name = "test_prompt_macros"
 required-features = ["server", "client"]
 path = "tests/test_prompt_macros.rs"

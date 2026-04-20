@@ -405,6 +405,30 @@
         }
       }
     },
+    "CancelTaskMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/cancel"
+    },
+    "CancelTaskParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ]
+    },
     "CancelTaskResult": {
       "description": "Response to a `tasks/cancel` request.\n\nPer spec, `CancelTaskResult = allOf[Result, Task]` — same shape as `GetTaskResult`.",
       "type": "object",
@@ -1007,6 +1031,30 @@
         "messages"
       ]
     },
+    "GetTaskInfoMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/get"
+    },
+    "GetTaskInfoParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ]
+    },
     "GetTaskPayloadResult": {
       "description": "Response to a `tasks/result` request.\n\nPer spec, the result structure matches the original request type\n(e.g., `CallToolResult` for `tools/call`). This is represented as\nan open object. The payload is the original request's result\nserialized as a JSON value."
     },
@@ -1072,6 +1120,30 @@
         "status",
         "createdAt",
         "lastUpdatedAt"
+      ]
+    },
+    "GetTaskResultMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/result"
+    },
+    "GetTaskResultParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
       ]
     },
     "Icon": {
@@ -1357,6 +1429,18 @@
           "$ref": "#/definitions/Request2"
         },
         {
+          "$ref": "#/definitions/Request3"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam"
+        },
+        {
+          "$ref": "#/definitions/Request4"
+        },
+        {
+          "$ref": "#/definitions/Request5"
+        },
+        {
           "$ref": "#/definitions/CustomRequest"
         }
       ],
@@ -1514,6 +1598,11 @@
       "type": "string",
       "format": "const",
       "const": "roots/list"
+    },
+    "ListTasksMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/list"
     },
     "ListTasksResult": {
       "type": "object",
@@ -1863,6 +1952,25 @@
       "type": "string",
       "format": "const",
       "const": "object"
+    },
+    "PaginatedRequestParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "PingRequestMethod": {
       "type": "string",
@@ -2452,6 +2560,54 @@
         "params"
       ]
     },
+    "Request3": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetTaskInfoMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetTaskInfoParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request4": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetTaskResultMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetTaskResultParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request5": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/CancelTaskMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CancelTaskParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
     "RequestNoParam": {
       "type": "object",
       "properties": {
@@ -2468,6 +2624,27 @@
       "properties": {
         "method": {
           "$ref": "#/definitions/ListRootsRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListTasksMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
