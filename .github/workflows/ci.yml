@@ -60,7 +60,34 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-  
+
+  semver:
+    name: SemVer Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+
+      - name: Check rmcp (default features)
+        run: |
+          cargo semver-checks \
+            --package rmcp \
+            --baseline-rev ${{ github.event.pull_request.base.sha }} \
+            --only-explicit-features \
+            --features default
+
   spelling:
     name: spell check with typos
     runs-on: ubuntu-latest
