@@ -298,7 +298,6 @@ where
         self
     }
 }
-#[derive(Debug)]
 #[non_exhaustive]
 pub struct ToolRouter<S> {
     #[allow(clippy::type_complexity)]
@@ -307,6 +306,22 @@ pub struct ToolRouter<S> {
     pub transparent_when_not_found: bool,
 
     disabled: std::collections::HashSet<Cow<'static, str>>,
+
+    notifier: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl<S> std::fmt::Debug for ToolRouter<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolRouter")
+            .field("map", &self.map)
+            .field(
+                "transparent_when_not_found",
+                &self.transparent_when_not_found,
+            )
+            .field("disabled", &self.disabled)
+            .field("notifier", &self.notifier.as_ref().map(|_| "..."))
+            .finish()
+    }
 }
 
 impl<S> Default for ToolRouter<S> {
@@ -315,15 +330,18 @@ impl<S> Default for ToolRouter<S> {
             map: std::collections::HashMap::new(),
             transparent_when_not_found: false,
             disabled: std::collections::HashSet::new(),
+            notifier: None,
         }
     }
 }
+
 impl<S> Clone for ToolRouter<S> {
     fn clone(&self) -> Self {
         Self {
             map: self.map.clone(),
             transparent_when_not_found: self.transparent_when_not_found,
             disabled: self.disabled.clone(),
+            notifier: self.notifier.clone(),
         }
     }
 }
@@ -346,11 +364,7 @@ where
     S: MaybeSend + 'static,
 {
     pub fn new() -> Self {
-        Self {
-            map: std::collections::HashMap::new(),
-            transparent_when_not_found: false,
-            disabled: std::collections::HashSet::new(),
-        }
+        Self::default()
     }
     pub fn with_route<R, A>(mut self, route: R) -> Self
     where
@@ -426,29 +440,30 @@ where
         self.map.contains_key(name) && !self.disabled.contains(name)
     }
 
-    /// Disable a tool by name so it is hidden from `list_all`, `get`, and
-    /// rejected by `call`. The tool remains in the router and can be
-    /// re-enabled later with [`enable_route`](Self::enable_route).
+    /// Disable a tool by name. Hidden from `list_all`, `get`, rejected by
+    /// `call`. Re-enable with [`enable_route`](Self::enable_route).
     ///
     /// Returns `true` if the name was newly added to the disabled set.
     /// The name is recorded even if no matching route exists yet, so routes
-    /// added later (via [`add_route`](Self::add_route) or
-    /// [`merge`](Self::merge)) will inherit the disabled state.
-    ///
-    /// Callers should send `Peer::notify_tool_list_changed` when the
-    /// visible tool list changes. Accepts `&'static str` or `String`;
-    /// for a non-static `&str`, call `.to_owned()` first.
+    /// added later will inherit the disabled state.
     pub fn disable_route(&mut self, name: impl Into<Cow<'static, str>>) -> bool {
-        self.disabled.insert(name.into())
+        let name = name.into();
+        let was_visible = self.map.contains_key(&name) && !self.disabled.contains(&name);
+        let newly_disabled = self.disabled.insert(name.clone());
+        if was_visible && newly_disabled {
+            self.notify_if_visible(&name);
+        }
+        newly_disabled
     }
 
     /// Re-enable a previously disabled tool. Returns `true` if the name
-    /// was present in the disabled set and was removed.
-    ///
-    /// Callers should send `Peer::notify_tool_list_changed` when the
-    /// visible tool list changes.
+    /// was in the disabled set.
     pub fn enable_route(&mut self, name: &str) -> bool {
-        self.disabled.remove(name)
+        let removed = self.disabled.remove(name);
+        if removed {
+            self.notify_if_visible(name);
+        }
+        removed
     }
 
     /// Returns `true` if the tool exists in the router **and** is currently
@@ -466,6 +481,58 @@ where
     pub fn with_disabled(mut self, name: impl Into<Cow<'static, str>>) -> Self {
         self.disabled.insert(name.into());
         self
+    }
+
+    /// Install a callback invoked when the visible tool list changes.
+    pub fn set_notifier(&mut self, f: impl Fn() + Send + Sync + 'static) {
+        self.notifier = Some(Arc::new(f));
+    }
+
+    pub fn clear_notifier(&mut self) {
+        self.notifier = None;
+    }
+
+    /// Install a notifier that sends `notifications/tools/list_changed`
+    /// via the given peer.
+    pub fn bind_peer_notifier(&mut self, peer: &crate::service::Peer<crate::RoleServer>) {
+        let peer = peer.clone();
+        self.set_notifier(move || {
+            let peer = peer.clone();
+            tokio::spawn(async move {
+                if let Err(e) = peer.notify_tool_list_changed().await {
+                    tracing::warn!("failed to send tools/list_changed notification: {e}");
+                }
+            });
+        });
+    }
+
+    /// Deferred notifier: no-op until the peer slot is filled.
+    pub(crate) fn deferred_peer_notifier() -> (
+        impl Fn() + Send + Sync + 'static,
+        Arc<std::sync::OnceLock<crate::service::Peer<crate::RoleServer>>>,
+    ) {
+        let peer_slot =
+            Arc::new(std::sync::OnceLock::<crate::service::Peer<crate::RoleServer>>::new());
+        let slot_clone = peer_slot.clone();
+        let notifier = move || {
+            if let Some(peer) = slot_clone.get() {
+                let peer = peer.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = peer.notify_tool_list_changed().await {
+                        tracing::warn!("failed to send tools/list_changed notification: {e}");
+                    }
+                });
+            }
+        };
+        (notifier, peer_slot)
+    }
+
+    fn notify_if_visible(&self, name: &str) {
+        if self.map.contains_key(name) {
+            if let Some(notifier) = &self.notifier {
+                (notifier)();
+            }
+        }
     }
 
     pub async fn call(

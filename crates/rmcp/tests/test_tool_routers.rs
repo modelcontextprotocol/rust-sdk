@@ -1,5 +1,8 @@
 #![cfg(not(feature = "local"))]
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use futures::future::BoxFuture;
 use rmcp::{
@@ -269,4 +272,101 @@ fn test_disable_enable_return_false_cases() {
 
     // Enable on unknown name returns false
     assert!(!router.enable_route("unknown"));
+}
+
+// ── Notifier tests ──────────────────────────────────────────────────────
+
+fn counter_notifier() -> (
+    impl Fn() + Send + Sync + 'static,
+    std::sync::Arc<AtomicUsize>,
+) {
+    let counter = std::sync::Arc::new(AtomicUsize::new(0));
+    let c = counter.clone();
+    let notifier = move || {
+        c.fetch_add(1, Ordering::SeqCst);
+    };
+    (notifier, counter)
+}
+
+#[test]
+fn test_notifier_fires_on_disable_and_enable() {
+    let (notifier, counter) = counter_notifier();
+    let mut router = build_router();
+    router.set_notifier(notifier);
+
+    assert!(router.disable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    assert!(!router.disable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    assert!(router.enable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
+
+    assert!(!router.enable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn test_notifier_skips_nonexistent_tools() {
+    let (notifier, counter) = counter_notifier();
+    let mut router = build_router();
+    router.set_notifier(notifier);
+
+    assert!(router.disable_route("does_not_exist"));
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+    assert!(router.enable_route("does_not_exist"));
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+    assert!(router.disable_route("future_tool"));
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    assert!(router.enable_route("future_tool"));
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn test_no_notifier_no_panic() {
+    let mut router = build_router();
+    assert!(router.disable_route("async_function"));
+    assert!(router.enable_route("async_function"));
+    assert!(router.disable_route("async_function"));
+    assert!(!router.disable_route("async_function"));
+}
+
+#[test]
+fn test_clone_shares_notifier() {
+    let (notifier, counter) = counter_notifier();
+    let mut router = build_router();
+    router.set_notifier(notifier);
+    let mut cloned = router.clone();
+
+    assert!(cloned.disable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    assert!(router.disable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
+
+    cloned.clear_notifier();
+    assert!(cloned.enable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
+
+    assert!(router.enable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn test_pre_init_disable_silent_but_correct() {
+    let mut router = build_router();
+
+    assert!(router.disable_route("async_function"));
+    assert_eq!(router.list_all().len(), 3);
+    assert!(!router.has_route("async_function"));
+
+    let (notifier, counter) = counter_notifier();
+    router.set_notifier(notifier);
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+    assert!(router.enable_route("async_function"));
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
 }

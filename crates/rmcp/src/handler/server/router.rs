@@ -6,7 +6,7 @@ use tool::{IntoToolRoute, ToolRoute};
 use super::ServerHandler;
 use crate::{
     RoleServer, Service,
-    model::{ClientRequest, ListPromptsResult, ListToolsResult, ServerResult},
+    model::{ClientNotification, ClientRequest, ListPromptsResult, ListToolsResult, ServerResult},
     service::NotificationContext,
 };
 
@@ -18,6 +18,7 @@ pub struct Router<S> {
     pub tool_router: tool::ToolRouter<S>,
     pub prompt_router: prompt::PromptRouter<S>,
     pub service: Arc<S>,
+    peer_slot: Arc<std::sync::OnceLock<crate::service::Peer<RoleServer>>>,
 }
 
 impl<S> Router<S>
@@ -25,10 +26,14 @@ where
     S: ServerHandler,
 {
     pub fn new(service: S) -> Self {
+        let (notifier, peer_slot) = tool::ToolRouter::<S>::deferred_peer_notifier();
+        let mut tool_router = tool::ToolRouter::new();
+        tool_router.set_notifier(notifier);
         Self {
-            tool_router: tool::ToolRouter::new(),
+            tool_router,
             prompt_router: prompt::PromptRouter::new(),
             service: Arc::new(service),
+            peer_slot,
         }
     }
 
@@ -72,6 +77,12 @@ where
         notification: <RoleServer as crate::service::ServiceRole>::PeerNot,
         context: NotificationContext<RoleServer>,
     ) -> Result<(), crate::ErrorData> {
+        if matches!(
+            &notification,
+            ClientNotification::InitializedNotification(_)
+        ) {
+            let _ = self.peer_slot.set(context.peer.clone());
+        }
         self.service
             .handle_notification(notification, context)
             .await
@@ -137,6 +148,81 @@ where
     }
 
     fn get_info(&self) -> <RoleServer as crate::service::ServiceRole>::Info {
-        ServerHandler::get_info(&self.service)
+        let mut info = ServerHandler::get_info(&self.service);
+        info.capabilities
+            .tools
+            .get_or_insert_with(Default::default)
+            .list_changed = Some(true);
+        info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        model::{CallToolResult, ClientNotification, ServerNotification, Tool},
+        service::{AtomicU32RequestIdProvider, Peer, PeerSinkMessage, RequestIdProvider},
+    };
+
+    struct DummyHandler;
+    impl ServerHandler for DummyHandler {}
+
+    async fn recv_notification(
+        rx: &mut tokio::sync::mpsc::Receiver<PeerSinkMessage<RoleServer>>,
+    ) -> ServerNotification {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        match msg {
+            PeerSinkMessage::Notification {
+                notification,
+                responder,
+            } => {
+                let _ = responder.send(Ok(()));
+                notification
+            }
+            other => panic!("expected notification, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_deferred_notifier_e2e() {
+        let mut router = Router::new(DummyHandler).with_tool(tool::ToolRoute::new_dyn(
+            Tool::new("my_tool", "test", Arc::new(Default::default())),
+            |_ctx| Box::pin(async { Ok(CallToolResult::default()) }),
+        ));
+
+        let id_provider: Arc<dyn RequestIdProvider> =
+            Arc::new(AtomicU32RequestIdProvider::default());
+        let (peer, mut rx) = Peer::<RoleServer>::new(id_provider, None);
+
+        let context = crate::service::NotificationContext {
+            peer: peer.clone(),
+            meta: Default::default(),
+            extensions: Default::default(),
+        };
+        router
+            .handle_notification(
+                ClientNotification::InitializedNotification(Default::default()),
+                context,
+            )
+            .await
+            .unwrap();
+
+        router.tool_router.disable_route("my_tool");
+        assert!(matches!(
+            recv_notification(&mut rx).await,
+            ServerNotification::ToolListChangedNotification(_)
+        ));
+
+        router.tool_router.enable_route("my_tool");
+        assert!(matches!(
+            recv_notification(&mut rx).await,
+            ServerNotification::ToolListChangedNotification(_)
+        ));
     }
 }
