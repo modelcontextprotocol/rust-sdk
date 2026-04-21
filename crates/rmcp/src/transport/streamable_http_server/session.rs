@@ -30,6 +30,41 @@ use crate::{
 
 pub mod local;
 pub mod never;
+pub mod store;
+
+pub use store::{SessionState, SessionStore, SessionStoreError};
+
+/// Extension marker inserted into the `initialize` request extensions during a
+/// session restore replay. Handlers can check for its presence to distinguish a
+/// cross-instance restore from a genuine client-initiated `initialize` request.
+///
+/// ```rust,ignore
+/// if req.extensions().get::<SessionRestoreMarker>().is_some() {
+///     // this is a restore replay, not a fresh client connection
+/// }
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct SessionRestoreMarker {
+    pub id: SessionId,
+}
+
+/// The outcome of a [`SessionManager::restore_session`] call.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum RestoreOutcome<T> {
+    /// The session was just re-created from external state; the caller must
+    /// spawn an MCP handler against the returned transport and replay the
+    /// `initialize` handshake.
+    Restored(T),
+    /// The session was already present in memory (e.g. a concurrent request
+    /// already restored it). The caller should proceed as if `has_session`
+    /// had returned `true` — no further action is required.
+    AlreadyPresent,
+    /// This session manager does not support external-store restore.
+    /// The caller should fall through to the normal 404 response.
+    NotSupported,
+}
 
 /// Controls how MCP sessions are created, validated, and closed.
 ///
@@ -98,4 +133,22 @@ pub trait SessionManager: Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error>,
     > + Send;
+
+    /// Attempt to restore a previously-known session from external state,
+    /// creating a fresh in-memory session worker with the given `id`.
+    ///
+    /// See [`RestoreOutcome`] for the three possible results:
+    /// - [`RestoreOutcome::Restored`] — session re-created; caller must spawn
+    ///   an MCP handler and replay the `initialize` handshake.
+    /// - [`RestoreOutcome::AlreadyPresent`] — session is already in memory
+    ///   (e.g. a concurrent request restored it first); caller proceeds
+    ///   normally.
+    /// - [`RestoreOutcome::NotSupported`] (default) — this session manager
+    ///   does not support external-store restore; caller returns 404.
+    fn restore_session(
+        &self,
+        _id: SessionId,
+    ) -> impl Future<Output = Result<RestoreOutcome<Self::Transport>, Self::Error>> + Send {
+        futures::future::ready(Ok(RestoreOutcome::NotSupported))
+    }
 }

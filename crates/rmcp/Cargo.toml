@@ -340,6 +340,16 @@ required-features = [
 path = "tests/test_streamable_http_stale_session.rs"
 
 [[test]]
+name = "test_streamable_http_session_store"
+required-features = [
+  "client",
+  "server",
+  "transport-streamable-http-client-reqwest",
+  "transport-streamable-http-server",
+]
+path = "tests/test_streamable_http_session_store.rs"
+
+[[test]]
 name = "test_streamable_http_connection_reuse"
 required-features = [
   "server",
@@ -351,4 +361,3 @@ required-features = [
   "transport-streamable-http-client-reqwest",
 ]
 path = "tests/test_streamable_http_connection_reuse.rs"
-
