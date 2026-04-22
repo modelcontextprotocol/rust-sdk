@@ -449,11 +449,10 @@ where
     pub fn disable_route(&mut self, name: impl Into<Cow<'static, str>>) -> bool {
         let name = name.into();
         let was_visible = self.map.contains_key(&name) && !self.disabled.contains(&name);
-        let newly_disabled = self.disabled.insert(name.clone());
-        if was_visible && newly_disabled {
+        if was_visible {
             self.notify_if_visible(&name);
         }
-        newly_disabled
+        self.disabled.insert(name)
     }
 
     /// Re-enable a previously disabled tool. Returns `true` if the name
@@ -530,7 +529,7 @@ where
     fn notify_if_visible(&self, name: &str) {
         if self.map.contains_key(name) {
             if let Some(notifier) = &self.notifier {
-                (notifier)();
+                notifier();
             }
         }
     }
