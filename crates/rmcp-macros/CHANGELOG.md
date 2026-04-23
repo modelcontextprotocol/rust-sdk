@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.5.0...rmcp-macros-v1.6.0) - 2026-04-23
+
+### Fixed
+
+- *(docs)* use correct Parameters<T> syntax in tool examples ([#814](https://github.com/modelcontextprotocol/rust-sdk/pull/814))
+
+### Other
+
+- add systemprompt-template to Built with rmcp ([#820](https://github.com/modelcontextprotocol/rust-sdk/pull/820))
+
 ## [1.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.4.0...rmcp-macros-v1.5.0) - 2026-04-16
 
 ### Fixed
