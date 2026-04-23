@@ -64,6 +64,15 @@ pub struct StreamableHttpServerConfig {
     /// or with ports:
     ///     allowed_hosts = ["example.com", "example.com:8080"]
     pub allowed_hosts: Vec<String>,
+    /// Allowed browser origins for inbound `Origin` validation.
+    ///
+    /// Defaults to an empty list, which disables Origin validation. When
+    /// non-empty, requests carrying an `Origin` header must match per RFC 6454
+    /// `(scheme, host, port)`; missing-`Origin` requests still pass. Entries
+    /// must include a scheme; `"null"` matches the browser's `Origin: null`.
+    /// examples:
+    ///     allowed_origins = ["https://app.example.com", "http://localhost:8080"]
+    pub allowed_origins: Vec<String>,
     /// Optional external session store for cross-instance recovery.
     ///
     /// When set, [`SessionState`] (the client's `initialize` parameters) is
@@ -103,6 +112,7 @@ impl Default for StreamableHttpServerConfig {
             json_response: false,
             cancellation_token: CancellationToken::new(),
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
+            allowed_origins: vec![],
             session_store: None,
         }
     }
@@ -119,6 +129,18 @@ impl StreamableHttpServerConfig {
     /// Disable allowed hosts. This will allow requests with any `Host` header, which is NOT recommended for public deployments.
     pub fn disable_allowed_hosts(mut self) -> Self {
         self.allowed_hosts.clear();
+        self
+    }
+    pub fn with_allowed_origins(
+        mut self,
+        allowed_origins: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allowed_origins = allowed_origins.into_iter().map(Into::into).collect();
+        self
+    }
+    /// Disable Origin validation, reverting to the default ignore-Origin behavior.
+    pub fn disable_allowed_origins(mut self) -> Self {
+        self.allowed_origins.clear();
         self
     }
     pub fn with_sse_keep_alive(mut self, duration: Option<Duration>) -> Self {
@@ -243,6 +265,59 @@ fn host_is_allowed(host: &NormalizedAuthority, allowed_hosts: &[String]) -> bool
         })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NormalizedOrigin {
+    Null,
+    Tuple {
+        scheme: String,
+        host: String,
+        port: Option<u16>,
+    },
+}
+
+fn parse_origin_value(value: &str) -> Option<NormalizedOrigin> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.eq_ignore_ascii_case("null") {
+        return Some(NormalizedOrigin::Null);
+    }
+    let uri = http::Uri::try_from(value).ok()?;
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let authority = uri.authority()?;
+    Some(NormalizedOrigin::Tuple {
+        scheme,
+        host: normalize_host(authority.host()),
+        port: authority.port_u16(),
+    })
+}
+
+fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> bool {
+    if allowed_origins.is_empty() {
+        return true;
+    }
+    allowed_origins
+        .iter()
+        .filter_map(|raw| parse_origin_value(raw))
+        .any(|allowed| match (&allowed, origin) {
+            (NormalizedOrigin::Null, NormalizedOrigin::Null) => true,
+            (
+                NormalizedOrigin::Tuple {
+                    scheme: a_scheme,
+                    host: a_host,
+                    port: a_port,
+                },
+                NormalizedOrigin::Tuple {
+                    scheme: o_scheme,
+                    host: o_host,
+                    port: o_port,
+                },
+            ) => a_scheme == o_scheme && a_host == o_host && (a_port.is_none() || a_port == o_port),
+            _ => false,
+        })
+}
+
 fn bad_request_response(message: &str) -> BoxResponse {
     let body = Full::from(message.to_string()).boxed();
 
@@ -274,7 +349,30 @@ fn validate_dns_rebinding_headers(
     if !host_is_allowed(&host, &config.allowed_hosts) {
         return Err(forbidden_response("Forbidden: Host header is not allowed"));
     }
+    validate_origin_header(headers, &config.allowed_origins)?;
+    Ok(())
+}
 
+fn validate_origin_header(
+    headers: &HeaderMap,
+    allowed_origins: &[String],
+) -> Result<(), BoxResponse> {
+    if allowed_origins.is_empty() {
+        return Ok(());
+    }
+    let Some(origin_header) = headers.get(http::header::ORIGIN) else {
+        return Ok(());
+    };
+    let origin_str = origin_header
+        .to_str()
+        .map_err(|_| bad_request_response("Bad Request: Invalid Origin header encoding"))?;
+    let origin = parse_origin_value(origin_str)
+        .ok_or_else(|| bad_request_response("Bad Request: Invalid Origin header"))?;
+    if !origin_is_allowed(&origin, allowed_origins) {
+        return Err(forbidden_response(
+            "Forbidden: Origin header is not allowed",
+        ));
+    }
     Ok(())
 }
 

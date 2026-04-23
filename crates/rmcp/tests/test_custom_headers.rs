@@ -1030,3 +1030,111 @@ async fn test_server_validates_host_header_port_for_dns_rebinding_protection() {
     let response = service.handle(wrong_port_request).await;
     assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
 }
+
+#[cfg(all(feature = "transport-streamable-http-server", feature = "server"))]
+mod origin_validation {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http::{Method, Request, header::CONTENT_TYPE};
+    use http_body_util::Full;
+    use rmcp::{
+        handler::server::ServerHandler,
+        model::{ServerCapabilities, ServerInfo},
+        transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    };
+    use serde_json::json;
+
+    #[derive(Clone)]
+    struct TestHandler;
+
+    impl ServerHandler for TestHandler {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().build())
+        }
+    }
+
+    fn service_with_allowed_origins(
+        origins: &[&str],
+    ) -> StreamableHttpService<TestHandler, LocalSessionManager> {
+        StreamableHttpService::new(
+            || Ok(TestHandler),
+            Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default().with_allowed_origins(origins.iter().copied()),
+        )
+    }
+
+    fn init_request(origin: Option<&str>) -> Request<Full<Bytes>> {
+        let init_body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "1.0.0"}
+            }
+        });
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .header("Accept", "application/json, text/event-stream")
+            .header(CONTENT_TYPE, "application/json")
+            .header("Host", "localhost:8080");
+        if let Some(origin) = origin {
+            builder = builder.header("Origin", origin);
+        }
+        builder
+            .body(Full::new(Bytes::from(init_body.to_string())))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn allowlisted_origin_is_allowed() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service
+            .handle(init_request(Some("http://localhost:8080")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn non_allowlisted_origin_is_forbidden() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service
+            .handle(init_request(Some("http://attacker.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn missing_origin_passes_through() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service.handle(init_request(None)).await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn scheme_mismatch_is_forbidden() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service
+            .handle(init_request(Some("https://localhost:8080")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn null_origin_is_allowed_when_allowlisted() {
+        let service = service_with_allowed_origins(&["null"]);
+        let response = service.handle(init_request(Some("null"))).await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn null_origin_is_forbidden_when_not_allowlisted() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service.handle(init_request(Some("null"))).await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+}
