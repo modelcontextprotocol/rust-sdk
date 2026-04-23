@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.5.0...rmcp-v1.6.0) - 2026-04-23
+
+### Added
+
+- *(http)* add Origin header validation ([#823](https://github.com/modelcontextprotocol/rust-sdk/pull/823))
+- *(router)* support runtime disabling of tools ([#809](https://github.com/modelcontextprotocol/rust-sdk/pull/809))
+- optional session store (resumabillity support) ([#775](https://github.com/modelcontextprotocol/rust-sdk/pull/775))
+
+### Fixed
+
+- *(docs)* use correct Parameters<T> syntax in tool examples ([#814](https://github.com/modelcontextprotocol/rust-sdk/pull/814))
+
+### Other
+
+- add systemprompt-template to Built with rmcp ([#820](https://github.com/modelcontextprotocol/rust-sdk/pull/820))
+
 ## [1.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.4.0...rmcp-v1.5.0) - 2026-04-16
 
 ### Added
