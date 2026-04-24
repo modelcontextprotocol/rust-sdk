@@ -930,6 +930,8 @@ pub enum LocalSessionWorkerError {
     FailToHandleMessage(SessionError),
     #[error("keep alive timeout after {}ms", _0.as_millis())]
     KeepAliveTimeout(Duration),
+    #[error("init timeout after {}ms", _0.as_millis())]
+    InitTimeout(Duration),
     #[error("Transport closed")]
     TransportClosed,
     #[error("Tokio join error {0}")]
@@ -959,13 +961,24 @@ impl Worker for LocalSessionWorker {
             FromHttpService(SessionEvent),
             FromHandler(WorkerSendRequest<LocalSessionWorker>),
         }
-        // waiting for initialize request
-        let evt = self.event_rx.recv().await.ok_or_else(|| {
-            WorkerQuitReason::fatal(
-                LocalSessionWorkerError::TransportTerminated,
-                "get initialize request",
-            )
-        })?;
+        let init_timeout = self.session_config.init_timeout.unwrap_or(Duration::MAX);
+        let evt = tokio::select! {
+            evt = self.event_rx.recv() => evt.ok_or_else(|| {
+                WorkerQuitReason::fatal(
+                    LocalSessionWorkerError::TransportTerminated,
+                    "get initialize request",
+                )
+            })?,
+            _ = context.cancellation_token.cancelled() => {
+                return Err(WorkerQuitReason::Cancelled);
+            }
+            _ = tokio::time::sleep(init_timeout) => {
+                return Err(WorkerQuitReason::fatal(
+                    LocalSessionWorkerError::InitTimeout(init_timeout),
+                    "waiting for initialize request",
+                ));
+            }
+        };
         let SessionEvent::InitializeRequest { request, responder } = evt else {
             return Err(WorkerQuitReason::fatal(
                 LocalSessionWorkerError::UnexpectedEvent(evt),
@@ -1122,6 +1135,10 @@ pub struct SessionConfig {
     /// resume requests. After this duration, completed entries are evicted
     /// and resume will return an error. Default is 60 seconds.
     pub completed_cache_ttl: Duration,
+    /// Maximum duration to wait for the `initialize` request after session
+    /// creation. If not received within this window, the session is
+    /// terminated. Default is 60 seconds. Set to `None` to disable.
+    pub init_timeout: Option<Duration>,
 }
 
 impl SessionConfig {
@@ -1129,6 +1146,7 @@ impl SessionConfig {
     pub const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(300);
     pub const DEFAULT_SSE_RETRY: Duration = Duration::from_secs(3);
     pub const DEFAULT_COMPLETED_CACHE_TTL: Duration = Duration::from_secs(60);
+    pub const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 }
 
 impl Default for SessionConfig {
@@ -1138,6 +1156,7 @@ impl Default for SessionConfig {
             keep_alive: Some(Self::DEFAULT_KEEP_ALIVE),
             sse_retry: Some(Self::DEFAULT_SSE_RETRY),
             completed_cache_ttl: Self::DEFAULT_COMPLETED_CACHE_TTL,
+            init_timeout: Some(Self::DEFAULT_INIT_TIMEOUT),
         }
     }
 }
