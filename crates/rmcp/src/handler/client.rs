@@ -30,6 +30,22 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 .create_elicitation(request.params, context)
                 .await
                 .map(ClientResult::CreateElicitationResult),
+            ServerRequest::ListTasksRequest(request) => self
+                .list_tasks(request.params, context)
+                .await
+                .map(ClientResult::ListTasksResult),
+            ServerRequest::GetTaskInfoRequest(request) => self
+                .get_task_info(request.params, context)
+                .await
+                .map(ClientResult::GetTaskResult),
+            ServerRequest::GetTaskResultRequest(request) => self
+                .get_task_result(request.params, context)
+                .await
+                .map(ClientResult::GetTaskPayloadResult),
+            ServerRequest::CancelTaskRequest(request) => self
+                .cancel_task(request.params, context)
+                .await
+                .map(ClientResult::CancelTaskResult),
             ServerRequest::CustomRequest(request) => self
                 .on_custom_request(request, context)
                 .await
@@ -191,6 +207,68 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         )))
     }
 
+    /// Handle a `tasks/list` request from a server. Only relevant when the
+    /// client is also a task *receiver* (e.g. it accepted a task-augmented
+    /// `sampling/createMessage` or `elicitation/create` request).
+    ///
+    /// # Default Behavior
+    /// Returns `-32601` (Method not found). Clients that advertise
+    /// `capabilities.tasks.list` must override this.
+    fn list_tasks(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<ListTasksResult, McpError>> + MaybeSendFuture + '_ {
+        let _ = (request, context);
+        std::future::ready(Err(McpError::method_not_found::<ListTasksMethod>()))
+    }
+
+    /// Handle a `tasks/get` request from a server. Only relevant when the
+    /// client is also a task *receiver* (e.g. it accepted a task-augmented
+    /// `sampling/createMessage` or `elicitation/create` request).
+    ///
+    /// # Default Behavior
+    /// Returns `-32601` (Method not found). Clients that advertise
+    /// `capabilities.tasks.requests.sampling.createMessage` or
+    /// `capabilities.tasks.requests.elicitation.create` must override this.
+    fn get_task_info(
+        &self,
+        request: GetTaskInfoParams,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
+        let _ = (request, context);
+        std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
+    }
+
+    /// Handle a `tasks/result` request from a server. Only relevant when
+    /// the client is also a task *receiver*.
+    ///
+    /// # Default Behavior
+    /// Returns `-32601` (Method not found).
+    fn get_task_result(
+        &self,
+        request: GetTaskResultParams,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
+        let _ = (request, context);
+        std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
+    }
+
+    /// Handle a `tasks/cancel` request from a server. Only relevant when
+    /// the client is also a task *receiver*.
+    ///
+    /// # Default Behavior
+    /// Returns `-32601` (Method not found). Clients that advertise
+    /// `capabilities.tasks.cancel` must override this.
+    fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: RequestContext<RoleClient>,
+    ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
+        let _ = (request, context);
+        std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
+    }
+
     fn on_cancelled(
         &self,
         params: CancelledNotificationParam,
@@ -308,6 +386,38 @@ macro_rules! impl_client_handler_for_wrapper {
                 context: RequestContext<RoleClient>,
             ) -> impl Future<Output = Result<CustomResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).on_custom_request(request, context)
+            }
+
+            fn list_tasks(
+                &self,
+                request: Option<PaginatedRequestParams>,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<ListTasksResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).list_tasks(request, context)
+            }
+
+            fn get_task_info(
+                &self,
+                request: GetTaskInfoParams,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).get_task_info(request, context)
+            }
+
+            fn get_task_result(
+                &self,
+                request: GetTaskResultParams,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).get_task_result(request, context)
+            }
+
+            fn cancel_task(
+                &self,
+                request: CancelTaskParams,
+                context: RequestContext<RoleClient>,
+            ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).cancel_task(request, context)
             }
 
             fn on_cancelled(

@@ -166,6 +166,10 @@ variant_extension! {
         ListRootsRequest
         CreateElicitationRequest
         CustomRequest
+        GetTaskInfoRequest
+        ListTasksRequest
+        GetTaskResultRequest
+        CancelTaskRequest
     }
 }
 
