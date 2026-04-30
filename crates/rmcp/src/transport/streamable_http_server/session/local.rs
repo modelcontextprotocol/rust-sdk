@@ -66,9 +66,16 @@ impl SessionManager for LocalSessionManager {
         Ok(response)
     }
     async fn close_session(&self, id: &SessionId) -> Result<(), Self::Error> {
-        let mut sessions = self.sessions.write().await;
-        if let Some(handle) = sessions.remove(id) {
-            handle.close().await?;
+        let handle = {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(id)
+        };
+        if let Some(handle) = handle {
+            match handle.close().await {
+                // Worker already exited — nothing left to clean up.
+                Ok(()) | Err(SessionError::SessionServiceTerminated) => {}
+                Err(e) => return Err(e.into()),
+            }
         }
         Ok(())
     }
