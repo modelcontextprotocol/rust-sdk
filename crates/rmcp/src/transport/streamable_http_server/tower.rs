@@ -330,13 +330,23 @@ fn bad_request_response(message: &str) -> BoxResponse {
 
 fn parse_host_header(headers: &HeaderMap) -> Result<NormalizedAuthority, BoxResponse> {
     let Some(host) = headers.get(http::header::HOST) else {
+        tracing::warn!("rejected request with missing Host header");
         return Err(bad_request_response("Bad Request: missing Host header"));
     };
 
-    let host = host
+    let host_str = host
         .to_str()
+        .inspect_err(|_| {
+            tracing::warn!(host = ?host, "rejected request with non-UTF-8 Host header");
+        })
         .map_err(|_| bad_request_response("Bad Request: Invalid Host header encoding"))?;
-    let authority = http::uri::Authority::try_from(host)
+    let authority = http::uri::Authority::try_from(host_str)
+        .inspect_err(|_| {
+            tracing::warn!(
+                host = host_str,
+                "rejected request with malformed Host header"
+            );
+        })
         .map_err(|_| bad_request_response("Bad Request: Invalid Host header"))?;
     Ok(normalize_authority(authority.host(), authority.port_u16()))
 }
@@ -347,6 +357,10 @@ fn validate_dns_rebinding_headers(
 ) -> Result<(), BoxResponse> {
     let host = parse_host_header(headers)?;
     if !host_is_allowed(&host, &config.allowed_hosts) {
+        tracing::warn!(
+            host = ?host,
+            "rejected request with disallowed Host header (possible DNS rebinding attempt)",
+        );
         return Err(forbidden_response("Forbidden: Host header is not allowed"));
     }
     validate_origin_header(headers, &config.allowed_origins)?;
@@ -365,10 +379,22 @@ fn validate_origin_header(
     };
     let origin_str = origin_header
         .to_str()
+        .inspect_err(|_| {
+            tracing::warn!(origin = ?origin_header, "rejected request with non-UTF-8 Origin header");
+        })
         .map_err(|_| bad_request_response("Bad Request: Invalid Origin header encoding"))?;
-    let origin = parse_origin_value(origin_str)
-        .ok_or_else(|| bad_request_response("Bad Request: Invalid Origin header"))?;
+    let origin = parse_origin_value(origin_str).ok_or_else(|| {
+        tracing::warn!(
+            origin = origin_str,
+            "rejected request with malformed Origin header",
+        );
+        bad_request_response("Bad Request: Invalid Origin header")
+    })?;
     if !origin_is_allowed(&origin, allowed_origins) {
+        tracing::warn!(
+            origin = ?origin,
+            "rejected request with disallowed Origin header (possible cross-origin attack)",
+        );
         return Err(forbidden_response(
             "Forbidden: Origin header is not allowed",
         ));
