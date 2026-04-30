@@ -928,8 +928,6 @@ pub enum LocalSessionWorkerError {
     FailToSendInitializeRequest(SessionError),
     #[error("fail to handle message: {0}")]
     FailToHandleMessage(SessionError),
-    #[error("keep alive timeout after {}ms", _0.as_millis())]
-    KeepAliveTimeout(Duration),
     #[error("Transport closed")]
     TransportClosed,
     #[error("Tokio join error {0}")]
@@ -1008,7 +1006,7 @@ impl Worker for LocalSessionWorker {
                     return Err(WorkerQuitReason::Cancelled)
                 }
                 _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::fatal(LocalSessionWorkerError::KeepAliveTimeout(keep_alive), "poll next session event"))
+                    return Err(WorkerQuitReason::IdleTimeout(keep_alive))
                 }
             };
             match event {
