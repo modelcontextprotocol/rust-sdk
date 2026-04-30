@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level};
@@ -22,6 +22,8 @@ pub enum WorkerQuitReason<E> {
     TransportClosed,
     #[error("Handler terminated")]
     HandlerTerminated,
+    #[error("Worker idle timeout ({}ms)", _0.as_millis())]
+    IdleTimeout(Duration),
 }
 
 impl<E: std::error::Error + Send + 'static> WorkerQuitReason<E> {
@@ -122,7 +124,8 @@ impl<W: Worker> WorkerTransport<W> {
                 .inspect_err(|e| match e {
                     WorkerQuitReason::Cancelled
                     | WorkerQuitReason::TransportClosed
-                    | WorkerQuitReason::HandlerTerminated => {
+                    | WorkerQuitReason::HandlerTerminated
+                    | WorkerQuitReason::IdleTimeout(_) => {
                         tracing::debug!("worker quit with reason: {:?}", e);
                     }
                     WorkerQuitReason::Join(e) => {
