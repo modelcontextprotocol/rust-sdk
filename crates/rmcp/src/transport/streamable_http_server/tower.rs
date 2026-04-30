@@ -328,34 +328,42 @@ fn bad_request_response(message: &str) -> BoxResponse {
         .expect("failed to build bad request response")
 }
 
-fn parse_host_header(headers: &HeaderMap) -> Result<NormalizedAuthority, BoxResponse> {
-    let Some(host) = headers.get(http::header::HOST) else {
-        tracing::warn!("rejected request with missing Host header");
-        return Err(bad_request_response("Bad Request: missing Host header"));
-    };
-
-    let host_str = host
-        .to_str()
-        .inspect_err(|_| {
-            tracing::warn!(host = ?host, "rejected request with non-UTF-8 Host header");
-        })
-        .map_err(|_| bad_request_response("Bad Request: Invalid Host header encoding"))?;
-    let authority = http::uri::Authority::try_from(host_str)
-        .inspect_err(|_| {
-            tracing::warn!(
-                host = host_str,
-                "rejected request with malformed Host header"
-            );
-        })
-        .map_err(|_| bad_request_response("Bad Request: Invalid Host header"))?;
+fn parse_host_header(
+    uri: &http::Uri,
+    headers: &HeaderMap,
+) -> Result<NormalizedAuthority, BoxResponse> {
+    if let Some(host) = headers.get(http::header::HOST) {
+        let host_str = host
+            .to_str()
+            .inspect_err(|_| {
+                tracing::warn!(host = ?host, "rejected request with non-UTF-8 Host header");
+            })
+            .map_err(|_| bad_request_response("Bad Request: Invalid Host header encoding"))?;
+        let authority = http::uri::Authority::try_from(host_str)
+            .inspect_err(|_| {
+                tracing::warn!(
+                    host = host_str,
+                    "rejected request with malformed Host header"
+                );
+            })
+            .map_err(|_| bad_request_response("Bad Request: Invalid Host header"))?;
+        return Ok(normalize_authority(authority.host(), authority.port_u16()));
+    }
+    // HTTP/2 carries the host in `:authority`; middleware such as
+    // `axum::Router::nest` can drop the `Host` header hyper synthesizes from it.
+    let authority = uri.authority().ok_or_else(|| {
+        tracing::warn!("rejected request with missing Host header and no :authority");
+        bad_request_response("Bad Request: missing Host header")
+    })?;
     Ok(normalize_authority(authority.host(), authority.port_u16()))
 }
 
 fn validate_dns_rebinding_headers(
+    uri: &http::Uri,
     headers: &HeaderMap,
     config: &StreamableHttpServerConfig,
 ) -> Result<(), BoxResponse> {
-    let host = parse_host_header(headers)?;
+    let host = parse_host_header(uri, headers)?;
     if !host_is_allowed(&host, &config.allowed_hosts) {
         tracing::warn!(
             host = ?host,
@@ -806,7 +814,9 @@ where
         B: Body + Send + 'static,
         B::Error: Display,
     {
-        if let Err(response) = validate_dns_rebinding_headers(request.headers(), &self.config) {
+        if let Err(response) =
+            validate_dns_rebinding_headers(request.uri(), request.headers(), &self.config)
+        {
             return response;
         }
         let method = request.method().clone();
