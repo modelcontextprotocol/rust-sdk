@@ -102,7 +102,7 @@ hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 # macro
 rmcp-macros = { workspace = true, optional = true }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-chrono = { version = "0.4.38", features = ["serde"] }
+chrono = { version = "0.4.38", default-features = false, features = ["serde", "now"] }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 chrono = { version = "0.4.38", default-features = false, features = [
