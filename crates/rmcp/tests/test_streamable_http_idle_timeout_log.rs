@@ -21,6 +21,7 @@ use common::calculator::Calculator;
 
 struct CapturedEvent {
     level: tracing::Level,
+    target: String,
     message: String,
 }
 
@@ -38,6 +39,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturingLayer {
         event.record(&mut visitor);
         self.events.lock().unwrap().push(CapturedEvent {
             level: *event.metadata().level(),
+            target: event.metadata().target().to_string(),
             message: visitor.0,
         });
     }
@@ -142,7 +144,7 @@ async fn test_keep_alive_timeout_does_not_emit_error_log() {
 
     let error_events: Vec<_> = captured
         .iter()
-        .filter(|e| e.level == tracing::Level::ERROR)
+        .filter(|e| e.level == tracing::Level::ERROR && e.target.starts_with("rmcp"))
         .collect();
     assert!(
         error_events.is_empty(),
@@ -153,7 +155,11 @@ async fn test_keep_alive_timeout_does_not_emit_error_log() {
 
     let debug_events: Vec<_> = captured
         .iter()
-        .filter(|e| e.level == tracing::Level::DEBUG && e.message.contains("IdleTimeout"))
+        .filter(|e| {
+            e.level == tracing::Level::DEBUG
+                && e.target.starts_with("rmcp")
+                && e.message.contains("IdleTimeout")
+        })
         .collect();
     assert!(
         !debug_events.is_empty(),

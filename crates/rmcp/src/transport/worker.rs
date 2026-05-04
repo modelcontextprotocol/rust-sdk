@@ -22,7 +22,7 @@ pub enum WorkerQuitReason<E> {
     TransportClosed,
     #[error("Handler terminated")]
     HandlerTerminated,
-    #[error("Worker idle timeout ({}ms)", _0.as_millis())]
+    #[error("Worker idle timeout after {}ms", _0.as_millis())]
     IdleTimeout(Duration),
 }
 
