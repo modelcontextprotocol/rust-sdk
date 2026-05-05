@@ -88,6 +88,18 @@ jobs:
             --only-explicit-features \
             --features default
 
+      - name: Check rmcp (all features except local)
+        run: |
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
+                      | select(startswith("__") | not)
+                      | select(. != "local")] | join(",")')
+          cargo semver-checks \
+            --package rmcp \
+            --baseline-rev ${{ github.event.pull_request.base.sha }} \
+            --only-explicit-features \
+            --features "$FEATURES"
+
   spelling:
     name: spell check with typos
     runs-on: ubuntu-latest
