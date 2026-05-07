@@ -259,7 +259,7 @@ jobs:
             if [ -f "$dir/Cargo.toml" ]; then
               if [[ "$dir" != *"wasi"* ]]; then
                 echo "Testing $dir"
-                cargo test --manifest-path "$dir/Cargo.toml" --all-features
+                cargo test --manifest-path "$dir/Cargo.toml" --all-features --all-targets
               fi
             fi
           done
