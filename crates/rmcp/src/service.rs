@@ -881,7 +881,7 @@ where
                 Event::ToSink(m) => {
                     if let Some(id) = match &m {
                         JsonRpcMessage::Response(response) => Some(&response.id),
-                        JsonRpcMessage::Error(error) => Some(&error.id),
+                        JsonRpcMessage::Error(error) => error.id.as_ref(),
                         _ => None,
                     } {
                         if let Some(ct) = local_ct_pool.remove(id) {
@@ -971,7 +971,7 @@ where
                                 }
                                 Err(error) => {
                                     tracing::warn!(%id, ?error, "response error");
-                                    JsonRpcMessage::error(error, id)
+                                    JsonRpcMessage::error(error, Some(id))
                                 }
                             };
                             let _send_result = sink.send(response).await;
@@ -1028,6 +1028,12 @@ where
                     }
                 }
                 Event::PeerMessage(JsonRpcMessage::Error(JsonRpcError { error, id, .. })) => {
+                    let Some(id) = id else {
+                        // MCP error responses without an id (e.g. Parse error / Invalid Request)
+                        // can't be routed back to a pending request — log and drop.
+                        tracing::debug!(?error, "received id-less peer error");
+                        continue;
+                    };
                     if let Some(responder) = local_responder_pool.remove(&id) {
                         let _response_result = responder.send(Err(ServiceError::McpError(error)));
                         if let Err(_error) = _response_result {

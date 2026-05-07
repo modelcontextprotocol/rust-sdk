@@ -862,7 +862,14 @@
           "$ref": "#/definitions/ErrorData"
         },
         "id": {
-          "$ref": "#/definitions/NumberOrString"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NumberOrString"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "jsonrpc": {
           "$ref": "#/definitions/JsonRpcVersion2_0"
@@ -870,7 +877,6 @@
       },
       "required": [
         "jsonrpc",
-        "id",
         "error"
       ]
     },

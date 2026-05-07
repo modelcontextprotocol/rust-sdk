@@ -523,14 +523,12 @@ impl LocalSessionWorker {
                 }
             }
             ServerJsonRpcMessage::Error(json_rpc_error) => {
-                if let Some(id) = self
-                    .resource_router
-                    .get(&ResourceKey::McpRequestId(json_rpc_error.id.clone()))
-                {
-                    OutboundChannel::RequestWise {
-                        id: *id,
-                        close: true,
-                    }
+                if let Some(id) = json_rpc_error.id.clone().and_then(|rid| {
+                    self.resource_router
+                        .get(&ResourceKey::McpRequestId(rid))
+                        .copied()
+                }) {
+                    OutboundChannel::RequestWise { id, close: true }
                 } else {
                     OutboundChannel::Common
                 }
@@ -1041,8 +1039,7 @@ impl Worker for LocalSessionWorker {
                             Some(ResourceKey::McpRequestId(request_id))
                         }
                         crate::model::JsonRpcMessage::Error(json_rpc_error) => {
-                            let request_id = json_rpc_error.id.clone();
-                            Some(ResourceKey::McpRequestId(request_id))
+                            json_rpc_error.id.clone().map(ResourceKey::McpRequestId)
                         }
                         _ => {
                             None

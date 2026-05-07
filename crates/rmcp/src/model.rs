@@ -461,13 +461,17 @@ pub struct JsonRpcResponse<R = JsonObject> {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct JsonRpcError {
     pub jsonrpc: JsonRpcVersion2_0,
-    pub id: RequestId,
+    // MCP 2025-11-25 §Error Responses: `id` is optional and omitted when the
+    // server cannot read the request id (e.g. parse error / invalid request).
+    // https://modelcontextprotocol.io/specification/2025-11-25/basic#error-responses
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<RequestId>,
     pub error: ErrorData,
 }
 
 impl JsonRpcError {
     /// Create a new JsonRpcError.
-    pub fn new(id: RequestId, error: ErrorData) -> Self {
+    pub fn new(id: Option<RequestId>, error: ErrorData) -> Self {
         Self {
             jsonrpc: JsonRpcVersion2_0,
             id,
@@ -601,7 +605,7 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
         })
     }
     #[inline]
-    pub const fn error(error: ErrorData, id: RequestId) -> Self {
+    pub const fn error(error: ErrorData, id: Option<RequestId>) -> Self {
         JsonRpcMessage::Error(JsonRpcError {
             jsonrpc: JsonRpcVersion2_0,
             id,
@@ -633,15 +637,15 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
             _ => None,
         }
     }
-    pub fn into_error(self) -> Option<(ErrorData, RequestId)> {
+    pub fn into_error(self) -> Option<(ErrorData, Option<RequestId>)> {
         match self {
             JsonRpcMessage::Error(e) => Some((e.error, e.id)),
             _ => None,
         }
     }
-    pub fn into_result(self) -> Option<(Result<Resp, ErrorData>, RequestId)> {
+    pub fn into_result(self) -> Option<(Result<Resp, ErrorData>, Option<RequestId>)> {
         match self {
-            JsonRpcMessage::Response(r) => Some((Ok(r.result), r.id)),
+            JsonRpcMessage::Response(r) => Some((Ok(r.result), Some(r.id))),
             JsonRpcMessage::Error(e) => Some((Err(e.error), e.id)),
 
             _ => None,

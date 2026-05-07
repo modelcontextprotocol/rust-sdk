@@ -4,7 +4,7 @@ use futures::SinkExt;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader},
     sync::Mutex,
 };
 use tokio_util::{
@@ -13,7 +13,10 @@ use tokio_util::{
 };
 
 use super::{IntoTransport, Transport};
-use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
+use crate::{
+    model::ErrorData,
+    service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
+};
 
 #[non_exhaustive]
 pub enum TransportAdapterAsyncRW {}
@@ -143,10 +146,11 @@ where
                     tracing::debug!("Parse error on incoming message: {e}");
                     let mut write = self.write.lock().await;
                     let framed = write.as_mut()?;
-                    let inner = framed.get_mut();
-                    if inner.write_all(PARSE_ERROR_RESPONSE).await.is_err()
-                        || inner.flush().await.is_err()
-                    {
+                    let response = TxJsonRpcMessage::<Role>::error(
+                        ErrorData::parse_error("Parse error", None),
+                        None,
+                    );
+                    if framed.send(response).await.is_err() {
                         return None;
                     }
                 }
@@ -207,12 +211,6 @@ fn without_carriage_return(s: &[u8]) -> &[u8] {
 
 /// UTF-8 byte order mark. RFC 8259 §8.1 allows JSON parsers to ignore a leading BOM.
 const UTF8_BOM: &[u8; 3] = b"\xEF\xBB\xBF";
-
-// JSON-RPC 2.0 §5.1: https://www.jsonrpc.org/specification#error_object
-// Hardcoded bytes because `RequestId` has no `Null` variant — we can't
-// build an `id: null` JsonRpcError through the typed codec.
-const PARSE_ERROR_RESPONSE: &[u8] =
-    b"{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":\"Parse error\"},\"id\":null}\n";
 
 /// Check if a method is a standard MCP method (request, response, or notification).
 /// This includes both requests and notifications defined in the MCP specification.
@@ -621,7 +619,7 @@ mod test {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn receive_recovers_from_parse_error() {
-        use tokio::io::AsyncReadExt;
+        use tokio::io::AsyncWriteExt;
 
         use crate::{RoleServer, transport::Transport};
 
@@ -645,10 +643,20 @@ mod test {
             .await
             .expect("transport should recover and yield the next valid message");
 
-        let mut reply = vec![0u8; PARSE_ERROR_RESPONSE.len()];
-        client_r.read_exact(&mut reply).await.unwrap();
+        // Read one line back from the peer side and parse as JSON.
+        let mut reply_buf = Vec::new();
+        let mut peer = tokio::io::BufReader::new(&mut client_r);
+        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
 
-        assert_eq!(reply, PARSE_ERROR_RESPONSE);
+        // Per MCP 2025-11-25: id is omitted when the server can't read the request id.
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32700, "message": "Parse error"},
+            })
+        );
         assert_eq!(
             serde_json::to_value(&received).unwrap()["method"],
             "notifications/initialized",

@@ -219,7 +219,7 @@ where
         }
         Err(e) => {
             transport
-                .send(ServerJsonRpcMessage::error(e.clone(), id))
+                .send(ServerJsonRpcMessage::error(e.clone(), Some(id)))
                 .await
                 .map_err(|error| {
                     ServerInitializeError::transport::<T>(error, "sending error response")

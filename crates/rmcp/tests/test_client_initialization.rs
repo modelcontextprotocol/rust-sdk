@@ -30,7 +30,7 @@ async fn test_client_init_handles_jsonrpc_error() {
 
         let error_msg = ServerJsonRpcMessage::Error(JsonRpcError {
             jsonrpc: JsonRpcVersion2_0,
-            id: RequestId::Number(1),
+            id: Some(RequestId::Number(1)),
             error: ErrorData {
                 code: ErrorCode(-32600),
                 message: Cow::Borrowed("Invalid Request"),
