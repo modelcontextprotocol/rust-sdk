@@ -103,7 +103,10 @@ impl Counter {
         )]))
     }
 
-    #[tool(description = "Long running task example")]
+    #[tool(
+        description = "Long running task example",
+        execution(task_support = "optional")
+    )]
     async fn long_task(&self) -> Result<CallToolResult, McpError> {
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         Ok(CallToolResult::success(vec![Content::text(
@@ -360,7 +363,7 @@ mod tests {
             "source".into(),
             serde_json::Value::String("integration-test".into()),
         );
-        let params = CallToolRequestParams::new("long_task").with_task(Some(task_meta));
+        let params = CallToolRequestParams::new("long_task").with_task(task_meta);
         let response = client_service
             .send_request(ClientRequest::CallToolRequest(Request::new(params.clone())))
             .await?;
