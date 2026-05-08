@@ -31,6 +31,7 @@
 - [补全](#补全)
 - [通知](#通知)
 - [订阅](#订阅)
+- [任务](#任务长时间运行的工具调用)
 - [示例](#示例)
 - [OAuth 支持](#oauth-支持)
 - [相关资源](#相关资源)
@@ -951,6 +952,26 @@ impl ClientHandler for MyClient {
     }
 }
 ```
+
+---
+
+## 任务（长时间运行的工具调用）
+
+`rmcp` 支持 SEP-1319 中定义的[基于任务的工具调用](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)流程。为工具添加 `execution(task_support = "required" | "optional")` 注解，并在 `ServerHandler` 实现上添加 `#[task_handler]` —— `enqueue_task`、`tasks/list`、`tasks/get`、`tasks/result` 和 `tasks/cancel` 将在 `OperationProcessor` 之上自动生成。
+
+```rust, ignore
+#[tool(
+    description = "Sum two numbers after a 2-second delay",
+    execution(task_support = "required")
+)]
+async fn slow_sum(/* ... */) -> Result<CallToolResult, McpError> { /* ... */ }
+
+#[tool_handler]
+#[task_handler]
+impl ServerHandler for TaskDemo {}
+```
+
+完整的端到端示例请参阅 [`servers_task_stdio`](../../examples/servers/src/task_stdio.rs) 及对应的 [`clients_task_stdio`](../../examples/clients/src/task_stdio.rs)。
 
 ---
 
