@@ -109,3 +109,7 @@ path = "src/calculator_stdio.rs"
 [[example]]
 name = "elicitation_enum_select"
 path = "src/elicitation_enum_inference.rs"
+
+[[example]]
+name = "servers_task_stdio"
+path = "src/task_stdio.rs"

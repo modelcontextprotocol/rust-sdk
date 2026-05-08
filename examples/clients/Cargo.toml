@@ -61,3 +61,7 @@ path = "src/progress_client.rs"
 [[example]]
 name = "clients_client_credentials"
 path = "src/auth/client_credentials.rs"
+
+[[example]]
+name = "clients_task_stdio"
+path = "src/task_stdio.rs"

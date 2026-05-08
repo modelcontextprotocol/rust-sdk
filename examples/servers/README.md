@@ -62,6 +62,16 @@ A server demonstrating the prompt framework capabilities.
 - Uses standard I/O transport
 - Good example of prompt implementation patterns
 
+### Task Demo Server (`task_stdio.rs`)
+
+A minimal stdio server demonstrating task-based tool invocation per
+[SEP-1319](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks).
+
+- `slow_sum` is declared with `execution(task_support = "required")`, so clients MUST invoke it as a task
+- `quick_echo` is a regular synchronous tool for contrast
+- Wires up `enqueue_task` / `tasks/get` / `tasks/result` / `tasks/cancel` via `#[task_handler]`
+- Pair with `examples/clients/src/task_stdio.rs` to see the full lifecycle (create → poll → fetch result)
+
 ### Progress Demo Server (`progress_demo.rs`)
 
 A server that demonstrates progress notifications during long-running operations.

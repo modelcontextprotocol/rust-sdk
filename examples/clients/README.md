@@ -59,6 +59,15 @@ A client demonstrating how to use the sampling tool.
 - Retrieves server information and list of available tools
 - Calls the `ask_llm` tool
 
+### Task Standard I/O Client (`task_stdio.rs`)
+
+A client that exercises the task lifecycle against `servers_task_stdio`
+(per [SEP-1319](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)).
+
+- Spawns `servers_task_stdio` as a child process over stdio
+- Calls `quick_echo` synchronously
+- Calls `slow_sum` as a task via `CallToolRequestParams::with_task(...)`, polls `tasks/get` until completion, then fetches the result via `tasks/result`
+
 ### Progress Test Client (`progress_client.rs`)
 
 A client that communicates with an MCP server using progress notifications.
@@ -91,6 +100,9 @@ cargo run -p mcp-client-examples --example clients_oauth_client
 
 # Run the sampling standard I/O client example
 cargo run -p mcp-client-examples --example clients_sampling_stdio
+
+# Run the task-based invocation client (drives servers_task_stdio)
+cargo run -p mcp-client-examples --example clients_task_stdio
 ```
 
 ## Dependencies

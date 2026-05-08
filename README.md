@@ -31,6 +31,7 @@ For the full MCP specification, see [modelcontextprotocol.io](https://modelconte
 - [Completions](#completions)
 - [Notifications](#notifications)
 - [Subscriptions](#subscriptions)
+- [Tasks](#tasks-long-running-tool-invocations)
 - [Examples](#examples)
 - [OAuth Support](#oauth-support)
 - [Related Resources](#related-resources)
@@ -953,6 +954,28 @@ impl ClientHandler for MyClient {
 ```
 
 ---
+
+## Tasks (long-running tool invocations)
+
+`rmcp` supports the [task-based tool invocation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)
+flow defined in SEP-1319. Annotate a tool with `execution(task_support = "required" | "optional")`
+and add `#[task_handler]` to your `ServerHandler` impl — `enqueue_task`, `tasks/list`, `tasks/get`,
+`tasks/result`, and `tasks/cancel` are generated for you on top of an `OperationProcessor`.
+
+```rust, ignore
+#[tool(
+    description = "Sum two numbers after a 2-second delay",
+    execution(task_support = "required")
+)]
+async fn slow_sum(/* ... */) -> Result<CallToolResult, McpError> { /* ... */ }
+
+#[tool_handler]
+#[task_handler]
+impl ServerHandler for TaskDemo {}
+```
+
+See [`servers_task_stdio`](examples/servers/src/task_stdio.rs) and the matching
+[`clients_task_stdio`](examples/clients/src/task_stdio.rs) for a runnable end-to-end example.
 
 ## Examples
 
