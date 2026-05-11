@@ -158,7 +158,10 @@ pub enum PromptMessageContent {
         image: ImageContent,
     },
     /// Embedded server-side resource
-    Resource { resource: EmbeddedResource },
+    Resource {
+        #[serde(flatten)]
+        resource: EmbeddedResource,
+    },
     /// A link to a resource that can be fetched separately
     ResourceLink {
         #[serde(flatten)]
@@ -319,6 +322,57 @@ mod tests {
         assert!(json.contains("\"type\":\"resource_link\""));
         assert!(json.contains("\"uri\":\"file:///test.txt\""));
         assert!(json.contains("\"name\":\"test.txt\""));
+    }
+
+    #[test]
+    fn test_prompt_message_resource_serialization_is_flat() {
+        // Regression test: PromptMessageContent::Resource must serialize to
+        // the spec-compliant flat shape `{ "type": "resource", "resource": { "uri", "mimeType", "text" } }`
+        // and NOT the double-nested shape `{ "type": "resource", "resource": { "resource": {...} } }`.
+        // See: https://modelcontextprotocol.io/specification/2025-06-18/server/prompts
+        let message = PromptMessage::new_resource(
+            PromptMessageRole::User,
+            "alc://packages/sc/narrative".to_string(),
+            Some("text/markdown".to_string()),
+            Some("# Hello".to_string()),
+            None,
+            None,
+            None,
+        );
+
+        let value: serde_json::Value = serde_json::to_value(&message).unwrap();
+
+        // Drill into content
+        let content = value.get("content").expect("content present");
+        assert_eq!(
+            content.get("type").and_then(|v| v.as_str()),
+            Some("resource")
+        );
+
+        let resource = content
+            .get("resource")
+            .expect("resource field present at content level");
+
+        // Spec-compliant: resource.uri / resource.mimeType / resource.text MUST be flat
+        assert_eq!(
+            resource.get("uri").and_then(|v| v.as_str()),
+            Some("alc://packages/sc/narrative"),
+            "expected flat resource.uri, got: {resource:#?}"
+        );
+        assert_eq!(
+            resource.get("mimeType").and_then(|v| v.as_str()),
+            Some("text/markdown")
+        );
+        assert_eq!(
+            resource.get("text").and_then(|v| v.as_str()),
+            Some("# Hello")
+        );
+
+        // Regression guard: content.resource MUST NOT contain a nested `resource` key.
+        assert!(
+            resource.get("resource").is_none(),
+            "double-nested resource detected (regression): {resource:#?}"
+        );
     }
 
     #[test]

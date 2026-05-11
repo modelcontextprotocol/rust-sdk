@@ -140,35 +140,6 @@
       ]
     },
     "Annotated2": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resource": {
-          "$ref": "#/definitions/ResourceContents"
-        }
-      },
-      "required": [
-        "resource"
-      ]
-    },
-    "Annotated3": {
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
       "properties": {
@@ -244,7 +215,7 @@
         "name"
       ]
     },
-    "Annotated4": {
+    "Annotated3": {
       "type": "object",
       "properties": {
         "annotations": {
@@ -1475,7 +1446,7 @@
         "resourceTemplates": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated4"
+            "$ref": "#/definitions/Annotated3"
           }
         }
       },
@@ -1502,7 +1473,7 @@
         "resources": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated3"
+            "$ref": "#/definitions/Annotated2"
           }
         }
       },
@@ -2142,8 +2113,26 @@
           "description": "Embedded server-side resource",
           "type": "object",
           "properties": {
+            "_meta": {
+              "description": "Optional protocol-level metadata for this content block",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "resource": {
-              "$ref": "#/definitions/Annotated2"
+              "$ref": "#/definitions/ResourceContents"
             },
             "type": {
               "type": "string",
