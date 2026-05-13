@@ -42,10 +42,10 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 .get_task_result(request.params, context)
                 .await
                 .map(ClientResult::GetTaskPayloadResult),
-            ServerRequest::CancelTaskRequest(request) => self
-                .cancel_task(request.params, context)
+            ServerRequest::DeleteTaskRequest(request) => self
+                .delete_task(request.params, context)
                 .await
-                .map(ClientResult::CancelTaskResult),
+                .map(ClientResult::DeleteTaskResult),
             ServerRequest::CustomRequest(request) => self
                 .on_custom_request(request, context)
                 .await
@@ -254,19 +254,19 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
     }
 
-    /// Handle a `tasks/cancel` request from a server. Only relevant when
-    /// the client is also a task *receiver*.
+    /// Handle a `tasks/delete` request from a server (SEP-1686 §3.6).
+    /// Only relevant when the client is also a task *receiver*.
     ///
     /// # Default Behavior
-    /// Returns `-32601` (Method not found). Clients that advertise
-    /// `capabilities.tasks.cancel` must override this.
-    fn cancel_task(
+    /// Returns `-32601` (Method not found). Task receivers must override this
+    /// to delete the task and any associated stored result.
+    fn delete_task(
         &self,
-        request: CancelTaskParams,
+        request: DeleteTaskParams,
         context: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
+    ) -> impl Future<Output = Result<DeleteTaskResult, McpError>> + MaybeSendFuture + '_ {
         let _ = (request, context);
-        std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
+        std::future::ready(Err(McpError::method_not_found::<DeleteTaskMethod>()))
     }
 
     fn on_cancelled(
@@ -412,12 +412,12 @@ macro_rules! impl_client_handler_for_wrapper {
                 (**self).get_task_result(request, context)
             }
 
-            fn cancel_task(
+            fn delete_task(
                 &self,
-                request: CancelTaskParams,
+                request: DeleteTaskParams,
                 context: RequestContext<RoleClient>,
-            ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
-                (**self).cancel_task(request, context)
+            ) -> impl Future<Output = Result<DeleteTaskResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).delete_task(request, context)
             }
 
             fn on_cancelled(
