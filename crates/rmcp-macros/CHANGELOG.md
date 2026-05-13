@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.6.0...rmcp-macros-v1.7.0) - 2026-05-13
+
+### Added
+
+- add task-based stdio examples ([#839](https://github.com/modelcontextprotocol/rust-sdk/pull/839))
+
 ## [1.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.5.0...rmcp-macros-v1.6.0) - 2026-05-01
 
 ### Fixed
