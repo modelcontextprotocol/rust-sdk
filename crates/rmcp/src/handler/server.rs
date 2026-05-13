@@ -125,10 +125,10 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .get_task_result(request.params, context)
                 .await
                 .map(ServerResult::GetTaskPayloadResult),
-            ClientRequest::CancelTaskRequest(request) => self
-                .cancel_task(request.params, context)
+            ClientRequest::DeleteTaskRequest(request) => self
+                .delete_task(request.params, context)
                 .await
-                .map(ServerResult::CancelTaskResult),
+                .map(ServerResult::DeleteTaskResult),
         };
         // SEP-2164: peers negotiating 2026-07-28+ get the standard INVALID_PARAMS code for
         // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
@@ -398,13 +398,13 @@ macro_rules! server_handler_methods {
             std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
         }
 
-        fn cancel_task(
+        fn delete_task(
             &self,
-            request: CancelTaskParams,
+            request: DeleteTaskParams,
             context: RequestContext<RoleServer>,
-        ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
+        ) -> impl Future<Output = Result<DeleteTaskResult, McpError>> + MaybeSendFuture + '_ {
             let _ = (request, context);
-            std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
+            std::future::ready(Err(McpError::method_not_found::<DeleteTaskMethod>()))
         }
     };
 }
@@ -614,12 +614,12 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).get_task_result(request, context)
             }
 
-            fn cancel_task(
+            fn delete_task(
                 &self,
-                request: CancelTaskParams,
+                request: DeleteTaskParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CancelTaskResult, McpError>> + MaybeSendFuture + '_ {
-                (**self).cancel_task(request, context)
+            ) -> impl Future<Output = Result<DeleteTaskResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).delete_task(request, context)
             }
         }
     };

@@ -1,5 +1,5 @@
 //! End-to-end tests proving that task-management RPCs (`tasks/get`,
-//! `tasks/list`, `tasks/result`, `tasks/cancel`) sent from a server to a
+//! `tasks/list`, `tasks/result`, `tasks/delete`) sent from a server to a
 //! client are dispatched to the appropriate `ClientHandler` methods and
 //! return results that the server receives as the correct `ClientResult`
 //! variant.
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
-        CancelTaskParams, CancelTaskRequest, CancelTaskResult, ClientResult, GetTaskInfoParams,
+        ClientResult, DeleteTaskParams, DeleteTaskRequest, DeleteTaskResult, GetTaskInfoParams,
         GetTaskInfoRequest, GetTaskPayloadResult, GetTaskResult, GetTaskResultParams,
         GetTaskResultRequest, ListTasksRequest, ListTasksResult, PaginatedRequestParams,
         ServerRequest, Task, TaskStatus,
@@ -28,7 +28,7 @@ use tokio::sync::{Mutex, Notify};
 struct ClientState {
     last_get_task_id: Option<String>,
     last_result_task_id: Option<String>,
-    last_cancel_task_id: Option<String>,
+    last_delete_task_id: Option<String>,
     list_called: bool,
 }
 
@@ -81,22 +81,14 @@ impl ClientHandler for TaskClient {
         Ok(GetTaskPayloadResult::new(json!({ "ok": true })))
     }
 
-    async fn cancel_task(
+    async fn delete_task(
         &self,
-        request: CancelTaskParams,
+        request: DeleteTaskParams,
         _context: rmcp::service::RequestContext<rmcp::RoleClient>,
-    ) -> Result<CancelTaskResult, rmcp::ErrorData> {
-        self.state.lock().await.last_cancel_task_id = Some(request.task_id.clone());
+    ) -> Result<DeleteTaskResult, rmcp::ErrorData> {
+        self.state.lock().await.last_delete_task_id = Some(request.task_id);
         self.received.notify_one();
-        Ok(CancelTaskResult {
-            meta: None,
-            task: Task::new(
-                request.task_id,
-                TaskStatus::Cancelled,
-                "2025-11-25T10:30:00Z".into(),
-                "2025-11-25T10:30:00Z".into(),
-            ),
-        })
+        Ok(DeleteTaskResult::default())
     }
 }
 
@@ -251,28 +243,25 @@ async fn tasks_result_reaches_client_handler() {
 }
 
 #[tokio::test]
-async fn tasks_cancel_reaches_client_handler() {
-    let request = ServerRequest::CancelTaskRequest(CancelTaskRequest::new(CancelTaskParams {
+async fn tasks_delete_reaches_client_handler() {
+    let request = ServerRequest::DeleteTaskRequest(DeleteTaskRequest::new(DeleteTaskParams {
         meta: None,
-        task_id: "task-cancelme".into(),
+        task_id: "task-deleteme".into(),
     }));
     let (state, response) = run_server_request(request).await;
 
     assert_eq!(
-        state.lock().await.last_cancel_task_id.as_deref(),
-        Some("task-cancelme")
+        state.lock().await.last_delete_task_id.as_deref(),
+        Some("task-deleteme")
     );
-    // CancelTaskResult and GetTaskResult share the same JSON shape
-    // (`Result + flattened Task`); the untagged ClientResult enum picks
-    // the first match, which is GetTaskResult. Callers distinguish by
-    // knowing which request they sent rather than by inspecting the
-    // response variant. This mirrors the existing behavior on the server
-    // side.
+    // `DeleteTaskResult` has a custom Deserialize that always fails (see
+    // crates/rmcp/src/model/task.rs) so its on-wire shape (`{_meta?}`)
+    // surfaces as `EmptyResult` — the first matching variant in the
+    // untagged `ClientResult` enum. Callers distinguish by knowing which
+    // request they sent rather than by inspecting the response variant.
+    // This mirrors the design used for `GetTaskPayloadResult`.
     match response {
-        ClientResult::GetTaskResult(r) => {
-            assert_eq!(r.task.task_id, "task-cancelme");
-            assert_eq!(r.task.status, TaskStatus::Cancelled);
-        }
+        ClientResult::EmptyResult(_) => {}
         other => panic!("unexpected variant: {other:?}"),
     }
 }

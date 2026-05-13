@@ -155,7 +155,7 @@ variant_extension! {
         GetTaskInfoRequest
         ListTasksRequest
         GetTaskResultRequest
-        CancelTaskRequest
+        DeleteTaskRequest
     }
 }
 
@@ -169,7 +169,7 @@ variant_extension! {
         GetTaskInfoRequest
         ListTasksRequest
         GetTaskResultRequest
-        CancelTaskRequest
+        DeleteTaskRequest
     }
 }
 
