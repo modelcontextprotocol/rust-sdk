@@ -178,11 +178,25 @@ impl StreamableHttpClient for reqwest::Client {
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
+        let content_length = response.content_length();
         let session_id = response
             .headers()
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
+        // Spec requires 202 Accepted for these, but some servers return an empty 200.
+        // Treat empty success responses as equivalent to Accepted.
+        if status.is_success()
+            && content_length == Some(0)
+            && matches!(
+                message,
+                ClientJsonRpcMessage::Notification(_)
+                    | ClientJsonRpcMessage::Response(_)
+                    | ClientJsonRpcMessage::Error(_)
+            )
+        {
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
         // Non-success responses may carry valid JSON-RPC error payloads that
         // should be surfaced as McpError rather than lost in TransportSend.
         if !status.is_success() {
