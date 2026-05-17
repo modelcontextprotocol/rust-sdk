@@ -1,4 +1,6 @@
-use std::{collections::HashMap, convert::Infallible, fmt::Display, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow, collections::HashMap, convert::Infallible, fmt::Display, sync::Arc, time::Duration,
+};
 
 use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
@@ -14,8 +16,8 @@ use super::session::{
 use crate::{
     RoleServer,
     model::{
-        ClientJsonRpcMessage, ClientNotification, ClientRequest, GetExtensions, InitializeRequest,
-        InitializedNotification, ProtocolVersion,
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData, GetExtensions,
+        InitializeRequest, InitializedNotification, JsonRpcError, ProtocolVersion, RequestId,
     },
     serve_server,
     service::serve_directly,
@@ -205,6 +207,54 @@ fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), Box
                 )
                 .expect("valid response"));
         }
+    }
+    Ok(())
+}
+
+fn invalid_request_jsonrpc_response(
+    id: Option<RequestId>,
+    message: impl Into<Cow<'static, str>>,
+) -> BoxResponse {
+    let err = JsonRpcError::new(id, ErrorData::invalid_request(message, None));
+    let body = serde_json::to_vec(&err).expect("serialize JsonRpcError");
+    Response::builder()
+        .status(http::StatusCode::BAD_REQUEST)
+        .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+        .body(Full::new(Bytes::from(body)).boxed())
+        .expect("valid response")
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "BoxResponse is intentionally large; matches other handlers in this file"
+)]
+/// Absent header is allowed; the first initialize round-trip may legitimately omit it.
+fn validate_header_matches_init_body(
+    headers: &http::HeaderMap,
+    body_version: &str,
+    request_id: Option<RequestId>,
+) -> Result<(), BoxResponse> {
+    let Some(header_value) = headers.get(HEADER_MCP_PROTOCOL_VERSION) else {
+        return Ok(());
+    };
+    let header_str = header_value.to_str().map_err(|_| {
+        invalid_request_jsonrpc_response(
+            request_id.clone(),
+            "Invalid Request: MCP-Protocol-Version header is not valid UTF-8",
+        )
+    })?;
+    if header_str != body_version {
+        tracing::warn!(
+            header = header_str,
+            body = body_version,
+            "rejecting initialize: MCP-Protocol-Version header does not match params.protocolVersion"
+        );
+        return Err(invalid_request_jsonrpc_response(
+            request_id,
+            format!(
+                "Invalid Request: MCP-Protocol-Version header ({header_str}) does not match initialize params.protocolVersion ({body_version})"
+            ),
+        ));
     }
     Ok(())
 }
@@ -1095,9 +1145,15 @@ where
                     None
                 };
                 if let ClientJsonRpcMessage::Request(req) = &mut message {
-                    if !matches!(req.request, ClientRequest::InitializeRequest(_)) {
+                    let ClientRequest::InitializeRequest(init_req) = &req.request else {
                         return Err(unexpected_message_response("initialize request"));
-                    }
+                    };
+                    // Reject mismatched MCP-Protocol-Version header before binding the session to anything.
+                    validate_header_matches_init_body(
+                        &part.headers,
+                        init_req.params.protocol_version.as_str(),
+                        Some(req.id.clone()),
+                    )?;
                     // inject request part to extensions
                     req.request.extensions_mut().insert(part);
                 } else {
@@ -1163,13 +1219,24 @@ where
                 Ok(response)
             }
         } else {
-            // Stateless mode: validate MCP-Protocol-Version on non-init requests
-            let is_init = matches!(
-                &message,
-                ClientJsonRpcMessage::Request(req) if matches!(req.request, ClientRequest::InitializeRequest(_))
-            );
-            if !is_init {
-                validate_protocol_version_header(&part.headers)?;
+            // Stateless mode:
+            // - on initialize: the header (if present) must match `params.protocolVersion`
+            // - on every other request: the header must name a known version.
+            match &message {
+                ClientJsonRpcMessage::Request(req) => {
+                    if let ClientRequest::InitializeRequest(init_req) = &req.request {
+                        validate_header_matches_init_body(
+                            &part.headers,
+                            init_req.params.protocol_version.as_str(),
+                            Some(req.id.clone()),
+                        )?;
+                    } else {
+                        validate_protocol_version_header(&part.headers)?;
+                    }
+                }
+                _ => {
+                    validate_protocol_version_header(&part.headers)?;
+                }
             }
             let service = self
                 .get_service()
