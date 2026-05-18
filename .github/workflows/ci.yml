@@ -85,6 +85,7 @@ jobs:
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
+            --release-type minor \
             --only-explicit-features \
             --features default
 
@@ -97,6 +98,7 @@ jobs:
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
+            --release-type minor \
             --only-explicit-features \
             --features "$FEATURES"
 
