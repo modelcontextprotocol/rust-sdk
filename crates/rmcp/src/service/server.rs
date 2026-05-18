@@ -69,6 +69,10 @@ pub enum ServerInitializeError {
     #[error("initialize failed: {0}")]
     InitializeFailed(ErrorData),
 
+    #[deprecated(
+        since = "1.8.0",
+        note = "Negotiation now falls back to the server-configured version. This variant is never constructed and will be removed in a future major release."
+    )]
     #[error("unsupported protocol version: {0}")]
     UnsupportedProtocolVersion(ProtocolVersion),
 
@@ -155,6 +159,23 @@ where
     }
 }
 
+/// Echoes the client-requested version if known; otherwise returns `server_fallback`.
+fn negotiate_protocol_version(
+    client_requested: &ProtocolVersion,
+    server_fallback: ProtocolVersion,
+) -> ProtocolVersion {
+    if ProtocolVersion::KNOWN_VERSIONS.contains(client_requested) {
+        client_requested.clone()
+    } else {
+        tracing::warn!(
+            client_requested = %client_requested,
+            server_fallback = %server_fallback,
+            "client requested unsupported protocol version; falling back to server default"
+        );
+        server_fallback
+    }
+}
+
 async fn serve_server_with_ct_inner<S, T>(
     service: S,
     transport: T,
@@ -227,16 +248,10 @@ where
             return Err(ServerInitializeError::InitializeFailed(e));
         }
     };
-    let peer_protocol_version = peer_info.params.protocol_version.clone();
-    let protocol_version = match peer_protocol_version
-        .partial_cmp(&init_response.protocol_version)
-        .ok_or(ServerInitializeError::UnsupportedProtocolVersion(
-            peer_protocol_version,
-        ))? {
-        std::cmp::Ordering::Less => peer_info.params.protocol_version.clone(),
-        _ => init_response.protocol_version,
-    };
-    init_response.protocol_version = protocol_version;
+    init_response.protocol_version = negotiate_protocol_version(
+        &peer_info.params.protocol_version,
+        init_response.protocol_version,
+    );
     transport
         .send(ServerJsonRpcMessage::response(
             ServerResult::InitializeResult(init_response),
