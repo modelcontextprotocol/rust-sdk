@@ -133,7 +133,8 @@ pub use tool_traits::{AsyncTool, SyncTool, ToolBase};
 
 use crate::{
     handler::server::{
-        tool::{CallToolHandler, DynCallToolHandler, ToolCallContext, schema_for_type},
+        common::schema_for_input,
+        tool::{CallToolHandler, DynCallToolHandler, ToolCallContext},
         tool_name_validation::validate_and_warn_tool_name,
     },
     model::{CallToolResult, Tool, ToolAnnotations},
@@ -249,7 +250,7 @@ where
             attr: Tool::new(
                 name.into(),
                 "",
-                schema_for_type::<crate::model::JsonObject>(),
+                schema_for_input::<crate::model::JsonObject>(),
             ),
             call: self,
             _marker: std::marker::PhantomData,
@@ -286,7 +287,7 @@ where
         self
     }
     pub fn parameters<T: JsonSchema + 'static>(mut self) -> Self {
-        self.attr.input_schema = schema_for_type::<T>();
+        self.attr.input_schema = schema_for_input::<T>();
         self
     }
     pub fn parameters_value(mut self, schema: serde_json::Value) -> Self {
