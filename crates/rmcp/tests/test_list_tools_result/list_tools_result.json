@@ -23,6 +23,20 @@
                         "a",
                         "b"
                     ]
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                        "sum": {
+                            "description": "The sum of the two numbers.",
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "sum"
+                    ]
                 }
             }
         ]

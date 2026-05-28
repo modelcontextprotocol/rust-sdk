@@ -1,6 +1,10 @@
 //! Common utilities shared between tool and prompt handlers
 
-use std::{any::TypeId, collections::HashMap, sync::Arc};
+use std::{
+    any::TypeId,
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use schemars::JsonSchema;
 
@@ -30,12 +34,10 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
             let generator = settings.into_generator();
             let schema = generator.into_root_schema_for::<T>();
             let object = serde_json::to_value(schema).expect("failed to serialize schema");
-            let object = match object {
-                serde_json::Value::Object(object) => object,
-                _ => panic!(
-                    "Schema serialization produced non-object value: expected JSON object but got {:?}",
-                    object
-                ),
+            let serde_json::Value::Object(object) = object else {
+                panic!(
+                    "Schema serialization produced non-object value: expected JSON object but got {object:?}"
+                );
             };
             let schema = Arc::new(object);
             cache
@@ -48,7 +50,16 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     })
 }
 
-/// Generate a JSON schema for inputSchema (does not need "title" or "description" fields for the top-level object)
+/// Clone the schema and remove top-level "title" and "description" fields
+/// (the wrapper type name and doc, which are noise to the LLM).
+fn strip_top_level_metadata(schema: &Arc<JsonObject>) -> Arc<JsonObject> {
+    let mut object = schema.as_ref().clone();
+    object.remove("title");
+    object.remove("description");
+    Arc::new(object)
+}
+
+/// Generate a JSON schema for inputSchema (top-level "title" and "description" are removed)
 pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     thread_local! {
         static CACHE_FOR_INPUT: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
@@ -61,13 +72,7 @@ pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
         {
             schema.clone()
         } else {
-            let mut schema = schema_for_type::<T>().as_ref().clone();
-
-            // Remove unnecessary top-level fields
-            schema.remove("title");
-            schema.remove("description");
-
-            let schema = Arc::new(schema);
+            let schema = strip_top_level_metadata(&schema_for_type::<T>());
             cache
                 .write()
                 .expect("input schema cache lock poisoned")
@@ -78,21 +83,18 @@ pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     })
 }
 
-// TODO: should be updated according to the new specifications
 /// Schema used when input is empty.
 pub fn schema_for_empty_input() -> Arc<JsonObject> {
-    std::sync::Arc::new(
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    )
+    static EMPTY: LazyLock<Arc<JsonObject>> = LazyLock::new(|| {
+        let mut object = JsonObject::new();
+        object.insert("type".into(), serde_json::json!("object"));
+        object.insert("properties".into(), serde_json::json!({}));
+        Arc::new(object)
+    });
+    EMPTY.clone()
 }
 
-/// Generate and validate a JSON schema for outputSchema (must have root type "object").
+/// Generate a JSON schema for outputSchema (must have root type "object"; top-level "title" and "description" are removed)
 pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String> {
     thread_local! {
         static CACHE_FOR_OUTPUT: std::sync::RwLock<HashMap<TypeId, Result<Arc<JsonObject>, String>>> = Default::default();
@@ -108,20 +110,20 @@ pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObje
             return result.clone();
         }
 
-        // Generate and validate schema
-        let schema = schema_for_type::<T>();
-        let result = match schema.get("type") {
-            Some(serde_json::Value::String(t)) if t == "object" => Ok(schema.clone()),
+        // Generate, validate, and strip unnecessary top-level fields
+        let raw = schema_for_type::<T>();
+        let result = match raw.get("type") {
+            Some(serde_json::Value::String(t)) if t == "object" => {
+                Ok(strip_top_level_metadata(&raw))
+            }
             Some(serde_json::Value::String(t)) => Err(format!(
-                "MCP specification requires tool outputSchema to have root type 'object', but found '{}'.",
-                t
+                "MCP specification requires tool outputSchema to have root type 'object', but found '{t}'."
             )),
             None => Err(
                 "Schema is missing 'type' field. MCP specification requires outputSchema to have root type 'object'.".to_string()
             ),
             Some(other) => Err(format!(
-                "Schema 'type' field has unexpected format: {:?}. Expected \"object\".",
-                other
+                "Schema 'type' field has unexpected format: {other:?}. Expected \"object\"."
             )),
         };
 
@@ -315,5 +317,17 @@ mod tests {
     fn test_schema_for_output_accepts_object() {
         let result = schema_for_output::<TestObject>();
         assert!(result.is_ok(),);
+    }
+
+    #[test]
+    fn test_schema_for_output_strips_top_level_title() {
+        let schema = schema_for_output::<TestObject>().unwrap();
+        assert!(!schema.contains_key("title"));
+    }
+
+    #[test]
+    fn test_schema_for_output_strips_top_level_description() {
+        let schema = schema_for_output::<TestObject>().unwrap();
+        assert!(!schema.contains_key("description"));
     }
 }
