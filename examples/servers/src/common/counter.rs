@@ -44,9 +44,29 @@ pub struct ExamplePromptArgs {
     pub message: String,
 }
 
+/// MCP spec types prompt arguments as `Record<string, string>`, so
+/// spec-compliant clients stringify all values. Accept both wire forms.
+fn deserialize_i32_from_string_or_int<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrInt {
+        Int(i32),
+        Str(String),
+    }
+    match StringOrInt::deserialize(deserializer)? {
+        StringOrInt::Int(n) => Ok(n),
+        StringOrInt::Str(s) => s.parse::<i32>().map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct CounterAnalysisArgs {
     /// The target value you're trying to reach
+    #[serde(deserialize_with = "deserialize_i32_from_string_or_int")]
     pub goal: i32,
     /// Preferred strategy: 'fast' or 'careful'
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -332,6 +352,34 @@ mod tests {
         assert_eq!(args[0].required, Some(true));
         assert_eq!(args[1].name, "strategy");
         assert_eq!(args[1].required, Some(false));
+    }
+
+    #[test]
+    fn test_counter_analysis_args_accepts_integer_goal() {
+        let json = serde_json::json!({ "goal": 20 });
+        let args: CounterAnalysisArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.goal, 20);
+    }
+
+    #[test]
+    fn test_counter_analysis_args_accepts_string_goal() {
+        let json = serde_json::json!({ "goal": "20" });
+        let args: CounterAnalysisArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.goal, 20);
+    }
+
+    #[test]
+    fn test_counter_analysis_args_accepts_negative_string_goal() {
+        let json = serde_json::json!({ "goal": "-7" });
+        let args: CounterAnalysisArgs = serde_json::from_value(json).unwrap();
+        assert_eq!(args.goal, -7);
+    }
+
+    #[test]
+    fn test_counter_analysis_args_rejects_non_numeric_string_goal() {
+        let json = serde_json::json!({ "goal": "not a number" });
+        let result: Result<CounterAnalysisArgs, _> = serde_json::from_value(json);
+        assert!(result.is_err());
     }
 
     #[tokio::test]
