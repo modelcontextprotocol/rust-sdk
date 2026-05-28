@@ -50,36 +50,48 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     })
 }
 
-/// Clone the schema and remove top-level "title" and "description" fields
-/// (the wrapper type name and doc, which are noise to the LLM).
-fn strip_top_level_metadata(schema: &Arc<JsonObject>) -> Arc<JsonObject> {
-    let mut object = schema.as_ref().clone();
-    object.remove("title");
-    object.remove("description");
-    Arc::new(object)
+/// Validate that the schema root is `type: "object"` (per MCP spec) and strip top-level
+/// `title`/`description` (the wrapper type name and doc, which are noise to the LLM).
+fn validate_and_strip(raw: &Arc<JsonObject>, purpose: &str) -> Result<Arc<JsonObject>, String> {
+    match raw.get("type") {
+        Some(serde_json::Value::String(t)) if t == "object" => {
+            let mut object = raw.as_ref().clone();
+            object.remove("title");
+            object.remove("description");
+            Ok(Arc::new(object))
+        }
+        Some(serde_json::Value::String(t)) => Err(format!(
+            "MCP specification requires tool {purpose} to have root type 'object', but found '{t}'."
+        )),
+        None => Err(format!(
+            "Schema is missing 'type' field. MCP specification requires {purpose} to have root type 'object'."
+        )),
+        Some(other) => Err(format!(
+            "Schema 'type' field has unexpected format: {other:?}. Expected \"object\"."
+        )),
+    }
 }
 
-/// Generate a JSON schema for inputSchema (top-level "title" and "description" are removed)
-pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+/// Generate, validate, and strip a JSON schema for inputSchema (must have root type "object";
+/// top-level "title" and "description" are removed).
+pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String> {
     thread_local! {
-        static CACHE_FOR_INPUT: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
+        static CACHE_FOR_INPUT: std::sync::RwLock<HashMap<TypeId, Result<Arc<JsonObject>, String>>> = Default::default();
     };
     CACHE_FOR_INPUT.with(|cache| {
-        if let Some(schema) = cache
+        if let Some(result) = cache
             .read()
             .expect("input schema cache lock poisoned")
             .get(&TypeId::of::<T>())
         {
-            schema.clone()
-        } else {
-            let schema = strip_top_level_metadata(&schema_for_type::<T>());
-            cache
-                .write()
-                .expect("input schema cache lock poisoned")
-                .insert(TypeId::of::<T>(), schema.clone());
-
-            schema
+            return result.clone();
         }
+        let result = validate_and_strip(&schema_for_type::<T>(), "inputSchema");
+        cache
+            .write()
+            .expect("input schema cache lock poisoned")
+            .insert(TypeId::of::<T>(), result.clone());
+        result
     })
 }
 
@@ -111,21 +123,7 @@ pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObje
         }
 
         // Generate, validate, and strip unnecessary top-level fields
-        let raw = schema_for_type::<T>();
-        let result = match raw.get("type") {
-            Some(serde_json::Value::String(t)) if t == "object" => {
-                Ok(strip_top_level_metadata(&raw))
-            }
-            Some(serde_json::Value::String(t)) => Err(format!(
-                "MCP specification requires tool outputSchema to have root type 'object', but found '{t}'."
-            )),
-            None => Err(
-                "Schema is missing 'type' field. MCP specification requires outputSchema to have root type 'object'.".to_string()
-            ),
-            Some(other) => Err(format!(
-                "Schema 'type' field has unexpected format: {other:?}. Expected \"object\"."
-            )),
-        };
+        let result = validate_and_strip(&schema_for_type::<T>(), "outputSchema");
 
         // Cache the result (both success and error cases)
         cache
@@ -328,6 +326,30 @@ mod tests {
     #[test]
     fn test_schema_for_output_strips_top_level_description() {
         let schema = schema_for_output::<TestObject>().unwrap();
+        assert!(!schema.contains_key("description"));
+    }
+
+    #[test]
+    fn test_schema_for_input_rejects_primitive() {
+        let result = schema_for_input::<i32>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_for_input_accepts_object() {
+        let result = schema_for_input::<TestObject>();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_schema_for_input_strips_top_level_title() {
+        let schema = schema_for_input::<TestObject>().unwrap();
+        assert!(!schema.contains_key("title"));
+    }
+
+    #[test]
+    fn test_schema_for_input_strips_top_level_description() {
+        let schema = schema_for_input::<TestObject>().unwrap();
         assert!(!schema.contains_key("description"));
     }
 }

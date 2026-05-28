@@ -232,6 +232,13 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
             // if found, use the Parameters schema
             syn::parse2::<Expr>(quote! {
                 rmcp::handler::server::common::schema_for_input::<#params_ty>()
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Invalid input schema for `{}`: {}",
+                            std::any::type_name::<#params_ty>(),
+                            e
+                        )
+                    })
             })?
         } else {
             // if not found, use a default empty JSON schema object

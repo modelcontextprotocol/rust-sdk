@@ -330,7 +330,8 @@ impl Tool {
     /// Set the input schema using a type that implements JsonSchema
     #[cfg(feature = "server")]
     pub fn with_input_schema<T: JsonSchema + 'static>(mut self) -> Self {
-        self.input_schema = crate::handler::server::tool::schema_for_input::<T>();
+        self.input_schema = crate::handler::server::tool::schema_for_input::<T>()
+            .unwrap_or_else(|e| panic!("Invalid input schema for tool '{}': {}", self.name, e));
         self
     }
 
