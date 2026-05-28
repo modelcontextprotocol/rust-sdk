@@ -48,6 +48,36 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     })
 }
 
+/// Generate a JSON schema for inputSchema (does not need "title" or "description" fields for the top-level object)
+pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    thread_local! {
+        static CACHE_FOR_INPUT: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
+    };
+    CACHE_FOR_INPUT.with(|cache| {
+        if let Some(schema) = cache
+            .read()
+            .expect("input schema cache lock poisoned")
+            .get(&TypeId::of::<T>())
+        {
+            schema.clone()
+        } else {
+            let mut schema = schema_for_type::<T>().as_ref().clone();
+
+            // Remove unnecessary top-level fields
+            schema.remove("title");
+            schema.remove("description");
+
+            let schema = Arc::new(schema);
+            cache
+                .write()
+                .expect("input schema cache lock poisoned")
+                .insert(TypeId::of::<T>(), schema.clone());
+
+            schema
+        }
+    })
+}
+
 // TODO: should be updated according to the new specifications
 /// Schema used when input is empty.
 pub fn schema_for_empty_input() -> Arc<JsonObject> {

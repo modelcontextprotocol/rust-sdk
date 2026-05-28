@@ -91,7 +91,6 @@ fn expected_schema() -> serde_json::Value {
       "required": [
         "messages"
       ],
-      "title": "ChatRequest",
       "type": "object"
     })
 }
