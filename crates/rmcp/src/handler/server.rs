@@ -184,9 +184,7 @@ macro_rules! server_handler_methods {
             request: InitializeRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
-            if context.peer.peer_info().is_none() {
-                context.peer.set_peer_info(request);
-            }
+            context.peer.set_peer_info(request);
             std::future::ready(Ok(self.get_info()))
         }
         fn complete(
