@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AnnotateAble, Annotations, Icon, Meta, RawEmbeddedResource,
-    content::{EmbeddedResource, ImageContent},
+    content::{AudioContent, EmbeddedResource, ImageContent},
     resource::ResourceContents,
 };
 
@@ -157,6 +157,11 @@ pub enum PromptMessageContent {
         #[serde(flatten)]
         image: ImageContent,
     },
+    /// Audio content with base64-encoded data
+    Audio {
+        #[serde(flatten)]
+        audio: AudioContent,
+    },
     /// Embedded server-side resource
     Resource {
         #[serde(flatten)]
@@ -224,6 +229,29 @@ impl PromptMessage {
                     data: base64,
                     mime_type: mime_type.into(),
                     meta,
+                }
+                .optional_annotate(annotations),
+            },
+        }
+    }
+
+    /// Create a new audio message. `annotations` is optional.
+    #[cfg(feature = "base64")]
+    pub fn new_audio(
+        role: PromptMessageRole,
+        data: &[u8],
+        mime_type: &str,
+        annotations: Option<Annotations>,
+    ) -> Self {
+        use base64::{Engine, prelude::BASE64_STANDARD};
+
+        let base64 = BASE64_STANDARD.encode(data);
+        Self {
+            role,
+            content: PromptMessageContent::Audio {
+                audio: crate::model::RawAudioContent {
+                    data: base64,
+                    mime_type: mime_type.into(),
                 }
                 .optional_annotate(annotations),
             },
@@ -305,6 +333,56 @@ mod tests {
         // Verify it contains mimeType (camelCase) not mime_type (snake_case)
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_prompt_message_audio_serialization_and_deserialization() {
+        // Audio is part of the spec's ContentBlock union for prompt messages
+        // (text | image | audio | resource_link | resource). Ensure the Audio
+        // variant serializes to the flat, spec-compliant shape
+        // `{ "type": "audio", "data", "mimeType" }` and parses back.
+        // See: https://modelcontextprotocol.io/specification/2025-06-18/server/prompts
+        let content = PromptMessageContent::Audio {
+            audio: crate::model::RawAudioContent {
+                data: "YXVkaW8=".to_string(),
+                mime_type: "audio/wav".to_string(),
+            }
+            .no_annotation(),
+        };
+
+        let value = serde_json::to_value(&content).unwrap();
+        assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("audio"));
+        assert_eq!(value.get("data").and_then(|v| v.as_str()), Some("YXVkaW8="));
+        assert_eq!(
+            value.get("mimeType").and_then(|v| v.as_str()),
+            Some("audio/wav"),
+            "expected camelCase mimeType, got: {value:#?}"
+        );
+
+        // Regression: a spec-valid audio content block must deserialize into
+        // the Audio variant (previously failed with "unknown variant `audio`").
+        let json = r#"{"type":"audio","data":"YXVkaW8=","mimeType":"audio/wav"}"#;
+        let parsed: PromptMessageContent = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, content);
+    }
+
+    #[test]
+    #[cfg(feature = "base64")]
+    fn test_prompt_message_new_audio_constructor() {
+        let message =
+            PromptMessage::new_audio(PromptMessageRole::User, b"hello", "audio/wav", None);
+        let value = serde_json::to_value(&message).unwrap();
+        let content = value.get("content").expect("content present");
+        assert_eq!(content.get("type").and_then(|v| v.as_str()), Some("audio"));
+        assert_eq!(
+            content.get("mimeType").and_then(|v| v.as_str()),
+            Some("audio/wav")
+        );
+        // base64 of "hello"
+        assert_eq!(
+            content.get("data").and_then(|v| v.as_str()),
+            Some("aGVsbG8=")
+        );
     }
 
     #[test]

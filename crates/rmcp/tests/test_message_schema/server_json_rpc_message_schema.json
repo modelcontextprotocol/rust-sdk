@@ -2116,6 +2116,37 @@
           ]
         },
         {
+          "description": "Audio content with base64-encoded data",
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "data": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "mimeType"
+          ]
+        },
+        {
           "description": "Embedded server-side resource",
           "type": "object",
           "properties": {
