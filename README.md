@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-The generated tool `inputSchema` is derived from the fields of `T`. The type name and documentation on `T` are ignored; only field names, field types, and field documentation are used.
+The generated tool `inputSchema` and `outputSchema` are derived from the fields of `T`. The type name and documentation on `T` are ignored; only field names, field types, and field documentation are used.
 
 When you need custom server metadata or multiple capabilities (tools + prompts), use explicit `#[tool_handler]`:
 

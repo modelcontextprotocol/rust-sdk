@@ -250,7 +250,9 @@ where
             attr: Tool::new(
                 name.into(),
                 "",
-                schema_for_input::<crate::model::JsonObject>(),
+                schema_for_input::<crate::model::JsonObject>().unwrap_or_else(|e| {
+                    panic!("Invalid input schema for JsonObject: {e}");
+                }),
             ),
             call: self,
             _marker: std::marker::PhantomData,
@@ -287,7 +289,12 @@ where
         self
     }
     pub fn parameters<T: JsonSchema + 'static>(mut self) -> Self {
-        self.attr.input_schema = schema_for_input::<T>();
+        self.attr.input_schema = schema_for_input::<T>().unwrap_or_else(|e| {
+            panic!(
+                "Invalid input schema for `{}`: {e}",
+                std::any::type_name::<T>()
+            )
+        });
         self
     }
     pub fn parameters_value(mut self, schema: serde_json::Value) -> Self {
