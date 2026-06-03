@@ -58,6 +58,9 @@ impl<'c> AsyncHttpClient<'c> for OAuthReqwestClient {
 
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
+/// Default OIDC Dynamic Client Registration `application_type` (SEP-837)
+const DEFAULT_APPLICATION_TYPE: &str = "native";
+
 /// Stored credentials for OAuth2 authorization
 #[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -423,6 +426,7 @@ pub struct OAuthClientConfig {
     pub client_secret: Option<String>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
+    pub application_type: Option<String>,
 }
 
 impl OAuthClientConfig {
@@ -432,6 +436,7 @@ impl OAuthClientConfig {
             client_secret: None,
             scopes: Vec::new(),
             redirect_uri: redirect_uri.into(),
+            application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         }
     }
 
@@ -442,6 +447,12 @@ impl OAuthClientConfig {
 
     pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
         self.scopes = scopes;
+        self
+    }
+
+    /// Set the OIDC Dynamic Client Registration `application_type` (SEP-837), e.g. `"native"` or `"web"`
+    pub fn with_application_type(mut self, application_type: impl Into<String>) -> Self {
+        self.application_type = Some(application_type.into());
         self
     }
 }
@@ -613,6 +624,8 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// OIDC Dynamic Client Registration `application_type` (SEP-837)
+    application_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -624,6 +637,8 @@ pub(crate) struct ClientRegistrationRequest {
     pub response_types: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -707,6 +722,7 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         };
 
         Ok(manager)
@@ -800,6 +816,11 @@ impl AuthorizationManager {
             return Err(AuthError::NoAuthorizationSupport);
         }
 
+        // SEP-837: only override application_type when the config sets one
+        if let Some(application_type) = &config.application_type {
+            self.application_type = Some(application_type.clone());
+        }
+
         let metadata = self.metadata.as_ref().unwrap();
 
         let auth_url = AuthUrl::new(metadata.authorization_endpoint.clone())
@@ -890,6 +911,7 @@ impl AuthorizationManager {
         };
         self.validate_server_metadata("code")?;
 
+        let application_type = self.application_type.clone();
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
             redirect_uris: vec![redirect_uri.to_string()],
@@ -904,6 +926,7 @@ impl AuthorizationManager {
             } else {
                 Some(scopes.join(" "))
             },
+            application_type: application_type.clone(),
         };
 
         let response = match self
@@ -958,6 +981,7 @@ impl AuthorizationManager {
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            application_type,
         };
 
         self.configure_client(config.clone())?;
@@ -972,6 +996,8 @@ impl AuthorizationManager {
             client_secret: None,
             scopes: vec![],
             redirect_uri: self.base_url.to_string(),
+            // keep the manager's current application_type
+            application_type: None,
         };
         self.configure_client(config)
     }
@@ -2140,12 +2166,14 @@ impl AuthorizationSession {
                         client_metadata_url
                     )));
                 }
-                // SEP-991: URL-based Client IDs - use URL as client_id directly
+                // SEP-991: URL-based Client IDs - use URL as client_id directly.
+                // SEP-837: match the hosted client-metadata.json application_type ("native")
                 OAuthClientConfig {
                     client_id: client_metadata_url.to_string(),
                     client_secret: None,
                     scopes: scopes.iter().map(|s| s.to_string()).collect(),
                     redirect_uri: redirect_uri.to_string(),
+                    application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
                 }
             } else {
                 // Fallback to dynamic registration
@@ -3117,6 +3145,7 @@ mod tests {
             client_secret: Some("my-secret".to_string()),
             scopes: vec![],
             redirect_uri: "http://localhost/callback".to_string(),
+            application_type: None,
         }
     }
 
@@ -3678,6 +3707,7 @@ mod tests {
             token_endpoint_auth_method: "none".to_string(),
             response_types: vec!["code".to_string()],
             scope: Some("read write".to_string()),
+            application_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["scope"], "read write");
@@ -3692,9 +3722,57 @@ mod tests {
             token_endpoint_auth_method: "none".to_string(),
             response_types: vec!["code".to_string()],
             scope: None,
+            application_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(!json.as_object().unwrap().contains_key("scope"));
+    }
+
+    // -- ClientRegistrationRequest application_type (SEP-837) --
+
+    #[test]
+    fn client_registration_request_includes_application_type_when_present() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+            application_type: Some("native".to_string()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["application_type"], "native");
+    }
+
+    #[test]
+    fn client_registration_request_omits_application_type_when_none() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+            application_type: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("application_type"));
+    }
+
+    // -- OAuthClientConfig application_type (SEP-837) --
+
+    #[test]
+    fn oauth_client_config_defaults_application_type_to_native() {
+        let config = super::OAuthClientConfig::new("client-id", "http://127.0.0.1:8080/callback");
+        assert_eq!(config.application_type.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn oauth_client_config_with_application_type_overrides_default() {
+        let config = super::OAuthClientConfig::new("client-id", "https://app.example.com/callback")
+            .with_application_type("web");
+        assert_eq!(config.application_type.as_deref(), Some("web"));
     }
 
     // -- client credentials (SEP-1046) --
