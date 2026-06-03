@@ -270,7 +270,8 @@ where
 }
 
 macro_rules! method {
-    (peer_req $method:ident $Req:ident() => $Resp: ident ) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident() => $Resp: ident ) => {
+        $(#[$meta])*
         pub async fn $method(&self) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
@@ -283,7 +284,8 @@ macro_rules! method {
             }
         }
     };
-    (peer_req $method:ident $Req:ident($Param: ident) => $Resp: ident ) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident($Param: ident) => $Resp: ident ) => {
+        $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
@@ -298,7 +300,8 @@ macro_rules! method {
             }
         }
     };
-    (peer_req $method:ident $Req:ident($Param: ident)? => $Resp: ident ) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident($Param: ident)? => $Resp: ident ) => {
+        $(#[$meta])*
         pub async fn $method(&self, params: Option<$Param>) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
@@ -313,7 +316,8 @@ macro_rules! method {
             }
         }
     };
-    (peer_req $method:ident $Req:ident($Param: ident)) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident($Param: ident)) => {
+        $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<(), ServiceError> {
             let result = self
                 .send_request(ClientRequest::$Req($Req {
@@ -329,7 +333,8 @@ macro_rules! method {
         }
     };
 
-    (peer_not $method:ident $Not:ident($Param: ident)) => {
+    ($(#[$meta:meta])* peer_not $method:ident $Not:ident($Param: ident)) => {
+        $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
@@ -340,7 +345,8 @@ macro_rules! method {
             Ok(())
         }
     };
-    (peer_not $method:ident $Not:ident) => {
+    ($(#[$meta:meta])* peer_not $method:ident $Not:ident) => {
+        $(#[$meta])*
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ClientNotification::$Not($Not {
                 method: Default::default(),
@@ -354,7 +360,13 @@ macro_rules! method {
 
 impl Peer<RoleClient> {
     method!(peer_req complete CompleteRequest(CompleteRequestParams) => CompleteResult);
-    method!(peer_req set_level SetLevelRequest(SetLevelRequestParams));
+    method!(
+        #[deprecated(
+            since = "1.8.0",
+            note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+        )]
+        peer_req set_level SetLevelRequest(SetLevelRequestParams)
+    );
     method!(peer_req get_prompt GetPromptRequest(GetPromptRequestParams) => GetPromptResult);
     method!(peer_req list_prompts ListPromptsRequest(PaginatedRequestParams)? => ListPromptsResult);
     method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParams)? => ListResourcesResult);

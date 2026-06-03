@@ -1,5 +1,6 @@
 // cargo test --features "server client" --package rmcp test_logging
 #![cfg(not(feature = "local"))]
+#![allow(deprecated)]
 mod common;
 
 use std::sync::{Arc, Mutex};
