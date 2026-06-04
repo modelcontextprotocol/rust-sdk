@@ -164,6 +164,10 @@ pub struct StoredAuthorizationState {
     #[serde(default)]
     pub require_issuer: bool,
     pub created_at: u64,
+    /// scopes requested in this round, used to resolve the grant when the token response omits
+    /// `scope` (RFC 6749 §5.1)
+    #[serde(default)]
+    pub requested_scopes: Vec<String>,
 }
 
 impl std::fmt::Debug for StoredAuthorizationState {
@@ -174,6 +178,7 @@ impl std::fmt::Debug for StoredAuthorizationState {
             .field("expected_issuer", &self.expected_issuer)
             .field("require_issuer", &self.require_issuer)
             .field("created_at", &self.created_at)
+            .field("requested_scopes", &self.requested_scopes)
             .finish()
     }
 }
@@ -225,7 +230,14 @@ impl StoredAuthorizationState {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            requested_scopes: Vec::new(),
         }
+    }
+
+    /// record the scopes requested in this authorization round (SEP-2350)
+    pub fn with_requested_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.requested_scopes = scopes;
+        self
     }
 
     pub fn into_pkce_verifier(self) -> PkceCodeVerifier {
@@ -1054,7 +1066,7 @@ impl AuthorizationManager {
 
         let (auth_url, csrf_token) = auth_request.url();
 
-        // store pkce verifier and expected issuer for later use via state store
+        // store pkce verifier, expected issuer, and the requested scopes for later use via state store
         let expected_issuer = self
             .metadata
             .as_ref()
@@ -1074,7 +1086,8 @@ impl AuthorizationManager {
             &csrf_token,
             expected_issuer,
             require_issuer,
-        );
+        )
+        .with_requested_scopes(scopes.iter().map(|s| s.to_string()).collect());
         self.state_store
             .save(csrf_token.secret(), stored_state)
             .await?;
@@ -1089,11 +1102,33 @@ impl AuthorizationManager {
 
     /// compute the union of current scopes and required scopes
     fn compute_scope_union(current: &[String], required: &str) -> Vec<String> {
-        let mut scope_set: std::collections::HashSet<String> = current.iter().cloned().collect();
-        for scope in required.split_whitespace() {
-            scope_set.insert(scope.to_string());
+        let mut scopes = current.to_vec();
+        scopes.extend(required.split_whitespace().map(|s| s.to_string()));
+        Self::dedup_scopes(scopes)
+    }
+
+    /// deduplicate scopes preserving first-seen order (SEP-2350: stable for testability)
+    fn dedup_scopes(scopes: Vec<String>) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        scopes
+            .into_iter()
+            .filter(|s| seen.insert(s.clone()))
+            .collect()
+    }
+
+    /// resolve the granted scope set from a token response (SEP-2350, RFC 6749 §5.1): an explicit
+    /// `scope` may narrow the grant; an omitted one means the request was granted in full, so fall
+    /// back to the requested scopes (or the previously granted set when none were recorded).
+    fn resolve_granted_scopes(
+        response_scopes: Option<Vec<String>>,
+        requested_scopes: &[String],
+        current_scopes: &[String],
+    ) -> Vec<String> {
+        match response_scopes {
+            Some(scopes) => scopes,
+            None if !requested_scopes.is_empty() => requested_scopes.to_vec(),
+            None => current_scopes.to_vec(),
         }
-        scope_set.into_iter().collect()
     }
 
     /// check if a scope upgrade is possible and allowed
@@ -1116,35 +1151,42 @@ impl AuthorizationManager {
         scopes
     }
 
-    /// select scopes based on SEP-835 priority:
-    /// 1. scope from WWW-Authenticate header (argument or stored from initial 401 probe)
-    /// 2. scopes_supported from protected resource metadata (RFC 9728)
-    /// 3. scopes_supported from authorization server metadata
-    /// 4. provided default scopes
+    /// select scopes following SEP-2350: re-authorization requests the union of the
+    /// previously requested scopes and the newly challenged scopes. Server-reported
+    /// scopes (WWW-Authenticate challenge, protected resource metadata) are operational
+    /// requirements for the current operation, never an exclusive directive, so they
+    /// accumulate rather than replace. The AS metadata and caller defaults only seed the
+    /// request when nothing has been requested or challenged yet.
     fn select_base_scopes(
         &self,
         www_authenticate_scope: Option<&str>,
         default_scopes: &[&str],
     ) -> Vec<String> {
+        let mut accumulated: Vec<String> = Vec::new();
+
+        // previously requested scopes
+        if let Ok(guard) = self.current_scopes.try_read() {
+            accumulated.extend(guard.iter().cloned());
+        }
+
+        // newly challenged scopes for the current operation (RFC 6750 §3.1)
         if let Some(scope) = www_authenticate_scope {
-            return scope.split_whitespace().map(|s| s.to_string()).collect();
+            accumulated.extend(scope.split_whitespace().map(|s| s.to_string()));
         }
-
-        // use scopes from initial 401 WWW-Authenticate header
         if let Ok(guard) = self.www_auth_scopes.try_read() {
-            if !guard.is_empty() {
-                return guard.clone();
-            }
+            accumulated.extend(guard.iter().cloned());
         }
 
-        // use scopes_supported from protected resource metadata (RFC 9728)
+        // scopes required for the current operation per protected resource metadata (RFC 9728)
         if let Ok(guard) = self.resource_scopes.try_read() {
-            if !guard.is_empty() {
-                return guard.clone();
-            }
+            accumulated.extend(guard.iter().cloned());
         }
 
-        // use scopes_supported from authorization server metadata
+        if !accumulated.is_empty() {
+            return Self::dedup_scopes(accumulated);
+        }
+
+        // nothing requested or challenged yet: seed from AS metadata, then caller defaults
         if let Some(metadata) = &self.metadata {
             if let Some(scopes_supported) = &metadata.scopes_supported {
                 if !scopes_supported.is_empty() {
@@ -1284,6 +1326,9 @@ impl AuthorizationManager {
 
         Self::validate_authorization_response_issuer(&stored_state, received_issuer)?;
 
+        // capture requested scopes before the state is consumed
+        let requested_scopes = stored_state.requested_scopes.clone();
+
         // Reconstruct the PKCE verifier
         let pkce_verifier = stored_state.into_pkce_verifier();
 
@@ -1322,10 +1367,14 @@ impl AuthorizationManager {
 
         debug!("exchange token result: {:?}", token_result);
 
-        let granted_scopes: Vec<String> = token_result
+        // SEP-2350: an omitted `scope` means the grant equals the request (RFC 6749 §5.1).
+        let response_scopes = token_result
             .scopes()
-            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_default();
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect());
+        let granted_scopes = {
+            let current = self.current_scopes.read().await;
+            Self::resolve_granted_scopes(response_scopes, &requested_scopes, &current)
+        };
 
         *self.current_scopes.write().await = granted_scopes.clone();
         *self.scope_upgrade_attempts.write().await = 0;
@@ -3107,15 +3156,25 @@ mod tests {
     fn test_stored_authorization_state_serialization() {
         let pkce = PkceCodeVerifier::new("my-verifier".to_string());
         let csrf = CsrfToken::new("my-csrf".to_string());
-        let state = StoredAuthorizationState::new(&pkce, &csrf);
+        let state = StoredAuthorizationState::new(&pkce, &csrf)
+            .with_requested_scopes(vec!["read".to_string(), "write".to_string()]);
 
         let json = serde_json::to_string(&state).unwrap();
         let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.pkce_verifier, "my-verifier");
         assert_eq!(deserialized.csrf_token, "my-csrf");
+        assert_eq!(deserialized.requested_scopes, vec!["read", "write"]);
         assert_eq!(deserialized.expected_issuer, None);
         assert!(!deserialized.require_issuer);
+    }
+
+    #[test]
+    fn stored_authorization_state_defaults_requested_scopes_when_absent() {
+        let json = r#"{"pkce_verifier":"v","csrf_token":"c","created_at":1}"#;
+        let state: StoredAuthorizationState = serde_json::from_str(json).unwrap();
+
+        assert!(state.requested_scopes.is_empty());
     }
 
     #[test]
@@ -3880,6 +3939,104 @@ mod tests {
         assert!(scopes.contains(&"offline_access".to_string()));
         assert!(scopes.contains(&"profile".to_string()));
         assert!(scopes.contains(&"email".to_string()));
+    }
+
+    // -- SEP-2350: client-side scope accumulation in step-up authorization --
+
+    #[tokio::test]
+    async fn select_scopes_unions_challenge_with_previously_requested() {
+        let mgr = manager_with_metadata(None).await;
+        *mgr.current_scopes.write().await = vec!["read".to_string()];
+
+        let scopes = mgr.select_scopes(Some("write"), &[]);
+
+        assert_eq!(scopes, vec!["read".to_string(), "write".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn select_scopes_does_not_replace_previously_requested_with_challenge() {
+        let mgr = manager_with_metadata(None).await;
+        *mgr.current_scopes.write().await = vec!["read".to_string(), "profile".to_string()];
+
+        let scopes = mgr.select_scopes(Some("write"), &[]);
+
+        assert!(scopes.contains(&"read".to_string()));
+        assert!(scopes.contains(&"profile".to_string()));
+        assert!(scopes.contains(&"write".to_string()));
+    }
+
+    #[tokio::test]
+    async fn select_scopes_accumulates_across_multiple_step_up_rounds() {
+        let mgr = manager_with_metadata(None).await;
+        *mgr.current_scopes.write().await = vec!["read".to_string()];
+
+        // round one: server challenges for "write"
+        let round_one = mgr.select_scopes(Some("write"), &[]);
+        assert_eq!(round_one, vec!["read".to_string(), "write".to_string()]);
+        *mgr.current_scopes.write().await = round_one;
+
+        // round two: server challenges for "admin", earlier scopes are retained
+        let round_two = mgr.select_scopes(Some("admin"), &[]);
+        assert_eq!(
+            round_two,
+            vec!["read".to_string(), "write".to_string(), "admin".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn select_scopes_deduplicates_challenge_already_requested() {
+        let mgr = manager_with_metadata(None).await;
+        *mgr.current_scopes.write().await = vec!["read".to_string(), "write".to_string()];
+
+        let scopes = mgr.select_scopes(Some("write admin"), &[]);
+
+        assert_eq!(
+            scopes,
+            vec!["read".to_string(), "write".to_string(), "admin".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn select_scopes_unions_resource_metadata_as_operational_requirement() {
+        let mgr = manager_with_metadata(None).await;
+        *mgr.current_scopes.write().await = vec!["read".to_string()];
+        *mgr.resource_scopes.write().await = vec!["profile".to_string()];
+
+        let scopes = mgr.select_scopes(Some("write"), &[]);
+
+        assert!(scopes.contains(&"read".to_string()));
+        assert!(scopes.contains(&"write".to_string()));
+        assert!(scopes.contains(&"profile".to_string()));
+    }
+
+    #[test]
+    fn resolve_granted_scopes_uses_requested_when_response_omits_scope() {
+        let granted = AuthorizationManager::resolve_granted_scopes(
+            None,
+            &["read".to_string(), "write".to_string()],
+            &["read".to_string()],
+        );
+
+        assert_eq!(granted, vec!["read".to_string(), "write".to_string()]);
+    }
+
+    #[test]
+    fn resolve_granted_scopes_honors_explicit_server_downgrade() {
+        let granted = AuthorizationManager::resolve_granted_scopes(
+            Some(vec!["read".to_string()]),
+            &["read".to_string(), "write".to_string()],
+            &["read".to_string()],
+        );
+
+        assert_eq!(granted, vec!["read".to_string()]);
+    }
+
+    #[test]
+    fn resolve_granted_scopes_falls_back_to_current_when_nothing_requested() {
+        let granted =
+            AuthorizationManager::resolve_granted_scopes(None, &[], &["read".to_string()]);
+
+        assert_eq!(granted, vec!["read".to_string()]);
     }
 
     #[tokio::test]
