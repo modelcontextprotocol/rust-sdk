@@ -1010,6 +1010,7 @@ impl ServerHandler for TaskDemo {}
 - [spreadsheet-mcp](https://github.com/PSU3D0/spreadsheet-mcp) - 面向 LLM 智能体的高效 Token 使用的电子表格分析 MCP 服务，支持自动区域检测、重新计算、截图和编辑
 - [hyper-mcp](https://github.com/hyper-mcp-rs/hyper-mcp) - 通过 WebAssembly (WASM) 插件扩展功能的快速、安全的 MCP 服务
 - [rudof-mcp](https://github.com/rudof-project/rudof/tree/master/rudof_mcp) - RDF 验证和数据处理 MCP 服务，支持 ShEx/SHACL 验证、SPARQL 查询和格式转换。支持 stdio 和 Streamable HTTP 传输，具备完整的 MCP 功能（工具、提示词、资源、日志、补全、任务）
+- [MCPMate](https://github.com/loocor/MCPMate) - 渐进式 MCP 管理桌面应用：从引导式服务导入开始，逐步扩展到多客户端配置集和 Unify 元工具，让能力暴露、Token 消耗与运行状态更可控，并在效率、成本和可靠性上提供更多选择
 
 
 ## 开发
