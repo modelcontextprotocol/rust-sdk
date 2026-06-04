@@ -272,7 +272,8 @@ where
 }
 
 macro_rules! method {
-    (peer_req $method:ident $Req:ident() => $Resp: ident ) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident() => $Resp: ident ) => {
+        $(#[$meta])*
         pub async fn $method(&self) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ServerRequest::$Req($Req {
@@ -286,7 +287,8 @@ macro_rules! method {
             }
         }
     };
-    (peer_req $method:ident $Req:ident($Param: ident) => $Resp: ident ) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident($Param: ident) => $Resp: ident ) => {
+        $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<$Resp, ServiceError> {
             let result = self
                 .send_request(ServerRequest::$Req($Req {
@@ -301,7 +303,8 @@ macro_rules! method {
             }
         }
     };
-    (peer_req $method:ident $Req:ident($Param: ident)) => {
+    ($(#[$meta:meta])* peer_req $method:ident $Req:ident($Param: ident)) => {
+        $(#[$meta])*
         pub fn $method(
             &self,
             params: $Param,
@@ -321,7 +324,8 @@ macro_rules! method {
         }
     };
 
-    (peer_not $method:ident $Not:ident($Param: ident)) => {
+    ($(#[$meta:meta])* peer_not $method:ident $Not:ident($Param: ident)) => {
+        $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<(), ServiceError> {
             self.send_notification(ServerNotification::$Not($Not {
                 method: Default::default(),
@@ -332,7 +336,8 @@ macro_rules! method {
             Ok(())
         }
     };
-    (peer_not $method:ident $Not:ident) => {
+    ($(#[$meta:meta])* peer_not $method:ident $Not:ident) => {
+        $(#[$meta])*
         pub async fn $method(&self) -> Result<(), ServiceError> {
             self.send_notification(ServerNotification::$Not($Not {
                 method: Default::default(),
@@ -344,7 +349,8 @@ macro_rules! method {
     };
 
     // Timeout-only variants (base method should be created separately with peer_req)
-    (peer_req_with_timeout $method_with_timeout:ident $Req:ident() => $Resp: ident) => {
+    ($(#[$meta:meta])* peer_req_with_timeout $method_with_timeout:ident $Req:ident() => $Resp: ident) => {
+        $(#[$meta])*
         pub async fn $method_with_timeout(
             &self,
             timeout: Option<std::time::Duration>,
@@ -369,7 +375,8 @@ macro_rules! method {
         }
     };
 
-    (peer_req_with_timeout $method_with_timeout:ident $Req:ident($Param: ident) => $Resp: ident) => {
+    ($(#[$meta:meta])* peer_req_with_timeout $method_with_timeout:ident $Req:ident($Param: ident) => $Resp: ident) => {
+        $(#[$meta])*
         pub async fn $method_with_timeout(
             &self,
             params: $Param,
@@ -412,6 +419,10 @@ impl Peer<RoleServer> {
         }
     }
 
+    #[deprecated(
+        since = "1.8.0",
+        note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+    )]
     pub async fn create_message(
         &self,
         params: CreateMessageRequestParams,
@@ -441,7 +452,13 @@ impl Peer<RoleServer> {
             _ => Err(ServiceError::UnexpectedResponse),
         }
     }
-    method!(peer_req list_roots ListRootsRequest() => ListRootsResult);
+    method!(
+        #[deprecated(
+            since = "1.8.0",
+            note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+        )]
+        peer_req list_roots ListRootsRequest() => ListRootsResult
+    );
     #[cfg(feature = "elicitation")]
     method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
     #[cfg(feature = "elicitation")]
@@ -451,7 +468,13 @@ impl Peer<RoleServer> {
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
-    method!(peer_not notify_logging_message LoggingMessageNotification(LoggingMessageNotificationParam));
+    method!(
+        #[deprecated(
+            since = "1.8.0",
+            note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+        )]
+        peer_not notify_logging_message LoggingMessageNotification(LoggingMessageNotificationParam)
+    );
     method!(peer_not notify_resource_updated ResourceUpdatedNotification(ResourceUpdatedNotificationParam));
     method!(peer_not notify_resource_list_changed ResourceListChangedNotification);
     method!(peer_not notify_tool_list_changed ToolListChangedNotification);

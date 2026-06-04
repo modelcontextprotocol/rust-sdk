@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::{collections::HashSet, sync::Arc};
 
 use rmcp::{

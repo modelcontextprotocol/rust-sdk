@@ -471,6 +471,8 @@ context.peer.notify_prompt_list_changed().await?;
 
 ## Sampling
 
+> **Deprecated (SEP-2577):** Sampling is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
+
 Sampling flips the usual direction: the server asks the client to run an LLM completion. The server sends a `create_message` request, the client processes it through its LLM, and returns the result.
 
 **MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)
@@ -544,6 +546,8 @@ impl ClientHandler for MyClient {
 
 ## Roots
 
+> **Deprecated (SEP-2577):** Roots is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
+
 Roots tell servers which directories or projects the client is working in. A root is a URI (typically `file://`) pointing to a workspace or repository. Servers can query roots to know where to look for files and how to scope their work.
 
 **MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/2025-11-25/client/roots)
@@ -611,6 +615,8 @@ client.notify_roots_list_changed().await?;
 ---
 
 ## Logging
+
+> **Deprecated (SEP-2577):** Logging is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
 
 Servers can send structured log messages to clients. The client sets a minimum severity level, and the server sends messages through the peer notification interface.
 

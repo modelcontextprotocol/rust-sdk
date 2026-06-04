@@ -272,7 +272,7 @@
     },
     "ClientCapabilities": {
       "title": "Builder",
-      "description": "```rust\n# use rmcp::model::ClientCapabilities;\nlet cap = ClientCapabilities::builder()\n    .enable_experimental()\n    .enable_roots()\n    .enable_roots_list_changed()\n    .build();\n```",
+      "description": "```rust\n# use rmcp::model::ClientCapabilities;\nlet cap = ClientCapabilities::builder()\n    .enable_experimental()\n    .build();\n```",
       "type": "object",
       "properties": {
         "elicitation": {
@@ -308,6 +308,7 @@
           }
         },
         "roots": {
+          "description": "Capability for filesystem roots (deprecated by SEP-2577).",
           "anyOf": [
             {
               "$ref": "#/definitions/RootsCapabilities"
@@ -318,7 +319,7 @@
           ]
         },
         "sampling": {
-          "description": "Capability for LLM sampling requests (SEP-1577)",
+          "description": "Capability for LLM sampling requests (SEP-1577, deprecated by SEP-2577).",
           "anyOf": [
             {
               "$ref": "#/definitions/SamplingCapability"
@@ -1811,6 +1812,7 @@
       ]
     },
     "RootsCapabilities": {
+      "description": "Roots capability. Deprecated by SEP-2577; remains functional and will be\nremoved in a future release.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
       "type": "object",
       "properties": {
         "listChanged": {
@@ -1827,7 +1829,7 @@
       "const": "notifications/roots/list_changed"
     },
     "SamplingCapability": {
-      "description": "Sampling capability with optional sub-capabilities (SEP-1577).",
+      "description": "Sampling capability with optional sub-capabilities (SEP-1577).\n\nDeprecated by SEP-2577; remains functional and will be removed in a future\nrelease.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
       "type": "object",
       "properties": {
         "context": {
@@ -1955,6 +1957,7 @@
       ]
     },
     "SamplingTaskCapability": {
+      "description": "Sampling task capability. Deprecated by SEP-2577; remains functional and\nwill be removed in a future release.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
       "type": "object",
       "properties": {
         "createMessage": {

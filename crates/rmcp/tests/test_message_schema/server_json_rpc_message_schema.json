@@ -2724,6 +2724,7 @@
       ]
     },
     "SamplingTaskCapability": {
+      "description": "Sampling task capability. Deprecated by SEP-2577; remains functional and\nwill be removed in a future release.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
       "type": "object",
       "properties": {
         "createMessage": {
@@ -2737,7 +2738,7 @@
     },
     "ServerCapabilities": {
       "title": "Builder",
-      "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_logging()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
+      "description": "```rust\n# use rmcp::model::ServerCapabilities;\nlet cap = ServerCapabilities::builder()\n    .enable_experimental()\n    .enable_prompts()\n    .enable_resources()\n    .enable_tools()\n    .enable_tool_list_changed()\n    .build();\n```",
       "type": "object",
       "properties": {
         "completions": {
@@ -2769,6 +2770,7 @@
           }
         },
         "logging": {
+          "description": "Capability for server log message notifications (deprecated by SEP-2577).",
           "type": [
             "object",
             "null"
