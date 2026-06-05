@@ -152,6 +152,7 @@ impl std::fmt::Display for ProtocolVersion {
 }
 
 impl ProtocolVersion {
+    pub const V_2026_07_28: Self = Self(Cow::Borrowed("2026-07-28"));
     pub const V_2025_11_25: Self = Self(Cow::Borrowed("2025-11-25"));
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
@@ -164,6 +165,7 @@ impl ProtocolVersion {
         Self::V_2025_03_26,
         Self::V_2025_06_18,
         Self::V_2025_11_25,
+        Self::V_2026_07_28,
     ];
 
     /// Returns the string representation of this protocol version.
@@ -193,6 +195,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
             "2025-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
             "2025-06-18" => return Ok(ProtocolVersion::V_2025_06_18),
             "2025-11-25" => return Ok(ProtocolVersion::V_2025_11_25),
+            "2026-07-28" => return Ok(ProtocolVersion::V_2026_07_28),
             _ => {}
         }
         Ok(ProtocolVersion(Cow::Owned(s)))
@@ -544,6 +547,25 @@ impl ErrorData {
     pub fn resource_not_found(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::RESOURCE_NOT_FOUND, message, data)
     }
+
+    /// Create a resource-not-found error using the code required by the negotiated protocol version.
+    ///
+    /// SEP-2164 standardizes resource-not-found as JSON-RPC `INVALID_PARAMS` (`-32602`)
+    /// starting with protocol version `2026-07-28`. Older protocol versions continue to use
+    /// the legacy MCP-specific `RESOURCE_NOT_FOUND` code (`-32002`).
+    pub fn resource_not_found_for(
+        protocol_version: &ProtocolVersion,
+        message: impl Into<Cow<'static, str>>,
+        data: Option<Value>,
+    ) -> Self {
+        let code = if protocol_version.as_str() >= ProtocolVersion::V_2026_07_28.as_str() {
+            ErrorCode::INVALID_PARAMS
+        } else {
+            ErrorCode::RESOURCE_NOT_FOUND
+        };
+        Self::new(code, message, data)
+    }
+
     pub fn parse_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::PARSE_ERROR, message, data)
     }
@@ -4019,6 +4041,26 @@ mod tests {
             "elicitationId": "elicitation-123"
         });
         assert_eq!(json_url, expected_url_json);
+    }
+
+    #[test]
+    fn resource_not_found_for_uses_legacy_code_for_older_protocol_versions() {
+        let error = ErrorData::resource_not_found_for(
+            &ProtocolVersion::V_2025_11_25,
+            "resource not found",
+            None,
+        );
+        assert_eq!(error.code, ErrorCode::RESOURCE_NOT_FOUND);
+    }
+
+    #[test]
+    fn resource_not_found_for_uses_invalid_params_for_sep_2164_protocol_versions() {
+        let error = ErrorData::resource_not_found_for(
+            &ProtocolVersion::V_2026_07_28,
+            "resource not found",
+            None,
+        );
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     }
 
     #[test]
