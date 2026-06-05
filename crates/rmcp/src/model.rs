@@ -1142,6 +1142,18 @@ pub type ProgressNotification = Notification<ProgressNotificationMethod, Progres
 
 pub type Cursor = String;
 
+/// Scope describing who may cache cacheable list/read results.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum CacheScope {
+    /// The response may be cached for the current user.
+    User,
+    /// The response may be shared by clients with equivalent authorization.
+    Shared,
+}
+
 macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
@@ -1159,14 +1171,33 @@ macro_rules! paginated_result {
         }
 
         impl $t {
-            pub fn with_all_items(
-                items: $t_item,
-            ) -> Self {
+            pub fn with_all_items(items: $t_item) -> Self {
                 Self {
                     meta: None,
                     next_cursor: None,
                     $i_item: items,
                 }
+            }
+
+            /// Set the time, in milliseconds, that this result may be treated as fresh.
+            pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
+                let meta = self.meta.get_or_insert_with(Meta::new);
+                meta.insert("ttlMs".to_string(), Value::Number(ttl_ms.into()));
+                self
+            }
+
+            /// Set the cache scope for this result.
+            pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
+                let meta = self.meta.get_or_insert_with(Meta::new);
+                let cache_scope = match cache_scope {
+                    CacheScope::User => "user",
+                    CacheScope::Shared => "shared",
+                };
+                meta.insert(
+                    "cacheScope".to_string(),
+                    Value::String(cache_scope.to_string()),
+                );
+                self
             }
         }
     };
@@ -1239,6 +1270,7 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ReadResourceResult {
@@ -1250,6 +1282,37 @@ impl ReadResourceResult {
     /// Create a new ReadResourceResult with the given contents.
     pub fn new(contents: Vec<ResourceContents>) -> Self {
         Self { contents }
+    }
+
+    /// Set the time, in milliseconds, that this result may be treated as fresh.
+    pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
+        self.contents.iter_mut().for_each(|content| match content {
+            ResourceContents::TextResourceContents { meta, .. }
+            | ResourceContents::BlobResourceContents { meta, .. } => {
+                let meta = meta.get_or_insert_with(Meta::new);
+                meta.insert("ttlMs".to_string(), Value::Number(ttl_ms.into()));
+            }
+        });
+        self
+    }
+
+    /// Set the cache scope for this result.
+    pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
+        let cache_scope = match cache_scope {
+            CacheScope::User => "user",
+            CacheScope::Shared => "shared",
+        };
+        self.contents.iter_mut().for_each(|content| match content {
+            ResourceContents::TextResourceContents { meta, .. }
+            | ResourceContents::BlobResourceContents { meta, .. } => {
+                let meta = meta.get_or_insert_with(Meta::new);
+                meta.insert(
+                    "cacheScope".to_string(),
+                    Value::String(cache_scope.to_string()),
+                );
+            }
+        });
+        self
     }
 }
 
