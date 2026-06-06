@@ -61,3 +61,45 @@ fn test_chained_builder_methods() {
     assert!(output_schema_str.contains("greeting"));
     assert!(output_schema_str.contains("is_adult"));
 }
+
+#[test]
+fn test_with_output_schema_primitive() {
+    let tool = Tool::new("test", "Test tool", JsonObject::new()).with_output_schema::<i32>();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
+    assert!(schema_str.contains("\"type\":\"integer\""));
+    // title should be stripped from output schema
+    assert!(!schema_str.contains("title"));
+}
+
+#[test]
+fn test_with_output_schema_array() {
+    let tool = Tool::new("test", "Test tool", JsonObject::new())
+        .with_output_schema::<Vec<String>>();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
+    assert!(schema_str.contains("\"type\":\"array\""));
+    assert!(schema_str.contains("items"));
+    // title should be stripped from output schema
+    assert!(!schema_str.contains("title"));
+}
+
+#[test]
+fn test_with_output_schema_option() {
+    let tool = Tool::new("test", "Test tool", JsonObject::new())
+        .with_output_schema::<Option<String>>();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
+    // Option<String> generates a composition schema (anyOf/oneOf/type array with null)
+    assert!(
+        schema_str.contains("anyOf") || schema_str.contains("oneOf") || schema_str.contains("null"),
+        "Expected composition schema for Option<String>, got: {schema_str}"
+    );
+    assert!(!schema_str.contains("title"));
+}
