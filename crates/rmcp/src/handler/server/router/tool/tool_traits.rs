@@ -340,4 +340,43 @@ mod tests {
             assert_eq!(result, ErrorData::invalid_params("invalid params", None));
         }
     }
+
+    struct ArrayTool;
+    impl ToolBase for ArrayTool {
+        type Parameter = AddParameter;
+        type Output = Vec<AddOutput>;
+        type Error = ErrorData;
+
+        fn name() -> Cow<'static, str> {
+            "array-tool".into()
+        }
+    }
+    impl SyncTool<TraitBasedToolServer> for ArrayTool {
+        fn invoke(
+            _service: &TraitBasedToolServer,
+            _param: Self::Parameter,
+        ) -> Result<Self::Output, Self::Error> {
+            Ok(vec![])
+        }
+    }
+    impl AsyncTool<TraitBasedToolServer> for ArrayTool {
+        async fn invoke(
+            _service: &TraitBasedToolServer,
+            _param: Self::Parameter,
+        ) -> Result<Self::Output, Self::Error> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn test_toolbase_output_schema_with_array_output() {
+        let schema = ArrayTool::output_schema();
+        assert!(schema.is_some());
+        let schema = schema.unwrap();
+        let schema_value: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string(&*schema).expect("failed to serialize schema"),
+        )
+        .expect("failed to parse schema JSON");
+        assert_eq!(schema_value["type"], "array");
+    }
 }

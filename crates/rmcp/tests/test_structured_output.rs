@@ -93,6 +93,24 @@ impl TestServer {
             Err("User not found".to_string())
         }
     }
+
+    /// Tool that returns a list of calculation results
+    #[tool(name = "calculate-list", description = "Return a list of calculation results")]
+    pub async fn calculate_list(
+        &self,
+        params: Parameters<CalculationRequest>,
+    ) -> Result<Json<Vec<CalculationResult>>, String> {
+        Ok(Json(vec![CalculationResult {
+            sum: params.0.a + params.0.b,
+            product: params.0.a * params.0.b,
+        }]))
+    }
+
+    /// Tool that returns a count
+    #[tool(name = "get-count", description = "Return a count")]
+    pub async fn get_count(&self) -> Result<Json<i32>, String> {
+        Ok(Json(42))
+    }
 }
 
 #[tokio::test]
@@ -359,4 +377,40 @@ fn test_call_tool_result_deserialize_without_content() {
     let result: CallToolResult = serde_json::from_value(json).unwrap();
     assert!(result.content.is_empty());
     assert!(result.structured_content.is_some());
+}
+
+#[tokio::test]
+async fn test_tool_with_array_output_schema() {
+    let server = TestServer::new();
+    let tools = server.tool_router.list_all();
+
+    // Find the calculate-list tool
+    let calculate_list_tool = tools.iter().find(|t| t.name == "calculate-list").unwrap();
+
+    // Verify it has an output schema
+    assert!(calculate_list_tool.output_schema.is_some());
+
+    let schema = calculate_list_tool.output_schema.as_ref().unwrap();
+
+    // Check that the schema contains array type
+    let schema_str = serde_json::to_string(schema).unwrap();
+    assert!(schema_str.contains("array"));
+}
+
+#[tokio::test]
+async fn test_tool_with_primitive_output_schema() {
+    let server = TestServer::new();
+    let tools = server.tool_router.list_all();
+
+    // Find the get-count tool
+    let get_count_tool = tools.iter().find(|t| t.name == "get-count").unwrap();
+
+    // Verify it has an output schema
+    assert!(get_count_tool.output_schema.is_some());
+
+    let schema = get_count_tool.output_schema.as_ref().unwrap();
+
+    // Check that the schema contains integer type
+    let schema_str = serde_json::to_string(schema).unwrap();
+    assert!(schema_str.contains("integer"));
 }
