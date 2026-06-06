@@ -1143,31 +1143,316 @@ pub type ProgressNotification = Notification<ProgressNotificationMethod, Progres
 pub type Cursor = String;
 
 /// Scope describing who may cache cacheable list/read results.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CacheScope {
-    /// The response may be cached for the current user.
+    /// Any client or intermediary may cache and serve the response to any user.
+    #[default]
+    Public,
+    /// Only the requesting user's client may cache the response.
+    Private,
+    /// Alias for [`CacheScope::Private`] kept for compatibility with earlier draft support.
     User,
-    /// The response may be shared by clients with equivalent authorization.
+    /// Alias for [`CacheScope::Public`] kept for compatibility with earlier draft support.
     Shared,
+}
+
+impl Serialize for CacheScope {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            CacheScope::Public | CacheScope::Shared => "public",
+            CacheScope::Private | CacheScope::User => "private",
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for CacheScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "public" => Ok(CacheScope::Public),
+            "private" => Ok(CacheScope::Private),
+            // Accept the earlier draft values for read-side compatibility.
+            "shared" => Ok(CacheScope::Public),
+            "user" => Ok(CacheScope::Private),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["public", "private"],
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for CacheScope {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("CacheScope")
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        serde_json::json!({
+            "description": "Scope describing who may cache cacheable list/read results.",
+            "enum": ["private", "public"],
+            "type": "string"
+        })
+        .as_object()
+        .expect("schema is an object")
+        .clone()
+        .into()
+    }
+}
+
+fn deserialize_ttl_ms<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    ttl_ms_from_value(&value).map_err(serde::de::Error::custom)
+}
+
+fn ttl_ms_from_value(value: &Value) -> Result<u64, &'static str> {
+    match value {
+        Value::Number(number) => {
+            if let Some(value) = number.as_u64() {
+                Ok(value)
+            } else if let Some(value) = number.as_i64() {
+                Ok(value.max(0) as u64)
+            } else {
+                Err("ttlMs must be an integer")
+            }
+        }
+        _ => Err("ttlMs must be an integer"),
+    }
+}
+
+const TTL_MS_FIELD: &str = "ttlMs";
+const CACHE_SCOPE_FIELD: &str = "cacheScope";
+
+fn ttl_ms_from_meta(meta: Option<&Meta>) -> u64 {
+    meta.and_then(|meta| meta.get(TTL_MS_FIELD))
+        .and_then(|value| ttl_ms_from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn cache_scope_from_meta(meta: Option<&Meta>) -> CacheScope {
+    meta.and_then(|meta| meta.get(CACHE_SCOPE_FIELD))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
+}
+
+fn set_meta_cache_hint(meta: &mut Option<Meta>, key: &str, value: Option<Value>) {
+    if let Some(value) = value {
+        meta.get_or_insert_with(Meta::new)
+            .insert(key.to_string(), value);
+    } else if let Some(existing_meta) = meta.as_mut() {
+        existing_meta.remove(key);
+        if existing_meta.is_empty() {
+            *meta = None;
+        }
+    }
+}
+
+fn set_meta_ttl_ms(meta: &mut Option<Meta>, ttl_ms: u64) {
+    set_meta_cache_hint(
+        meta,
+        TTL_MS_FIELD,
+        (ttl_ms != 0).then(|| Value::Number(ttl_ms.into())),
+    );
+}
+
+fn set_meta_cache_scope(meta: &mut Option<Meta>, cache_scope: CacheScope) {
+    set_meta_cache_hint(
+        meta,
+        CACHE_SCOPE_FIELD,
+        (cache_scope != CacheScope::default()).then(|| {
+            serde_json::to_value(cache_scope).expect("CacheScope serializes to a valid JSON value")
+        }),
+    );
+}
+
+fn meta_without_cache_hints(meta: Option<&Meta>) -> Option<Meta> {
+    let mut meta = meta.cloned()?;
+    meta.remove(TTL_MS_FIELD);
+    meta.remove(CACHE_SCOPE_FIELD);
+    (!meta.is_empty()).then_some(meta)
+}
+
+fn to_camel_case(field: &str) -> String {
+    let mut output = String::new();
+    let mut uppercase_next = false;
+    for ch in field.chars() {
+        if ch == '_' {
+            uppercase_next = true;
+        } else if uppercase_next {
+            output.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            output.push(ch);
+        }
+    }
+    output
 }
 
 macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
     }) => {
-        #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-        #[serde(rename_all = "camelCase")]
-        #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+        #[derive(Debug, Clone, PartialEq, Default)]
         #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
         pub struct $t {
-            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
             pub meta: Option<Meta>,
-            #[serde(skip_serializing_if = "Option::is_none")]
             pub next_cursor: Option<Cursor>,
             pub $i_item: $t_item,
+        }
+
+        impl Serialize for $t {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                use serde::ser::SerializeMap;
+
+                let meta = meta_without_cache_hints(self.meta.as_ref());
+                let mut len = 3;
+                if meta.is_some() {
+                    len += 1;
+                }
+                if self.next_cursor.is_some() {
+                    len += 1;
+                }
+
+                let mut map = serializer.serialize_map(Some(len))?;
+                if let Some(meta) = meta.as_ref() {
+                    map.serialize_entry("_meta", meta)?;
+                }
+                if let Some(next_cursor) = self.next_cursor.as_ref() {
+                    map.serialize_entry("nextCursor", next_cursor)?;
+                }
+                map.serialize_entry(TTL_MS_FIELD, &self.ttl_ms())?;
+                map.serialize_entry(CACHE_SCOPE_FIELD, &self.cache_scope())?;
+                map.serialize_entry(&to_camel_case(stringify!($i_item)), &self.$i_item)?;
+                map.end()
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $t {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let mut value = Value::deserialize(deserializer)?;
+                let object = value
+                    .as_object_mut()
+                    .ok_or_else(|| serde::de::Error::custom("expected an object"))?;
+
+                let mut meta: Option<Meta> = object
+                    .remove("_meta")
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(serde::de::Error::custom)?;
+                if let Some(existing_meta) = meta.as_mut() {
+                    existing_meta.remove(TTL_MS_FIELD);
+                    existing_meta.remove(CACHE_SCOPE_FIELD);
+                    if existing_meta.is_empty() {
+                        meta = None;
+                    }
+                }
+
+                let next_cursor = object
+                    .remove("nextCursor")
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(serde::de::Error::custom)?;
+                let ttl_ms = object
+                    .remove(TTL_MS_FIELD)
+                    .map(|value| ttl_ms_from_value(&value).map_err(serde::de::Error::custom))
+                    .transpose()?
+                    .unwrap_or_default();
+                let cache_scope = object
+                    .remove(CACHE_SCOPE_FIELD)
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(serde::de::Error::custom)?
+                    .unwrap_or_default();
+                let item_field = to_camel_case(stringify!($i_item));
+                let items = object
+                    .remove(&item_field)
+                    .ok_or_else(|| serde::de::Error::custom(format!("missing field `{item_field}`")))
+                    .and_then(|value| {
+                        serde_json::from_value(value).map_err(serde::de::Error::custom)
+                    })?;
+
+                let mut result = Self {
+                    meta,
+                    next_cursor,
+                    $i_item: items,
+                };
+                result.set_ttl_ms(ttl_ms);
+                result.set_cache_scope(cache_scope);
+                Ok(result)
+            }
+        }
+
+        #[cfg(feature = "schemars")]
+        impl schemars::JsonSchema for $t {
+            fn schema_name() -> Cow<'static, str> {
+                Cow::Borrowed(stringify!($t))
+            }
+
+            fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                use serde_json::{Map, json};
+
+                let item_field = to_camel_case(stringify!($i_item));
+                let mut properties = Map::new();
+                properties.insert(
+                    "_meta".to_string(),
+                    serde_json::to_value(generator.subschema_for::<Option<Meta>>())
+                        .expect("schema serializes to JSON"),
+                );
+                properties.insert(
+                    "nextCursor".to_string(),
+                    serde_json::to_value(generator.subschema_for::<Option<Cursor>>())
+                        .expect("schema serializes to JSON"),
+                );
+                properties.insert(
+                    TTL_MS_FIELD.to_string(),
+                    json!({
+                        "description": "Time, in milliseconds, that this result may be treated as fresh.",
+                        "type": "integer",
+                        "format": "uint64",
+                        "default": 0,
+                        "minimum": 0
+                    }),
+                );
+                properties.insert(
+                    CACHE_SCOPE_FIELD.to_string(),
+                    json!({
+                        "description": "Scope describing who may cache this result.",
+                        "allOf": [generator.subschema_for::<CacheScope>()],
+                        "default": "public"
+                    }),
+                );
+                properties.insert(
+                    item_field.clone(),
+                    serde_json::to_value(generator.subschema_for::<$t_item>())
+                        .expect("schema serializes to JSON"),
+                );
+
+                let mut schema = Map::new();
+                schema.insert("type".to_string(), json!("object"));
+                schema.insert("properties".to_string(), Value::Object(properties));
+                schema.insert(
+                    "required".to_string(),
+                    json!([CACHE_SCOPE_FIELD, item_field, TTL_MS_FIELD]),
+                );
+                schemars::Schema::from(schema)
+            }
         }
 
         impl $t {
@@ -1179,24 +1464,35 @@ macro_rules! paginated_result {
                 }
             }
 
+            /// Return the time, in milliseconds, that this result may be treated as fresh.
+            pub fn ttl_ms(&self) -> u64 {
+                ttl_ms_from_meta(self.meta.as_ref())
+            }
+
+            /// Set the time, in milliseconds, that this result may be treated as fresh.
+            pub fn set_ttl_ms(&mut self, ttl_ms: u64) {
+                set_meta_ttl_ms(&mut self.meta, ttl_ms);
+            }
+
             /// Set the time, in milliseconds, that this result may be treated as fresh.
             pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
-                let meta = self.meta.get_or_insert_with(Meta::new);
-                meta.insert("ttlMs".to_string(), Value::Number(ttl_ms.into()));
+                self.set_ttl_ms(ttl_ms);
                 self
+            }
+
+            /// Return the cache scope for this result.
+            pub fn cache_scope(&self) -> CacheScope {
+                cache_scope_from_meta(self.meta.as_ref())
+            }
+
+            /// Set the cache scope for this result.
+            pub fn set_cache_scope(&mut self, cache_scope: CacheScope) {
+                set_meta_cache_scope(&mut self.meta, cache_scope);
             }
 
             /// Set the cache scope for this result.
             pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
-                let meta = self.meta.get_or_insert_with(Meta::new);
-                let cache_scope = match cache_scope {
-                    CacheScope::User => "user",
-                    CacheScope::Shared => "shared",
-                };
-                meta.insert(
-                    "cacheScope".to_string(),
-                    Value::String(cache_scope.to_string()),
-                );
+                self.set_cache_scope(cache_scope);
                 self
             }
         }
@@ -1271,47 +1567,89 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ReadResourceResult {
+    /// Time, in milliseconds, that this result may be treated as fresh.
+    #[serde(default, deserialize_with = "deserialize_ttl_ms")]
+    pub ttl_ms: u64,
+    /// Scope describing who may cache this result.
+    #[serde(default)]
+    pub cache_scope: CacheScope,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
+}
+
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for ReadResourceResult {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ReadResourceResult")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use serde_json::{Map, json};
+
+        let mut properties = Map::new();
+        properties.insert(
+            TTL_MS_FIELD.to_string(),
+            json!({
+                "description": "Time, in milliseconds, that this result may be treated as fresh.",
+                "type": "integer",
+                "format": "uint64",
+                "default": 0,
+                "minimum": 0
+            }),
+        );
+        properties.insert(
+            CACHE_SCOPE_FIELD.to_string(),
+            json!({
+                "description": "Scope describing who may cache this result.",
+                "allOf": [generator.subschema_for::<CacheScope>()],
+                "default": "public"
+            }),
+        );
+        properties.insert(
+            "contents".to_string(),
+            serde_json::json!({
+                "description": "The actual content of the resource",
+                "type": "array",
+                "items": generator.subschema_for::<ResourceContents>()
+            }),
+        );
+
+        let mut schema = Map::new();
+        schema.insert(
+            "description".to_string(),
+            json!("Result containing the contents of a read resource"),
+        );
+        schema.insert("type".to_string(), json!("object"));
+        schema.insert("properties".to_string(), Value::Object(properties));
+        schema.insert(
+            "required".to_string(),
+            json!([CACHE_SCOPE_FIELD, "contents", TTL_MS_FIELD]),
+        );
+        schemars::Schema::from(schema)
+    }
 }
 
 impl ReadResourceResult {
     /// Create a new ReadResourceResult with the given contents.
     pub fn new(contents: Vec<ResourceContents>) -> Self {
-        Self { contents }
+        Self {
+            ttl_ms: 0,
+            cache_scope: CacheScope::default(),
+            contents,
+        }
     }
 
     /// Set the time, in milliseconds, that this result may be treated as fresh.
     pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
-        self.contents.iter_mut().for_each(|content| match content {
-            ResourceContents::TextResourceContents { meta, .. }
-            | ResourceContents::BlobResourceContents { meta, .. } => {
-                let meta = meta.get_or_insert_with(Meta::new);
-                meta.insert("ttlMs".to_string(), Value::Number(ttl_ms.into()));
-            }
-        });
+        self.ttl_ms = ttl_ms;
         self
     }
 
     /// Set the cache scope for this result.
     pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
-        let cache_scope = match cache_scope {
-            CacheScope::User => "user",
-            CacheScope::Shared => "shared",
-        };
-        self.contents.iter_mut().for_each(|content| match content {
-            ResourceContents::TextResourceContents { meta, .. }
-            | ResourceContents::BlobResourceContents { meta, .. } => {
-                let meta = meta.get_or_insert_with(Meta::new);
-                meta.insert(
-                    "cacheScope".to_string(),
-                    Value::String(cache_scope.to_string()),
-                );
-            }
-        });
+        self.cache_scope = cache_scope;
         self
     }
 }

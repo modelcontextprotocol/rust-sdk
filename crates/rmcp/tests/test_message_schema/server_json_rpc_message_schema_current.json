@@ -344,6 +344,14 @@
       "format": "const",
       "const": "boolean"
     },
+    "CacheScope": {
+      "description": "Scope describing who may cache cacheable list/read results.",
+      "type": "string",
+      "enum": [
+        "private",
+        "public"
+      ]
+    },
     "CallToolResult": {
       "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
@@ -1416,6 +1424,15 @@
           ],
           "additionalProperties": true
         },
+        "cacheScope": {
+          "description": "Scope describing who may cache this result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            }
+          ],
+          "default": "public"
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1427,10 +1444,19 @@
           "items": {
             "$ref": "#/definitions/Prompt"
           }
+        },
+        "ttlMs": {
+          "description": "Time, in milliseconds, that this result may be treated as fresh.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         }
       },
       "required": [
-        "prompts"
+        "cacheScope",
+        "prompts",
+        "ttlMs"
       ]
     },
     "ListResourceTemplatesResult": {
@@ -1443,6 +1469,15 @@
           ],
           "additionalProperties": true
         },
+        "cacheScope": {
+          "description": "Scope describing who may cache this result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            }
+          ],
+          "default": "public"
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1454,10 +1489,19 @@
           "items": {
             "$ref": "#/definitions/Annotated3"
           }
+        },
+        "ttlMs": {
+          "description": "Time, in milliseconds, that this result may be treated as fresh.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         }
       },
       "required": [
-        "resourceTemplates"
+        "cacheScope",
+        "resourceTemplates",
+        "ttlMs"
       ]
     },
     "ListResourcesResult": {
@@ -1470,6 +1514,15 @@
           ],
           "additionalProperties": true
         },
+        "cacheScope": {
+          "description": "Scope describing who may cache this result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            }
+          ],
+          "default": "public"
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1481,10 +1534,19 @@
           "items": {
             "$ref": "#/definitions/Annotated2"
           }
+        },
+        "ttlMs": {
+          "description": "Time, in milliseconds, that this result may be treated as fresh.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         }
       },
       "required": [
-        "resources"
+        "cacheScope",
+        "resources",
+        "ttlMs"
       ]
     },
     "ListRootsRequestMethod": {
@@ -1530,6 +1592,15 @@
           ],
           "additionalProperties": true
         },
+        "cacheScope": {
+          "description": "Scope describing who may cache this result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            }
+          ],
+          "default": "public"
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1541,10 +1612,19 @@
           "items": {
             "$ref": "#/definitions/Tool"
           }
+        },
+        "ttlMs": {
+          "description": "Time, in milliseconds, that this result may be treated as fresh.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         }
       },
       "required": [
-        "tools"
+        "cacheScope",
+        "tools",
+        "ttlMs"
       ]
     },
     "LoggingLevel": {
@@ -2403,16 +2483,34 @@
       "description": "Result containing the contents of a read resource",
       "type": "object",
       "properties": {
+        "cacheScope": {
+          "description": "Scope describing who may cache this result.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            }
+          ],
+          "default": "public"
+        },
         "contents": {
           "description": "The actual content of the resource",
           "type": "array",
           "items": {
             "$ref": "#/definitions/ResourceContents"
           }
+        },
+        "ttlMs": {
+          "description": "Time, in milliseconds, that this result may be treated as fresh.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         }
       },
       "required": [
-        "contents"
+        "cacheScope",
+        "contents",
+        "ttlMs"
       ]
     },
     "Request": {
