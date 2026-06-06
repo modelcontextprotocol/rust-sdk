@@ -286,6 +286,26 @@ impl OperationProcessor {
         false
     }
 
+    /// Delete a task and its associated stored result (SEP-1686 §3.6).
+    ///
+    /// Aborts the task if it is still running and removes any stored
+    /// completed result. Returns `true` if anything was deleted.
+    pub fn delete_task(&mut self, task_id: &str) -> bool {
+        self.collect_completed_results();
+        let mut deleted = false;
+        if let Some(task) = self.running_tasks.remove(task_id) {
+            task.task_handle.abort();
+            deleted = true;
+        }
+        let before = self.completed_results.len();
+        self.completed_results
+            .retain(|r| r.descriptor.operation_id != task_id);
+        if self.completed_results.len() != before {
+            deleted = true;
+        }
+        deleted
+    }
+
     /// Retrieve a completed task result if available.
     pub fn take_completed_result(&mut self, task_id: &str) -> Option<TaskResult> {
         self.collect_completed_results();

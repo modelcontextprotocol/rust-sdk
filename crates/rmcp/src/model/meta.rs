@@ -155,7 +155,7 @@ variant_extension! {
         GetTaskInfoRequest
         ListTasksRequest
         GetTaskResultRequest
-        CancelTaskRequest
+        DeleteTaskRequest
     }
 }
 
@@ -166,6 +166,10 @@ variant_extension! {
         ListRootsRequest
         CreateElicitationRequest
         CustomRequest
+        GetTaskInfoRequest
+        ListTasksRequest
+        GetTaskResultRequest
+        DeleteTaskRequest
     }
 }
 

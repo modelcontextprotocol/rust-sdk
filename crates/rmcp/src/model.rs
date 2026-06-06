@@ -3159,21 +3159,21 @@ impl RequestParamsMeta for GetTaskResultParams {
 #[deprecated(since = "0.13.0", note = "Use GetTaskResultParams instead")]
 pub type GetTaskResultParam = GetTaskResultParams;
 
-const_string!(CancelTaskMethod = "tasks/cancel");
-pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
+const_string!(DeleteTaskMethod = "tasks/delete");
+pub type DeleteTaskRequest = Request<DeleteTaskMethod, DeleteTaskParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct CancelTaskParams {
+pub struct DeleteTaskParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     pub task_id: String,
 }
 
-impl RequestParamsMeta for CancelTaskParams {
+impl RequestParamsMeta for DeleteTaskParams {
     fn meta(&self) -> Option<&Meta> {
         self.meta.as_ref()
     }
@@ -3181,10 +3181,6 @@ impl RequestParamsMeta for CancelTaskParams {
         &mut self.meta
     }
 }
-
-/// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
-pub type CancelTaskParam = CancelTaskParams;
 /// Deprecated: Use [`GetTaskResult`] instead (spec alignment).
 #[deprecated(since = "0.15.0", note = "Use GetTaskResult instead")]
 pub type GetTaskInfoResult = GetTaskResult;
@@ -3284,7 +3280,7 @@ ts_union!(
     | GetTaskInfoRequest
     | ListTasksRequest
     | GetTaskResultRequest
-    | CancelTaskRequest
+    | DeleteTaskRequest
     | CustomRequest;
 );
 
@@ -3307,7 +3303,7 @@ impl ClientRequest {
             ClientRequest::GetTaskInfoRequest(r) => r.method.as_str(),
             ClientRequest::ListTasksRequest(r) => r.method.as_str(),
             ClientRequest::GetTaskResultRequest(r) => r.method.as_str(),
-            ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
+            ClientRequest::DeleteTaskRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
     }
@@ -3327,6 +3323,10 @@ ts_union!(
     box CreateMessageResult
     | ListRootsResult
     | CreateElicitationResult
+    | ListTasksResult
+    | GetTaskResult
+    | GetTaskPayloadResult
+    | DeleteTaskResult
     | EmptyResult
     | CustomResult;
 );
@@ -3345,8 +3345,28 @@ ts_union!(
     | CreateMessageRequest
     | ListRootsRequest
     | CreateElicitationRequest
+    | GetTaskInfoRequest
+    | ListTasksRequest
+    | GetTaskResultRequest
+    | DeleteTaskRequest
     | CustomRequest;
 );
+
+impl ServerRequest {
+    pub fn method(&self) -> &str {
+        match &self {
+            ServerRequest::PingRequest(r) => r.method.as_str(),
+            ServerRequest::CreateMessageRequest(r) => r.method.as_str(),
+            ServerRequest::ListRootsRequest(r) => r.method.as_str(),
+            ServerRequest::CreateElicitationRequest(r) => r.method.as_str(),
+            ServerRequest::GetTaskInfoRequest(r) => r.method.as_str(),
+            ServerRequest::ListTasksRequest(r) => r.method.as_str(),
+            ServerRequest::GetTaskResultRequest(r) => r.method.as_str(),
+            ServerRequest::DeleteTaskRequest(r) => r.method.as_str(),
+            ServerRequest::CustomRequest(r) => r.method.as_str(),
+        }
+    }
+}
 
 ts_union!(
     export type ServerNotification =
@@ -3375,7 +3395,7 @@ ts_union!(
     | CreateTaskResult
     | ListTasksResult
     | GetTaskResult
-    | CancelTaskResult
+    | DeleteTaskResult
     | CallToolResult
     | GetTaskPayloadResult
     | EmptyResult

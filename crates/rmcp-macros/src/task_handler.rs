@@ -223,38 +223,24 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             .push(syn::parse2::<ImplItem>(get_result_fn)?);
     }
 
-    if !has_method("cancel_task", &item_impl) {
-        let cancel_fn = quote! {
-            async fn cancel_task(
+    if !has_method("delete_task", &item_impl) {
+        let delete_fn = quote! {
+            async fn delete_task(
                 &self,
-                request: rmcp::model::CancelTaskParams,
+                request: rmcp::model::DeleteTaskParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-            ) -> Result<rmcp::model::CancelTaskResult, McpError> {
-                use rmcp::task_manager::current_timestamp;
+            ) -> Result<rmcp::model::DeleteTaskResult, McpError> {
                 let task_id = request.task_id;
                 let mut processor = (#processor).lock().await;
 
-                if processor.cancel_task(&task_id) {
-                    let timestamp = current_timestamp();
-                    let task = rmcp::model::Task::new(
-                        task_id,
-                        rmcp::model::TaskStatus::Cancelled,
-                        timestamp.clone(),
-                        timestamp,
-                    );
-                    return Ok(rmcp::model::CancelTaskResult { meta: None, task });
-                }
-
-                // If already completed, signal it's not cancellable
-                let exists_completed = processor.peek_completed().iter().any(|r| r.descriptor.operation_id == task_id);
-                if exists_completed {
-                    return Err(McpError::invalid_request(format!("task already completed: {}", task_id), None));
+                if processor.delete_task(&task_id) {
+                    return Ok(rmcp::model::DeleteTaskResult { meta: None });
                 }
 
                 Err(McpError::resource_not_found(format!("task not found: {}", task_id), None))
             }
         };
-        item_impl.items.push(syn::parse2::<ImplItem>(cancel_fn)?);
+        item_impl.items.push(syn::parse2::<ImplItem>(delete_fn)?);
     }
 
     // Auto-generate get_info() if not already provided and no sibling tool/prompt handler

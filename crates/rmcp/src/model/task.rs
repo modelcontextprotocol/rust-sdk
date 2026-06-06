@@ -156,18 +156,35 @@ impl<'de> serde::Deserialize<'de> for GetTaskPayloadResult {
     }
 }
 
-/// Response to a `tasks/cancel` request.
+/// Response to a `tasks/delete` request.
 ///
-/// Per spec, `CancelTaskResult = allOf[Result, Task]` — same shape as `GetTaskResult`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Per SEP-1686 §3.6, the result carries only protocol-level metadata.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct CancelTaskResult {
+pub struct DeleteTaskResult {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
-    #[serde(flatten)]
-    pub task: Task,
+}
+
+// Custom Deserialize that always fails, so that `DeleteTaskResult` is skipped
+// during `#[serde(untagged)]` enum deserialization (e.g. `ClientResult` /
+// `ServerResult`). The on-wire shape (`{ "_meta"?: ... }`) is
+// indistinguishable from many other results — `EmptyResult` / `CustomResult`
+// act as the catch-all. `DeleteTaskResult` should be constructed
+// programmatically (e.g. via `::default()`).
+impl<'de> serde::Deserialize<'de> for DeleteTaskResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        serde::de::IgnoredAny::deserialize(deserializer)?;
+        Err(serde::de::Error::custom(
+            "DeleteTaskResult cannot be deserialized directly; \
+             use EmptyResult / CustomResult as the catch-all",
+        ))
+    }
 }
 
 /// Paginated list of tasks
