@@ -318,7 +318,7 @@ impl Tool {
     ///
     /// # Panics
     ///
-    /// Panics if the generated schema does not have root type "object" as required by MCP specification.
+    /// Panics if output schema generation fails.
     #[cfg(feature = "server")]
     pub fn with_output_schema<T: JsonSchema + 'static>(mut self) -> Self {
         let schema = crate::handler::server::tool::schema_for_output::<T>()

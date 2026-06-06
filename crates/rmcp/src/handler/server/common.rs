@@ -50,9 +50,9 @@ pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     })
 }
 
-/// Validate that the schema root is `type: "object"` (per MCP spec) and strip top-level
-/// `title`/`description` (the wrapper type name and doc, which are noise to the LLM).
-fn validate_and_strip(raw: &Arc<JsonObject>, purpose: &str) -> Result<Arc<JsonObject>, String> {
+/// Validate that the schema root is `type: "object"` (per MCP spec for inputSchema) and
+/// strip top-level `title`/`description` (the wrapper type name and doc, which are noise to the LLM).
+fn validate_and_strip_input(raw: &Arc<JsonObject>) -> Result<Arc<JsonObject>, String> {
     match raw.get("type") {
         Some(serde_json::Value::String(t)) if t == "object" => {
             let mut object = raw.as_ref().clone();
@@ -61,15 +61,25 @@ fn validate_and_strip(raw: &Arc<JsonObject>, purpose: &str) -> Result<Arc<JsonOb
             Ok(Arc::new(object))
         }
         Some(serde_json::Value::String(t)) => Err(format!(
-            "MCP specification requires tool {purpose} to have root type 'object', but found '{t}'."
+            "MCP specification requires tool inputSchema to have root type 'object', but found '{t}'."
         )),
-        None => Err(format!(
-            "Schema is missing 'type' field. MCP specification requires {purpose} to have root type 'object'."
-        )),
+        None => Err(
+            "Schema is missing 'type' field. MCP specification requires inputSchema to have root type 'object'.".to_string()
+        ),
         Some(other) => Err(format!(
             "Schema 'type' field has unexpected format: {other:?}. Expected \"object\"."
         )),
     }
+}
+
+/// Strip top-level `title`/`description` from a JSON schema for outputSchema.
+/// Unlike inputSchema, outputSchema may have any JSON Schema 2020-12 root type
+/// (objects, arrays, primitives, compositions) per SEP-2106.
+fn validate_and_strip_output(raw: &Arc<JsonObject>) -> Arc<JsonObject> {
+    let mut object = raw.as_ref().clone();
+    object.remove("title");
+    object.remove("description");
+    Arc::new(object)
 }
 
 /// Generate, validate, and strip a JSON schema for inputSchema (must have root type "object";
@@ -86,7 +96,7 @@ pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObjec
         {
             return result.clone();
         }
-        let result = validate_and_strip(&schema_for_type::<T>(), "inputSchema");
+        let result = validate_and_strip_input(&schema_for_type::<T>());
         cache
             .write()
             .expect("input schema cache lock poisoned")
@@ -106,7 +116,10 @@ pub fn schema_for_empty_input() -> Arc<JsonObject> {
     EMPTY.clone()
 }
 
-/// Generate a JSON schema for outputSchema (must have root type "object"; top-level "title" and "description" are removed)
+/// Generate and strip a JSON schema for outputSchema.
+/// Unlike inputSchema, outputSchema accepts any JSON Schema 2020-12 root type
+/// (objects, arrays, primitives, compositions) per SEP-2106.
+/// Top-level "title" and "description" are always removed.
 pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String> {
     thread_local! {
         static CACHE_FOR_OUTPUT: std::sync::RwLock<HashMap<TypeId, Result<Arc<JsonObject>, String>>> = Default::default();
@@ -122,10 +135,8 @@ pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObje
             return result.clone();
         }
 
-        // Generate, validate, and strip unnecessary top-level fields
-        let result = validate_and_strip(&schema_for_type::<T>(), "outputSchema");
+        let result = Ok(validate_and_strip_output(&schema_for_type::<T>()));
 
-        // Cache the result (both success and error cases)
         cache
             .write()
             .expect("output schema cache lock poisoned")
@@ -306,9 +317,24 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_for_output_rejects_primitive() {
+    fn test_schema_for_output_accepts_primitive() {
         let result = schema_for_output::<i32>();
-        assert!(result.is_err(),);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_array() {
+        let result = schema_for_output::<Vec<i32>>();
+        assert!(result.is_ok());
+        let schema = result.unwrap();
+        assert_eq!(schema.get("type"), Some(&serde_json::json!("array")));
+        assert!(schema.contains_key("items"));
+    }
+
+    #[test]
+    fn test_schema_for_output_strips_title_for_primitive() {
+        let schema = schema_for_output::<i32>().unwrap();
+        assert!(!schema.contains_key("title"));
     }
 
     #[test]
