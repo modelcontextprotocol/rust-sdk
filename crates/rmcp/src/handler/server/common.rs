@@ -320,6 +320,42 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_for_output_strips_description_for_primitive() {
+        let schema = schema_for_output::<i32>();
+        assert!(!schema.contains_key("description"));
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_composition() {
+        let schema = schema_for_output::<Option<String>>();
+        let schema_str = serde_json::to_string(&schema).unwrap();
+        assert!(
+            schema_str.contains("anyOf")
+                || schema_str.contains("oneOf")
+                || schema_str.contains("null"),
+            "Expected composition schema for Option<String>, got: {schema_str}"
+        );
+    }
+
+    #[test]
+    fn test_schema_for_output_caches_result() {
+        let schema1 = schema_for_output::<i32>();
+        let schema2 = schema_for_output::<i32>();
+        assert!(Arc::ptr_eq(&schema1, &schema2));
+    }
+
+    #[test]
+    fn test_schema_for_input_rejects_array() {
+        let result = schema_for_input::<Vec<i32>>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_unit() {
+        let _schema = schema_for_output::<()>();
+    }
+
+    #[test]
     fn test_schema_for_output_accepts_object() {
         let schema = schema_for_output::<TestObject>();
         assert_eq!(schema.get("type"), Some(&serde_json::json!("object")));

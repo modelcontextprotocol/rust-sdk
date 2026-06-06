@@ -95,7 +95,10 @@ impl TestServer {
     }
 
     /// Tool that returns a list of calculation results
-    #[tool(name = "calculate-list", description = "Return a list of calculation results")]
+    #[tool(
+        name = "calculate-list",
+        description = "Return a list of calculation results"
+    )]
     pub async fn calculate_list(
         &self,
         params: Parameters<CalculationRequest>,

@@ -76,8 +76,8 @@ fn test_with_output_schema_primitive() {
 
 #[test]
 fn test_with_output_schema_array() {
-    let tool = Tool::new("test", "Test tool", JsonObject::new())
-        .with_output_schema::<Vec<String>>();
+    let tool =
+        Tool::new("test", "Test tool", JsonObject::new()).with_output_schema::<Vec<String>>();
 
     assert!(tool.output_schema.is_some());
 
@@ -90,8 +90,8 @@ fn test_with_output_schema_array() {
 
 #[test]
 fn test_with_output_schema_option() {
-    let tool = Tool::new("test", "Test tool", JsonObject::new())
-        .with_output_schema::<Option<String>>();
+    let tool =
+        Tool::new("test", "Test tool", JsonObject::new()).with_output_schema::<Option<String>>();
 
     assert!(tool.output_schema.is_some());
 
