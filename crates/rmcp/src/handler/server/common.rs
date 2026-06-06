@@ -338,6 +338,45 @@ mod tests {
     }
 
     #[test]
+    fn test_schema_for_output_strips_description_for_primitive() {
+        let schema = schema_for_output::<i32>().unwrap();
+        assert!(!schema.contains_key("description"));
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_composition() {
+        let result = schema_for_output::<Option<String>>();
+        assert!(result.is_ok());
+        let schema = result.unwrap();
+        let schema_str = serde_json::to_string(&schema).unwrap();
+        assert!(
+            schema_str.contains("anyOf") || schema_str.contains("oneOf") || schema_str.contains("null"),
+            "Expected composition schema for Option<String>, got: {schema_str}"
+        );
+    }
+
+    #[test]
+    fn test_schema_for_output_caches_result() {
+        let result1 = schema_for_output::<i32>();
+        let result2 = schema_for_output::<i32>();
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert!(Arc::ptr_eq(result1.as_ref().unwrap(), result2.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn test_schema_for_input_rejects_array() {
+        let result = schema_for_input::<Vec<i32>>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_unit() {
+        let result = schema_for_output::<()>();
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_schema_for_output_accepts_object() {
         let result = schema_for_output::<TestObject>();
         assert!(result.is_ok(),);
