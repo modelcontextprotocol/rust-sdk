@@ -362,6 +362,8 @@ macro_rules! method {
             let options = crate::service::PeerRequestOptions {
                 timeout,
                 meta: None,
+                reset_timeout_on_progress: false,
+                max_total_timeout: None,
             };
             let result = self
                 .send_request_with_option(request, options)
@@ -390,6 +392,8 @@ macro_rules! method {
             let options = crate::service::PeerRequestOptions {
                 timeout,
                 meta: None,
+                reset_timeout_on_progress: false,
+                max_total_timeout: None,
             };
             let result = self
                 .send_request_with_option(request, options)
