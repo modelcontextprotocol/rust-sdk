@@ -1218,7 +1218,15 @@ impl AuthorizationManager {
         received_issuer: Option<&str>,
     ) -> Result<(), AuthError> {
         let Some(expected_issuer) = stored_state.expected_issuer.as_deref() else {
-            // Without issuer metadata from discovery, there is no stable value to bind to.
+            if received_issuer.is_some() || stored_state.require_issuer {
+                return Err(AuthError::AuthorizationFailed(
+                    "Authorization callback issuer cannot be validated because expected issuer was not recorded"
+                        .to_string(),
+                ));
+            }
+            // Without issuer metadata from discovery and without an issuer-bearing
+            // callback, there is no stable value to bind to. This preserves
+            // compatibility with older authorization servers.
             return Ok(());
         };
         let Some(received_issuer) = received_issuer else {
@@ -3644,6 +3652,37 @@ mod tests {
             AuthError::AuthorizationServerMissingIssuer { expected_issuer }
                 if expected_issuer == "https://auth.example.com"
         ));
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_present_issuer_without_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, false);
+
+        let error = AuthorizationManager::validate_authorization_response_issuer(
+            &state,
+            Some("https://auth.example.com"),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+        );
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_required_issuer_without_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, true);
+
+        let error =
+            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+        );
     }
 
     #[test]
