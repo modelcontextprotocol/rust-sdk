@@ -1151,10 +1151,6 @@ pub enum CacheScope {
     Public,
     /// Only the requesting user's client may cache the response.
     Private,
-    /// Alias for [`CacheScope::Private`] kept for compatibility with earlier draft support.
-    User,
-    /// Alias for [`CacheScope::Public`] kept for compatibility with earlier draft support.
-    Shared,
 }
 
 impl Serialize for CacheScope {
@@ -1163,8 +1159,8 @@ impl Serialize for CacheScope {
         S: serde::Serializer,
     {
         match self {
-            CacheScope::Public | CacheScope::Shared => "public",
-            CacheScope::Private | CacheScope::User => "private",
+            CacheScope::Public => "public",
+            CacheScope::Private => "private",
         }
         .serialize(serializer)
     }
@@ -1178,9 +1174,6 @@ impl<'de> Deserialize<'de> for CacheScope {
         match String::deserialize(deserializer)?.as_str() {
             "public" => Ok(CacheScope::Public),
             "private" => Ok(CacheScope::Private),
-            // Accept the earlier draft values for read-side compatibility.
-            "shared" => Ok(CacheScope::Public),
-            "user" => Ok(CacheScope::Private),
             other => Err(serde::de::Error::unknown_variant(
                 other,
                 &["public", "private"],
