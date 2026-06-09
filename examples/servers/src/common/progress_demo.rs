@@ -11,7 +11,7 @@ use rmcp::{
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
-use tracing::debug;
+use tracing::{debug, info};
 
 // a Stream data source that generates data in chunks
 #[derive(Clone)]
@@ -30,7 +30,7 @@ impl StreamDataSource {
         }
     }
     pub fn from_text(text: &str) -> Self {
-        Self::new(text.as_bytes().to_vec(), 1)
+        Self::new(text.as_bytes().to_vec(), 5)
     }
 }
 
@@ -61,7 +61,7 @@ impl ProgressDemo {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
-            data_source: StreamDataSource::from_text("Hello, world!"),
+            data_source: StreamDataSource::from_text("1111122222333334444455555"),
         }
     }
     #[tool(description = "Process data stream with progress updates")]
@@ -70,6 +70,21 @@ impl ProgressDemo {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let mut counter = 0;
+        info!(
+            "Processing stream with progress token {:?}",
+            ctx.meta.get_key_value("progressToken")
+        );
+        let Some((_, progress_token)) = ctx.meta.get_key_value("progressToken") else {
+            return Err(McpError::internal_error(format!("No progress token"), None));
+        };
+
+        let Ok(progress_token) = serde_json::from_value::<NumberOrString>(progress_token.clone())
+        else {
+            return Err(McpError::internal_error(
+                format!("Invalid format of the progress token"),
+                None,
+            ));
+        };
 
         let mut data_source = self.data_source.clone();
         loop {
@@ -83,9 +98,9 @@ impl ProgressDemo {
             counter += 1;
             // create progress notification param
             let progress_param = ProgressNotificationParam {
-                progress_token: ProgressToken(NumberOrString::Number(counter)),
+                progress_token: ProgressToken(progress_token.clone()),
                 progress: counter as f64,
-                total: None,
+                total: Some(5.0),
                 message: Some(chunk_str.to_string()),
             };
 
@@ -104,6 +119,7 @@ impl ProgressDemo {
                     ));
                 }
             }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
