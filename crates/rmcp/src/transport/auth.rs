@@ -1145,7 +1145,8 @@ impl AuthorizationManager {
         drop(attempts);
 
         let current_scopes = self.current_scopes.read().await.clone();
-        let upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+        let mut upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+        self.add_offline_access_if_supported(&mut upgraded_scopes);
 
         debug!(
             "Requesting scope upgrade: current={:?}, required={}, union={:?}",
@@ -1329,7 +1330,9 @@ impl AuthorizationManager {
 
         let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
         let mut refresh_request = oauth_client.exchange_refresh_token(&refresh_token_value);
-        for scope in &stored_credentials.granted_scopes {
+        let mut refresh_scopes = stored_credentials.granted_scopes.clone();
+        self.add_offline_access_if_supported(&mut refresh_scopes);
+        for scope in &refresh_scopes {
             refresh_request = refresh_request.add_scope(Scope::new(scope.clone()));
         }
         let token_result = refresh_request
@@ -3539,6 +3542,29 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn scope_upgrade_adds_offline_access_when_as_supports_it() {
+        let mut mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        mgr.configure_client_id("my-client").unwrap();
+        *mgr.current_scopes.write().await = vec!["profile".to_string()];
+
+        let auth_url = mgr.request_scope_upgrade("email").await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let scope = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "scope").then(|| value.into_owned()))
+            .expect("scope should be present");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["email", "offline_access", "profile"]);
+    }
+
     #[test]
     fn scope_upgrade_config_default_values() {
         let config = ScopeUpgradeConfig::default();
@@ -4086,6 +4112,44 @@ mod tests {
         let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
         scope_parts.sort_unstable();
         assert_eq!(scope_parts, vec!["read", "write"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_adds_offline_access_when_as_supports_it() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            scopes_supported: Some(vec!["read".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        let scope = params
+            .get("scope")
+            .expect("scope should be present in refresh request");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["offline_access", "read"]);
     }
 
     #[tokio::test]
