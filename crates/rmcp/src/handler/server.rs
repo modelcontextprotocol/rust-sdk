@@ -22,7 +22,9 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         request: <RoleServer as ServiceRole>::PeerReq,
         context: RequestContext<RoleServer>,
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
-        match request {
+        // `context` is moved into the dispatch below, so read the negotiated version first.
+        let protocol_version = context.protocol_version();
+        let result = match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
                 .await
@@ -127,7 +129,18 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .cancel_task(request.params, context)
                 .await
                 .map(ServerResult::CancelTaskResult),
-        }
+        };
+        // SEP-2164: peers negotiating 2026-07-28+ get the standard INVALID_PARAMS code for
+        // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
+        // compare lexically the same as chronologically.
+        let use_invalid_params =
+            protocol_version.is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        result.map_err(|mut error| {
+            if use_invalid_params && error.code == ErrorCode::RESOURCE_NOT_FOUND {
+                error.code = ErrorCode::INVALID_PARAMS;
+            }
+            error
+        })
     }
 
     async fn handle_notification(
