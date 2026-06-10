@@ -38,6 +38,7 @@ struct AppState {
 struct CallbackParams {
     code: String,
     state: String,
+    iss: Option<String>,
 }
 
 async fn callback_handler(
@@ -150,6 +151,7 @@ async fn main() -> Result<()> {
     let CallbackParams {
         code: auth_code,
         state: csrf_token,
+        iss,
     } = code_receiver
         .await
         .context("Failed to get authorization code")?;
@@ -157,7 +159,7 @@ async fn main() -> Result<()> {
     // Exchange code for access token
     tracing::info!("Exchanging authorization code for access token...");
     oauth_state
-        .handle_callback(&auth_code, &csrf_token)
+        .handle_callback_with_issuer(&auth_code, &csrf_token, iss.as_deref())
         .await
         .context("Failed to handle callback")?;
     tracing::info!("Successfully obtained access token");
