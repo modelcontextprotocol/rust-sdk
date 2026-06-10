@@ -174,10 +174,7 @@ async fn test_json_string_type_generates_schema() {
     let server = TestServer::new();
     let tools = server.tool_router.list_all();
 
-    let string_tool = tools
-        .iter()
-        .find(|t| t.name == "with-json-string")
-        .unwrap();
+    let string_tool = tools.iter().find(|t| t.name == "with-json-string").unwrap();
     assert!(
         string_tool.output_schema.is_some(),
         "Json<String> return type should generate output schema"

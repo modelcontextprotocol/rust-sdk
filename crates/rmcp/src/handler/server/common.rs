@@ -350,7 +350,9 @@ mod tests {
         let schema = result.unwrap();
         let schema_str = serde_json::to_string(&schema).unwrap();
         assert!(
-            schema_str.contains("anyOf") || schema_str.contains("oneOf") || schema_str.contains("null"),
+            schema_str.contains("anyOf")
+                || schema_str.contains("oneOf")
+                || schema_str.contains("null"),
             "Expected composition schema for Option<String>, got: {schema_str}"
         );
     }
@@ -361,7 +363,10 @@ mod tests {
         let result2 = schema_for_output::<i32>();
         assert!(result1.is_ok());
         assert!(result2.is_ok());
-        assert!(Arc::ptr_eq(result1.as_ref().unwrap(), result2.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            result1.as_ref().unwrap(),
+            result2.as_ref().unwrap()
+        ));
     }
 
     #[test]
