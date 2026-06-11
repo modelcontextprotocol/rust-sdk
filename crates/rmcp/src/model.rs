@@ -152,6 +152,7 @@ impl std::fmt::Display for ProtocolVersion {
 }
 
 impl ProtocolVersion {
+    pub const V_2026_07_28: Self = Self(Cow::Borrowed("2026-07-28"));
     pub const V_2025_11_25: Self = Self(Cow::Borrowed("2025-11-25"));
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
@@ -164,6 +165,7 @@ impl ProtocolVersion {
         Self::V_2025_03_26,
         Self::V_2025_06_18,
         Self::V_2025_11_25,
+        Self::V_2026_07_28,
     ];
 
     /// Returns the string representation of this protocol version.
@@ -193,6 +195,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
             "2025-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
             "2025-06-18" => return Ok(ProtocolVersion::V_2025_06_18),
             "2025-11-25" => return Ok(ProtocolVersion::V_2025_11_25),
+            "2026-07-28" => return Ok(ProtocolVersion::V_2026_07_28),
             _ => {}
         }
         Ok(ProtocolVersion(Cow::Owned(s)))
@@ -541,9 +544,12 @@ impl ErrorData {
             data,
         }
     }
+    /// Resource-not-found error (`-32002`). The server upgrades this to `INVALID_PARAMS`
+    /// (`-32602`) for peers negotiating protocol `2026-07-28` or newer (SEP-2164).
     pub fn resource_not_found(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::RESOURCE_NOT_FOUND, message, data)
     }
+
     pub fn parse_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::PARSE_ERROR, message, data)
     }

@@ -672,6 +672,16 @@ impl<R: ServiceRole> RequestContext<R> {
     }
 }
 
+#[cfg(feature = "server")]
+impl RequestContext<RoleServer> {
+    /// The protocol version the client negotiated, or `None` before peer info is recorded.
+    pub fn protocol_version(&self) -> Option<crate::model::ProtocolVersion> {
+        self.peer
+            .peer_info()
+            .map(|info| info.protocol_version.clone())
+    }
+}
+
 /// Request execution context
 #[derive(Debug, Clone)]
 #[non_exhaustive]
