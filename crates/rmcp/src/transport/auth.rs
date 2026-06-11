@@ -1330,10 +1330,10 @@ impl AuthorizationManager {
 
         let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
         let mut refresh_request = oauth_client.exchange_refresh_token(&refresh_token_value);
-        let mut refresh_scopes = stored_credentials.granted_scopes.clone();
+        let mut refresh_scopes = stored_credentials.granted_scopes;
         self.add_offline_access_if_supported(&mut refresh_scopes);
-        for scope in &refresh_scopes {
-            refresh_request = refresh_request.add_scope(Scope::new(scope.clone()));
+        for scope in refresh_scopes {
+            refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let token_result = refresh_request
             .request_async(&OAuthReqwestClient(self.http_client.clone()))
