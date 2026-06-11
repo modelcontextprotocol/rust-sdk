@@ -60,6 +60,28 @@ impl TestServer {
     pub async fn explicit_schema(&self) -> Result<String, String> {
         Ok("test".to_string())
     }
+
+    /// Tool that returns Json<Vec<T>> - array output schema
+    #[tool(name = "with-json-array")]
+    pub async fn with_json_array(&self) -> Result<Json<Vec<TestData>>, String> {
+        Ok(Json(vec![TestData {
+            value: "test".to_string(),
+        }]))
+    }
+
+    /// Tool that returns Result<Json<Vec<T>>, ErrorData> - array output schema
+    #[tool(name = "result-with-json-array")]
+    pub async fn result_with_json_array(&self) -> Result<Json<Vec<TestData>>, rmcp::ErrorData> {
+        Ok(Json(vec![TestData {
+            value: "test".to_string(),
+        }]))
+    }
+
+    /// Tool that returns Json<String> - string output schema
+    #[tool(name = "with-json-string")]
+    pub async fn with_json_string(&self) -> Result<Json<String>, String> {
+        Ok(Json("test".to_string()))
+    }
 }
 
 #[tokio::test]
@@ -111,5 +133,56 @@ async fn test_explicit_schema_override() {
     assert!(
         explicit_tool.output_schema.is_some(),
         "Explicit output_schema attribute should work"
+    );
+}
+
+#[tokio::test]
+async fn test_json_array_type_generates_schema() {
+    let server = TestServer::new();
+    let tools = server.tool_router.list_all();
+
+    let array_tool = tools.iter().find(|t| t.name == "with-json-array").unwrap();
+    assert!(
+        array_tool.output_schema.is_some(),
+        "Json<Vec<T>> return type should generate output schema"
+    );
+    let schema = array_tool.output_schema.as_ref().unwrap();
+    assert_eq!(
+        schema.get("type").and_then(|v| v.as_str()),
+        Some("array"),
+        "Json<Vec<T>> should produce an array schema"
+    );
+}
+
+#[tokio::test]
+async fn test_result_with_json_array_generates_schema() {
+    let server = TestServer::new();
+    let tools = server.tool_router.list_all();
+
+    let result_array_tool = tools
+        .iter()
+        .find(|t| t.name == "result-with-json-array")
+        .unwrap();
+    assert!(
+        result_array_tool.output_schema.is_some(),
+        "Result<Json<Vec<T>>, ErrorData> return type should generate output schema"
+    );
+}
+
+#[tokio::test]
+async fn test_json_string_type_generates_schema() {
+    let server = TestServer::new();
+    let tools = server.tool_router.list_all();
+
+    let string_tool = tools.iter().find(|t| t.name == "with-json-string").unwrap();
+    assert!(
+        string_tool.output_schema.is_some(),
+        "Json<String> return type should generate output schema"
+    );
+    let schema = string_tool.output_schema.as_ref().unwrap();
+    assert_eq!(
+        schema.get("type").and_then(|v| v.as_str()),
+        Some("string"),
+        "Json<String> should produce a string schema"
     );
 }
