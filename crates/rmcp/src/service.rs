@@ -51,7 +51,7 @@ use crate::{
         JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta,
         NumberOrString, ProgressToken, RequestId,
     },
-    transport::{DynamicTransportError, IntoTransport, Transport},
+    transport::{DynamicTransportError, IntoTransport, Transport, TransportSessionIdHandle},
 };
 #[cfg(feature = "client")]
 mod client;
@@ -506,6 +506,7 @@ pub struct RunningService<R: ServiceRole, S: Service<R>> {
     handle: Option<tokio::task::JoinHandle<QuitReason>>,
     cancellation_token: CancellationToken,
     dg: DropGuard,
+    session_id_handle: Option<TransportSessionIdHandle>,
 }
 impl<R: ServiceRole, S: Service<R>> Deref for RunningService<R, S> {
     type Target = Peer<R>;
@@ -527,6 +528,12 @@ impl<R: ServiceRole, S: Service<R>> RunningService<R, S> {
     #[inline]
     pub fn cancellation_token(&self) -> RunningServiceCancellationToken {
         RunningServiceCancellationToken(self.cancellation_token.clone())
+    }
+    #[inline]
+    pub fn session_id(&self) -> Option<Arc<str>> {
+        self.session_id_handle
+            .as_ref()
+            .and_then(|handle| handle.session_id())
     }
 
     /// Returns true if the service has been closed or cancelled.
@@ -753,6 +760,7 @@ where
     let (sink_proxy_tx, mut sink_proxy_rx) =
         tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
     let peer_info = peer.peer_info();
+    let session_id_handle = transport.session_id_handle();
     if R::IS_CLIENT {
         tracing::info!(?peer_info, "Service initialized as client");
     } else {
@@ -1092,5 +1100,6 @@ where
         handle: Some(handle),
         cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
+        session_id_handle,
     }
 }

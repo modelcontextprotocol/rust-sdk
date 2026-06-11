@@ -3,7 +3,7 @@ use std::{borrow::Cow, time::Duration};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level};
 
-use super::{IntoTransport, Transport};
+use super::{IntoTransport, Transport, TransportSessionIdHandle};
 use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +46,9 @@ pub trait Worker: Sized + Send + 'static {
     type Role: ServiceRole;
     fn err_closed() -> Self::Error;
     fn err_join(e: tokio::task::JoinError) -> Self::Error;
+    fn session_id_handle(&self) -> Option<TransportSessionIdHandle> {
+        None
+    }
     fn run(
         self,
         context: WorkerContext<Self>,
@@ -67,6 +70,7 @@ pub struct WorkerTransport<W: Worker> {
     join_handle: Option<tokio::task::JoinHandle<Result<(), WorkerQuitReason<W::Error>>>>,
     _drop_guard: tokio_util::sync::DropGuard,
     ct: CancellationToken,
+    session_id_handle: Option<TransportSessionIdHandle>,
 }
 
 #[non_exhaustive]
@@ -96,12 +100,21 @@ impl<W: Worker> WorkerTransport<W> {
     pub fn cancel_token(&self) -> CancellationToken {
         self.ct.clone()
     }
+    pub fn session_id_handle(&self) -> Option<TransportSessionIdHandle> {
+        self.session_id_handle.clone()
+    }
+    pub fn session_id(&self) -> Option<std::sync::Arc<str>> {
+        self.session_id_handle
+            .as_ref()
+            .and_then(|handle| handle.session_id())
+    }
     pub fn spawn(worker: W) -> Self {
         Self::spawn_with_ct(worker, CancellationToken::new())
     }
     pub fn spawn_with_ct(worker: W, transport_task_ct: CancellationToken) -> Self {
         let config = worker.config();
         let worker_name = config.name;
+        let session_id_handle = worker.session_id_handle();
         let (to_transport_tx, from_handler_rx) =
             tokio::sync::mpsc::channel::<WorkerSendRequest<W>>(config.channel_buffer_capacity);
         let (to_handler_tx, from_transport_rx) =
@@ -145,6 +158,7 @@ impl<W: Worker> WorkerTransport<W> {
             join_handle: Some(join_handle),
             ct: transport_task_ct.clone(),
             _drop_guard: transport_task_ct.drop_guard(),
+            session_id_handle,
         }
     }
 }
@@ -213,5 +227,9 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
         } else {
             Ok(())
         }
+    }
+
+    fn session_id_handle(&self) -> Option<TransportSessionIdHandle> {
+        WorkerTransport::session_id_handle(self)
     }
 }

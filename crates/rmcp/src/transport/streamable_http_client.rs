@@ -1,4 +1,9 @@
-use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use futures::{Stream, StreamExt, future::BoxFuture, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
@@ -16,12 +21,37 @@ use crate::{
         ServerResult,
     },
     transport::{
+        TransportSessionIdHandle, TransportSessionIdProvider,
         common::client_side_sse::SseAutoReconnectStream,
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
     },
 };
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
+
+/// Cloneable read-only handle for the negotiated streamable HTTP session ID.
+#[derive(Debug, Clone, Default)]
+pub struct StreamableHttpClientSession {
+    session_id: Arc<RwLock<Option<Arc<str>>>>,
+}
+
+impl StreamableHttpClientSession {
+    pub fn session_id(&self) -> Option<Arc<str>> {
+        self.session_id.read().ok().and_then(|guard| guard.clone())
+    }
+
+    fn set_session_id(&self, session_id: Option<Arc<str>>) {
+        if let Ok(mut guard) = self.session_id.write() {
+            *guard = session_id;
+        }
+    }
+}
+
+impl TransportSessionIdProvider for StreamableHttpClientSession {
+    fn session_id(&self) -> Option<Arc<str>> {
+        self.session_id()
+    }
+}
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -277,6 +307,7 @@ struct SessionCleanupInfo<C> {
 pub struct StreamableHttpClientWorker<C: StreamableHttpClient> {
     pub client: C,
     pub config: StreamableHttpClientTransportConfig,
+    session: StreamableHttpClientSession,
 }
 
 impl<C: StreamableHttpClient + Default> StreamableHttpClientWorker<C> {
@@ -287,13 +318,18 @@ impl<C: StreamableHttpClient + Default> StreamableHttpClientWorker<C> {
                 uri: url.into(),
                 ..Default::default()
             },
+            session: StreamableHttpClientSession::default(),
         }
     }
 }
 
 impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     pub fn new(client: C, config: StreamableHttpClientTransportConfig) -> Self {
-        Self { client, config }
+        Self {
+            client,
+            config,
+            session: StreamableHttpClientSession::default(),
+        }
     }
 }
 
@@ -447,6 +483,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     fn err_join(e: tokio::task::JoinError) -> Self::Error {
         StreamableHttpError::TokioJoinError(e)
     }
+    fn session_id_handle(&self) -> Option<TransportSessionIdHandle> {
+        Some(TransportSessionIdHandle::new(Arc::new(
+            self.session.clone(),
+        )))
+    }
     fn config(&self) -> super::worker::WorkerConfig {
         super::worker::WorkerConfig {
             name: Some("StreamableHttpClientWorker".into()),
@@ -505,6 +546,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             None
         };
+        self.session.set_session_id(session_id.clone());
         // Extract the negotiated protocol version from the init response
         // and build a custom headers map that includes MCP-Protocol-Version
         // for all subsequent HTTP requests (per MCP 2025-06-18 spec).
@@ -684,6 +726,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                         streams.abort_all();
 
                                         session_id = new_session_id;
+                                        self.session.set_session_id(session_id.clone());
                                         protocol_headers = new_protocol_headers;
                                         session_cleanup_info =
                                             session_id.as_ref().map(|sid| SessionCleanupInfo {
@@ -872,6 +915,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 }
             }
         }
+        self.session.set_session_id(None);
 
         loop_result
     }

@@ -108,7 +108,22 @@ async fn test_session_state_persisted_to_store() -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
+    assert!(
+        transport.session_id().is_none(),
+        "session ID should not be set before initialization"
+    );
+    let session_id_handle = transport
+        .session_id_handle()
+        .expect("streamable HTTP transport should expose a session ID handle");
     let client = ().serve(transport).await?;
+    let client_session_id = client
+        .session_id()
+        .expect("session ID should be exposed after initialization");
+    assert_eq!(
+        session_id_handle.session_id().as_deref(),
+        Some(client_session_id.as_ref()),
+        "transport handle and running service should expose the same session ID"
+    );
 
     // Make a real request so the session is fully active.
     let _resources = client.list_all_resources().await?;
@@ -122,6 +137,10 @@ async fn test_session_state_persisted_to_store() -> anyhow::Result<()> {
 
     // Verify the stored state contains the expected client info.
     let entries = store.0.read().await;
+    assert!(
+        entries.contains_key(client_session_id.as_ref()),
+        "exposed session ID should match the persisted store key"
+    );
     let state = entries.values().next().expect("store entry should exist");
     assert_eq!(
         state.initialize_params.client_info.name, "rmcp",
