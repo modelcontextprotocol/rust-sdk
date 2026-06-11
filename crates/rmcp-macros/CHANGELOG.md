@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.7.0...rmcp-macros-v1.8.0) - 2026-06-11
+
+### Added
+
+- deprecate roots, sampling, and logging (SEP-2577) ([#884](https://github.com/modelcontextprotocol/rust-sdk/pull/884))
+
+### Fixed
+
+- strip and validate tool outputSchema and inputSchema ([#860](https://github.com/modelcontextprotocol/rust-sdk/pull/860))
+- remove unnecessary fields from tools' inputSchema ([#856](https://github.com/modelcontextprotocol/rust-sdk/pull/856))
+
+### Other
+
+- refine mcpmate listing copy ([#885](https://github.com/modelcontextprotocol/rust-sdk/pull/885))
+- added jilebi-mcp to the list of built with rmcp ([#861](https://github.com/modelcontextprotocol/rust-sdk/pull/861))
+
 ## [1.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.6.0...rmcp-macros-v1.7.0) - 2026-05-13
 
 ### Added
