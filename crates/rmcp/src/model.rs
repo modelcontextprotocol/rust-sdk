@@ -2838,7 +2838,58 @@ impl CallToolResult {
             meta: None,
         }
     }
-    /// Create an error tool result with unstructured content
+
+    /// Create a tool-level error result with caller-visible content.
+    ///
+    /// # When to use this vs `Err(ErrorData)`
+    ///
+    /// MCP distinguishes two failure modes for a `call_tool` invocation, and
+    /// the right one to use depends on **whose problem it is**:
+    ///
+    /// - **Tool-level error** — `Ok(CallToolResult::error(...))`.
+    ///   The request was valid and routed to your tool, but executing the
+    ///   tool failed in a way the caller should see (a query returned no
+    ///   rows, an external API returned 500, the user's input is plausible
+    ///   but produced no result, etc.). The caller's MCP client renders the
+    ///   `content` you provide; your message reaches the user. **This is the
+    ///   right choice for almost every "the tool ran and didn't work" case.**
+    ///
+    /// - **Protocol error** — `Err(ErrorData)` with a JSON-RPC code.
+    ///   The server cannot route the request at all: the tool name is
+    ///   unknown ([`ErrorCode::METHOD_NOT_FOUND`]), the parameters cannot
+    ///   be parsed or fail schema validation
+    ///   ([`ErrorCode::INVALID_PARAMS`], `-32602`), or an infrastructure
+    ///   error makes the server itself unusable
+    ///   ([`ErrorCode::INTERNAL_ERROR`], `-32603`). MCP clients typically
+    ///   render protocol errors opaquely (e.g. "Tool result missing due to
+    ///   internal error") — the caller does **not** see your message.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::{CallToolResult, Content, ErrorData};
+    ///
+    /// async fn lookup(query: &str) -> Result<CallToolResult, ErrorData> {
+    ///     // Caller passed a malformed query — the server can't run anything.
+    ///     // This is a protocol error, the caller's client will render it
+    ///     // as -32602 invalid_params:
+    ///     if query.is_empty() {
+    ///         return Err(ErrorData::invalid_params("query must be non-empty", None));
+    ///     }
+    ///
+    ///     // Tool ran, no result. Caller should see the explanation:
+    ///     let rows = run_query(query).await;
+    ///     if rows.is_empty() {
+    ///         return Ok(CallToolResult::error(vec![Content::text(
+    ///             format!("no rows matched '{query}'"),
+    ///         )]));
+    ///     }
+    ///
+    ///     Ok(CallToolResult::success(vec![Content::text(format_rows(&rows))]))
+    /// }
+    /// # async fn run_query(_: &str) -> Vec<&'static str> { vec![] }
+    /// # fn format_rows(_: &[&str]) -> String { String::new() }
+    /// ```
     pub fn error(content: Vec<Content>) -> Self {
         CallToolResult {
             content,
