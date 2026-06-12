@@ -345,11 +345,18 @@
       "const": "boolean"
     },
     "CacheScope": {
-      "description": "Scope describing who may cache cacheable list/read results.",
-      "type": "string",
-      "enum": [
-        "private",
-        "public"
+      "description": "Scope describing who may cache cacheable list/read results (SEP-2549).\n\nDefaults to [`CacheScope::Public`] when absent from the wire.",
+      "oneOf": [
+        {
+          "description": "Any client or intermediary may cache and serve the response to any user.",
+          "type": "string",
+          "const": "public"
+        },
+        {
+          "description": "Only the requesting user's client may cache the response.",
+          "type": "string",
+          "const": "private"
+        }
       ]
     },
     "CallToolResult": {
@@ -1425,13 +1432,15 @@
           "additionalProperties": true
         },
         "cacheScope": {
-          "description": "Scope describing who may cache this result.",
-          "allOf": [
+          "description": "Scope describing who may cache this result (SEP-2549).",
+          "anyOf": [
             {
               "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "public"
+          ]
         },
         "nextCursor": {
           "type": [
@@ -1446,17 +1455,17 @@
           }
         },
         "ttlMs": {
-          "description": "Time, in milliseconds, that this result may be treated as fresh.",
-          "type": "integer",
+          "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
-          "default": 0,
           "minimum": 0
         }
       },
       "required": [
-        "cacheScope",
-        "prompts",
-        "ttlMs"
+        "prompts"
       ]
     },
     "ListResourceTemplatesResult": {
@@ -1470,13 +1479,15 @@
           "additionalProperties": true
         },
         "cacheScope": {
-          "description": "Scope describing who may cache this result.",
-          "allOf": [
+          "description": "Scope describing who may cache this result (SEP-2549).",
+          "anyOf": [
             {
               "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "public"
+          ]
         },
         "nextCursor": {
           "type": [
@@ -1491,17 +1502,17 @@
           }
         },
         "ttlMs": {
-          "description": "Time, in milliseconds, that this result may be treated as fresh.",
-          "type": "integer",
+          "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
-          "default": 0,
           "minimum": 0
         }
       },
       "required": [
-        "cacheScope",
-        "resourceTemplates",
-        "ttlMs"
+        "resourceTemplates"
       ]
     },
     "ListResourcesResult": {
@@ -1515,13 +1526,15 @@
           "additionalProperties": true
         },
         "cacheScope": {
-          "description": "Scope describing who may cache this result.",
-          "allOf": [
+          "description": "Scope describing who may cache this result (SEP-2549).",
+          "anyOf": [
             {
               "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "public"
+          ]
         },
         "nextCursor": {
           "type": [
@@ -1536,17 +1549,17 @@
           }
         },
         "ttlMs": {
-          "description": "Time, in milliseconds, that this result may be treated as fresh.",
-          "type": "integer",
+          "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
-          "default": 0,
           "minimum": 0
         }
       },
       "required": [
-        "cacheScope",
-        "resources",
-        "ttlMs"
+        "resources"
       ]
     },
     "ListRootsRequestMethod": {
@@ -1593,13 +1606,15 @@
           "additionalProperties": true
         },
         "cacheScope": {
-          "description": "Scope describing who may cache this result.",
-          "allOf": [
+          "description": "Scope describing who may cache this result (SEP-2549).",
+          "anyOf": [
             {
               "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "public"
+          ]
         },
         "nextCursor": {
           "type": [
@@ -1614,17 +1629,17 @@
           }
         },
         "ttlMs": {
-          "description": "Time, in milliseconds, that this result may be treated as fresh.",
-          "type": "integer",
+          "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
-          "default": 0,
           "minimum": 0
         }
       },
       "required": [
-        "cacheScope",
-        "tools",
-        "ttlMs"
+        "tools"
       ]
     },
     "LoggingLevel": {
@@ -2484,13 +2499,15 @@
       "type": "object",
       "properties": {
         "cacheScope": {
-          "description": "Scope describing who may cache this result.",
-          "allOf": [
+          "description": "Scope describing who may cache this result (SEP-2549).",
+          "anyOf": [
             {
               "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "public"
+          ]
         },
         "contents": {
           "description": "The actual content of the resource",
@@ -2500,17 +2517,17 @@
           }
         },
         "ttlMs": {
-          "description": "Time, in milliseconds, that this result may be treated as fresh.",
-          "type": "integer",
+          "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
-          "default": 0,
           "minimum": 0
         }
       },
       "required": [
-        "cacheScope",
-        "contents",
-        "ttlMs"
+        "contents"
       ]
     },
     "Request": {

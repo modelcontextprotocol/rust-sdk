@@ -35,13 +35,21 @@ fn read_resource_results_serialize_cache_hints_as_top_level_fields() {
 }
 
 #[test]
-fn ttl_ms_deserialization_normalizes_absent_and_negative_values_to_zero() {
+fn cache_hints_are_omitted_when_absent() {
+    let result = ListToolsResult::with_all_items(Vec::new());
+    let actual = serde_json::to_value(result).expect("serialize list tools result");
+
+    assert_eq!(actual, json!({ "tools": [] }));
+}
+
+#[test]
+fn cache_hints_default_to_none_and_negative_ttl_is_normalized_to_zero() {
     let absent: ListToolsResult = serde_json::from_value(json!({
         "tools": []
     }))
     .expect("deserialize result without ttlMs");
-    assert_eq!(absent.ttl_ms(), 0);
-    assert_eq!(absent.cache_scope(), CacheScope::Public);
+    assert_eq!(absent.ttl_ms, None);
+    assert_eq!(absent.cache_scope, None);
 
     let negative: ReadResourceResult = serde_json::from_value(json!({
         "ttlMs": -42,
@@ -49,6 +57,22 @@ fn ttl_ms_deserialization_normalizes_absent_and_negative_values_to_zero() {
         "contents": []
     }))
     .expect("deserialize result with negative ttlMs");
-    assert_eq!(negative.ttl_ms, 0);
-    assert_eq!(negative.cache_scope, CacheScope::Private);
+    assert_eq!(negative.ttl_ms, Some(0));
+    assert_eq!(negative.cache_scope, Some(CacheScope::Private));
+}
+
+#[test]
+fn cache_scope_round_trips() {
+    assert_eq!(
+        serde_json::to_value(CacheScope::Public).unwrap(),
+        json!("public")
+    );
+    assert_eq!(
+        serde_json::to_value(CacheScope::Private).unwrap(),
+        json!("private")
+    );
+    assert_eq!(
+        serde_json::from_value::<CacheScope>(json!("private")).unwrap(),
+        CacheScope::Private
+    );
 }

@@ -1,7 +1,5 @@
 {
     "result": {
-        "ttlMs": 0,
-        "cacheScope": "public",
         "tools": [
             {
                 "name": "add",
