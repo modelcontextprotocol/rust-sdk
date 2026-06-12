@@ -72,6 +72,8 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                     tools: #router.list_all(),
                     meta: #result_meta,
                     next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
                 })
             }
         })?;

@@ -1142,6 +1142,34 @@ pub type ProgressNotification = Notification<ProgressNotificationMethod, Progres
 
 pub type Cursor = String;
 
+/// Scope describing who may cache cacheable list/read results (SEP-2549).
+///
+/// Defaults to [`CacheScope::Public`] when absent from the wire.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum CacheScope {
+    /// Any client or intermediary may cache and serve the response to any user.
+    #[default]
+    Public,
+    /// Only the requesting user's client may cache the response.
+    Private,
+}
+
+/// Normalize a `ttlMs` value during deserialization.
+///
+/// Per SEP-2549, `ttlMs` MUST be `>= 0`; if a server returns a negative value,
+/// clients SHOULD treat it as `0` (immediately stale). This tolerates that case
+/// rather than erroring, while still accepting an absent field as `None`.
+fn deserialize_ttl_ms<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<i64>::deserialize(deserializer)?;
+    Ok(value.map(|ttl_ms| ttl_ms.max(0) as u64))
+}
+
 macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
@@ -1151,22 +1179,44 @@ macro_rules! paginated_result {
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
         pub struct $t {
-            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+            #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
             pub meta: Option<Meta>,
-            #[serde(skip_serializing_if = "Option::is_none")]
+            #[serde(default, skip_serializing_if = "Option::is_none")]
             pub next_cursor: Option<Cursor>,
+            /// Time, in milliseconds, that this result may be treated as fresh (SEP-2549).
+            #[serde(
+                default,
+                deserialize_with = "deserialize_ttl_ms",
+                skip_serializing_if = "Option::is_none"
+            )]
+            pub ttl_ms: Option<u64>,
+            /// Scope describing who may cache this result (SEP-2549).
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub cache_scope: Option<CacheScope>,
             pub $i_item: $t_item,
         }
 
         impl $t {
-            pub fn with_all_items(
-                items: $t_item,
-            ) -> Self {
+            pub fn with_all_items(items: $t_item) -> Self {
                 Self {
                     meta: None,
                     next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
                     $i_item: items,
                 }
+            }
+
+            /// Set the time, in milliseconds, that this result may be treated as fresh.
+            pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
+                self.ttl_ms = Some(ttl_ms);
+                self
+            }
+
+            /// Set the cache scope for this result.
+            pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
+                self.cache_scope = Some(cache_scope);
+                self
             }
         }
     };
@@ -1239,9 +1289,20 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ReadResourceResult {
+    /// Time, in milliseconds, that this result may be treated as fresh (SEP-2549).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ttl_ms",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ttl_ms: Option<u64>,
+    /// Scope describing who may cache this result (SEP-2549).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<CacheScope>,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
 }
@@ -1249,7 +1310,23 @@ pub struct ReadResourceResult {
 impl ReadResourceResult {
     /// Create a new ReadResourceResult with the given contents.
     pub fn new(contents: Vec<ResourceContents>) -> Self {
-        Self { contents }
+        Self {
+            ttl_ms: None,
+            cache_scope: None,
+            contents,
+        }
+    }
+
+    /// Set the time, in milliseconds, that this result may be treated as fresh.
+    pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
+        self.ttl_ms = Some(ttl_ms);
+        self
+    }
+
+    /// Set the cache scope for this result.
+    pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
+        self.cache_scope = Some(cache_scope);
+        self
     }
 }
 
