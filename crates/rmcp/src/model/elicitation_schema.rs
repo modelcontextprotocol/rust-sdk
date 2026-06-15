@@ -544,12 +544,13 @@ pub struct LegacyEnumSchema {
     pub description: Option<Cow<'static, str>>,
     #[serde(rename = "enum")]
     pub enum_: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enum_names: Option<Vec<String>>,
 }
 
 /// Untitled single-select
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct UntitledSingleSelectEnumSchema {
@@ -1739,6 +1740,45 @@ mod tests {
         assert_eq!(json["description"], "A legacy enum schema");
         assert_eq!(json["enum"], json!(["A", "B"]));
         assert_eq!(json["enumNames"], json!(["Option A", "Option B"]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_legacy_enum_schema_roundtrip_preserves_enum_names() -> anyhow::Result<()> {
+        // Regression test for: legacy enum payload with `enumNames` was silently
+        // deserialized as `UntitledSingleSelectEnumSchema` (which has no `enumNames`
+        // field), causing the array to be dropped on re-serialization.
+        let input = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "choice": {
+                    "type": "string",
+                    "enum": ["opt1", "opt2", "opt3"],
+                    "enumNames": ["Option One", "Option Two", "Option Three"]
+                }
+            }
+        });
+        let schema: ElicitationSchema = serde_json::from_value(input.clone())?;
+        let output = serde_json::to_value(&schema)?;
+        assert_eq!(
+            output["properties"]["choice"]["enumNames"],
+            serde_json::json!(["Option One", "Option Two", "Option Three"]),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_legacy_enum_schema_no_enum_names_omits_field() -> anyhow::Result<()> {
+        // `LegacyEnumSchema` with `enum_names: None` must not serialize `"enumNames": null`.
+        let schema = EnumSchema::Legacy(LegacyEnumSchema {
+            type_: StringTypeConst,
+            title: None,
+            description: None,
+            enum_: vec!["a".to_string(), "b".to_string()],
+            enum_names: None,
+        });
+        let json = serde_json::to_value(&schema)?;
+        assert!(!json.as_object().unwrap().contains_key("enumNames"));
         Ok(())
     }
 
