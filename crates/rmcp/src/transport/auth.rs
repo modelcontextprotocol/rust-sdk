@@ -53,19 +53,7 @@ pub struct OAuthHttpRequest {
 }
 
 impl OAuthHttpRequest {
-    fn discovery(request: HttpRequest) -> Self {
-        Self::with_redirect_policy(request, OAuthHttpRedirectPolicy::Follow)
-    }
-
-    #[cfg(feature = "auth-client-credentials-jwt")]
-    fn credentials(request: HttpRequest) -> Self {
-        Self::with_redirect_policy(request, OAuthHttpRedirectPolicy::Stop)
-    }
-
-    fn with_redirect_policy(
-        request: HttpRequest,
-        redirect_policy: OAuthHttpRedirectPolicy,
-    ) -> Self {
+    fn new(request: HttpRequest, redirect_policy: OAuthHttpRedirectPolicy) -> Self {
         Self {
             request,
             redirect_policy,
@@ -171,15 +159,6 @@ struct OAuth2HttpClient<'a> {
     redirect_policy: OAuthHttpRedirectPolicy,
 }
 
-impl<'a> OAuth2HttpClient<'a> {
-    fn new(client: &'a dyn OAuthHttpClient, redirect_policy: OAuthHttpRedirectPolicy) -> Self {
-        Self {
-            client,
-            redirect_policy,
-        }
-    }
-}
-
 impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
     type Error = OAuthHttpClientError;
 
@@ -188,10 +167,8 @@ impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
     >;
 
     fn call(&'c self, request: HttpRequest) -> Self::Future {
-        self.client.execute(OAuthHttpRequest::with_redirect_policy(
-            request,
-            self.redirect_policy,
-        ))
+        self.client
+            .execute(OAuthHttpRequest::new(request, self.redirect_policy))
     }
 }
 
@@ -973,16 +950,6 @@ impl AuthorizationManager {
         Ok(())
     }
 
-    /// Replace the HTTP client used by every OAuth network operation.
-    ///
-    /// This includes protected-resource and authorization-server discovery,
-    /// dynamic client registration, code exchange, refresh, and client
-    /// credentials. The ordinary MCP transport is configured separately.
-    pub fn with_oauth_http_client(&mut self, http_client: Arc<dyn OAuthHttpClient>) {
-        self.http_client = http_client;
-        self.refresh_redirect_policy = OAuthHttpRedirectPolicy::Stop;
-    }
-
     /// discover oauth2 metadata (per SEP-985: Protected Resource Metadata first, then direct OAuth)
     pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
         if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
@@ -1142,7 +1109,10 @@ impl AuthorizationManager {
             .map_err(|error| AuthError::RegistrationFailed(error.to_string()))?;
         let response = match self
             .http_client
-            .execute(OAuthHttpRequest::discovery(request))
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Follow,
+            ))
             .await
         {
             Ok(response) => response,
@@ -1473,10 +1443,10 @@ impl AuthorizationManager {
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
             .add_extra_param("resource", self.base_url.to_string())
-            .request_async(&OAuth2HttpClient::new(
-                self.http_client.as_ref(),
-                OAuthHttpRedirectPolicy::Stop,
-            ))
+            .request_async(&OAuth2HttpClient {
+                client: self.http_client.as_ref(),
+                redirect_policy: OAuthHttpRedirectPolicy::Stop,
+            })
             .await
         {
             Ok(token) => token,
@@ -1610,10 +1580,10 @@ impl AuthorizationManager {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let token_result = refresh_request
-            .request_async(&OAuth2HttpClient::new(
-                self.http_client.as_ref(),
-                self.refresh_redirect_policy,
-            ))
+            .request_async(&OAuth2HttpClient {
+                client: self.http_client.as_ref(),
+                redirect_policy: self.refresh_redirect_policy,
+            })
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
@@ -1914,7 +1884,10 @@ impl AuthorizationManager {
             .body(Vec::new())
             .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
         self.http_client
-            .execute(OAuthHttpRequest::discovery(request))
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Follow,
+            ))
             .await
     }
 
@@ -2191,10 +2164,10 @@ impl AuthorizationManager {
         }
 
         let token_result = match request
-            .request_async(&OAuth2HttpClient::new(
-                self.http_client.as_ref(),
-                OAuthHttpRedirectPolicy::Stop,
-            ))
+            .request_async(&OAuth2HttpClient {
+                client: self.http_client.as_ref(),
+                redirect_policy: OAuthHttpRedirectPolicy::Stop,
+            })
             .await
         {
             Ok(token) => token,
@@ -2315,7 +2288,10 @@ impl AuthorizationManager {
             .map_err(|error| AuthError::ClientCredentialsError(error.to_string()))?;
         let response = self
             .http_client
-            .execute(OAuthHttpRequest::credentials(request))
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Stop,
+            ))
             .await
             .map_err(|e| {
                 AuthError::ClientCredentialsError(format!("Token exchange request failed: {e}"))
