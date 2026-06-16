@@ -52,17 +52,21 @@ pub struct OAuthHttpRequest {
 
 impl OAuthHttpRequest {
     fn discovery(request: HttpRequest) -> Self {
-        Self {
-            request,
-            redirect_policy: OAuthHttpRedirectPolicy::Follow,
-            timeout: Some(DEFAULT_HTTP_TIMEOUT),
-        }
+        Self::with_redirect_policy(request, OAuthHttpRedirectPolicy::Follow)
     }
 
+    #[cfg(feature = "auth-client-credentials-jwt")]
     fn credentials(request: HttpRequest) -> Self {
+        Self::with_redirect_policy(request, OAuthHttpRedirectPolicy::Stop)
+    }
+
+    fn with_redirect_policy(
+        request: HttpRequest,
+        redirect_policy: OAuthHttpRedirectPolicy,
+    ) -> Self {
         Self {
             request,
-            redirect_policy: OAuthHttpRedirectPolicy::Stop,
+            redirect_policy,
             timeout: Some(DEFAULT_HTTP_TIMEOUT),
         }
     }
@@ -156,7 +160,19 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
     }
 }
 
-struct OAuth2HttpClient<'a>(&'a dyn OAuthHttpClient);
+struct OAuth2HttpClient<'a> {
+    client: &'a dyn OAuthHttpClient,
+    redirect_policy: OAuthHttpRedirectPolicy,
+}
+
+impl<'a> OAuth2HttpClient<'a> {
+    fn new(client: &'a dyn OAuthHttpClient, redirect_policy: OAuthHttpRedirectPolicy) -> Self {
+        Self {
+            client,
+            redirect_policy,
+        }
+    }
+}
 
 impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
     type Error = OAuthHttpClientError;
@@ -166,7 +182,10 @@ impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
     >;
 
     fn call(&'c self, request: HttpRequest) -> Self::Future {
-        self.0.execute(OAuthHttpRequest::credentials(request))
+        self.client.execute(OAuthHttpRequest::with_redirect_policy(
+            request,
+            self.redirect_policy,
+        ))
     }
 }
 
@@ -754,6 +773,8 @@ impl Default for ScopeUpgradeConfig {
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: Arc<dyn OAuthHttpClient>,
+    // Preserve legacy reqwest refresh behavior without weakening custom clients.
+    refresh_redirect_policy: OAuthHttpRedirectPolicy,
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
     credential_store: Arc<dyn CredentialStore>,
@@ -850,9 +871,10 @@ impl AuthorizationManager {
             .timeout(DEFAULT_HTTP_TIMEOUT)
             .build()
             .map_err(|e| AuthError::InternalError(e.to_string()))?;
-        Self::new_with_oauth_http_client(
+        Self::new_inner(
             base_url,
             Arc::new(ReqwestOAuthHttpClient::new(http_client)?),
+            OAuthHttpRedirectPolicy::Follow,
         )
         .await
     }
@@ -862,10 +884,19 @@ impl AuthorizationManager {
         base_url: U,
         http_client: Arc<dyn OAuthHttpClient>,
     ) -> Result<Self, AuthError> {
+        Self::new_inner(base_url, http_client, OAuthHttpRedirectPolicy::Stop).await
+    }
+
+    async fn new_inner<U: IntoUrl>(
+        base_url: U,
+        http_client: Arc<dyn OAuthHttpClient>,
+        refresh_redirect_policy: OAuthHttpRedirectPolicy,
+    ) -> Result<Self, AuthError> {
         let base_url = base_url.into_url()?;
 
         let manager = Self {
             http_client,
+            refresh_redirect_policy,
             metadata: None,
             oauth_client: None,
             credential_store: Arc::new(InMemoryCredentialStore::new()),
@@ -932,6 +963,7 @@ impl AuthorizationManager {
 
     pub fn with_client(&mut self, http_client: ReqwestClient) -> Result<(), AuthError> {
         self.http_client = Arc::new(ReqwestOAuthHttpClient::new(http_client)?);
+        self.refresh_redirect_policy = OAuthHttpRedirectPolicy::Follow;
         Ok(())
     }
 
@@ -942,6 +974,7 @@ impl AuthorizationManager {
     /// credentials. The ordinary MCP transport is configured separately.
     pub fn with_oauth_http_client(&mut self, http_client: Arc<dyn OAuthHttpClient>) {
         self.http_client = http_client;
+        self.refresh_redirect_policy = OAuthHttpRedirectPolicy::Stop;
     }
 
     /// discover oauth2 metadata (per SEP-985: Protected Resource Metadata first, then direct OAuth)
@@ -1434,7 +1467,10 @@ impl AuthorizationManager {
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
             .add_extra_param("resource", self.base_url.to_string())
-            .request_async(&OAuth2HttpClient(self.http_client.as_ref()))
+            .request_async(&OAuth2HttpClient::new(
+                self.http_client.as_ref(),
+                OAuthHttpRedirectPolicy::Stop,
+            ))
             .await
         {
             Ok(token) => token,
@@ -1568,7 +1604,10 @@ impl AuthorizationManager {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let token_result = refresh_request
-            .request_async(&OAuth2HttpClient(self.http_client.as_ref()))
+            .request_async(&OAuth2HttpClient::new(
+                self.http_client.as_ref(),
+                self.refresh_redirect_policy,
+            ))
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
@@ -2146,7 +2185,10 @@ impl AuthorizationManager {
         }
 
         let token_result = match request
-            .request_async(&OAuth2HttpClient(self.http_client.as_ref()))
+            .request_async(&OAuth2HttpClient::new(
+                self.http_client.as_ref(),
+                OAuthHttpRedirectPolicy::Stop,
+            ))
             .await
         {
             Ok(token) => token,
@@ -2588,23 +2630,25 @@ pub enum OAuthState {
 }
 
 impl OAuthState {
-    fn oauth_http_client(&self) -> Arc<dyn OAuthHttpClient> {
-        match self {
-            OAuthState::Unauthorized(manager) | OAuthState::Authorized(manager) => {
-                Arc::clone(&manager.http_client)
-            }
-            OAuthState::Session(session) => Arc::clone(&session.auth_manager.http_client),
-            OAuthState::AuthorizedHttpClient(client) => {
-                Arc::clone(&client.auth_manager.http_client)
-            }
-        }
+    fn oauth_http_client_config(&self) -> (Arc<dyn OAuthHttpClient>, OAuthHttpRedirectPolicy) {
+        let manager = match self {
+            OAuthState::Unauthorized(manager) | OAuthState::Authorized(manager) => manager,
+            OAuthState::Session(session) => &session.auth_manager,
+            OAuthState::AuthorizedHttpClient(client) => &client.auth_manager,
+        };
+        (
+            Arc::clone(&manager.http_client),
+            manager.refresh_redirect_policy,
+        )
     }
 
     async fn placeholder(&self) -> Result<Self, AuthError> {
+        let (http_client, refresh_redirect_policy) = self.oauth_http_client_config();
         Ok(OAuthState::Unauthorized(
-            AuthorizationManager::new_with_oauth_http_client(
+            AuthorizationManager::new_inner(
                 DEFAULT_EXCHANGE_URL,
-                self.oauth_http_client(),
+                http_client,
+                refresh_redirect_policy,
             )
             .await?,
         ))
@@ -2653,9 +2697,10 @@ impl OAuthState {
         credentials: OAuthTokenResponse,
     ) -> Result<(), AuthError> {
         if let OAuthState::Unauthorized(manager) = self {
-            let replacement = AuthorizationManager::new_with_oauth_http_client(
+            let replacement = AuthorizationManager::new_inner(
                 DEFAULT_EXCHANGE_URL,
                 Arc::clone(&manager.http_client),
+                manager.refresh_redirect_policy,
             )
             .await?;
             let mut manager = std::mem::replace(manager, replacement);
@@ -4773,6 +4818,74 @@ mod tests {
         assert!(
             matches!(err, AuthError::TokenRefreshFailed(_)),
             "expected TokenRefreshFailed when no refresh token, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_uses_client_configured_by_with_client() {
+        use axum::{Router, body::Body, http::Response, routing::post};
+
+        let received_header = Arc::new(std::sync::Mutex::new(None));
+        let received_header_clone = Arc::clone(&received_header);
+        let app = Router::new().route(
+            "/token",
+            post(move |headers: axum::http::HeaderMap| {
+                let received_header = Arc::clone(&received_header_clone);
+                async move {
+                    *received_header.lock().unwrap() = headers
+                        .get("x-custom-client")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600}"#,
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert("x-custom-client", "configured".parse().unwrap());
+        manager
+            .with_client(
+                reqwest::Client::builder()
+                    .default_headers(default_headers)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: "my-client".to_string(),
+                token_response: Some(make_token_response_with_refresh(
+                    "old-token",
+                    "my-refresh-token",
+                )),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            })
+            .await
+            .unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        assert_eq!(
+            received_header.lock().unwrap().as_deref(),
+            Some("configured")
         );
     }
 
