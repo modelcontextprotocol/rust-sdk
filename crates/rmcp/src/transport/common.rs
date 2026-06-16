@@ -3,6 +3,9 @@ pub mod server_side_http;
 
 pub mod http_header;
 
+#[cfg(any(feature = "client-side-sse", feature = "server-side-http"))]
+pub mod mcp_headers;
+
 #[cfg(feature = "__reqwest")]
 mod reqwest;
 

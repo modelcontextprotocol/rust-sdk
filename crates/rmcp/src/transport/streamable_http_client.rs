@@ -17,16 +17,66 @@ use super::common::client_side_sse::{ExponentialBackoff, SseRetryPolicy, SseStre
 use crate::{
     RoleClient,
     model::{
-        ClientJsonRpcMessage, ClientNotification, ErrorData, InitializedNotification, RequestId,
-        ServerJsonRpcMessage, ServerResult,
+        ClientJsonRpcMessage, ClientNotification, ErrorData, InitializedNotification, JsonObject,
+        ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
     },
     transport::{
-        common::client_side_sse::SseAutoReconnectStream,
+        common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
     },
 };
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
+
+/// Clones `base` and, when the negotiated version requires SEP-2243 headers, adds the
+/// `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` headers derived from the outgoing message.
+fn build_request_headers(
+    base: &HashMap<HeaderName, HeaderValue>,
+    message: &ClientJsonRpcMessage,
+    tool_cache: &HashMap<String, Arc<JsonObject>>,
+    version: &ProtocolVersion,
+) -> HashMap<HeaderName, HeaderValue> {
+    use serde_json::Value;
+
+    let mut headers = base.clone();
+    if *version >= ProtocolVersion::STANDARD_HEADERS {
+        if let Ok(value) = serde_json::to_value(message) {
+            let schema = value
+                .get("method")
+                .and_then(Value::as_str)
+                .filter(|method| *method == "tools/call")
+                .and_then(|_| value.get("params"))
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .and_then(|name| tool_cache.get(name))
+                .map(Arc::as_ref);
+            for (name, val) in mcp_headers::standard_request_headers(&value, schema) {
+                headers.insert(name, val);
+            }
+        }
+    }
+    headers
+}
+
+/// Caches tool input schemas from a `tools/list` response for later `Mcp-Param-*` emission.
+fn cache_tools_from_response(
+    cache: &mut HashMap<String, Arc<JsonObject>>,
+    message: &ServerJsonRpcMessage,
+) {
+    if let ServerJsonRpcMessage::Response(response) = message {
+        if let ServerResult::ListToolsResult(list) = &response.result {
+            for tool in &list.tools {
+                if let Err(reason) =
+                    mcp_headers::validate_param_header_annotations(&tool.input_schema)
+                {
+                    tracing::warn!(tool = %tool.name, "ignoring x-mcp-header annotations: {reason}");
+                    continue;
+                }
+                cache.insert(tool.name.to_string(), tool.input_schema.clone());
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -645,10 +695,14 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         // Extract the negotiated protocol version from the init response
         // and build a custom headers map that includes MCP-Protocol-Version
         // for all subsequent HTTP requests (per MCP 2025-06-18 spec).
+        // Negotiated protocol version gates SEP-2243 standard headers; default to a
+        // pre-SEP version so headers are omitted if the version can't be determined.
+        let mut negotiated_version = ProtocolVersion::default();
         let mut protocol_headers = {
             let mut headers = config.custom_headers.clone();
             if let ServerJsonRpcMessage::Response(response) = &message {
                 if let ServerResult::InitializeResult(init_result) = &response.result {
+                    negotiated_version = init_result.protocol_version.clone();
                     if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
                         // HeaderName::from_static requires lowercase
                         headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
@@ -657,6 +711,9 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             headers
         };
+        // SEP-2243: tool input schemas (name -> schema) cached from tools/list responses,
+        // used to promote annotated tools/call arguments to Mcp-Param-* headers.
+        let mut tool_header_cache: HashMap<String, Arc<JsonObject>> = HashMap::new();
 
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
         let mut session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
@@ -670,13 +727,19 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         context.send_to_handler(message).await?;
         let initialized_notification = context.recv_from_handler().await?;
         // expect a initialized response
+        let initialized_headers = build_request_headers(
+            &protocol_headers,
+            &initialized_notification.message,
+            &tool_header_cache,
+            &negotiated_version,
+        );
         self.client
             .post_message(
                 config.uri.clone(),
                 initialized_notification.message,
                 session_id.clone(),
                 config.auth_header.clone(),
-                protocol_headers.clone(),
+                initialized_headers,
             )
             .await
             .map_err(WorkerQuitReason::fatal_context(
@@ -788,6 +851,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     // Pass a clone to the first attempt so `message` is retained for a
                     // potential re-init retry. `post_message` takes ownership and the
                     // trait cannot be changed, so the clone is unavoidable.
+                    let request_headers = build_request_headers(
+                        &protocol_headers,
+                        &message,
+                        &tool_header_cache,
+                        &negotiated_version,
+                    );
                     let response = self
                         .client
                         .post_message(
@@ -795,7 +864,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             message.clone(),
                             session_id.clone(),
                             config.auth_header.clone(),
-                            protocol_headers.clone(),
+                            request_headers,
                         )
                         .await;
                     let send_result = match response {
@@ -908,6 +977,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                         });
                                         }
 
+                                        let retry_headers = build_request_headers(
+                                            &protocol_headers,
+                                            &message,
+                                            &tool_header_cache,
+                                            &negotiated_version,
+                                        );
                                         let retry_response = self
                                             .client
                                             .post_message(
@@ -915,7 +990,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 message,
                                                 session_id.clone(),
                                                 config.auth_header.clone(),
-                                                protocol_headers.clone(),
+                                                retry_headers,
                                             )
                                             .await;
                                         match retry_response {
@@ -931,6 +1006,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 Ok(())
                                             }
                                             Ok(StreamableHttpPostResponse::Json(msg, ..)) => {
+                                                cache_tools_from_response(
+                                                    &mut tool_header_cache,
+                                                    &msg,
+                                                );
                                                 context.send_to_handler(msg).await?;
                                                 Ok(())
                                             }
@@ -973,6 +1052,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                         Ok(StreamableHttpPostResponse::Json(message, ..)) => {
+                            cache_tools_from_response(&mut tool_header_cache, &message);
                             context.send_to_handler(message).await?;
                             Ok(())
                         }
@@ -1007,6 +1087,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         &mut pending_stream_response_ids,
                         &json_rpc_message,
                     );
+                    cache_tools_from_response(&mut tool_header_cache, &json_rpc_message);
                     // send the message to the handler
                     if let Err(e) = context.send_to_handler(json_rpc_message).await {
                         break 'main_loop Err(e);
