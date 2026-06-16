@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     EmptyExtraTokenFields, ExtraTokenFields, HttpRequest, HttpResponse, PkceCodeChallenge,
@@ -26,6 +27,7 @@ use tracing::{debug, warn};
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 
 /// Redirect handling requested for an outbound OAuth HTTP operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -39,14 +41,14 @@ pub enum OAuthHttpRedirectPolicy {
 }
 
 /// A complete outbound HTTP operation requested by the OAuth implementation.
-#[derive(Debug)]
 #[non_exhaustive]
 pub struct OAuthHttpRequest {
     /// HTTP request with an absolute URI and buffered body.
     pub request: HttpRequest,
     /// Redirect behavior required by the OAuth operation.
     pub redirect_policy: OAuthHttpRedirectPolicy,
-    /// Maximum duration for the operation, or no SDK-specified timeout.
+    /// Suggested maximum duration for the operation, or no SDK-specified timeout.
+    /// Implementations with their own timeout policy may retain it instead.
     pub timeout: Option<Duration>,
 }
 
@@ -127,15 +129,14 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             let OAuthHttpRequest {
                 request,
                 redirect_policy,
-                timeout,
+                ..
             } = request;
             let client = match redirect_policy {
                 OAuthHttpRedirectPolicy::Follow => &self.follow_redirects,
                 OAuthHttpRedirectPolicy::Stop => &self.stop_redirects,
             };
-            let mut request = reqwest::Request::try_from(request)
+            let request = reqwest::Request::try_from(request)
                 .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
-            *request.timeout_mut() = timeout;
             let response = client
                 .execute(request)
                 .await
@@ -147,14 +148,19 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             for (name, value) in response.headers() {
                 builder = builder.header(name, value);
             }
+            let mut body = Vec::new();
+            let mut body_stream = response.bytes_stream();
+            while let Some(chunk) = body_stream.next().await {
+                let chunk = chunk.map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                if chunk.len() > MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES - body.len() {
+                    return Err(OAuthHttpClientError::new(format!(
+                        "OAuth HTTP response body exceeds {MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES} bytes"
+                    )));
+                }
+                body.extend_from_slice(&chunk);
+            }
             builder
-                .body(
-                    response
-                        .bytes()
-                        .await
-                        .map_err(|error| OAuthHttpClientError::new(error.to_string()))?
-                        .to_vec(),
-                )
+                .body(body)
                 .map_err(|error| OAuthHttpClientError::new(error.to_string()))
         })
     }
