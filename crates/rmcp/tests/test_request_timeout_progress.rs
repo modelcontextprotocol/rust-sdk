@@ -9,11 +9,10 @@ use std::{
 };
 
 use rmcp::{
-    ClientHandler, Peer, RoleServer, ServerHandler, ServiceError, ServiceExt,
-    handler::server::tool::ToolRouter,
+    ClientHandler, Peer, RoleServer, ServiceError, ServiceExt,
     model::{CallToolRequestParams, ClientRequest, Meta, ProgressNotificationParam, Request},
     service::PeerRequestOptions,
-    tool, tool_handler, tool_router,
+    tool, tool_router,
 };
 
 #[derive(Clone, Default)]
@@ -31,19 +30,15 @@ impl ClientHandler for ProgressCountingClient {
     }
 }
 
-struct ProgressTimeoutServer {
-    tool_router: ToolRouter<Self>,
-}
+struct ProgressTimeoutServer;
 
 impl ProgressTimeoutServer {
     fn new() -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-        }
+        Self
     }
 }
 
-#[tool_router]
+#[tool_router(server_handler)]
 impl ProgressTimeoutServer {
     #[tool]
     async fn delayed_without_progress(&self) -> Result<(), rmcp::ErrorData> {
@@ -101,9 +96,6 @@ impl ProgressTimeoutServer {
         Ok(())
     }
 }
-
-#[tool_handler]
-impl ServerHandler for ProgressTimeoutServer {}
 
 async fn start_pair()
 -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ProgressCountingClient>> {

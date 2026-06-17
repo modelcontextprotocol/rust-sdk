@@ -356,6 +356,48 @@ impl<R: ServiceRole> RequestHandle<R> {
     pub const REQUEST_TIMEOUT_REASON: &str = "request timeout";
     pub const REQUEST_MAX_TOTAL_TIMEOUT_REASON: &str = "maximum total timeout exceeded";
 
+    pub async fn await_response(mut self) -> Result<R::PeerResp, ServiceError> {
+        let timeout = self.options.timeout;
+        let max_total_timeout = self.options.max_total_timeout;
+        let reset_timeout_on_progress = self.options.reset_timeout_on_progress;
+
+        let has_progress_reset_rx = self.progress_reset_rx.is_some();
+        let progress_token = self.progress_token.clone();
+
+        let result = match (timeout, max_total_timeout, reset_timeout_on_progress) {
+            (Some(timeout), None, false) => match tokio::time::timeout(timeout, &mut self.rx).await
+            {
+                Ok(response) => response.map_err(|_e| ServiceError::TransportClosed)?,
+                Err(_) => {
+                    let error = Err(ServiceError::Timeout { timeout });
+                    // cancel this request
+                    self.send_timeout_cancel_notification(Self::REQUEST_TIMEOUT_REASON)
+                        .await;
+                    error
+                }
+            },
+            (None, None, _) => (&mut self.rx)
+                .await
+                .map_err(|_e| ServiceError::TransportClosed)?,
+            _ => {
+                self.await_response_with_progress_timeout(
+                    timeout,
+                    max_total_timeout,
+                    reset_timeout_on_progress,
+                )
+                .await
+            }
+        };
+
+        Self::cleanup_progress_timeout_watcher(
+            &self.peer.progress_timeout_watchers,
+            &progress_token,
+            has_progress_reset_rx,
+        )
+        .await;
+        result
+    }
+
     async fn send_timeout_cancel_notification(&self, reason: &str) {
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
@@ -366,64 +408,6 @@ impl<R: ServiceRole> RequestHandle<R> {
             extensions: Default::default(),
         };
         let _ = self.peer.send_notification(notification.into()).await;
-    }
-
-    async fn cleanup_progress_timeout_watcher(
-        progress_timeout_watchers: &ProgressTimeoutWatchers,
-        progress_token: &ProgressToken,
-        has_progress_reset_rx: bool,
-    ) {
-        if has_progress_reset_rx {
-            progress_timeout_watchers
-                .write()
-                .await
-                .remove(progress_token);
-        }
-    }
-
-    pub async fn await_response(mut self) -> Result<R::PeerResp, ServiceError> {
-        let timeout = self.options.timeout;
-        let max_total_timeout = self.options.max_total_timeout;
-        let reset_timeout_on_progress = self.options.reset_timeout_on_progress;
-
-        let has_progress_reset_rx = self.progress_reset_rx.is_some();
-        let progress_timeout_watchers = self.progress_timeout_watchers.clone();
-        let progress_token = self.progress_token.clone();
-
-        let result =
-            if timeout.is_some() && !reset_timeout_on_progress && max_total_timeout.is_none() {
-                let timeout = timeout.expect("timeout is checked above");
-                let timeout_result = tokio::time::timeout(timeout, &mut self.rx).await;
-                match timeout_result {
-                    Ok(response) => response.map_err(|_e| ServiceError::TransportClosed)?,
-                    Err(_) => {
-                        let error = Err(ServiceError::Timeout { timeout });
-                        // cancel this request
-                        self.send_timeout_cancel_notification(Self::REQUEST_TIMEOUT_REASON)
-                            .await;
-                        error
-                    }
-                }
-            } else if timeout.is_none() && max_total_timeout.is_none() {
-                (&mut self.rx)
-                    .await
-                    .map_err(|_e| ServiceError::TransportClosed)?
-            } else {
-                self.await_response_with_progress_timeout(
-                    timeout,
-                    max_total_timeout,
-                    reset_timeout_on_progress,
-                )
-                .await
-            };
-
-        Self::cleanup_progress_timeout_watcher(
-            &self.peer.progress_timeout_watchers,
-            &progress_token,
-            has_progress_reset_rx,
-        )
-        .await;
-        result
     }
 
     async fn await_response_with_progress_timeout(
@@ -494,6 +478,19 @@ impl<R: ServiceRole> RequestHandle<R> {
         };
         self.peer.send_notification(notification.into()).await?;
         Ok(())
+    }
+
+    async fn cleanup_progress_timeout_watcher(
+        progress_timeout_watchers: &ProgressTimeoutWatchers,
+        progress_token: &ProgressToken,
+        has_progress_reset_rx: bool,
+    ) {
+        if has_progress_reset_rx {
+            progress_timeout_watchers
+                .write()
+                .await
+                .remove(progress_token);
+        }
     }
 }
 
@@ -637,14 +634,24 @@ impl<R: ServiceRole> Peer<R> {
         } else {
             None
         };
-        self.tx
+        if self
+            .tx
             .send(PeerSinkMessage::Request {
                 request,
                 id: id.clone(),
                 responder,
             })
             .await
-            .map_err(|_m| ServiceError::TransportClosed)?;
+            .is_err()
+        {
+            if progress_reset_rx.is_some() {
+                self.progress_timeout_watchers
+                    .write()
+                    .await
+                    .remove(&progress_token);
+            }
+            return Err(ServiceError::TransportClosed);
+        }
         Ok(RequestHandle {
             id,
             rx: receiver,
