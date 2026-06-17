@@ -1,4 +1,5 @@
 #![cfg(not(feature = "local"))]
+#![allow(deprecated)]
 mod common;
 
 use anyhow::Result;

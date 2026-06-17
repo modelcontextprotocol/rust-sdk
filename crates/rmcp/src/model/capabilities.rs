@@ -60,6 +60,9 @@ pub struct ToolsCapability {
     pub list_changed: Option<bool>,
 }
 
+/// Roots capability. Deprecated by SEP-2577; remains functional and will be
+/// removed in a future release.
+/// See <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -97,6 +100,9 @@ pub struct TaskRequestsCapability {
     pub tools: Option<ToolsTaskCapability>,
 }
 
+/// Sampling task capability. Deprecated by SEP-2577; remains functional and
+/// will be removed in a future release.
+/// See <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -231,6 +237,10 @@ pub struct ElicitationCapability {
 }
 
 /// Sampling capability with optional sub-capabilities (SEP-1577).
+///
+/// Deprecated by SEP-2577; remains functional and will be removed in a future
+/// release.
+/// See <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -250,8 +260,6 @@ pub struct SamplingCapability {
 /// # use rmcp::model::ClientCapabilities;
 /// let cap = ClientCapabilities::builder()
 ///     .enable_experimental()
-///     .enable_roots()
-///     .enable_roots_list_changed()
 ///     .build();
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -266,9 +274,10 @@ pub struct ClientCapabilities {
     /// support with no settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<ExtensionCapabilities>,
+    /// Capability for filesystem roots (deprecated by SEP-2577).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapabilities>,
-    /// Capability for LLM sampling requests (SEP-1577)
+    /// Capability for LLM sampling requests (SEP-1577, deprecated by SEP-2577).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<SamplingCapability>,
     /// Capability to handle elicitation requests from servers for interactive user input
@@ -283,7 +292,6 @@ pub struct ClientCapabilities {
 /// ```rust
 /// # use rmcp::model::ServerCapabilities;
 /// let cap = ServerCapabilities::builder()
-///     .enable_logging()
 ///     .enable_experimental()
 ///     .enable_prompts()
 ///     .enable_resources()
@@ -304,6 +312,7 @@ pub struct ServerCapabilities {
     /// support with no settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<ExtensionCapabilities>,
+    /// Capability for server log message notifications (deprecated by SEP-2577).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging: Option<JsonObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -320,7 +329,7 @@ pub struct ServerCapabilities {
 
 #[cfg(any(feature = "server", feature = "macros"))]
 macro_rules! builder {
-    ($Target: ident {$($f: ident: $T: ty),* $(,)?}) => {
+    ($Target: ident {$($(#[$fa:meta])* $f: ident: $T: ty),* $(,)?}) => {
         paste! {
             #[derive(Default, Clone, Copy, Debug)]
             #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
@@ -352,20 +361,20 @@ macro_rules! builder {
                 }
             }
         }
-        builder!($Target @toggle $($f: $T,) *);
+        builder!($Target @toggle $($(#[$fa])* $f: $T,)*);
 
     };
-    ($Target: ident @toggle $f0: ident: $T0: ty, $($f: ident: $T: ty,)*) => {
-        builder!($Target @toggle [][$f0: $T0][$($f: $T,)*]);
+    ($Target: ident @toggle $(#[$fa0:meta])* $f0: ident: $T0: ty, $($(#[$fa:meta])* $f: ident: $T: ty,)*) => {
+        builder!($Target @toggle [][$(#[$fa0])* $f0: $T0][$($(#[$fa])* $f: $T,)*]);
     };
-    ($Target: ident @toggle [$($ff: ident: $Tf: ty,)*][$fn: ident: $TN: ty][$fn_1: ident: $Tn_1: ty, $($ft: ident: $Tt: ty,)*]) => {
-        builder!($Target @impl_toggle [$($ff: $Tf,)*][$fn: $TN][$fn_1: $Tn_1, $($ft:$Tt,)*]);
-        builder!($Target @toggle [$($ff: $Tf,)* $fn: $TN,][$fn_1: $Tn_1][$($ft:$Tt,)*]);
+    ($Target: ident @toggle [$($ff: ident: $Tf: ty,)*][$(#[$fna:meta])* $fn: ident: $TN: ty][$(#[$fn1a:meta])* $fn_1: ident: $Tn_1: ty, $($(#[$fta:meta])* $ft: ident: $Tt: ty,)*]) => {
+        builder!($Target @impl_toggle [$($ff: $Tf,)*][$(#[$fna])* $fn: $TN][$fn_1: $Tn_1, $($ft:$Tt,)*]);
+        builder!($Target @toggle [$($ff: $Tf,)* $fn: $TN,][$(#[$fn1a])* $fn_1: $Tn_1][$($(#[$fta])* $ft: $Tt,)*]);
     };
-    ($Target: ident @toggle [$($ff: ident: $Tf: ty,)*][$fn: ident: $TN: ty][]) => {
-        builder!($Target @impl_toggle [$($ff: $Tf,)*][$fn: $TN][]);
+    ($Target: ident @toggle [$($ff: ident: $Tf: ty,)*][$(#[$fna:meta])* $fn: ident: $TN: ty][]) => {
+        builder!($Target @impl_toggle [$($ff: $Tf,)*][$(#[$fna])* $fn: $TN][]);
     };
-    ($Target: ident @impl_toggle [$($ff: ident: $Tf: ty,)*][$fn: ident: $TN: ty][$($ft: ident: $Tt: ty,)*]) => {
+    ($Target: ident @impl_toggle [$($ff: ident: $Tf: ty,)*][$(#[$fna:meta])* $fn: ident: $TN: ty][$($ft: ident: $Tt: ty,)*]) => {
         paste! {
             impl<
                 $(const [<$ff:upper>]: bool,)*
@@ -375,6 +384,7 @@ macro_rules! builder {
                 false,
                 $([<$ft:upper>],)*
             >> {
+                $(#[$fna])*
                 pub fn [<enable_ $fn>](self) -> [<$Target Builder>]<[<$Target BuilderState>]<
                     $([<$ff:upper>],)*
                     true,
@@ -387,6 +397,7 @@ macro_rules! builder {
                         state: PhantomData
                     }
                 }
+                $(#[$fna])*
                 pub fn [<enable_ $fn _with>](self, $fn: $TN) -> [<$Target Builder>]<[<$Target BuilderState>]<
                     $([<$ff:upper>],)*
                     true,
@@ -431,6 +442,10 @@ builder! {
     ServerCapabilities {
         experimental: ExperimentalCapabilities,
         extensions: ExtensionCapabilities,
+        #[deprecated(
+            since = "1.8.0",
+            note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+        )]
         logging: JsonObject,
         completions: JsonObject,
         prompts: PromptsCapability,
@@ -509,7 +524,15 @@ builder! {
     ClientCapabilities{
         experimental: ExperimentalCapabilities,
         extensions: ExtensionCapabilities,
+        #[deprecated(
+            since = "1.8.0",
+            note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+        )]
         roots: RootsCapabilities,
+        #[deprecated(
+            since = "1.8.0",
+            note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+        )]
         sampling: SamplingCapability,
         elicitation: ElicitationCapability,
         tasks: TasksCapability,
@@ -520,6 +543,10 @@ builder! {
 impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, true, S, EL, TASKS>>
 {
+    #[deprecated(
+        since = "1.8.0",
+        note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+    )]
     pub fn enable_roots_list_changed(mut self) -> Self {
         if let Some(c) = self.roots.as_mut() {
             c.list_changed = Some(true);
@@ -533,6 +560,10 @@ impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS:
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, true, EL, TASKS>>
 {
     /// Enable tool calling in sampling requests
+    #[deprecated(
+        since = "1.8.0",
+        note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+    )]
     pub fn enable_sampling_tools(mut self) -> Self {
         if let Some(c) = self.sampling.as_mut() {
             c.tools = Some(JsonObject::default());
@@ -541,6 +572,10 @@ impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS:
     }
 
     /// Enable context inclusion in sampling (soft-deprecated)
+    #[deprecated(
+        since = "1.8.0",
+        note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+    )]
     pub fn enable_sampling_context(mut self) -> Self {
         if let Some(c) = self.sampling.as_mut() {
             c.context = Some(JsonObject::default());
@@ -571,6 +606,7 @@ impl<const E: bool, const EXT: bool, const R: bool, const S: bool, const TASKS: 
 mod test {
     use super::*;
     #[test]
+    #[allow(deprecated)]
     fn test_builder() {
         let builder = <ServerCapabilitiesBuilder>::default()
             .enable_logging()
@@ -673,6 +709,7 @@ mod test {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_client_extensions_capability() {
         // Test building ClientCapabilities with extensions (MCP Apps support)
         let mut extensions = ExtensionCapabilities::new();

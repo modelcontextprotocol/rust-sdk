@@ -112,10 +112,12 @@ impl TestServer {
 }
 
 impl ServerHandler for TestServer {
+    #[allow(deprecated)]
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_logging().build())
     }
 
+    #[allow(deprecated)]
     fn set_level(
         &self,
         request: SetLevelRequestParams,

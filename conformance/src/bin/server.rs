@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::{collections::HashSet, sync::Arc};
 
 use rmcp::{
@@ -614,7 +615,7 @@ impl ServerHandler for ConformanceServer {
                 } else {
                     Err(ErrorData::resource_not_found(
                         format!("Resource not found: {}", uri),
-                        None,
+                        Some(json!({ "uri": uri })),
                     ))
                 }
             }

@@ -28,6 +28,16 @@ pub struct UserInfo {
     pub age: u32,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct GreetingRequest {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct GetUserRequest {
+    pub user_id: String,
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TestServer {}
 
@@ -64,14 +74,17 @@ impl TestServer {
 
     /// Tool that returns regular string output
     #[tool(name = "get-greeting", description = "Get a greeting")]
-    pub async fn get_greeting(&self, name: Parameters<String>) -> String {
-        format!("Hello, {}!", name.0)
+    pub async fn get_greeting(&self, params: Parameters<GreetingRequest>) -> String {
+        format!("Hello, {}!", params.0.name)
     }
 
     /// Tool that returns structured user info
     #[tool(name = "get-user", description = "Get user info")]
-    pub async fn get_user(&self, user_id: Parameters<String>) -> Result<Json<UserInfo>, String> {
-        if user_id.0 == "123" {
+    pub async fn get_user(
+        &self,
+        params: Parameters<GetUserRequest>,
+    ) -> Result<Json<UserInfo>, String> {
+        if params.0.user_id == "123" {
             Ok(Json(UserInfo {
                 name: "Alice".to_string(),
                 age: 30,

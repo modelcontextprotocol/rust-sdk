@@ -1,0 +1,46 @@
+{
+    "result": {
+        "tools": [
+            {
+                "name": "add",
+                "description": "Add two numbers.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                        "a": {
+                            "description": "The left-hand number.",
+                            "format": "double",
+                            "type": "number"
+                        },
+                        "b": {
+                            "description": "The right-hand number.",
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "a",
+                        "b"
+                    ]
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                        "sum": {
+                            "description": "The sum of the two numbers.",
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    "required": [
+                        "sum"
+                    ]
+                }
+            }
+        ]
+    },
+    "jsonrpc": "2.0",
+    "id": 2
+}

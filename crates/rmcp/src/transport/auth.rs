@@ -58,6 +58,9 @@ impl<'c> AsyncHttpClient<'c> for OAuthReqwestClient {
 
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
 
+/// Default OIDC Dynamic Client Registration `application_type` (SEP-837)
+const DEFAULT_APPLICATION_TYPE: &str = "native";
+
 /// Stored credentials for OAuth2 authorization
 #[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -156,6 +159,10 @@ impl CredentialStore for InMemoryCredentialStore {
 pub struct StoredAuthorizationState {
     pub pkce_verifier: String,
     pub csrf_token: String,
+    #[serde(default)]
+    pub expected_issuer: Option<String>,
+    #[serde(default)]
+    pub require_issuer: bool,
     pub created_at: u64,
 }
 
@@ -164,6 +171,8 @@ impl std::fmt::Debug for StoredAuthorizationState {
         f.debug_struct("StoredAuthorizationState")
             .field("pkce_verifier", &"[REDACTED]")
             .field("csrf_token", &"[REDACTED]")
+            .field("expected_issuer", &self.expected_issuer)
+            .field("require_issuer", &self.require_issuer)
             .field("created_at", &self.created_at)
             .finish()
     }
@@ -198,9 +207,20 @@ impl ExtraTokenFields for VendorExtraTokenFields {}
 
 impl StoredAuthorizationState {
     pub fn new(pkce_verifier: &PkceCodeVerifier, csrf_token: &CsrfToken) -> Self {
+        Self::new_with_expected_issuer(pkce_verifier, csrf_token, None, false)
+    }
+
+    pub fn new_with_expected_issuer(
+        pkce_verifier: &PkceCodeVerifier,
+        csrf_token: &CsrfToken,
+        expected_issuer: Option<String>,
+        require_issuer: bool,
+    ) -> Self {
         Self {
             pkce_verifier: pkce_verifier.secret().to_string(),
             csrf_token: csrf_token.secret().to_string(),
+            expected_issuer,
+            require_issuer,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -361,6 +381,17 @@ pub enum AuthError {
         upgrade_url: Option<String>,
     },
 
+    #[error(
+        "Authorization server issuer mismatch: expected {expected_issuer}, received {received_issuer}"
+    )]
+    AuthorizationServerMismatch {
+        expected_issuer: String,
+        received_issuer: String,
+    },
+
+    #[error("Authorization server response missing required issuer: expected {expected_issuer}")]
+    AuthorizationServerMissingIssuer { expected_issuer: String },
+
     #[error("Client credentials error: {0}")]
     ClientCredentialsError(String),
 
@@ -423,6 +454,7 @@ pub struct OAuthClientConfig {
     pub client_secret: Option<String>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
+    pub application_type: Option<String>,
 }
 
 impl OAuthClientConfig {
@@ -432,6 +464,7 @@ impl OAuthClientConfig {
             client_secret: None,
             scopes: Vec::new(),
             redirect_uri: redirect_uri.into(),
+            application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         }
     }
 
@@ -442,6 +475,12 @@ impl OAuthClientConfig {
 
     pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
         self.scopes = scopes;
+        self
+    }
+
+    /// Set the OIDC Dynamic Client Registration `application_type` (SEP-837), e.g. `"native"` or `"web"`
+    pub fn with_application_type(mut self, application_type: impl Into<String>) -> Self {
+        self.application_type = Some(application_type.into());
         self
     }
 }
@@ -613,6 +652,8 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// OIDC Dynamic Client Registration `application_type` (SEP-837)
+    application_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -624,6 +665,8 @@ pub(crate) struct ClientRegistrationRequest {
     pub response_types: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -707,6 +750,7 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         };
 
         Ok(manager)
@@ -800,6 +844,11 @@ impl AuthorizationManager {
             return Err(AuthError::NoAuthorizationSupport);
         }
 
+        // SEP-837: only override application_type when the config sets one
+        if let Some(application_type) = &config.application_type {
+            self.application_type = Some(application_type.clone());
+        }
+
         let metadata = self.metadata.as_ref().unwrap();
 
         let auth_url = AuthUrl::new(metadata.authorization_endpoint.clone())
@@ -890,6 +939,7 @@ impl AuthorizationManager {
         };
         self.validate_server_metadata("code")?;
 
+        let application_type = self.application_type.clone();
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
             redirect_uris: vec![redirect_uri.to_string()],
@@ -904,6 +954,7 @@ impl AuthorizationManager {
             } else {
                 Some(scopes.join(" "))
             },
+            application_type: application_type.clone(),
         };
 
         let response = match self
@@ -958,6 +1009,7 @@ impl AuthorizationManager {
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            application_type,
         };
 
         self.configure_client(config.clone())?;
@@ -972,6 +1024,8 @@ impl AuthorizationManager {
             client_secret: None,
             scopes: vec![],
             redirect_uri: self.base_url.to_string(),
+            // keep the manager's current application_type
+            application_type: None,
         };
         self.configure_client(config)
     }
@@ -1000,8 +1054,27 @@ impl AuthorizationManager {
 
         let (auth_url, csrf_token) = auth_request.url();
 
-        // store pkce verifier for later use via state store
-        let stored_state = StoredAuthorizationState::new(&pkce_verifier, &csrf_token);
+        // store pkce verifier and expected issuer for later use via state store
+        let expected_issuer = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.issuer.clone());
+        let require_issuer = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata
+                    .additional_fields
+                    .get("authorization_response_iss_parameter_supported")
+                    .and_then(|value| value.as_bool())
+            })
+            .unwrap_or(false);
+        let stored_state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce_verifier,
+            &csrf_token,
+            expected_issuer,
+            require_issuer,
+        );
         self.state_store
             .save(csrf_token.secret(), stored_state)
             .await?;
@@ -1119,7 +1192,8 @@ impl AuthorizationManager {
         drop(attempts);
 
         let current_scopes = self.current_scopes.read().await.clone();
-        let upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+        let mut upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+        self.add_offline_access_if_supported(&mut upgraded_scopes);
 
         debug!(
             "Requesting scope upgrade: current={:?}, required={}, union={:?}",
@@ -1140,11 +1214,58 @@ impl AuthorizationManager {
         *self.scope_upgrade_attempts.read().await
     }
 
+    fn validate_authorization_response_issuer(
+        stored_state: &StoredAuthorizationState,
+        received_issuer: Option<&str>,
+    ) -> Result<(), AuthError> {
+        let Some(expected_issuer) = stored_state.expected_issuer.as_deref() else {
+            if received_issuer.is_some() || stored_state.require_issuer {
+                return Err(AuthError::AuthorizationFailed(
+                    "Authorization callback issuer cannot be validated because expected issuer was not recorded"
+                        .to_string(),
+                ));
+            }
+            // Without issuer metadata from discovery and without an issuer-bearing
+            // callback, there is no stable value to bind to. This preserves
+            // compatibility with older authorization servers.
+            return Ok(());
+        };
+        let Some(received_issuer) = received_issuer else {
+            if stored_state.require_issuer {
+                return Err(AuthError::AuthorizationServerMissingIssuer {
+                    expected_issuer: expected_issuer.to_string(),
+                });
+            }
+            // SEP-2468 recommends RFC 9207 `iss`, but tolerate older authorization
+            // servers that do not advertise support for backwards compatibility.
+            return Ok(());
+        };
+        if received_issuer != expected_issuer {
+            return Err(AuthError::AuthorizationServerMismatch {
+                expected_issuer: expected_issuer.to_string(),
+                received_issuer: received_issuer.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// exchange authorization code for access token
     pub async fn exchange_code_for_token(
         &self,
         code: &str,
         csrf_token: &str,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        self.exchange_code_for_token_with_issuer(code, csrf_token, None)
+            .await
+    }
+
+    /// exchange authorization code for access token, validating the optional
+    /// RFC 9207 authorization response issuer (`iss`) when present.
+    pub async fn exchange_code_for_token_with_issuer(
+        &self,
+        code: &str,
+        csrf_token: &str,
+        received_issuer: Option<&str>,
     ) -> Result<OAuthTokenResponse, AuthError> {
         debug!("start exchange code for token: {:?}", code);
         let oauth_client = self
@@ -1160,6 +1281,8 @@ impl AuthorizationManager {
 
         // Delete state after retrieval (one-time use)
         self.state_store.delete(csrf_token).await?;
+
+        Self::validate_authorization_response_issuer(&stored_state, received_issuer)?;
 
         // Reconstruct the PKCE verifier
         let pkce_verifier = stored_state.into_pkce_verifier();
@@ -1303,8 +1426,10 @@ impl AuthorizationManager {
 
         let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
         let mut refresh_request = oauth_client.exchange_refresh_token(&refresh_token_value);
-        for scope in &stored_credentials.granted_scopes {
-            refresh_request = refresh_request.add_scope(Scope::new(scope.clone()));
+        let mut refresh_scopes = stored_credentials.granted_scopes;
+        self.add_offline_access_if_supported(&mut refresh_scopes);
+        for scope in refresh_scopes {
+            refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let token_result = refresh_request
             .request_async(&OAuthReqwestClient(self.http_client.clone()))
@@ -2106,6 +2231,47 @@ impl AuthorizationManager {
     }
 }
 
+/// Parameters returned by an OAuth authorization redirect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AuthorizationCallback {
+    pub code: String,
+    pub csrf_token: String,
+    pub issuer: Option<String>,
+}
+
+impl AuthorizationCallback {
+    /// Parse an OAuth redirect URL and extract `code`, `state`, and optional RFC 9207 `iss`.
+    pub fn from_redirect_url(url: &str) -> Result<Self, AuthError> {
+        let url = Url::parse(url)?;
+        let mut code = None;
+        let mut csrf_token = None;
+        let mut issuer = None;
+
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "code" => code = Some(value.into_owned()),
+                "state" => csrf_token = Some(value.into_owned()),
+                "iss" => issuer = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+
+        let code = code.ok_or_else(|| {
+            AuthError::AuthorizationFailed("Authorization callback missing code".to_string())
+        })?;
+        let csrf_token = csrf_token.ok_or_else(|| {
+            AuthError::AuthorizationFailed("Authorization callback missing state".to_string())
+        })?;
+
+        Ok(Self {
+            code,
+            csrf_token,
+            issuer,
+        })
+    }
+}
+
 /// oauth2 authorization session, for guiding user to complete the authorization process
 #[non_exhaustive]
 pub struct AuthorizationSession {
@@ -2140,12 +2306,14 @@ impl AuthorizationSession {
                         client_metadata_url
                     )));
                 }
-                // SEP-991: URL-based Client IDs - use URL as client_id directly
+                // SEP-991: URL-based Client IDs - use URL as client_id directly.
+                // SEP-837: match the hosted client-metadata.json application_type ("native")
                 OAuthClientConfig {
                     client_id: client_metadata_url.to_string(),
                     client_secret: None,
                     scopes: scopes.iter().map(|s| s.to_string()).collect(),
                     redirect_uri: redirect_uri.to_string(),
+                    application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
                 }
             } else {
                 // Fallback to dynamic registration
@@ -2212,9 +2380,35 @@ impl AuthorizationSession {
         code: &str,
         csrf_token: &str,
     ) -> Result<OAuthTokenResponse, AuthError> {
-        self.auth_manager
-            .exchange_code_for_token(code, csrf_token)
+        self.handle_callback_with_issuer(code, csrf_token, None)
             .await
+    }
+
+    /// handle authorization code callback, validating the optional RFC 9207
+    /// authorization response issuer (`iss`) when present.
+    pub async fn handle_callback_with_issuer(
+        &self,
+        code: &str,
+        csrf_token: &str,
+        issuer: Option<&str>,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        self.auth_manager
+            .exchange_code_for_token_with_issuer(code, csrf_token, issuer)
+            .await
+    }
+
+    /// handle an OAuth redirect URL, including optional RFC 9207 `iss` validation.
+    pub async fn handle_callback_url(
+        &self,
+        callback_url: &str,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let callback = AuthorizationCallback::from_redirect_url(callback_url)?;
+        self.handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await
     }
 }
 
@@ -2468,9 +2662,23 @@ impl OAuthState {
 
     /// handle authorization callback
     pub async fn handle_callback(&mut self, code: &str, csrf_token: &str) -> Result<(), AuthError> {
+        self.handle_callback_with_issuer(code, csrf_token, None)
+            .await
+    }
+
+    /// handle authorization callback, validating the optional RFC 9207
+    /// authorization response issuer (`iss`) when present.
+    pub async fn handle_callback_with_issuer(
+        &mut self,
+        code: &str,
+        csrf_token: &str,
+        issuer: Option<&str>,
+    ) -> Result<(), AuthError> {
         match self {
             OAuthState::Session(session) => {
-                session.handle_callback(code, csrf_token).await?;
+                session
+                    .handle_callback_with_issuer(code, csrf_token, issuer)
+                    .await?;
                 self.complete_authorization().await
             }
             OAuthState::Unauthorized(_) => {
@@ -2483,6 +2691,17 @@ impl OAuthState {
                 Err(AuthError::InternalError("Already authorized".to_string()))
             }
         }
+    }
+
+    /// handle an OAuth redirect URL, including optional RFC 9207 `iss` validation.
+    pub async fn handle_callback_url(&mut self, callback_url: &str) -> Result<(), AuthError> {
+        let callback = AuthorizationCallback::from_redirect_url(callback_url)?;
+        self.handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await
     }
 
     /// get access token
@@ -2571,8 +2790,9 @@ mod tests {
     use url::Url;
 
     use super::{
-        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore,
-        OAuthClientConfig, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
+        AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
+        InMemoryStateStore, OAuthClientConfig, ScopeUpgradeConfig, StateStore,
+        StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -2894,6 +3114,29 @@ mod tests {
 
         assert_eq!(deserialized.pkce_verifier, "my-verifier");
         assert_eq!(deserialized.csrf_token, "my-csrf");
+        assert_eq!(deserialized.expected_issuer, None);
+        assert!(!deserialized.require_issuer);
+    }
+
+    #[test]
+    fn test_stored_authorization_state_records_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
+        let csrf = CsrfToken::new("my-csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            false,
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            deserialized.expected_issuer.as_deref(),
+            Some("https://auth.example.com")
+        );
+        assert!(!deserialized.require_issuer);
     }
 
     #[test]
@@ -2906,7 +3149,7 @@ mod tests {
         assert!(!debug_output.contains("super-secret-verifier"));
         assert!(!debug_output.contains("super-secret-csrf"));
         assert!(debug_output.contains("[REDACTED]"));
-        assert!(debug_output.contains("created_at"));
+        assert!(debug_output.contains("expected_issuer"));
         assert!(debug_output.contains("created_at"));
     }
 
@@ -3117,6 +3360,7 @@ mod tests {
             client_secret: Some("my-secret".to_string()),
             scopes: vec![],
             redirect_uri: "http://localhost/callback".to_string(),
+            application_type: None,
         }
     }
 
@@ -3340,6 +3584,167 @@ mod tests {
         assert!(scope.contains("write"));
     }
 
+    #[test]
+    fn authorization_callback_parses_optional_issuer() {
+        let callback = AuthorizationCallback::from_redirect_url(
+            "http://localhost/callback?code=abc&state=csrf&iss=https%3A%2F%2Fauth.example.com",
+        )
+        .unwrap();
+
+        assert_eq!(callback.code, "abc");
+        assert_eq!(callback.csrf_token, "csrf");
+        assert_eq!(callback.issuer.as_deref(), Some("https://auth.example.com"));
+    }
+
+    #[test]
+    fn authorization_callback_requires_code_and_state() {
+        let missing_code = AuthorizationCallback::from_redirect_url(
+            "http://localhost/callback?state=csrf&iss=https%3A%2F%2Fauth.example.com",
+        );
+        assert!(matches!(
+            missing_code,
+            Err(AuthError::AuthorizationFailed(message)) if message.contains("missing code")
+        ));
+
+        let missing_state = AuthorizationCallback::from_redirect_url(
+            "http://localhost/callback?code=abc&iss=https%3A%2F%2Fauth.example.com",
+        );
+        assert!(matches!(
+            missing_state,
+            Err(AuthError::AuthorizationFailed(message)) if message.contains("missing state")
+        ));
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_accepts_match_and_missing_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            false,
+        );
+
+        assert!(
+            AuthorizationManager::validate_authorization_response_issuer(
+                &state,
+                Some("https://auth.example.com")
+            )
+            .is_ok()
+        );
+        assert!(AuthorizationManager::validate_authorization_response_issuer(&state, None).is_ok());
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_requires_issuer_when_advertised() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            true,
+        );
+
+        let error =
+            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
+
+        assert!(matches!(
+            error,
+            AuthError::AuthorizationServerMissingIssuer { expected_issuer }
+                if expected_issuer == "https://auth.example.com"
+        ));
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_present_issuer_without_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, false);
+
+        let error = AuthorizationManager::validate_authorization_response_issuer(
+            &state,
+            Some("https://auth.example.com"),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+        );
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_required_issuer_without_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, true);
+
+        let error =
+            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+        );
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_mismatch() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            false,
+        );
+
+        let error = AuthorizationManager::validate_authorization_response_issuer(
+            &state,
+            Some("https://evil.example.com"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            AuthError::AuthorizationServerMismatch {
+                expected_issuer,
+                received_issuer
+            } if expected_issuer == "https://auth.example.com"
+                && received_issuer == "https://evil.example.com"
+        ));
+    }
+
+    #[tokio::test]
+    async fn authorization_url_stores_expected_issuer_for_callback_validation() {
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager.get_authorization_url(&[]).await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let state = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+            .expect("authorization URL should contain state");
+
+        let stored_state = manager
+            .state_store
+            .load(&state)
+            .await
+            .unwrap()
+            .expect("authorization state should be stored");
+        assert_eq!(
+            stored_state.expected_issuer.as_deref(),
+            Some("https://auth.example.com")
+        );
+    }
+
     // -- scope management --
 
     #[test]
@@ -3510,6 +3915,29 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn scope_upgrade_adds_offline_access_when_as_supports_it() {
+        let mut mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        mgr.configure_client_id("my-client").unwrap();
+        *mgr.current_scopes.write().await = vec!["profile".to_string()];
+
+        let auth_url = mgr.request_scope_upgrade("email").await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let scope = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "scope").then(|| value.into_owned()))
+            .expect("scope should be present");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["email", "offline_access", "profile"]);
+    }
+
     #[test]
     fn scope_upgrade_config_default_values() {
         let config = ScopeUpgradeConfig::default();
@@ -3678,6 +4106,7 @@ mod tests {
             token_endpoint_auth_method: "none".to_string(),
             response_types: vec!["code".to_string()],
             scope: Some("read write".to_string()),
+            application_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["scope"], "read write");
@@ -3692,9 +4121,57 @@ mod tests {
             token_endpoint_auth_method: "none".to_string(),
             response_types: vec!["code".to_string()],
             scope: None,
+            application_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(!json.as_object().unwrap().contains_key("scope"));
+    }
+
+    // -- ClientRegistrationRequest application_type (SEP-837) --
+
+    #[test]
+    fn client_registration_request_includes_application_type_when_present() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+            application_type: Some("native".to_string()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["application_type"], "native");
+    }
+
+    #[test]
+    fn client_registration_request_omits_application_type_when_none() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+            application_type: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("application_type"));
+    }
+
+    // -- OAuthClientConfig application_type (SEP-837) --
+
+    #[test]
+    fn oauth_client_config_defaults_application_type_to_native() {
+        let config = super::OAuthClientConfig::new("client-id", "http://127.0.0.1:8080/callback");
+        assert_eq!(config.application_type.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn oauth_client_config_with_application_type_overrides_default() {
+        let config = super::OAuthClientConfig::new("client-id", "https://app.example.com/callback")
+            .with_application_type("web");
+        assert_eq!(config.application_type.as_deref(), Some("web"));
     }
 
     // -- client credentials (SEP-1046) --
@@ -4008,6 +4485,44 @@ mod tests {
         let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
         scope_parts.sort_unstable();
         assert_eq!(scope_parts, vec!["read", "write"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_adds_offline_access_when_as_supports_it() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            scopes_supported: Some(vec!["read".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        let scope = params
+            .get("scope")
+            .expect("scope should be present in refresh request");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["offline_access", "read"]);
     }
 
     #[tokio::test]

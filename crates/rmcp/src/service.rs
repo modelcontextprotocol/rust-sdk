@@ -518,7 +518,7 @@ pub struct Peer<R: ServiceRole> {
     request_id_provider: Arc<dyn RequestIdProvider>,
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
     progress_timeout_watchers: ProgressTimeoutWatchers,
-    info: Arc<tokio::sync::OnceCell<R::PeerInfo>>,
+    info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
 }
 
 impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
@@ -579,7 +579,7 @@ impl<R: ServiceRole> Peer<R> {
                 request_id_provider,
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 progress_timeout_watchers: Default::default(),
-                info: Arc::new(tokio::sync::OnceCell::new_with(peer_info)),
+                info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
             },
             rx,
         )
@@ -685,16 +685,15 @@ impl<R: ServiceRole> Peer<R> {
             }
         }
     }
-    pub fn peer_info(&self) -> Option<&R::PeerInfo> {
-        self.info.get()
+
+    /// Snapshot of the peer's handshake info.
+    pub fn peer_info(&self) -> Option<Arc<R::PeerInfo>> {
+        self.info.read().expect("peer info lock poisoned").clone()
     }
 
+    /// Stores the peer's handshake info, overwriting any previous value.
     pub fn set_peer_info(&self, info: R::PeerInfo) {
-        if self.info.initialized() {
-            tracing::warn!("trying to set peer info, which is already initialized");
-        } else {
-            let _ = self.info.set(info);
-        }
+        *self.info.write().expect("peer info lock poisoned") = Some(Arc::new(info));
     }
 
     pub fn is_transport_closed(&self) -> bool {
@@ -872,6 +871,16 @@ impl<R: ServiceRole> RequestContext<R> {
             extensions: Extensions::default(),
             peer,
         }
+    }
+}
+
+#[cfg(feature = "server")]
+impl RequestContext<RoleServer> {
+    /// The protocol version the client negotiated, or `None` before peer info is recorded.
+    pub fn protocol_version(&self) -> Option<crate::model::ProtocolVersion> {
+        self.peer
+            .peer_info()
+            .map(|info| info.protocol_version.clone())
     }
 }
 

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ErrorData,
     handler::server::{
-        common::schema_for_empty_input,
-        tool::{schema_for_output, schema_for_type},
+        common::{schema_for_empty_input, schema_for_input},
+        tool::schema_for_output,
         wrapper::{Json, Parameters},
     },
     model::{Icon, JsonObject, Meta, ToolAnnotations, ToolExecution},
@@ -49,7 +49,14 @@ pub trait ToolBase {
     /// If the tool does not have any parameters, you should override this methods to return [`None`],
     /// and when invoked, the parameter will get default values.
     fn input_schema() -> Option<Arc<JsonObject>> {
-        Some(schema_for_type::<Parameters<Self::Parameter>>())
+        Some(
+            schema_for_input::<Parameters<Self::Parameter>>().unwrap_or_else(|e| {
+                panic!(
+                    "Invalid input schema for ToolBase::Parameter type `{0}`: {e}",
+                    std::any::type_name::<Self::Parameter>(),
+                );
+            }),
+        )
     }
 
     /// Json schema for tool output.
