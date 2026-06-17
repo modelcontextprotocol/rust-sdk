@@ -73,6 +73,28 @@ fn cache_tools_from_response(
     }
 }
 
+/// Derives the negotiated protocol version and base request headers from an
+/// initialize response: returns `base` with `MCP-Protocol-Version` injected
+/// (per MCP 2025-06-18) plus the version used to gate SEP-2243 headers,
+/// defaulting to a pre-SEP version when the response can't be parsed.
+fn negotiate_version_headers(
+    init_response: &ServerJsonRpcMessage,
+    base: HashMap<HeaderName, HeaderValue>,
+) -> (ProtocolVersion, HashMap<HeaderName, HeaderValue>) {
+    let mut version = ProtocolVersion::default();
+    let mut headers = base;
+    if let ServerJsonRpcMessage::Response(response) = init_response {
+        if let ServerResult::InitializeResult(init_result) = &response.result {
+            version = init_result.protocol_version.clone();
+            // HeaderName::from_static requires lowercase
+            if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
+                headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
+            }
+        }
+    }
+    (version, headers)
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct AuthRequiredError {
@@ -455,17 +477,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 
         let new_session_id: Option<Arc<str>> = new_session_id_str.map(|s| Arc::from(s.as_str()));
 
-        // Start from custom_headers, then inject the negotiated MCP-Protocol-Version
-        // so all subsequent requests carry the right version (MCP 2025-06-18 spec).
-        let mut new_protocol_headers = custom_headers;
-        if let ServerJsonRpcMessage::Response(response) = &init_msg {
-            if let ServerResult::InitializeResult(init_result) = &response.result {
-                if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
-                    new_protocol_headers
-                        .insert(HeaderName::from_static("mcp-protocol-version"), hv);
-                }
-            }
-        }
+        let (negotiated_version, new_protocol_headers) =
+            negotiate_version_headers(&init_msg, custom_headers);
 
         let initialized_notification = ClientJsonRpcMessage::notification(
             ClientNotification::InitializedNotification(InitializedNotification {
@@ -473,13 +486,20 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                 extensions: Default::default(),
             }),
         );
+        // SEP-2243: notifications carry no Mcp-Param-*, so an empty tool cache suffices.
+        let initialized_headers = build_request_headers(
+            &new_protocol_headers,
+            &initialized_notification,
+            &HashMap::new(),
+            &negotiated_version,
+        );
         client
             .post_message(
                 uri,
                 initialized_notification,
                 new_session_id.clone(),
                 auth_header,
-                new_protocol_headers.clone(),
+                initialized_headers,
             )
             .await?
             .expect_accepted_or_json::<C::Error>()?;
@@ -555,25 +575,8 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             None
         };
-        // Extract the negotiated protocol version from the init response
-        // and build a custom headers map that includes MCP-Protocol-Version
-        // for all subsequent HTTP requests (per MCP 2025-06-18 spec).
-        // Negotiated protocol version gates SEP-2243 standard headers; default to a
-        // pre-SEP version so headers are omitted if the version can't be determined.
-        let mut negotiated_version = ProtocolVersion::default();
-        let mut protocol_headers = {
-            let mut headers = config.custom_headers.clone();
-            if let ServerJsonRpcMessage::Response(response) = &message {
-                if let ServerResult::InitializeResult(init_result) = &response.result {
-                    negotiated_version = init_result.protocol_version.clone();
-                    if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
-                        // HeaderName::from_static requires lowercase
-                        headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
-                    }
-                }
-            }
-            headers
-        };
+        let (negotiated_version, mut protocol_headers) =
+            negotiate_version_headers(&message, config.custom_headers.clone());
         // SEP-2243: tool input schemas (name -> schema) cached from tools/list responses,
         // used to promote annotated tools/call arguments to Mcp-Param-* headers.
         let mut tool_header_cache: HashMap<String, Arc<JsonObject>> = HashMap::new();

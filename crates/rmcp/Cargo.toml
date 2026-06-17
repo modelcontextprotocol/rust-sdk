@@ -295,6 +295,11 @@ required-features = ["server", "client"]
 path = "tests/test_protocol_version_negotiation.rs"
 
 [[test]]
+name = "test_streamable_http_standard_headers"
+required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+path = "tests/test_streamable_http_standard_headers.rs"
+
+[[test]]
 name = "test_streamable_http_4xx_error_body"
 required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]
 path = "tests/test_streamable_http_4xx_error_body.rs"
