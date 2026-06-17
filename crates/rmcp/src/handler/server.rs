@@ -269,6 +269,34 @@ macro_rules! server_handler_methods {
                 McpError::method_not_found::<UnsubscribeRequestMethod>(),
             ))
         }
+        /// Handle a `tools/call` request from a client.
+        ///
+        /// # Choosing a return value
+        ///
+        /// MCP distinguishes two failure modes; the API forces you to pick
+        /// the right one explicitly because they reach the caller's UI very
+        /// differently:
+        ///
+        /// - `Ok(`[`CallToolResult::error`]`(...))` — the tool ran (or tried
+        ///   to) and produced a failure the caller should see. The
+        ///   `content` you supply is rendered in the caller's MCP client,
+        ///   so the user gets your message. **This is the right return
+        ///   value for almost every "the tool didn't work" path** — empty
+        ///   results, validation failures the user can fix, downstream
+        ///   service unavailability, etc.
+        ///
+        /// - `Err(`[`McpError`]`)` — a JSON-RPC protocol error. Use this
+        ///   only when the request itself is unroutable: unknown tool
+        ///   ([`ErrorCode::METHOD_NOT_FOUND`]), malformed request shape that
+        ///   cannot be treated as a valid `tools/call`, or a server-internal
+        ///   failure that means the server cannot serve any request right now
+        ///   ([`ErrorCode::INTERNAL_ERROR`], `-32603`). MCP clients
+        ///   typically render protocol errors opaquely; **the caller will
+        ///   not see your message** — they see something like "Tool result
+        ///   missing due to internal error". If you want the caller to read
+        ///   your error, use `Ok(CallToolResult::error(...))`.
+        ///
+        /// See [`CallToolResult::error`] for a worked example.
         fn call_tool(
             &self,
             request: CallToolRequestParams,
