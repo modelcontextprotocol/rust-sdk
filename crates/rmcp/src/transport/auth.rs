@@ -857,7 +857,7 @@ impl AuthorizationManager {
         Self::new_inner(
             base_url,
             Arc::new(ReqwestOAuthHttpClient::new(http_client)?),
-            OAuthHttpRedirectPolicy::Follow,
+            OAuthHttpRedirectPolicy::Stop,
         )
         .await
     }
