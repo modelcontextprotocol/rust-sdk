@@ -18,7 +18,7 @@ use crate::{
     model::{
         ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData,
         GetExtensions, Implementation, InitializeRequest, InitializeRequestParams,
-        InitializedNotification, JsonRpcError, ProtocolVersion, RequestId,
+        InitializedNotification, JsonObject, JsonRpcError, ProtocolVersion, RequestId,
     },
     serve_server,
     service::serve_directly,
@@ -274,12 +274,12 @@ fn header_mismatch_jsonrpc_response(
         .expect("valid response")
 }
 
-/// Validates SEP-2243 `Mcp-Method` / `Mcp-Name` headers against the request body.
+/// Validates SEP-2243 `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` headers against the body.
 ///
 /// Only enforced when the request declares a protocol version `>= STANDARD_HEADERS`.
 /// The `initialize` handshake is exempt: clients emit these headers only after the
-/// version has been negotiated. `Mcp-Param-*` validation is not enforced here because
-/// the transport layer has no synchronous access to tool input schemas.
+/// version has been negotiated. `tool_schema` supplies the called tool's input schema
+/// so annotated `Mcp-Param-*` headers can be checked (no schema => those are skipped).
 #[expect(
     clippy::result_large_err,
     reason = "BoxResponse is intentionally large; matches other handlers in this file"
@@ -287,6 +287,7 @@ fn header_mismatch_jsonrpc_response(
 fn validate_standard_headers(
     headers: &HeaderMap,
     message: &ClientJsonRpcMessage,
+    tool_schema: impl Fn(&str) -> Option<Arc<JsonObject>>,
 ) -> Result<(), BoxResponse> {
     let version_requires_headers = headers
         .get(HEADER_MCP_PROTOCOL_VERSION)
@@ -310,7 +311,16 @@ fn validate_standard_headers(
     let Ok(value) = serde_json::to_value(message) else {
         return Ok(());
     };
-    if let Err(reason) = mcp_headers::validate_request_headers(headers, &value, None) {
+    // For tools/call, look up the tool schema so Mcp-Param-* headers are validated.
+    let schema = value
+        .get("method")
+        .and_then(|method| method.as_str())
+        .filter(|method| *method == "tools/call")
+        .and_then(|_| value.get("params"))
+        .and_then(|params| params.get("name"))
+        .and_then(|name| name.as_str())
+        .and_then(tool_schema);
+    if let Err(reason) = mcp_headers::validate_request_headers(headers, &value, schema.as_deref()) {
         return Err(header_mismatch_jsonrpc_response(request_id, reason));
     }
     Ok(())
@@ -611,6 +621,10 @@ pub struct StreamableHttpService<S, M> {
     pending_restores: Option<
         Arc<tokio::sync::RwLock<HashMap<SessionId, tokio::sync::watch::Sender<Option<bool>>>>>,
     >,
+    /// Caches tool input schemas by name for SEP-2243 `Mcp-Param-*` validation.
+    /// Populated lazily via `get_tool` so the service factory runs at most once
+    /// per tool name. `None` value means the tool exposes no schema.
+    tool_schemas: Arc<std::sync::RwLock<HashMap<String, Option<Arc<JsonObject>>>>>,
 }
 
 impl<S, M> Clone for StreamableHttpService<S, M> {
@@ -620,6 +634,7 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
             session_manager: self.session_manager.clone(),
             service_factory: self.service_factory.clone(),
             pending_restores: self.pending_restores.clone(),
+            tool_schemas: self.tool_schemas.clone(),
         }
     }
 }
@@ -627,7 +642,7 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
 impl<RequestBody, S, M> tower_service::Service<Request<RequestBody>> for StreamableHttpService<S, M>
 where
     RequestBody: Body + Send + 'static,
-    S: crate::Service<RoleServer> + Send + 'static,
+    S: crate::ServerHandler + Send + 'static,
     M: SessionManager,
     RequestBody::Error: Display,
     RequestBody::Data: Send + 'static,
@@ -681,7 +696,7 @@ impl Drop for PendingRestoreGuard {
 
 impl<S, M> StreamableHttpService<S, M>
 where
-    S: crate::Service<RoleServer> + Send + 'static,
+    S: crate::ServerHandler + Send + 'static,
     M: SessionManager,
 {
     pub fn new(
@@ -700,10 +715,31 @@ where
             session_manager,
             service_factory: Arc::new(service_factory),
             pending_restores,
+            tool_schemas: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
     fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
+    }
+
+    /// Returns the cached input schema for `name`, constructing a service once
+    /// per name to read its `ServerHandler::get_tool` definition. Used to
+    /// validate SEP-2243 `Mcp-Param-*` headers against the request body.
+    fn tool_schema(&self, name: &str) -> Option<Arc<JsonObject>> {
+        if let Ok(cache) = self.tool_schemas.read() {
+            if let Some(schema) = cache.get(name) {
+                return schema.clone();
+            }
+        }
+        let schema = self
+            .get_service()
+            .ok()
+            .and_then(|service| service.get_tool(name))
+            .map(|tool| tool.input_schema);
+        if let Ok(mut cache) = self.tool_schemas.write() {
+            cache.insert(name.to_owned(), schema.clone());
+        }
+        schema
     }
 
     /// Spawn a task that runs `serve_server` for the given session, waits for
@@ -720,7 +756,7 @@ where
         transport: M::Transport,
         init_done_tx: Option<tokio::sync::oneshot::Sender<()>>,
     ) where
-        S: crate::Service<RoleServer> + Send + 'static,
+        S: crate::ServerHandler + Send + 'static,
         M: SessionManager,
     {
         tokio::spawn(async move {
@@ -763,7 +799,7 @@ where
         parts: &http::request::Parts,
     ) -> Result<bool, std::io::Error>
     where
-        S: crate::Service<RoleServer> + Send + 'static,
+        S: crate::ServerHandler + Send + 'static,
         M: SessionManager,
     {
         // Both fields are Some iff a session store is configured.
@@ -1140,7 +1176,7 @@ where
                 // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
                 validate_protocol_version_header(&part.headers)?;
                 // Validate SEP-2243 standard headers against the body
-                validate_standard_headers(&part.headers, &message)?;
+                validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
 
                 // inject request part to extensions
                 match &mut message {
@@ -1294,7 +1330,7 @@ where
                 }
             }
             // Validate SEP-2243 standard headers against the body
-            validate_standard_headers(&part.headers, &message)?;
+            validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
             let service = self
                 .get_service()
                 .map_err(internal_error_response("get service"))?;
