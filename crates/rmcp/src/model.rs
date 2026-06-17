@@ -2855,10 +2855,7 @@ impl CallToolResult {
     ///   right choice for almost every "the tool ran and didn't work" case.**
     ///
     /// - **Protocol error** — `Err(ErrorData)` with a JSON-RPC code.
-    ///   The server cannot route the request at all: the tool name is
-    ///   unknown ([`ErrorCode::METHOD_NOT_FOUND`]), the parameters cannot
-    ///   be parsed or fail schema validation
-    ///   ([`ErrorCode::INVALID_PARAMS`], `-32602`), or an infrastructure
+    ///   The server cannot route the request at all, or an infrastructure
     ///   error makes the server itself unusable
     ///   ([`ErrorCode::INTERNAL_ERROR`], `-32603`). MCP clients typically
     ///   render protocol errors opaquely (e.g. "Tool result missing due to
