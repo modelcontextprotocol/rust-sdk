@@ -276,10 +276,9 @@ macro_rules! server_handler_methods {
         ///
         /// - `Err(`[`McpError`]`)` — a JSON-RPC protocol error. Use this
         ///   only when the request itself is unroutable: unknown tool
-        ///   ([`ErrorCode::METHOD_NOT_FOUND`]), unparsable or
-        ///   schema-invalid parameters ([`ErrorCode::INVALID_PARAMS`],
-        ///   `-32602`), or a server-internal failure that means the server
-        ///   cannot serve any request right now
+        ///   ([`ErrorCode::METHOD_NOT_FOUND`]), malformed request shape that
+        ///   cannot be treated as a valid `tools/call`, or a server-internal
+        ///   failure that means the server cannot serve any request right now
         ///   ([`ErrorCode::INTERNAL_ERROR`], `-32603`). MCP clients
         ///   typically render protocol errors opaquely; **the caller will
         ///   not see your message** — they see something like "Tool result
