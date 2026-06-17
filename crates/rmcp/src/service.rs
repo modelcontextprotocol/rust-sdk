@@ -418,7 +418,7 @@ impl<R: ServiceRole> RequestHandle<R> {
             };
 
         Self::cleanup_progress_timeout_watcher(
-            &progress_timeout_watchers,
+            &self.peer.progress_timeout_watchers,
             &progress_token,
             has_progress_reset_rx,
         )
