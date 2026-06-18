@@ -39,7 +39,7 @@ jobs:
       TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL || 'gpt-4o-mini' }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install jq
         run: sudo apt-get install -y jq
