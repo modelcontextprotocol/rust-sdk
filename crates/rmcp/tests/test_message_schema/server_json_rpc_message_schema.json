@@ -3642,6 +3642,7 @@
           "$ref": "#/definitions/StringTypeConst"
         }
       },
+      "additionalProperties": false,
       "required": [
         "type",
         "enum"
