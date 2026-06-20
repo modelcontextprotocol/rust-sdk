@@ -2022,6 +2022,7 @@ async fn test_elicitation_both_modes() {
 
 /// Test URL_ELICITATION_REQUIRED error code
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_url_elicitation_required_error_code() {
     // Test the error code constant
     assert_eq!(ErrorCode::URL_ELICITATION_REQUIRED.0, -32042);

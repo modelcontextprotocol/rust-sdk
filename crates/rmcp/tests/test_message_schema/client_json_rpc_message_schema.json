@@ -143,9 +143,24 @@
           ],
           "additionalProperties": true
         },
+        "inputResponses": {
+          "description": "Client responses to server-initiated input requests from a previous\n[`InputRequiredResult`]. Present only when retrying after an incomplete result.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "name": {
           "description": "The name of the tool to call",
           "type": "string"
+        },
+        "requestState": {
+          "description": "Opaque request state echoed back from a previous [`InputRequiredResult`].\nClients MUST return this value exactly as received.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "task": {
           "description": "Task metadata for async task management (SEP-1319)",
@@ -726,8 +741,23 @@
           ],
           "additionalProperties": true
         },
+        "inputResponses": {
+          "description": "Client responses to server-initiated input requests from a previous\n[`InputRequiredResult`].",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "name": {
           "type": "string"
+        },
+        "requestState": {
+          "description": "Opaque request state echoed back from a previous [`InputRequiredResult`].",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1373,6 +1403,21 @@
             "null"
           ],
           "additionalProperties": true
+        },
+        "inputResponses": {
+          "description": "Client responses to server-initiated input requests from a previous\n[`InputRequiredResult`].",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "requestState": {
+          "description": "Opaque request state echoed back from a previous [`InputRequiredResult`].",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "uri": {
           "description": "The URI of the resource to read",

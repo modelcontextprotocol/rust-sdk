@@ -252,8 +252,7 @@ impl ServerHandler for Counter {
                 self._create_resource_text("str:////Users/to/some/path/", "cwd"),
                 self._create_resource_text("memo://insights", "memo-name"),
             ],
-            next_cursor: None,
-            meta: None,
+            ..Default::default()
         })
     }
 
@@ -293,9 +292,8 @@ impl ServerHandler for Counter {
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         Ok(ListResourceTemplatesResult {
-            next_cursor: None,
             resource_templates: Vec::new(),
-            meta: None,
+            ..Default::default()
         })
     }
 

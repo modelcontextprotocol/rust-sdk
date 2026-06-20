@@ -113,8 +113,7 @@ impl ServerHandler for SamplingDemoServer {
                     .unwrap(),
                 ),
             )],
-            meta: None,
-            next_cursor: None,
+            ..Default::default()
         })
     }
 }

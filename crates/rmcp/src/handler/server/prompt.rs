@@ -103,6 +103,7 @@ impl IntoGetPromptResult for GetPromptResult {
 impl IntoGetPromptResult for Vec<PromptMessage> {
     fn into_get_prompt_result(self) -> Result<GetPromptResult, crate::ErrorData> {
         Ok(GetPromptResult {
+            result_type: Default::default(),
             description: None,
             messages: self,
             meta: None,

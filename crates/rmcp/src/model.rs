@@ -12,6 +12,7 @@ mod content;
 mod elicitation_schema;
 mod extension;
 mod meta;
+mod mrtr;
 mod prompt;
 mod resource;
 mod serde_impl;
@@ -23,6 +24,7 @@ pub use content::*;
 pub use elicitation_schema::*;
 pub use extension::*;
 pub use meta::*;
+pub use mrtr::*;
 pub use prompt::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -516,6 +518,10 @@ impl ErrorCode {
     pub const INVALID_PARAMS: Self = Self(-32602);
     pub const INTERNAL_ERROR: Self = Self(-32603);
     pub const PARSE_ERROR: Self = Self(-32700);
+    #[deprecated(
+        since = "2.0.0",
+        note = "URLElicitationRequiredError is removed by SEP-2322 (Multi Round-Trip Requests). Use InputRequiredResult instead."
+    )]
     pub const URL_ELICITATION_REQUIRED: Self = Self(-32042);
 }
 
@@ -572,6 +578,11 @@ impl ErrorData {
     pub fn internal_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
     }
+    #[deprecated(
+        since = "2.0.0",
+        note = "URLElicitationRequiredError is removed by SEP-2322 (Multi Round-Trip Requests). Use InputRequiredResult instead."
+    )]
+    #[allow(deprecated)]
     pub fn url_elicitation_required(
         message: impl Into<Cow<'static, str>>,
         data: Option<Value>,
@@ -682,6 +693,71 @@ impl From<()> for EmptyResult {
 
 impl From<EmptyResult> for () {
     fn from(_value: EmptyResult) {}
+}
+
+/// Indicates the type of a result object, allowing the client to
+/// determine how to parse the response.
+///
+/// The spec defines this as an open string (`"complete" | "input_required" | string`),
+/// so unknown values are preserved rather than rejected. Servers implementing this
+/// protocol version MUST include `resultType` in every result. For backward
+/// compatibility, clients MUST treat an absent field as `"complete"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ResultType(Cow<'static, str>);
+
+impl ResultType {
+    pub const COMPLETE: Self = Self(Cow::Borrowed("complete"));
+    pub const INPUT_REQUIRED: Self = Self(Cow::Borrowed("input_required"));
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns `true` if this is `"input_required"`.
+    pub fn is_input_required(&self) -> bool {
+        self.0 == "input_required"
+    }
+
+    /// Returns `true` if this is `"complete"`.
+    pub fn is_complete(&self) -> bool {
+        self.0 == "complete"
+    }
+}
+
+impl Default for ResultType {
+    fn default() -> Self {
+        Self::COMPLETE
+    }
+}
+
+impl Serialize for ResultType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResultType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        match s.as_str() {
+            "complete" => Ok(Self::COMPLETE),
+            "input_required" => Ok(Self::INPUT_REQUIRED),
+            _ => Ok(Self(Cow::Owned(s))),
+        }
+    }
+}
+
+impl std::fmt::Display for ResultType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 /// A catch-all response either side can use for custom requests.
@@ -1185,6 +1261,9 @@ macro_rules! paginated_result {
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
         pub struct $t {
+            /// Result type discriminator. Absent values deserialize as `"complete"`.
+            #[serde(default)]
+            pub result_type: ResultType,
             #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
             pub meta: Option<Meta>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -1197,6 +1276,7 @@ macro_rules! paginated_result {
                 items: $t_item,
             ) -> Self {
                 Self {
+                    result_type: ResultType::default(),
                     meta: None,
                     next_cursor: None,
                     $i_item: items,
@@ -1240,6 +1320,13 @@ pub struct ReadResourceRequestParams {
     pub meta: Option<Meta>,
     /// The URI of the resource to read
     pub uri: String,
+    /// Client responses to server-initiated input requests from a previous
+    /// [`InputRequiredResult`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_responses: Option<InputResponses>,
+    /// Opaque request state echoed back from a previous [`InputRequiredResult`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
 }
 
 impl ReadResourceRequestParams {
@@ -1248,12 +1335,26 @@ impl ReadResourceRequestParams {
         Self {
             meta: None,
             uri: uri.into(),
+            input_responses: None,
+            request_state: None,
         }
     }
 
     /// Set the metadata for this request.
     pub fn with_meta(mut self, meta: Meta) -> Self {
         self.meta = Some(meta);
+        self
+    }
+
+    /// Sets the input responses for an MRTR retry.
+    pub fn with_input_responses(mut self, input_responses: InputResponses) -> Self {
+        self.input_responses = Some(input_responses);
+        self
+    }
+
+    /// Sets the request state for an MRTR retry.
+    pub fn with_request_state(mut self, request_state: impl Into<String>) -> Self {
+        self.request_state = Some(request_state.into());
         self
     }
 }
@@ -1276,6 +1377,9 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ReadResourceResult {
+    /// Result type discriminator. Absent values deserialize as `"complete"`.
+    #[serde(default)]
+    pub result_type: ResultType,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -1286,6 +1390,7 @@ impl ReadResourceResult {
     /// Create a new ReadResourceResult with the given contents.
     pub fn new(contents: Vec<ResourceContents>) -> Self {
         Self {
+            result_type: ResultType::default(),
             contents,
             meta: None,
         }
@@ -1433,6 +1538,13 @@ pub struct GetPromptRequestParams {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
+    /// Client responses to server-initiated input requests from a previous
+    /// [`InputRequiredResult`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_responses: Option<InputResponses>,
+    /// Opaque request state echoed back from a previous [`InputRequiredResult`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
 }
 
 impl GetPromptRequestParams {
@@ -1442,6 +1554,8 @@ impl GetPromptRequestParams {
             meta: None,
             name: name.into(),
             arguments: None,
+            input_responses: None,
+            request_state: None,
         }
     }
 
@@ -1454,6 +1568,18 @@ impl GetPromptRequestParams {
     /// Set the metadata for this request.
     pub fn with_meta(mut self, meta: Meta) -> Self {
         self.meta = Some(meta);
+        self
+    }
+
+    /// Sets the input responses for an MRTR retry.
+    pub fn with_input_responses(mut self, input_responses: InputResponses) -> Self {
+        self.input_responses = Some(input_responses);
+        self
+    }
+
+    /// Sets the request state for an MRTR retry.
+    pub fn with_request_state(mut self, request_state: impl Into<String>) -> Self {
+        self.request_state = Some(request_state.into());
         self
     }
 }
@@ -2438,6 +2564,9 @@ impl CompletionInfo {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct CompleteResult {
+    /// Result type discriminator. Absent values deserialize as `"complete"`.
+    #[serde(default)]
+    pub result_type: ResultType,
     pub completion: CompletionInfo,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
@@ -2447,6 +2576,7 @@ impl CompleteResult {
     /// Create a new CompleteResult with the given completion info.
     pub fn new(completion: CompletionInfo) -> Self {
         Self {
+            result_type: ResultType::default(),
             completion,
             meta: None,
         }
@@ -2929,6 +3059,9 @@ pub type ElicitationCompletionNotification = ElicitationCompleteNotification;
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct CallToolResult {
+    /// Result type discriminator. Absent values deserialize as `"complete"`.
+    #[serde(default)]
+    pub result_type: ResultType,
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
     pub content: Vec<ContentBlock>,
@@ -2956,6 +3089,8 @@ impl<'de> Deserialize<'de> for CallToolResult {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Helper {
+            #[serde(default)]
+            result_type: ResultType,
             content: Option<Vec<ContentBlock>>,
             structured_content: Option<Value>,
             is_error: Option<bool>,
@@ -2977,6 +3112,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
         }
 
         Ok(CallToolResult {
+            result_type: helper.result_type,
             content: helper.content.unwrap_or_default(),
             structured_content: helper.structured_content,
             is_error: helper.is_error,
@@ -2989,6 +3125,7 @@ impl CallToolResult {
     /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
+            result_type: ResultType::default(),
             content,
             structured_content: None,
             is_error: Some(false),
@@ -3046,6 +3183,7 @@ impl CallToolResult {
     /// ```
     pub fn error(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
+            result_type: ResultType::default(),
             content,
             structured_content: None,
             is_error: Some(true),
@@ -3068,6 +3206,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
+            result_type: ResultType::default(),
             content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
@@ -3094,6 +3233,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
+            result_type: ResultType::default(),
             content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
@@ -3170,6 +3310,14 @@ pub struct CallToolRequestParams {
     /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<TaskMetadata>,
+    /// Client responses to server-initiated input requests from a previous
+    /// [`InputRequiredResult`]. Present only when retrying after an incomplete result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_responses: Option<InputResponses>,
+    /// Opaque request state echoed back from a previous [`InputRequiredResult`].
+    /// Clients MUST return this value exactly as received.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
 }
 
 impl CallToolRequestParams {
@@ -3180,6 +3328,8 @@ impl CallToolRequestParams {
             name: name.into(),
             arguments: None,
             task: None,
+            input_responses: None,
+            request_state: None,
         }
     }
 
@@ -3192,6 +3342,18 @@ impl CallToolRequestParams {
     /// Sets the task metadata for this tool call.
     pub fn with_task(mut self, task: TaskMetadata) -> Self {
         self.task = Some(task);
+        self
+    }
+
+    /// Sets the input responses for an MRTR retry.
+    pub fn with_input_responses(mut self, input_responses: InputResponses) -> Self {
+        self.input_responses = Some(input_responses);
+        self
+    }
+
+    /// Sets the request state for an MRTR retry.
+    pub fn with_request_state(mut self, request_state: impl Into<String>) -> Self {
+        self.request_state = Some(request_state.into());
         self
     }
 }
@@ -3286,6 +3448,9 @@ impl CreateMessageResult {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GetPromptResult {
+    /// Result type discriminator. Absent values deserialize as `"complete"`.
+    #[serde(default)]
+    pub result_type: ResultType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
@@ -3297,6 +3462,7 @@ impl GetPromptResult {
     /// Create a new GetPromptResult with required fields.
     pub fn new(messages: Vec<PromptMessage>) -> Self {
         Self {
+            result_type: ResultType::default(),
             description: None,
             messages,
             meta: None,
@@ -3683,6 +3849,7 @@ ts_union!(
     | GetTaskResult
     | CancelTaskResult
     | CallToolResult
+    | InputRequiredResult
     | GetTaskPayloadResult
     | EmptyResult
     | CustomResult

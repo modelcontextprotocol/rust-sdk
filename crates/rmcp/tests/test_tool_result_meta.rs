@@ -9,6 +9,7 @@ fn serialize_tool_result_with_meta() {
     let result = CallToolResult::success(content).with_meta(Some(meta));
     let v = serde_json::to_value(&result).unwrap();
     let expected = json!({
+        "resultType": "complete",
         "content": [{"type":"text","text":"ok"}],
         "isError": false,
         "_meta": {"foo":"bar"}

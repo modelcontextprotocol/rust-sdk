@@ -1,5 +1,6 @@
 {
     "result": {
+        "resultType": "complete",
         "tools": [
             {
                 "name": "add",

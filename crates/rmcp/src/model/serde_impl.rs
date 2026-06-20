@@ -451,6 +451,8 @@ mod test {
                 name: "my_tool".into(),
                 arguments: None,
                 task: None,
+                input_responses: None,
+                request_state: None,
             },
         };
 
@@ -489,6 +491,8 @@ mod test {
                 name: "my_tool".into(),
                 arguments: None,
                 task: None,
+                input_responses: None,
+                request_state: None,
             },
         };
 
@@ -510,6 +514,8 @@ mod test {
                 name: "my_tool".into(),
                 arguments: None,
                 task: None,
+                input_responses: None,
+                request_state: None,
             },
         };
 
@@ -528,6 +534,8 @@ mod test {
                 name: "my_tool".into(),
                 arguments: None,
                 task: None,
+                input_responses: None,
+                request_state: None,
             },
         };
 
@@ -564,6 +572,8 @@ mod test {
                 name: "my_tool".into(),
                 arguments: None,
                 task: None,
+                input_responses: None,
+                request_state: None,
             },
         };
 
@@ -590,6 +600,8 @@ mod test {
                 name: "my_tool".into(),
                 arguments: Some(serde_json::Map::from_iter([("x".to_string(), json!(1))])),
                 task: None,
+                input_responses: None,
+                request_state: None,
             },
         };
 
