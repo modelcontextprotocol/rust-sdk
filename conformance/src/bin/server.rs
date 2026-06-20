@@ -204,9 +204,8 @@ impl ServerHandler for ConformanceServer {
             ),
         ];
         Ok(ListToolsResult {
-            meta: None,
             tools,
-            next_cursor: None,
+            ..Default::default()
         })
     }
 
@@ -540,7 +539,6 @@ impl ServerHandler for ConformanceServer {
         _cx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         Ok(ListResourcesResult {
-            meta: None,
             resources: vec![
                 Resource::new("test://static-text", "Static Text Resource")
                     .with_description("A static text resource for testing")
@@ -549,7 +547,7 @@ impl ServerHandler for ConformanceServer {
                     .with_description("A static binary/blob resource for testing")
                     .with_mime_type("image/png"),
             ],
-            next_cursor: None,
+            ..Default::default()
         })
     }
 
@@ -609,13 +607,12 @@ impl ServerHandler for ConformanceServer {
         _cx: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
         Ok(ListResourceTemplatesResult {
-            meta: None,
             resource_templates: vec![
                 ResourceTemplate::new("test://template/{id}/data", "Dynamic Resource")
                     .with_description("A dynamic resource with parameter substitution")
                     .with_mime_type("application/json"),
             ],
-            next_cursor: None,
+            ..Default::default()
         })
     }
 
@@ -645,7 +642,6 @@ impl ServerHandler for ConformanceServer {
         _cx: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
         Ok(ListPromptsResult {
-            meta: None,
             prompts: vec![
                 Prompt::new(
                     "test_simple_prompt",
@@ -675,7 +671,7 @@ impl ServerHandler for ConformanceServer {
                     None,
                 ),
             ],
-            next_cursor: None,
+            ..Default::default()
         })
     }
 

@@ -178,6 +178,15 @@
             "null"
           ]
         },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
+        },
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
@@ -292,6 +301,15 @@
         },
         "completion": {
           "$ref": "#/definitions/CompletionInfo"
+        },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         }
       },
       "required": [
@@ -948,6 +966,15 @@
           "items": {
             "$ref": "#/definitions/PromptMessage"
           }
+        },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         }
       },
       "required": [
@@ -1205,6 +1232,77 @@
         "serverInfo"
       ]
     },
+    "InputRequest": {
+      "description": "A server-initiated request that can appear inside [`InputRequests`].\n\nPer the MCP spec, only `CreateMessageRequest` (sampling),\n`ElicitRequest` (elicitation), and `ListRootsRequest` (roots)\nare allowed. This is modeled as an untagged enum rather than a\n`ServerRequest` alias to prevent `PingRequest` or `CustomRequest` from\nbeing included.",
+      "anyOf": [
+        {
+          "description": "A `sampling/createMessage` request.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Request"
+            }
+          ]
+        },
+        {
+          "description": "An `elicitation/create` request.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Request2"
+            }
+          ]
+        },
+        {
+          "description": "A `roots/list` request.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RequestNoParam2"
+            }
+          ]
+        }
+      ]
+    },
+    "InputRequiredResult": {
+      "description": "A result indicating that additional input is needed before the request\ncan be completed.\n\nAt least one of [`input_requests`](Self::input_requests) or\n[`request_state`](Self::request_state) MUST be present.\n\nServers MAY send this in response to `tools/call`, `prompts/get`, or\n`resources/read`. Servers MUST NOT send this for any other request.\n\n# Examples\n\n```\nuse rmcp::model::InputRequiredResult;\n\nlet result = InputRequiredResult::from_request_state(\"opaque-server-state\");\nassert!(result.input_requests.is_none());\nassert_eq!(result.request_state.as_deref(), Some(\"opaque-server-state\"));\n```",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "inputRequests": {
+          "description": "Server-initiated requests that the client must fulfill before retrying.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/InputRequest"
+          }
+        },
+        "requestState": {
+          "description": "Opaque request state to be echoed back by the client on retry.\nClients MUST NOT inspect, parse, modify, or make any assumptions\nabout the contents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resultType": {
+          "description": "Always `\"input_required\"` for this result type.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resultType"
+      ]
+    },
     "IntegerSchema": {
       "description": "Schema definition for integer properties.\n\nCompliant with MCP 2025-06-18 specification for elicitation schemas.\nSupports only the fields allowed by the MCP spec.",
       "type": "object",
@@ -1456,6 +1554,15 @@
           "items": {
             "$ref": "#/definitions/Prompt"
           }
+        },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         }
       },
       "required": [
@@ -1483,6 +1590,15 @@
           "items": {
             "$ref": "#/definitions/ResourceTemplate"
           }
+        },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         }
       },
       "required": [
@@ -1510,6 +1626,15 @@
           "items": {
             "$ref": "#/definitions/Resource"
           }
+        },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         }
       },
       "required": [
@@ -1563,6 +1688,15 @@
             "string",
             "null"
           ]
+        },
+        "resultType": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         },
         "tools": {
           "type": "array",
@@ -2129,6 +2263,15 @@
           "items": {
             "$ref": "#/definitions/ResourceContents"
           }
+        },
+        "result_type": {
+          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
         }
       },
       "required": [
@@ -2442,6 +2585,10 @@
         }
       }
     },
+    "ResultType": {
+      "description": "Indicates the type of a result object, allowing the client to\ndetermine how to parse the response.\n\nThe spec defines this as an open string (`\"complete\" | \"input_required\" | string`),\nso unknown values are preserved rather than rejected. Servers implementing this\nprotocol version MUST include `resultType` in every result. For backward\ncompatibility, clients MUST treat an absent field as `\"complete\"`.",
+      "type": "string"
+    },
     "Role": {
       "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different\ntypes of message senders in the conversation flow.",
       "oneOf": [
@@ -2737,6 +2884,9 @@
         },
         {
           "$ref": "#/definitions/CallToolResult"
+        },
+        {
+          "$ref": "#/definitions/InputRequiredResult"
         },
         {
           "$ref": "#/definitions/GetTaskPayloadResult"

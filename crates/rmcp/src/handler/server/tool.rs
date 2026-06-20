@@ -46,6 +46,7 @@ impl<'s, S> ToolCallContext<'s, S> {
             name,
             arguments,
             task,
+            ..
         }: CallToolRequestParams,
         request_context: RequestContext<RoleServer>,
     ) -> Self {
