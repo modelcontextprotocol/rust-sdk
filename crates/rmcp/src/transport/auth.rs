@@ -1508,7 +1508,7 @@ impl AuthorizationManager {
             push_candidate("/.well-known/oauth-authorization-server".to_string());
             push_candidate("/.well-known/openid-configuration".to_string());
         } else {
-            // Path components present: follow spec priority order
+            // Path components present: prefer OAuth discovery before OpenID Connect fallbacks.
             // 1. OAuth 2.0 with path insertion
             push_candidate(format!("/.well-known/oauth-authorization-server/{trimmed}"));
             // 2. OpenID Connect with path insertion
