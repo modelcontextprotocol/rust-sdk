@@ -1,3 +1,5 @@
+// Sampling/Roots/Logging are SEP-2577-deprecated; this test handler exercises them.
+#![expect(deprecated)]
 use std::{
     future::Future,
     sync::{Arc, Mutex},

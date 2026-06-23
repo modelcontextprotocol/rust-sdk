@@ -565,6 +565,7 @@
           }
         }
       },
+      "deprecated": true,
       "required": [
         "messages",
         "maxTokens"
@@ -1577,6 +1578,7 @@
     "LoggingLevel": {
       "description": "Logging levels supported by the MCP protocol",
       "type": "string",
+      "deprecated": true,
       "enum": [
         "debug",
         "info",
@@ -1623,6 +1625,7 @@
           ]
         }
       },
+      "deprecated": true,
       "required": [
         "level",
         "data"
@@ -1639,7 +1642,8 @@
             "null"
           ]
         }
-      }
+      },
+      "deprecated": true
     },
     "ModelPreferences": {
       "description": "Preferences for model selection and behavior in sampling requests.\n\nThis allows servers to express their preferences for which model to use\nand how to balance different priorities when the client has multiple\nmodel options available.",
@@ -1679,7 +1683,8 @@
           ],
           "format": "float"
         }
-      }
+      },
+      "deprecated": true
     },
     "MultiSelectEnumSchema": {
       "description": "Multi-select enum options",
@@ -2494,6 +2499,7 @@
           ]
         }
       },
+      "deprecated": true,
       "required": [
         "role",
         "content"
@@ -2501,6 +2507,7 @@
     },
     "SamplingMessageContentBlock": {
       "description": "Content types for sampling messages (SEP-1577).",
+      "deprecated": true,
       "oneOf": [
         {
           "type": "object",
@@ -3379,7 +3386,8 @@
             }
           ]
         }
-      }
+      },
+      "deprecated": true
     },
     "ToolChoiceMode": {
       "description": "Tool selection mode (SEP-1577).",
@@ -3457,6 +3465,7 @@
           "type": "string"
         }
       },
+      "deprecated": true,
       "required": [
         "toolUseId",
         "content"
@@ -3484,6 +3493,7 @@
           "type": "string"
         }
       },
+      "deprecated": true,
       "required": [
         "id",
         "name",
