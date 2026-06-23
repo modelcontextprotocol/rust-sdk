@@ -80,12 +80,22 @@ jobs:
         with:
           tool: cargo-semver-checks
 
+      - name: Determine semver release type
+        run: |
+          if git log --format=%B \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} \
+            | grep -Eq '(^[A-Za-z0-9_-]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:)'; then
+            echo "SEMVER_RELEASE_TYPE=major" >> "$GITHUB_ENV"
+          else
+            echo "SEMVER_RELEASE_TYPE=minor" >> "$GITHUB_ENV"
+          fi
+
       - name: Check rmcp (default features)
         run: |
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
-            --release-type minor \
+            --release-type "$SEMVER_RELEASE_TYPE" \
             --only-explicit-features \
             --features default
 
@@ -98,7 +108,7 @@ jobs:
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
-            --release-type minor \
+            --release-type "$SEMVER_RELEASE_TYPE" \
             --only-explicit-features \
             --features "$FEATURES"
 
