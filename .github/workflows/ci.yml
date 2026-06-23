@@ -112,6 +112,32 @@ jobs:
             --only-explicit-features \
             --features "$FEATURES"
 
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (MSRV)
+        uses: dtolnay/rust-toolchain@1.88
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `rust-toolchain.toml` pins a newer dev toolchain and would otherwise
+      # override the toolchain installed above for in-repo `cargo` invocations.
+      # Forcing `RUSTUP_TOOLCHAIN` ensures the checks actually run on the MSRV.
+      - name: Check rmcp and rmcp-macros at MSRV
+        env:
+          RUSTUP_TOOLCHAIN: "1.88"
+        run: |
+          rustc --version
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
+                      | select(startswith("__") | not)
+                      | select(. != "local")] | join(",")')
+          cargo check -p rmcp --features "$FEATURES"
+          cargo check -p rmcp-macros
+
   spelling:
     name: spell check with typos
     runs-on: ubuntu-latest
