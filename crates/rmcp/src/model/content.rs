@@ -8,7 +8,7 @@
 //! variants for sampling messages (SEP-1577).
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{Annotations, Meta, resource::ResourceContents};
 
@@ -197,7 +197,7 @@ pub struct ToolResultContent {
     pub tool_use_id: String,
     pub content: Vec<ContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub structured_content: Option<super::JsonObject>,
+    pub structured_content: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
