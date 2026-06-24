@@ -9,8 +9,8 @@ use url::Url;
 use super::*;
 #[cfg(feature = "elicitation")]
 use crate::model::{
-    CreateElicitationRequest, CreateElicitationRequestParams, CreateElicitationResult,
-    ElicitationAction, ElicitationCompletionNotification, ElicitationResponseNotificationParam,
+    ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction,
+    ElicitationCompleteNotification, ElicitationResponseNotificationParam,
 };
 use crate::{
     model::{
@@ -464,11 +464,11 @@ impl Peer<RoleServer> {
         peer_req list_roots ListRootsRequest() => ListRootsResult
     );
     #[cfg(feature = "elicitation")]
-    method!(peer_req create_elicitation CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
+    method!(peer_req create_elicitation ElicitRequest(ElicitRequestParams) => ElicitResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_req_with_timeout create_elicitation_with_timeout CreateElicitationRequest(CreateElicitationRequestParams) => CreateElicitationResult);
+    method!(peer_req_with_timeout create_elicitation_with_timeout ElicitRequest(ElicitRequestParams) => ElicitResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_not notify_url_elicitation_completed ElicitationCompletionNotification(ElicitationResponseNotificationParam));
+    method!(peer_not notify_url_elicitation_completed ElicitationCompleteNotification(ElicitationResponseNotificationParam));
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -787,7 +787,7 @@ impl Peer<RoleServer> {
 
         let response = self
             .create_elicitation_with_timeout(
-                CreateElicitationRequestParams::FormElicitationParams {
+                ElicitRequestParams::FormElicitationParams {
                     meta: None,
                     message: message.into(),
                     requested_schema: schema,
@@ -920,7 +920,7 @@ impl Peer<RoleServer> {
 
         let action = self
             .create_elicitation_with_timeout(
-                CreateElicitationRequestParams::UrlElicitationParams {
+                ElicitRequestParams::UrlElicitationParams {
                     meta: None,
                     message: message.into(),
                     url: url.into().to_string(),

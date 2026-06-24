@@ -1,27 +1,21 @@
 /// Integration tests for resource_link support in both tools and prompts
-use rmcp::model::{
-    AnnotateAble, CallToolResult, Content, PromptMessage, PromptMessageContent, PromptMessageRole,
-    RawResource, Resource,
-};
+use rmcp::model::{CallToolResult, ContentBlock, PromptMessage, Resource, Role};
 
 #[test]
 fn test_tool_and_prompt_resource_link_compatibility() {
-    // Create a resource that can be used in both tools and prompts
-    let resource = RawResource::new("file:///shared/data.json", "Shared Data");
-    let resource_annotated: Resource = resource.clone().no_annotation();
+    let resource = Resource::new("file:///shared/data.json", "Shared Data");
 
     // Test 1: Tool returning a resource link
     let tool_result = CallToolResult::success(vec![
-        Content::text("Found shared data"),
-        Content::resource_link(resource.clone()),
+        ContentBlock::text("Found shared data"),
+        ContentBlock::resource_link(resource.clone()),
     ]);
 
     let tool_json = serde_json::to_string(&tool_result).unwrap();
     assert!(tool_json.contains("\"type\":\"resource_link\""));
 
     // Test 2: Prompt returning a resource link
-    let prompt_message =
-        PromptMessage::new_resource_link(PromptMessageRole::Assistant, resource_annotated.clone());
+    let prompt_message = PromptMessage::new_resource_link(Role::Assistant, resource.clone());
 
     let prompt_json = serde_json::to_string(&prompt_message).unwrap();
     assert!(prompt_json.contains("\"type\":\"resource_link\""));
@@ -30,11 +24,9 @@ fn test_tool_and_prompt_resource_link_compatibility() {
     let tool_content = &tool_result.content[1];
     let prompt_content = &prompt_message.content;
 
-    // Extract just the resource link parts
     let tool_resource_json = serde_json::to_value(tool_content).unwrap();
     let prompt_resource_json = serde_json::to_value(prompt_content).unwrap();
 
-    // Both should have the same structure
     assert_eq!(
         tool_resource_json.get("type").unwrap(),
         prompt_resource_json.get("type").unwrap()
@@ -51,16 +43,13 @@ fn test_tool_and_prompt_resource_link_compatibility() {
 
 #[test]
 fn test_resource_link_roundtrip() {
-    // Test that resource links can be serialized and deserialized correctly
-    // in both tool results and prompt messages
-
-    let mut resource = RawResource::new("https://api.example.com/resource", "API Resource");
-    resource.description = Some("External API resource".to_string());
-    resource.mime_type = Some("application/json".to_string());
-    resource.size = Some(2048);
+    let resource = Resource::new("https://api.example.com/resource", "API Resource")
+        .with_description("External API resource")
+        .with_mime_type("application/json")
+        .with_size(2048);
 
     // Test with tool result
-    let tool_result = CallToolResult::success(vec![Content::resource_link(resource.clone())]);
+    let tool_result = CallToolResult::success(vec![ContentBlock::resource_link(resource.clone())]);
 
     let tool_json = serde_json::to_string(&tool_result).unwrap();
     let tool_deserialized: CallToolResult = serde_json::from_str(&tool_json).unwrap();
@@ -82,15 +71,12 @@ fn test_resource_link_roundtrip() {
     }
 
     // Test with prompt message
-    let prompt_message = PromptMessage::new(
-        PromptMessageRole::User,
-        PromptMessageContent::resource_link(resource.no_annotation()),
-    );
+    let prompt_message = PromptMessage::new(Role::User, ContentBlock::resource_link(resource));
 
     let prompt_json = serde_json::to_string(&prompt_message).unwrap();
     let prompt_deserialized: PromptMessage = serde_json::from_str(&prompt_json).unwrap();
 
-    if let PromptMessageContent::ResourceLink { link } = prompt_deserialized.content {
+    if let ContentBlock::ResourceLink(link) = &prompt_deserialized.content {
         assert_eq!(link.uri, "https://api.example.com/resource");
         assert_eq!(link.name, "API Resource");
         assert_eq!(link.description, Some("External API resource".to_string()));
@@ -103,18 +89,15 @@ fn test_resource_link_roundtrip() {
 
 #[test]
 fn test_mixed_content_in_prompts_and_tools() {
-    // Test that resource links can be mixed with other content types
-    // in both prompts and tools
-
-    let resource1 = RawResource::new("file:///doc1.md", "Document 1");
-    let resource2 = RawResource::new("file:///doc2.md", "Document 2");
+    let resource1 = Resource::new("file:///doc1.md", "Document 1");
+    let resource2 = Resource::new("file:///doc2.md", "Document 2");
 
     // Tool with mixed content
     let tool_result = CallToolResult::success(vec![
-        Content::text("Processing complete. Found documents:"),
-        Content::resource_link(resource1.clone()),
-        Content::resource_link(resource2.clone()),
-        Content::embedded_text("summary://result", "Both documents processed successfully"),
+        ContentBlock::text("Processing complete. Found documents:"),
+        ContentBlock::resource_link(resource1),
+        ContentBlock::resource_link(resource2),
+        ContentBlock::embedded_text("summary://result", "Both documents processed successfully"),
     ]);
 
     assert_eq!(tool_result.content.len(), 4);

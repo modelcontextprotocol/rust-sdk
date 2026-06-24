@@ -48,8 +48,10 @@ impl ServerHandler for TestServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
-                .enable_tools_with(ToolsCapability {
-                    list_changed: Some(true),
+                .enable_tools_with({
+                    let mut tools = ToolsCapability::default();
+                    tools.list_changed = Some(true);
+                    tools
                 })
                 .build(),
         )

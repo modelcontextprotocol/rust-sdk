@@ -38,7 +38,7 @@ impl ServerHandler for Server {
             let _enter = span.enter();
 
             if let Err(e) = peer
-                .notify_resource_updated(ResourceUpdatedNotificationParam { uri: uri.clone() })
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(uri.clone()))
                 .await
             {
                 panic!("Failed to send notification: {}", e);

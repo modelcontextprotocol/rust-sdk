@@ -3,11 +3,54 @@ use serde_json::Value;
 
 use super::Meta;
 
+/// Metadata for augmenting a request with task execution (spec `TaskMetadata`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TaskMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<u64>,
+}
+
+impl TaskMetadata {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_ttl(mut self, ttl: u64) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+}
+
+/// Metadata for associating messages with a task (spec `RelatedTaskMetadata`).
+///
+/// Carried in `_meta` under the key `"io.modelcontextprotocol/related-task"`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct RelatedTaskMetadata {
+    pub task_id: String,
+}
+
+impl RelatedTaskMetadata {
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            task_id: task_id.into(),
+        }
+    }
+
+    /// The well-known `_meta` key for related-task metadata.
+    pub const META_KEY: &str = "io.modelcontextprotocol/related-task";
+}
+
 /// Canonical task lifecycle status as defined by SEP-1686.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub enum TaskStatus {
     /// The receiver accepted the request and is currently working on it.
     #[default]
@@ -111,12 +154,18 @@ impl CreateTaskResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct GetTaskResult {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     #[serde(flatten)]
     pub task: Task,
+}
+
+impl GetTaskResult {
+    pub fn new(task: Task) -> Self {
+        Self { meta: None, task }
+    }
 }
 
 /// Response to a `tasks/result` request.
@@ -162,7 +211,7 @@ impl<'de> serde::Deserialize<'de> for GetTaskPayloadResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct CancelTaskResult {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
@@ -170,11 +219,17 @@ pub struct CancelTaskResult {
     pub task: Task,
 }
 
+impl CancelTaskResult {
+    pub fn new(task: Task) -> Self {
+        Self { meta: None, task }
+    }
+}
+
 /// Paginated list of tasks
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct TaskList {
     pub tasks: Vec<Task>,
     #[serde(skip_serializing_if = "Option::is_none")]

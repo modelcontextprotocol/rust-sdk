@@ -40,7 +40,7 @@ impl Demo {
         &self,
         chat_request: Parameters<ChatRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let content = Content::json(chat_request.0)?;
+        let content = ContentBlock::json(chat_request.0)?;
         Ok(CallToolResult::success(vec![content]))
     }
 }

@@ -37,109 +37,8 @@
     }
   ],
   "definitions": {
-    "Annotated": {
-      "type": "object",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "text"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawTextContent"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "image"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawImageContent"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "resource"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawEmbeddedResource"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "audio"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawAudioContent"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "resource_link"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawResource"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        }
-      ]
-    },
     "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are\nused or displayed.",
       "type": "object",
       "properties": {
         "audience": {
@@ -182,6 +81,43 @@
         "value"
       ]
     },
+    "AudioContent": {
+      "description": "Audio content with base64-encoded data (spec `AudioContent`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "description": "The base64-encoded audio data.",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of the audio (e.g. `audio/wav`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
     "CallToolRequestMethod": {
       "type": "string",
       "format": "const",
@@ -213,11 +149,14 @@
         },
         "task": {
           "description": "Task metadata for async task management (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -256,6 +195,13 @@
     "CancelledNotificationParam": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "reason": {
           "type": [
             "string",
@@ -263,12 +209,16 @@
           ]
         },
         "requestId": {
-          "$ref": "#/definitions/NumberOrString"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NumberOrString"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      },
-      "required": [
-        "requestId"
-      ]
+      }
     },
     "ClientCapabilities": {
       "title": "Builder",
@@ -350,7 +300,7 @@
           "$ref": "#/definitions/ListRootsResult"
         },
         {
-          "$ref": "#/definitions/CreateElicitationResult"
+          "$ref": "#/definitions/ElicitResult"
         },
         {
           "$ref": "#/definitions/EmptyObject"
@@ -415,32 +365,94 @@
         }
       }
     },
-    "CreateElicitationResult": {
-      "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this result.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "action": {
-          "description": "The user's decision on how to handle the elicitation request",
+    "ContentBlock": {
+      "description": "Unified content block union (spec `ContentBlock`).\n\n`text | image | audio | resource_link | resource`",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
           "allOf": [
             {
-              "$ref": "#/definitions/ElicitationAction"
+              "$ref": "#/definitions/TextContent"
             }
+          ],
+          "required": [
+            "type"
           ]
         },
-        "content": {
-          "description": "The actual data provided by the user, if they accepted the request.\nMust conform to the JSON schema specified in the original request.\nOnly present when action is Accept."
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/EmbeddedResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Resource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
         }
-      },
-      "required": [
-        "action"
       ]
     },
     "CreateMessageResult": {
@@ -517,6 +529,34 @@
     "CustomResult": {
       "description": "A catch-all response either side can use for custom requests."
     },
+    "ElicitResult": {
+      "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this result.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "action": {
+          "description": "The user's decision on how to handle the elicitation request",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ElicitationAction"
+            }
+          ]
+        },
+        "content": {
+          "description": "The actual data provided by the user, if they accepted the request.\nMust conform to the JSON schema specified in the original request.\nOnly present when action is Accept."
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
     "ElicitationAction": {
       "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
       "oneOf": [
@@ -576,6 +616,42 @@
           "additionalProperties": true
         }
       }
+    },
+    "EmbeddedResource": {
+      "description": "Embedded resource content (spec `EmbeddedResource`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "description": "The embedded resource contents (text or blob).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceContents"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resource"
+      ]
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
@@ -657,12 +733,12 @@
         "name"
       ]
     },
-    "GetTaskInfoMethod": {
+    "GetTaskMethod": {
       "type": "string",
       "format": "const",
       "const": "tasks/get"
     },
-    "GetTaskInfoParams": {
+    "GetTaskParams": {
       "type": "object",
       "properties": {
         "_meta": {
@@ -681,12 +757,12 @@
         "taskId"
       ]
     },
-    "GetTaskResultMethod": {
+    "GetTaskPayloadMethod": {
       "type": "string",
       "format": "const",
       "const": "tasks/result"
     },
-    "GetTaskResultParams": {
+    "GetTaskPayloadParams": {
       "type": "object",
       "properties": {
         "_meta": {
@@ -759,6 +835,43 @@
           "type": "string",
           "const": "dark"
         }
+      ]
+    },
+    "ImageContent": {
+      "description": "Image content with base64-encoded data (spec `ImageContent`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "description": "The base64-encoded image data.",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of the image (e.g. `image/png`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
       ]
     },
     "Implementation": {
@@ -900,6 +1013,9 @@
         },
         {
           "$ref": "#/definitions/NotificationNoParam2"
+        },
+        {
+          "$ref": "#/definitions/Notification3"
         },
         {
           "$ref": "#/definitions/CustomNotification"
@@ -1087,6 +1203,21 @@
         "params"
       ]
     },
+    "Notification3": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/TaskStatusNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/Task"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
     "NotificationNoParam": {
       "type": "object",
       "properties": {
@@ -1151,6 +1282,13 @@
     "ProgressNotificationParam": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "message": {
           "description": "An optional message describing the current progress.",
           "type": [
@@ -1191,6 +1329,13 @@
     "PromptReference": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "name": {
           "type": "string"
         },
@@ -1208,149 +1353,6 @@
     "ProtocolVersion": {
       "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
-    },
-    "RawAudioContent": {
-      "type": "object",
-      "properties": {
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
-      ]
-    },
-    "RawEmbeddedResource": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "resource": {
-          "$ref": "#/definitions/ResourceContents"
-        }
-      },
-      "required": [
-        "resource"
-      ]
-    },
-    "RawImageContent": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "data": {
-          "description": "The base64-encoded image",
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
-      ]
-    },
-    "RawResource": {
-      "description": "Represents a resource in the extension with metadata",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional additional metadata for this resource",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "description": {
-          "description": "Optional description of the resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "icons": {
-          "description": "Optional list of icons for the resource",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/definitions/Icon"
-          }
-        },
-        "mimeType": {
-          "description": "MIME type of the resource content (\"text\" or \"blob\")",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "Name of the resource",
-          "type": "string"
-        },
-        "size": {
-          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "title": {
-          "description": "Human-readable title of the resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
-          "type": "string"
-        }
-      },
-      "required": [
-        "uri",
-        "name"
-      ]
-    },
-    "RawTextContent": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text"
-      ]
     },
     "ReadResourceRequestMethod": {
       "type": "string",
@@ -1390,7 +1392,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/ResourceReference"
+              "$ref": "#/definitions/ResourceTemplateReference"
             }
           ],
           "required": [
@@ -1437,10 +1439,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/GetTaskResultMethod"
+          "$ref": "#/definitions/GetTaskPayloadMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskResultParams"
+          "$ref": "#/definitions/GetTaskPayloadParams"
         }
       },
       "required": [
@@ -1581,10 +1583,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/GetTaskInfoMethod"
+          "$ref": "#/definitions/GetTaskMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskInfoParams"
+          "$ref": "#/definitions/GetTaskParams"
         }
       },
       "required": [
@@ -1708,7 +1710,85 @@
         "method"
       ]
     },
+    "Resource": {
+      "description": "A known resource that the server is capable of reading (spec `Resource`).\n\nAlso used as the inner type of `ContentBlock::ResourceLink` (spec `ResourceLink extends Resource`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this resource.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this resource.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Optional description of what this resource represents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional set of icons the client may display for this resource.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "The MIME type of this resource, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The programmatic name of the resource.",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content in bytes (before base64/tokenization), if known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Optional human-readable display title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "The URI of this resource (e.g. `file:///path/to/file`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
     "ResourceContents": {
+      "description": "The contents of a specific resource or sub-resource.",
       "anyOf": [
         {
           "type": "object",
@@ -1768,7 +1848,7 @@
         }
       ]
     },
-    "ResourceReference": {
+    "ResourceTemplateReference": {
       "type": "object",
       "properties": {
         "uri": {
@@ -1797,6 +1877,13 @@
     "Root": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "name": {
           "type": [
             "string",
@@ -1854,17 +1941,17 @@
       "description": "Single or array content wrapper (SEP-1577).",
       "anyOf": [
         {
-          "$ref": "#/definitions/SamplingMessageContent"
+          "$ref": "#/definitions/SamplingMessageContentBlock"
         },
         {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/SamplingMessageContent"
+            "$ref": "#/definitions/SamplingMessageContentBlock"
           }
         }
       ]
     },
-    "SamplingMessageContent": {
+    "SamplingMessageContentBlock": {
       "description": "Content types for sampling messages (SEP-1577).",
       "oneOf": [
         {
@@ -1877,7 +1964,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/RawTextContent"
+              "$ref": "#/definitions/TextContent"
             }
           ],
           "required": [
@@ -1894,7 +1981,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/RawImageContent"
+              "$ref": "#/definitions/ImageContent"
             }
           ],
           "required": [
@@ -1911,7 +1998,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/RawAudioContent"
+              "$ref": "#/definitions/AudioContent"
             }
           ],
           "required": [
@@ -2025,6 +2112,77 @@
         "uri"
       ]
     },
+    "Task": {
+      "description": "Primary Task object that surfaces metadata during the task lifecycle.\n\nPer spec, `lastUpdatedAt` and `ttl` are required fields.\n`ttl` is nullable (`null` means unlimited retention).",
+      "type": "object",
+      "properties": {
+        "createdAt": {
+          "description": "ISO-8601 creation timestamp.",
+          "type": "string"
+        },
+        "lastUpdatedAt": {
+          "description": "ISO-8601 timestamp for the most recent status change.",
+          "type": "string"
+        },
+        "pollInterval": {
+          "description": "Suggested polling interval (milliseconds).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "description": "Current lifecycle status (see [`TaskStatus`]).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TaskStatus"
+            }
+          ]
+        },
+        "statusMessage": {
+          "description": "Optional human-readable status message for UI surfaces.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "description": "Unique task identifier generated by the receiver.",
+          "type": "string"
+        },
+        "ttl": {
+          "description": "Retention window in milliseconds that the receiver agreed to honor.\n`None` (serialized as `null`) means unlimited retention.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "taskId",
+        "status",
+        "createdAt",
+        "lastUpdatedAt"
+      ]
+    },
+    "TaskMetadata": {
+      "description": "Metadata for augmenting a request with task execution (spec `TaskMetadata`).",
+      "type": "object",
+      "properties": {
+        "ttl": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
     "TaskRequestsCapability": {
       "description": "Request types that support task-augmented execution.",
       "type": "object",
@@ -2061,6 +2219,41 @@
         }
       }
     },
+    "TaskStatus": {
+      "description": "Canonical task lifecycle status as defined by SEP-1686.",
+      "oneOf": [
+        {
+          "description": "The receiver accepted the request and is currently working on it.",
+          "type": "string",
+          "const": "working"
+        },
+        {
+          "description": "The receiver requires additional input before work can continue.",
+          "type": "string",
+          "const": "input_required"
+        },
+        {
+          "description": "The underlying operation completed successfully and the result is ready.",
+          "type": "string",
+          "const": "completed"
+        },
+        {
+          "description": "The underlying operation failed and will not continue.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "The task was cancelled and will not continue processing.",
+          "type": "string",
+          "const": "cancelled"
+        }
+      ]
+    },
+    "TaskStatusNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/tasks/status"
+    },
     "TasksCapability": {
       "description": "Task capabilities shared by client and server.",
       "type": "object",
@@ -2091,12 +2284,43 @@
         }
       }
     },
+    "TextContent": {
+      "description": "Text content block (spec `TextContent`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "description": "The text content of the message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
     "ToolResultContent": {
       "description": "Tool execution result in user message (SEP-1577).",
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Optional metadata",
           "type": [
             "object",
             "null"
@@ -2104,21 +2328,18 @@
           "additionalProperties": true
         },
         "content": {
-          "description": "Content blocks returned by the tool",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated"
+            "$ref": "#/definitions/ContentBlock"
           }
         },
         "isError": {
-          "description": "Whether tool execution failed",
           "type": [
             "boolean",
             "null"
           ]
         },
         "structuredContent": {
-          "description": "Optional structured result",
           "type": [
             "object",
             "null"
@@ -2126,7 +2347,6 @@
           "additionalProperties": true
         },
         "toolUseId": {
-          "description": "ID of the corresponding tool use",
           "type": "string"
         }
       },
@@ -2139,7 +2359,6 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Optional metadata (preserved for caching)",
           "type": [
             "object",
             "null"
@@ -2147,16 +2366,13 @@
           "additionalProperties": true
         },
         "id": {
-          "description": "Unique identifier for this tool call",
           "type": "string"
         },
         "input": {
-          "description": "Input arguments for the tool",
           "type": "object",
           "additionalProperties": true
         },
         "name": {
-          "description": "Name of the tool to call",
           "type": "string"
         }
       },

@@ -11,8 +11,8 @@ use anyhow::{Result, anyhow};
 use rmcp::{
     ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResult, ClientRequest, GetTaskInfoParams,
-        GetTaskResultParams, JsonObject, Request, ServerResult, TaskStatus,
+        CallToolRequestParams, CallToolResult, ClientRequest, GetTaskParams, GetTaskPayloadParams,
+        Request, ServerResult, TaskMetadata, TaskStatus,
     },
     object,
     transport::{ConfigureCommandExt, TokioChildProcess},
@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
         .send_request(ClientRequest::CallToolRequest(Request::new(
             CallToolRequestParams::new("slow_sum")
                 .with_arguments(object!({ "a": 40, "b": 2 }))
-                .with_task(JsonObject::new()),
+                .with_task(TaskMetadata::new()),
         )))
         .await?;
     let ServerResult::CreateTaskResult(create) = create else {
@@ -77,11 +77,8 @@ async fn main() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
         let info = client
-            .send_request(ClientRequest::GetTaskInfoRequest(Request::new(
-                GetTaskInfoParams {
-                    meta: None,
-                    task_id: task_id.clone(),
-                },
+            .send_request(ClientRequest::GetTaskRequest(Request::new(
+                GetTaskParams::new(task_id.clone()),
             )))
             .await?;
         let ServerResult::GetTaskResult(info) = info else {
@@ -108,11 +105,8 @@ async fn main() -> Result<()> {
     //    here. (For a non-tool task the same value would surface as
     //    `ServerResult::CustomResult` and need manual `serde_json::from_value`.)
     let payload = client
-        .send_request(ClientRequest::GetTaskResultRequest(Request::new(
-            GetTaskResultParams {
-                meta: None,
-                task_id: task_id.clone(),
-            },
+        .send_request(ClientRequest::GetTaskPayloadRequest(Request::new(
+            GetTaskPayloadParams::new(task_id.clone()),
         )))
         .await?;
     let call_result: CallToolResult = match payload {

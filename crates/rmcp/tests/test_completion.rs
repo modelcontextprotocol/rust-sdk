@@ -54,10 +54,7 @@ fn test_complete_request_param_serialization() {
 
     let request = CompleteRequestParams::new(
         Reference::for_prompt("weather_prompt"),
-        ArgumentInfo {
-            name: "location".to_string(),
-            value: "San".to_string(),
-        },
+        ArgumentInfo::new("location", "San"),
     )
     .with_context(CompletionContext::with_arguments(args));
 
@@ -144,11 +141,8 @@ fn test_reference_convenience_methods() {
 #[test]
 fn test_completion_serialization_format() {
     // Test that completion follows MCP 2025-06-18 specification format
-    let completion = CompletionInfo {
-        values: vec!["value1".to_string(), "value2".to_string()],
-        total: Some(2),
-        has_more: Some(false),
-    };
+    let completion =
+        CompletionInfo::with_all_values(vec!["value1".to_string(), "value2".to_string()]).unwrap();
 
     let json = serde_json::to_value(&completion).unwrap();
 
@@ -162,15 +156,11 @@ fn test_completion_serialization_format() {
 
 #[test]
 fn test_resource_reference() {
-    // Test that ResourceReference works correctly
-    let resource_ref = ResourceReference {
-        uri: "test://uri".to_string(),
-    };
+    // Test that ResourceTemplateReference works correctly
+    let resource_ref = ResourceTemplateReference::new("test://uri");
 
-    // Test that ResourceReference works correctly
-    let another_ref = ResourceReference {
-        uri: "test://uri".to_string(),
-    };
+    // Test that ResourceTemplateReference works correctly
+    let another_ref = ResourceTemplateReference::new("test://uri");
 
     // They should be equivalent
     assert_eq!(resource_ref.uri, another_ref.uri);
@@ -197,10 +187,7 @@ fn test_mcp_schema_compliance() {
     // Test that our types serialize correctly according to MCP specification
     let request = CompleteRequestParams::new(
         Reference::for_resource("file://{path}"),
-        ArgumentInfo {
-            name: "path".to_string(),
-            value: "src/".to_string(),
-        },
+        ArgumentInfo::new("path", "src/"),
     );
 
     let json_str = serde_json::to_string(&request).unwrap();

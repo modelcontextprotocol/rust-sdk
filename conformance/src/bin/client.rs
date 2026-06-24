@@ -45,48 +45,46 @@ struct ElicitationDefaultsClientHandler;
 impl ClientHandler for ElicitationDefaultsClientHandler {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
-        info.capabilities.elicitation = Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(true),
-            }),
-            url: None,
-        });
+        info.capabilities.elicitation = Some(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+        );
         info
     }
 
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, ErrorData> {
+    ) -> Result<ElicitResult, ErrorData> {
         let content = match &request {
-            CreateElicitationRequestParams::FormElicitationParams {
+            ElicitRequestParams::FormElicitationParams {
                 requested_schema, ..
             } => {
                 let mut defaults = serde_json::Map::new();
                 for (name, prop) in &requested_schema.properties {
                     match prop {
-                        PrimitiveSchema::String(s) => {
+                        PrimitiveSchemaDefinition::String(s) => {
                             if let Some(d) = &s.default {
                                 defaults.insert(name.clone(), Value::String(d.clone()));
                             }
                         }
-                        PrimitiveSchema::Number(n) => {
+                        PrimitiveSchemaDefinition::Number(n) => {
                             if let Some(d) = n.default {
                                 defaults.insert(name.clone(), json!(d));
                             }
                         }
-                        PrimitiveSchema::Integer(i) => {
+                        PrimitiveSchemaDefinition::Integer(i) => {
                             if let Some(d) = i.default {
                                 defaults.insert(name.clone(), json!(d));
                             }
                         }
-                        PrimitiveSchema::Boolean(b) => {
+                        PrimitiveSchemaDefinition::Boolean(b) => {
                             if let Some(d) = b.default {
                                 defaults.insert(name.clone(), Value::Bool(d));
                             }
                         }
-                        PrimitiveSchema::Enum(e) => {
+                        PrimitiveSchemaDefinition::Enum(e) => {
                             let val = match e {
                                 EnumSchema::Single(SingleSelectEnumSchema::Untitled(u)) => {
                                     u.default.as_ref().map(|d| Value::String(d.clone()))
@@ -109,22 +107,22 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
                                     })
                                 }
                                 EnumSchema::Legacy(_) => None,
+                                _ => None,
                             };
                             if let Some(v) = val {
                                 defaults.insert(name.clone(), v);
                             }
                         }
+                        _ => {}
                     }
                 }
                 Some(Value::Object(defaults))
             }
             _ => Some(json!({})),
         };
-        Ok(CreateElicitationResult {
-            action: ElicitationAction::Accept,
-            content,
-            meta: None,
-        })
+        let mut result = ElicitResult::new(ElicitationAction::Accept);
+        result.content = content;
+        Ok(result)
     }
 }
 
@@ -134,12 +132,10 @@ struct FullClientHandler;
 impl ClientHandler for FullClientHandler {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
-        info.capabilities.elicitation = Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(true),
-            }),
-            url: None,
-        });
+        info.capabilities.elicitation = Some(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+        );
         info
     }
 
@@ -158,7 +154,7 @@ impl ClientHandler for FullClientHandler {
         Ok(CreateMessageResult::new(
             SamplingMessage::new(
                 Role::Assistant,
-                SamplingMessageContent::text(format!(
+                SamplingMessageContentBlock::text(format!(
                     "This is a mock LLM response to: {}",
                     prompt_text
                 )),
@@ -170,14 +166,11 @@ impl ClientHandler for FullClientHandler {
 
     async fn create_elicitation(
         &self,
-        _request: CreateElicitationRequestParams,
+        _request: ElicitRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, ErrorData> {
-        Ok(CreateElicitationResult {
-            action: ElicitationAction::Accept,
-            content: Some(json!({"username": "testuser", "email": "test@example.com"})),
-            meta: None,
-        })
+    ) -> Result<ElicitResult, ErrorData> {
+        Ok(ElicitResult::new(ElicitationAction::Accept)
+            .with_content(json!({"username": "testuser", "email": "test@example.com"})))
     }
 }
 

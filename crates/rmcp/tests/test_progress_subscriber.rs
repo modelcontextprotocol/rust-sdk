@@ -71,12 +71,11 @@ impl MyServer {
             ))?;
         for step in 0..10 {
             let _ = client
-                .notify_progress(ProgressNotificationParam {
-                    progress_token: progress_token.clone(),
-                    progress: (step as f64),
-                    total: Some(10.0),
-                    message: Some("Some message".into()),
-                })
+                .notify_progress(
+                    ProgressNotificationParam::new(progress_token.clone(), step as f64)
+                        .with_total(10.0)
+                        .with_message("Some message"),
+                )
                 .await;
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
