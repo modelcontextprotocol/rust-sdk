@@ -121,7 +121,9 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
             _ => Some(json!({})),
         };
         let mut result = ElicitResult::new(ElicitationAction::Accept);
-        result.content = content;
+        if let Some(c) = content {
+            result = result.with_content(c);
+        }
         Ok(result)
     }
 }

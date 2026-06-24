@@ -359,6 +359,17 @@ async fn test_tool_result_content_serialization() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_tool_result_content_requires_content() {
+    let raw = serde_json::json!({
+        "toolUseId": "call_123"
+    });
+
+    let err = serde_json::from_value::<ToolResultContent>(raw).unwrap_err();
+
+    assert!(err.to_string().contains("missing field `content`"));
+}
+
 #[tokio::test]
 async fn test_sampling_message_with_tool_use() -> Result<()> {
     let message = SamplingMessage::assistant_tool_use(

@@ -195,7 +195,6 @@ pub struct ToolResultContent {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     pub tool_use_id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content: Vec<ContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<super::JsonObject>,

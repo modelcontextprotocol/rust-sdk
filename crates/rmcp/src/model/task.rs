@@ -138,12 +138,20 @@ impl Task {
 #[non_exhaustive]
 pub struct CreateTaskResult {
     pub task: Task,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl CreateTaskResult {
     /// Create a new CreateTaskResult.
     pub fn new(task: Task) -> Self {
-        Self { task }
+        Self { task, meta: None }
+    }
+
+    /// Sets the protocol-level metadata for this result.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
     }
 }
 
@@ -222,29 +230,5 @@ pub struct CancelTaskResult {
 impl CancelTaskResult {
     pub fn new(task: Task) -> Self {
         Self { meta: None, task }
-    }
-}
-
-/// Paginated list of tasks
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct TaskList {
-    pub tasks: Vec<Task>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
-}
-
-impl TaskList {
-    /// Create a new TaskList.
-    pub fn new(tasks: Vec<Task>) -> Self {
-        Self {
-            tasks,
-            next_cursor: None,
-            total: None,
-        }
     }
 }

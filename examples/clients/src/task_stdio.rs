@@ -53,9 +53,9 @@ async fn main() -> Result<()> {
         .await?;
     tracing::info!("quick_echo -> {echo:#?}");
 
-    // 2) Task call. `slow_sum` is task_support = required, so we MUST attach a
-    //    `task` object. An empty object is fine — clients can stash arbitrary
-    //    metadata here that the server-side `OperationDescriptor` will keep.
+    // 2) Task call. `slow_sum` is task_support = required, so we MUST attach
+    //    `task` metadata. An empty `TaskMetadata` is fine; use `.with_ttl(...)`
+    //    to set a retention window.
     let create = client
         .send_request(ClientRequest::CallToolRequest(Request::new(
             CallToolRequestParams::new("slow_sum")

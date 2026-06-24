@@ -156,14 +156,18 @@ fn test_completion_serialization_format() {
 
 #[test]
 fn test_resource_reference() {
-    // Test that ResourceTemplateReference works correctly
-    let resource_ref = ResourceTemplateReference::new("test://uri");
+    // ResourceTemplateReference가 `ref/resource` 와이어 태그로 직렬화/역직렬화되는지 확인
+    let reference = Reference::for_resource("test://uri");
 
-    // Test that ResourceTemplateReference works correctly
-    let another_ref = ResourceTemplateReference::new("test://uri");
+    let json = serde_json::to_value(&reference).unwrap();
+    assert_eq!(json["type"], "ref/resource");
+    assert_eq!(json["uri"], "test://uri");
 
-    // They should be equivalent
-    assert_eq!(resource_ref.uri, another_ref.uri);
+    let back: Reference = serde_json::from_value(json).unwrap();
+    match back {
+        Reference::Resource(r) => assert_eq!(r.uri, "test://uri"),
+        other => panic!("expected Reference::Resource, got {other:?}"),
+    }
 }
 
 #[test]

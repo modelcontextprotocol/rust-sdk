@@ -1,4 +1,8 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 mod annotated;
 mod capabilities;
 mod content;
@@ -702,6 +706,7 @@ impl CustomResult {
 pub struct CancelledNotificationParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<RequestId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
@@ -2417,7 +2422,6 @@ impl Reference {
         Self::Prompt(PromptReference {
             name: name.into(),
             title: None,
-            meta: None,
         })
     }
 
@@ -2474,8 +2478,6 @@ pub struct PromptReference {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
 }
 
 impl PromptReference {
@@ -2484,7 +2486,6 @@ impl PromptReference {
         Self {
             name: name.into(),
             title: None,
-            meta: None,
         }
     }
 
@@ -2561,12 +2562,20 @@ pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 #[non_exhaustive]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ListRootsResult {
     /// Creates a new `ListRootsResult` with the given roots.
     pub fn new(roots: Vec<Root>) -> Self {
-        Self { roots }
+        Self { roots, meta: None }
+    }
+
+    /// Sets the protocol-level metadata for this result.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
     }
 }
 
@@ -3370,7 +3379,47 @@ const_string!(TaskStatusNotificationMethod = "notifications/tasks/status");
 /// Parameters for a task status notification (spec `TaskStatusNotificationParams`).
 ///
 /// The task fields are flattened at the top level: `NotificationParams & Task`.
-pub type TaskStatusNotificationParam = crate::model::Task;
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TaskStatusNotificationParam {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    #[serde(flatten)]
+    pub task: crate::model::Task,
+}
+
+impl TaskStatusNotificationParam {
+    pub fn new(task: crate::model::Task) -> Self {
+        Self { meta: None, task }
+    }
+
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+impl From<crate::model::Task> for TaskStatusNotificationParam {
+    fn from(task: crate::model::Task) -> Self {
+        Self::new(task)
+    }
+}
+
+impl Deref for TaskStatusNotificationParam {
+    type Target = crate::model::Task;
+
+    fn deref(&self) -> &Self::Target {
+        &self.task
+    }
+}
+
+impl DerefMut for TaskStatusNotificationParam {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.task
+    }
+}
 
 pub type TaskStatusNotification =
     Notification<TaskStatusNotificationMethod, TaskStatusNotificationParam>;
@@ -3612,6 +3661,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_aliases_still_resolve() {
+        // 하위호환: 구 이름이 새 타입으로 여전히 resolve되는지 확인.
+        let _: CreateElicitationResult = ElicitResult::new(ElicitationAction::Accept);
+        let _: GetTaskResultParams = GetTaskPayloadParams::new("task-1");
+        let _: ResourceReference = ResourceTemplateReference::new("res://x");
+    }
+
+    #[test]
+    fn cancelled_notification_request_id_is_optional_on_wire() {
+        // None → requestId 생략
+        let p = CancelledNotificationParam::new(None, Some("user cancelled".into()));
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v.get("requestId").is_none());
+
+        // Some → requestId 방출 + 라운드트립
+        let p = CancelledNotificationParam::new(Some(RequestId::Number(1)), None);
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["requestId"], json!(1));
+        let back: CancelledNotificationParam = serde_json::from_value(v).unwrap();
+        assert_eq!(back.request_id, Some(RequestId::Number(1)));
+    }
 
     #[test]
     fn test_notification_serde() {

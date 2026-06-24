@@ -128,7 +128,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     ///
     /// # Example
     /// ```rust,ignore
-    /// use rmcp::model::CreateElicitationRequestParam;
+    /// use rmcp::model::ElicitRequestParams;
     /// use rmcp::{
     ///     model::ErrorData as McpError,
     ///     model::*,
@@ -139,11 +139,11 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     /// impl ClientHandler for MyClient {
     ///  async fn create_elicitation(
     ///     &self,
-    ///     request: CreateElicitationRequestParam,
+    ///     request: ElicitRequestParams,
     ///     context: RequestContext<RoleClient>,
     ///  ) -> Result<ElicitResult, McpError> {
     ///     match request {
-    ///         CreateElicitationRequestParam::FormElicitationParam {meta, message, requested_schema,} => {
+    ///         ElicitRequestParams::FormElicitationParam {meta, message, requested_schema,} => {
     ///            // Display message to user and collect input according to requested_schema
     ///           let user_input = get_user_input(message, requested_schema).await?;
     ///          Ok(ElicitResult {
@@ -152,7 +152,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     ///              meta: None,
     ///          })
     ///         }
-    ///         CreateElicitationRequestParam::UrlElicitationParam {meta, message, url, elicitation_id,} => {
+    ///         ElicitRequestParams::UrlElicitationParam {meta, message, url, elicitation_id,} => {
     ///           // Open URL in browser for user to complete elicitation
     ///           open_url_in_browser(url).await?;
     ///          Ok(ElicitResult {
