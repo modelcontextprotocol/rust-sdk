@@ -37,238 +37,8 @@
     }
   ],
   "definitions": {
-    "Annotated": {
-      "type": "object",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "text"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawTextContent"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "image"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawImageContent"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "resource"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawEmbeddedResource"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "audio"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawAudioContent"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "resource_link"
-            }
-          },
-          "allOf": [
-            {
-              "$ref": "#/definitions/RawResource"
-            }
-          ],
-          "required": [
-            "type"
-          ]
-        }
-      ]
-    },
-    "Annotated2": {
-      "description": "Represents a resource in the extension with metadata",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional additional metadata for this resource",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "description": {
-          "description": "Optional description of the resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "icons": {
-          "description": "Optional list of icons for the resource",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/definitions/Icon"
-          }
-        },
-        "mimeType": {
-          "description": "MIME type of the resource content (\"text\" or \"blob\")",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "Name of the resource",
-          "type": "string"
-        },
-        "size": {
-          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "title": {
-          "description": "Human-readable title of the resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
-          "type": "string"
-        }
-      },
-      "required": [
-        "uri",
-        "name"
-      ]
-    },
-    "Annotated3": {
-      "type": "object",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "icons": {
-          "description": "Optional list of icons for the resource template",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/definitions/Icon"
-          }
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uriTemplate": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "uriTemplate",
-        "name"
-      ]
-    },
     "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are\nused or displayed.",
       "type": "object",
       "properties": {
         "audience": {
@@ -300,6 +70,43 @@
       "type": "string",
       "format": "const",
       "const": "array"
+    },
+    "AudioContent": {
+      "description": "Audio content with base64-encoded data (spec `AudioContent`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "description": "The base64-encoded audio data.",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of the audio (e.g. `audio/wav`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
     },
     "BooleanSchema": {
       "description": "Schema definition for boolean properties.",
@@ -361,7 +168,7 @@
           "type": "array",
           "default": [],
           "items": {
-            "$ref": "#/definitions/Annotated"
+            "$ref": "#/definitions/ContentBlock"
           }
         },
         "isError": {
@@ -448,6 +255,13 @@
     "CancelledNotificationParam": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "reason": {
           "type": [
             "string",
@@ -455,16 +269,27 @@
           ]
         },
         "requestId": {
-          "$ref": "#/definitions/NumberOrString"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NumberOrString"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      },
-      "required": [
-        "requestId"
-      ]
+      }
     },
     "CompleteResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "completion": {
           "$ref": "#/definitions/CompletionInfo"
         }
@@ -517,6 +342,96 @@
         "title"
       ]
     },
+    "ContentBlock": {
+      "description": "Unified content block union (spec `ContentBlock`).\n\n`text | image | audio | resource_link | resource`",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/TextContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ImageContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "audio"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/AudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/EmbeddedResource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Resource"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
     "ContextInclusion": {
       "description": "Specifies how much context should be included in sampling requests.\n\nThis allows clients to control what additional context information\nshould be provided to the LLM when processing sampling requests.",
       "oneOf": [
@@ -537,8 +452,174 @@
         }
       ]
     },
-    "CreateElicitationRequestParams": {
-      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n1. Form-based elicitation request\n```rust\nuse rmcp::model::*;\n\nlet params = CreateElicitationRequestParams::FormElicitationParams {\n   meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```\n2. URL-based elicitation request\n```rust\nuse rmcp::model::*;\nlet params = CreateElicitationRequestParams::UrlElicitationParams {\n    meta: None,\n    message: \"Please provide your feedback at the following URL\".to_string(),\n    url: \"https://example.com/feedback\".to_string(),\n    elicitation_id: \"unique-id-123\".to_string(),\n};\n```",
+    "CreateMessageRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "sampling/createMessage"
+    },
+    "CreateMessageRequestParams": {
+      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.\n\nThis implements `TaskAugmentedRequestParamsMeta` as sampling requests can be\nlong-running and may benefit from task-based execution.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "includeContext": {
+          "description": "How much context to include from MCP servers",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextInclusion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxTokens": {
+          "description": "Maximum number of tokens to generate",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "messages": {
+          "description": "The conversation history and current messages",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SamplingMessage"
+          }
+        },
+        "metadata": {
+          "description": "Additional metadata for the request"
+        },
+        "modelPreferences": {
+          "description": "Preferences for model selection and behavior",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelPreferences"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stopSequences": {
+          "description": "Sequences that should stop generation",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "systemPrompt": {
+          "description": "System prompt to guide the model's behavior",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "description": "Task metadata for async task management (SEP-1319)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "temperature": {
+          "description": "Temperature for controlling randomness (0.0 to 1.0)",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "toolChoice": {
+          "description": "Tool selection behavior (SEP-1577)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolChoice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "description": "Tools available for the model to call (SEP-1577)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Tool"
+          }
+        }
+      },
+      "required": [
+        "messages",
+        "maxTokens"
+      ]
+    },
+    "CreateTaskResult": {
+      "description": "Wrapper returned by task-augmented requests (CreateTaskResult in SEP-1686).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "task": {
+          "$ref": "#/definitions/Task"
+        }
+      },
+      "required": [
+        "task"
+      ]
+    },
+    "CustomNotification": {
+      "description": "A catch-all notification either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "CustomRequest": {
+      "description": "A catch-all request either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "CustomResult": {
+      "description": "A catch-all response either side can use for custom requests."
+    },
+    "ElicitRequestParams": {
+      "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n1. Form-based elicitation request\n```rust\nuse rmcp::model::*;\n\nlet params = ElicitRequestParams::FormElicitationParams {\n   meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```\n2. URL-based elicitation request\n```rust\nuse rmcp::model::*;\nlet params = ElicitRequestParams::UrlElicitationParams {\n    meta: None,\n    message: \"Please provide your feedback at the following URL\".to_string(),\n    url: \"https://example.com/feedback\".to_string(),\n    elicitation_id: \"unique-id-123\".to_string(),\n};\n```",
       "anyOf": [
         {
           "type": "object",
@@ -622,7 +703,7 @@
         }
       ]
     },
-    "CreateElicitationResult": {
+    "ElicitResult": {
       "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
       "type": "object",
       "properties": {
@@ -649,162 +730,6 @@
       "required": [
         "action"
       ]
-    },
-    "CreateMessageRequestMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "sampling/createMessage"
-    },
-    "CreateMessageRequestParams": {
-      "description": "Parameters for creating a message through LLM sampling.\n\nThis structure contains all the necessary information for a client to\ngenerate an LLM response, including conversation history, model preferences,\nand generation parameters.\n\nThis implements `TaskAugmentedRequestParamsMeta` as sampling requests can be\nlong-running and may benefit from task-based execution.",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "includeContext": {
-          "description": "How much context to include from MCP servers",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ContextInclusion"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "maxTokens": {
-          "description": "Maximum number of tokens to generate",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "messages": {
-          "description": "The conversation history and current messages",
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/SamplingMessage"
-          }
-        },
-        "metadata": {
-          "description": "Additional metadata for the request"
-        },
-        "modelPreferences": {
-          "description": "Preferences for model selection and behavior",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ModelPreferences"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "stopSequences": {
-          "description": "Sequences that should stop generation",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "systemPrompt": {
-          "description": "System prompt to guide the model's behavior",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "task": {
-          "description": "Task metadata for async task management (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "temperature": {
-          "description": "Temperature for controlling randomness (0.0 to 1.0)",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
-        "toolChoice": {
-          "description": "Tool selection behavior (SEP-1577)",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolChoice"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tools": {
-          "description": "Tools available for the model to call (SEP-1577)",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/definitions/Tool"
-          }
-        }
-      },
-      "required": [
-        "messages",
-        "maxTokens"
-      ]
-    },
-    "CreateTaskResult": {
-      "description": "Wrapper returned by task-augmented requests (CreateTaskResult in SEP-1686).",
-      "type": "object",
-      "properties": {
-        "task": {
-          "$ref": "#/definitions/Task"
-        }
-      },
-      "required": [
-        "task"
-      ]
-    },
-    "CustomNotification": {
-      "description": "A catch-all notification either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string"
-        },
-        "params": true
-      },
-      "required": [
-        "method"
-      ]
-    },
-    "CustomRequest": {
-      "description": "A catch-all request either side can use to send custom messages to its peer.\n\nThis preserves the raw `method` name and `params` payload so handlers can\ndeserialize them into domain-specific types.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string"
-        },
-        "params": true
-      },
-      "required": [
-        "method"
-      ]
-    },
-    "CustomResult": {
-      "description": "A catch-all response either side can use for custom requests."
     },
     "ElicitationAction": {
       "description": "Represents the possible actions a user can take in response to an elicitation request.\n\nWhen a server requests user input through elicitation, the user can:\n- Accept: Provide the requested information and continue\n- Decline: Refuse to provide the information but continue the operation\n- Cancel: Stop the entire operation",
@@ -840,6 +765,13 @@
       "description": "Notification parameters for an url elicitation completion notification.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "elicitationId": {
           "type": "string"
         }
@@ -863,7 +795,7 @@
           "description": "Property definitions (must be primitive types)",
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/PrimitiveSchema"
+            "$ref": "#/definitions/PrimitiveSchemaDefinition"
           }
         },
         "required": {
@@ -908,6 +840,42 @@
           "additionalProperties": true
         }
       }
+    },
+    "EmbeddedResource": {
+      "description": "Embedded resource content (spec `EmbeddedResource`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "description": "The embedded resource contents (text or blob).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceContents"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resource"
+      ]
     },
     "EmptyObject": {
       "description": "This is commonly used for representing empty objects in MCP messages.\n\nwithout returning any specific data.",
@@ -961,6 +929,13 @@
     "GetPromptResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "description": {
           "type": [
             "string",
@@ -1101,6 +1076,43 @@
         }
       ]
     },
+    "ImageContent": {
+      "description": "Image content with base64-encoded data (spec `ImageContent`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "description": "The base64-encoded image data.",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "The MIME type of the image (e.g. `image/png`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
     "Implementation": {
       "type": "object",
       "properties": {
@@ -1147,6 +1159,13 @@
       "description": "The server's response to an initialization request.\n\nContains the server's protocol version, capabilities, and implementation\ninformation, along with optional instructions for the client.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "capabilities": {
           "description": "The capabilities this server provides (tools, resources, prompts, etc.)",
           "allOf": [
@@ -1303,6 +1322,9 @@
           "$ref": "#/definitions/Notification5"
         },
         {
+          "$ref": "#/definitions/Notification6"
+        },
+        {
           "$ref": "#/definitions/CustomNotification"
         }
       ],
@@ -1370,6 +1392,12 @@
       "description": "Legacy enum schema, keep for backward compatibility",
       "type": "object",
       "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -1452,7 +1480,7 @@
         "resourceTemplates": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated3"
+            "$ref": "#/definitions/ResourceTemplate"
           }
         }
       },
@@ -1479,7 +1507,7 @@
         "resources": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated2"
+            "$ref": "#/definitions/Resource"
           }
         }
       },
@@ -1495,6 +1523,13 @@
     "ListTasksResult": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "nextCursor": {
           "type": [
             "string",
@@ -1506,14 +1541,6 @@
           "items": {
             "$ref": "#/definitions/Task"
           }
-        },
-        "total": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
         }
       },
       "required": [
@@ -1570,6 +1597,13 @@
       "description": "Parameters for a logging message notification",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "data": {
           "description": "The actual log data"
         },
@@ -1733,6 +1767,21 @@
         "params"
       ]
     },
+    "Notification6": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/TaskStatusNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/TaskStatusNotificationParam"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
     "NotificationNoParam": {
       "type": "object",
       "properties": {
@@ -1846,7 +1895,7 @@
       "format": "const",
       "const": "ping"
     },
-    "PrimitiveSchema": {
+    "PrimitiveSchemaDefinition": {
       "description": "Primitive schema definition for elicitation properties.\n\nAccording to MCP 2025-06-18 specification, elicitation schemas must have\nproperties of primitive types only (string, number, integer, boolean, enum).\n\nNote: Put Enum as the first variant to avoid ambiguity during deserialization.\nThis is due to the fact that EnumSchema can contain StringSchema internally and serde\nuses first match wins strategy when deserializing untagged enums.",
       "anyOf": [
         {
@@ -1899,6 +1948,13 @@
     "ProgressNotificationParam": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "message": {
           "description": "An optional message describing the current progress.",
           "type": [
@@ -1937,11 +1993,10 @@
       ]
     },
     "Prompt": {
-      "description": "A prompt that can be used to generate text from a model",
+      "description": "A prompt or prompt template that the server offers (spec `Prompt`).",
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Optional additional metadata for this prompt",
           "type": [
             "object",
             "null"
@@ -1949,7 +2004,6 @@
           "additionalProperties": true
         },
         "arguments": {
-          "description": "Optional arguments that can be passed to customize the prompt",
           "type": [
             "array",
             "null"
@@ -1959,14 +2013,12 @@
           }
         },
         "description": {
-          "description": "Optional description of what the prompt does",
           "type": [
             "string",
             "null"
           ]
         },
         "icons": {
-          "description": "Optional list of icons for the prompt",
           "type": [
             "array",
             "null"
@@ -1976,7 +2028,6 @@
           }
         },
         "name": {
-          "description": "The name of the prompt",
           "type": "string"
         },
         "title": {
@@ -1991,29 +2042,25 @@
       ]
     },
     "PromptArgument": {
-      "description": "Represents a prompt argument that can be passed to customize the prompt",
+      "description": "Describes an argument that a prompt can accept (spec `PromptArgument`).",
       "type": "object",
       "properties": {
         "description": {
-          "description": "A description of what the argument is used for",
           "type": [
             "string",
             "null"
           ]
         },
         "name": {
-          "description": "The name of the argument",
           "type": "string"
         },
         "required": {
-          "description": "Whether this argument is required",
           "type": [
             "boolean",
             "null"
           ]
         },
         "title": {
-          "description": "A human-readable title for the argument",
           "type": [
             "string",
             "null"
@@ -2030,246 +2077,19 @@
       "const": "notifications/prompts/list_changed"
     },
     "PromptMessage": {
-      "description": "A message in a prompt conversation",
+      "description": "A message returned as part of a prompt (spec `PromptMessage`).\n\nUses the unified `ContentBlock` for its content (text | image | audio | resource_link | resource).",
       "type": "object",
       "properties": {
         "content": {
-          "description": "The content of the message",
-          "allOf": [
-            {
-              "$ref": "#/definitions/PromptMessageContent"
-            }
-          ]
+          "$ref": "#/definitions/ContentBlock"
         },
         "role": {
-          "description": "The role of the message sender",
-          "allOf": [
-            {
-              "$ref": "#/definitions/PromptMessageRole"
-            }
-          ]
+          "$ref": "#/definitions/Role"
         }
       },
       "required": [
         "role",
         "content"
-      ]
-    },
-    "PromptMessageContent": {
-      "description": "Content types that can be included in prompt messages",
-      "oneOf": [
-        {
-          "description": "Plain text content",
-          "type": "object",
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "text"
-            }
-          },
-          "required": [
-            "type",
-            "text"
-          ]
-        },
-        {
-          "description": "Image content with base64-encoded data",
-          "type": "object",
-          "properties": {
-            "_meta": {
-              "description": "Optional protocol-level metadata for this content block",
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
-            },
-            "annotations": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/Annotations"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "data": {
-              "description": "The base64-encoded image",
-              "type": "string"
-            },
-            "mimeType": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "image"
-            }
-          },
-          "required": [
-            "type",
-            "data",
-            "mimeType"
-          ]
-        },
-        {
-          "description": "Audio content with base64-encoded data",
-          "type": "object",
-          "properties": {
-            "annotations": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/Annotations"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "data": {
-              "type": "string"
-            },
-            "mimeType": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "audio"
-            }
-          },
-          "required": [
-            "type",
-            "data",
-            "mimeType"
-          ]
-        },
-        {
-          "description": "Embedded server-side resource",
-          "type": "object",
-          "properties": {
-            "_meta": {
-              "description": "Optional protocol-level metadata for this content block",
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
-            },
-            "annotations": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/Annotations"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "resource": {
-              "$ref": "#/definitions/ResourceContents"
-            },
-            "type": {
-              "type": "string",
-              "const": "resource"
-            }
-          },
-          "required": [
-            "type",
-            "resource"
-          ]
-        },
-        {
-          "description": "A link to a resource that can be fetched separately",
-          "type": "object",
-          "properties": {
-            "_meta": {
-              "description": "Optional additional metadata for this resource",
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
-            },
-            "annotations": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/Annotations"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "description": {
-              "description": "Optional description of the resource",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "icons": {
-              "description": "Optional list of icons for the resource",
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "$ref": "#/definitions/Icon"
-              }
-            },
-            "mimeType": {
-              "description": "MIME type of the resource content (\"text\" or \"blob\")",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "name": {
-              "description": "Name of the resource",
-              "type": "string"
-            },
-            "size": {
-              "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint32",
-              "minimum": 0
-            },
-            "title": {
-              "description": "Human-readable title of the resource",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "resource_link"
-            },
-            "uri": {
-              "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "uri",
-            "name"
-          ]
-        }
-      ]
-    },
-    "PromptMessageRole": {
-      "description": "Represents the role of a message sender in a prompt conversation",
-      "type": "string",
-      "enum": [
-        "user",
-        "assistant"
       ]
     },
     "PromptsCapability": {
@@ -2287,153 +2107,17 @@
       "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
     },
-    "RawAudioContent": {
-      "type": "object",
-      "properties": {
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
-      ]
-    },
-    "RawEmbeddedResource": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "resource": {
-          "$ref": "#/definitions/ResourceContents"
-        }
-      },
-      "required": [
-        "resource"
-      ]
-    },
-    "RawImageContent": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "data": {
-          "description": "The base64-encoded image",
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
-      ]
-    },
-    "RawResource": {
-      "description": "Represents a resource in the extension with metadata",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional additional metadata for this resource",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "description": {
-          "description": "Optional description of the resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "icons": {
-          "description": "Optional list of icons for the resource",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/definitions/Icon"
-          }
-        },
-        "mimeType": {
-          "description": "MIME type of the resource content (\"text\" or \"blob\")",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "Name of the resource",
-          "type": "string"
-        },
-        "size": {
-          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "title": {
-          "description": "Human-readable title of the resource",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
-          "type": "string"
-        }
-      },
-      "required": [
-        "uri",
-        "name"
-      ]
-    },
-    "RawTextContent": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Optional protocol-level metadata for this content block",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text"
-      ]
-    },
     "ReadResourceResult": {
       "description": "Result containing the contents of a read resource",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "contents": {
           "description": "The actual content of the resource",
           "type": "array",
@@ -2470,7 +2154,7 @@
           "$ref": "#/definitions/ElicitationCreateRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CreateElicitationRequestParams"
+          "$ref": "#/definitions/ElicitRequestParams"
         }
       },
       "required": [
@@ -2500,7 +2184,85 @@
         "method"
       ]
     },
+    "Resource": {
+      "description": "A known resource that the server is capable of reading (spec `Resource`).\n\nAlso used as the inner type of `ContentBlock::ResourceLink` (spec `ResourceLink extends Resource`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this resource.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this resource.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Optional description of what this resource represents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional set of icons the client may display for this resource.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "The MIME type of this resource, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The programmatic name of the resource.",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content in bytes (before base64/tokenization), if known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Optional human-readable display title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "The URI of this resource (e.g. `file:///path/to/file`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
     "ResourceContents": {
+      "description": "The contents of a specific resource or sub-resource.",
       "anyOf": [
         {
           "type": "object",
@@ -2565,6 +2327,74 @@
       "format": "const",
       "const": "notifications/resources/list_changed"
     },
+    "ResourceTemplate": {
+      "description": "A template description for resources available on the server (spec `ResourceTemplate`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this resource template.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this template.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Optional description of what this template is for.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional set of icons the client may display for this template.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "The MIME type for resources matching this template, if uniform.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The programmatic name of the resource template.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Optional human-readable display title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uriTemplate": {
+          "description": "An RFC 6570 URI template for constructing resource URIs.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uriTemplate",
+        "name"
+      ]
+    },
     "ResourceUpdatedNotificationMethod": {
       "type": "string",
       "format": "const",
@@ -2574,6 +2404,13 @@
       "description": "Parameters for a resource update notification",
       "type": "object",
       "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "uri": {
           "description": "The URI of the resource that was updated",
           "type": "string"
@@ -2619,12 +2456,12 @@
       "description": "Single or array content wrapper (SEP-1577).",
       "anyOf": [
         {
-          "$ref": "#/definitions/SamplingMessageContent"
+          "$ref": "#/definitions/SamplingMessageContentBlock"
         },
         {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/SamplingMessageContent"
+            "$ref": "#/definitions/SamplingMessageContentBlock"
           }
         }
       ]
@@ -2662,7 +2499,7 @@
         "content"
       ]
     },
-    "SamplingMessageContent": {
+    "SamplingMessageContentBlock": {
       "description": "Content types for sampling messages (SEP-1577).",
       "oneOf": [
         {
@@ -2675,7 +2512,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/RawTextContent"
+              "$ref": "#/definitions/TextContent"
             }
           ],
           "required": [
@@ -2692,7 +2529,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/RawImageContent"
+              "$ref": "#/definitions/ImageContent"
             }
           ],
           "required": [
@@ -2709,7 +2546,7 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/RawAudioContent"
+              "$ref": "#/definitions/AudioContent"
             }
           ],
           "required": [
@@ -2877,7 +2714,7 @@
           "$ref": "#/definitions/ListToolsResult"
         },
         {
-          "$ref": "#/definitions/CreateElicitationResult"
+          "$ref": "#/definitions/ElicitResult"
         },
         {
           "$ref": "#/definitions/CreateTaskResult"
@@ -3070,6 +2907,20 @@
         "lastUpdatedAt"
       ]
     },
+    "TaskMetadata": {
+      "description": "Metadata for augmenting a request with task execution (spec `TaskMetadata`).",
+      "type": "object",
+      "properties": {
+        "ttl": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
     "TaskRequestsCapability": {
       "description": "Request types that support task-augmented execution.",
       "type": "object",
@@ -3136,6 +2987,75 @@
         }
       ]
     },
+    "TaskStatusNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/tasks/status"
+    },
+    "TaskStatusNotificationParam": {
+      "description": "Parameters for a task status notification (spec `TaskStatusNotificationParams`).\n\nThe task fields are flattened at the top level: `NotificationParams & Task`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "createdAt": {
+          "description": "ISO-8601 creation timestamp.",
+          "type": "string"
+        },
+        "lastUpdatedAt": {
+          "description": "ISO-8601 timestamp for the most recent status change.",
+          "type": "string"
+        },
+        "pollInterval": {
+          "description": "Suggested polling interval (milliseconds).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "description": "Current lifecycle status (see [`TaskStatus`]).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TaskStatus"
+            }
+          ]
+        },
+        "statusMessage": {
+          "description": "Optional human-readable status message for UI surfaces.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "description": "Unique task identifier generated by the receiver.",
+          "type": "string"
+        },
+        "ttl": {
+          "description": "Retention window in milliseconds that the receiver agreed to honor.\n`None` (serialized as `null`) means unlimited retention.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "taskId",
+        "status",
+        "createdAt",
+        "lastUpdatedAt"
+      ]
+    },
     "TaskSupport": {
       "description": "Per-tool task support mode as defined in the MCP specification.\n\nThis enum indicates whether a tool supports task-based invocation,\nallowing clients to know how to properly call the tool.\n\nSee [Tool-Level Negotiation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks#tool-level-negotiation).",
       "oneOf": [
@@ -3185,6 +3105,38 @@
           ]
         }
       }
+    },
+    "TextContent": {
+      "description": "Text content block (spec `TextContent`).",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "annotations": {
+          "description": "Optional annotations describing how the client should use this content.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "description": "The text content of the message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
     },
     "TitledItems": {
       "description": "Items for titled multi-select options",
@@ -3476,7 +3428,6 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Optional metadata",
           "type": [
             "object",
             "null"
@@ -3484,21 +3435,18 @@
           "additionalProperties": true
         },
         "content": {
-          "description": "Content blocks returned by the tool",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated"
+            "$ref": "#/definitions/ContentBlock"
           }
         },
         "isError": {
-          "description": "Whether tool execution failed",
           "type": [
             "boolean",
             "null"
           ]
         },
         "structuredContent": {
-          "description": "Optional structured result",
           "type": [
             "object",
             "null"
@@ -3506,12 +3454,12 @@
           "additionalProperties": true
         },
         "toolUseId": {
-          "description": "ID of the corresponding tool use",
           "type": "string"
         }
       },
       "required": [
-        "toolUseId"
+        "toolUseId",
+        "content"
       ]
     },
     "ToolUseContent": {
@@ -3519,7 +3467,6 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Optional metadata (preserved for caching)",
           "type": [
             "object",
             "null"
@@ -3527,16 +3474,13 @@
           "additionalProperties": true
         },
         "id": {
-          "description": "Unique identifier for this tool call",
           "type": "string"
         },
         "input": {
-          "description": "Input arguments for the tool",
           "type": "object",
           "additionalProperties": true
         },
         "name": {
-          "description": "Name of the tool to call",
           "type": "string"
         }
       },

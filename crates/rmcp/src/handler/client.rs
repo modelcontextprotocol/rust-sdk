@@ -26,10 +26,10 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 .list_roots(context)
                 .await
                 .map(ClientResult::ListRootsResult),
-            ServerRequest::CreateElicitationRequest(request) => self
+            ServerRequest::ElicitRequest(request) => self
                 .create_elicitation(request.params, context)
                 .await
-                .map(ClientResult::CreateElicitationResult),
+                .map(ClientResult::ElicitResult),
             ServerRequest::CustomRequest(request) => self
                 .on_custom_request(request, context)
                 .await
@@ -64,9 +64,12 @@ impl<H: ClientHandler> Service<RoleClient> for H {
             ServerNotification::PromptListChangedNotification(_notification_no_param) => {
                 self.on_prompt_list_changed(context).await
             }
-            ServerNotification::ElicitationCompletionNotification(notification) => {
+            ServerNotification::ElicitationCompleteNotification(notification) => {
                 self.on_url_elicitation_notification_complete(notification.params, context)
                     .await
+            }
+            ServerNotification::TaskStatusNotification(notification) => {
+                self.on_task_status(notification.params, context).await
             }
             ServerNotification::CustomNotification(notification) => {
                 self.on_custom_notification(notification, context).await
@@ -125,7 +128,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     ///
     /// # Example
     /// ```rust,ignore
-    /// use rmcp::model::CreateElicitationRequestParam;
+    /// use rmcp::model::ElicitRequestParams;
     /// use rmcp::{
     ///     model::ErrorData as McpError,
     ///     model::*,
@@ -136,23 +139,23 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     /// impl ClientHandler for MyClient {
     ///  async fn create_elicitation(
     ///     &self,
-    ///     request: CreateElicitationRequestParam,
+    ///     request: ElicitRequestParams,
     ///     context: RequestContext<RoleClient>,
-    ///  ) -> Result<CreateElicitationResult, McpError> {
+    ///  ) -> Result<ElicitResult, McpError> {
     ///     match request {
-    ///         CreateElicitationRequestParam::FormElicitationParam {meta, message, requested_schema,} => {
+    ///         ElicitRequestParams::FormElicitationParam {meta, message, requested_schema,} => {
     ///            // Display message to user and collect input according to requested_schema
     ///           let user_input = get_user_input(message, requested_schema).await?;
-    ///          Ok(CreateElicitationResult {
+    ///          Ok(ElicitResult {
     ///             action: ElicitationAction::Accept,
     ///              content: Some(user_input),
     ///              meta: None,
     ///          })
     ///         }
-    ///         CreateElicitationRequestParam::UrlElicitationParam {meta, message, url, elicitation_id,} => {
+    ///         ElicitRequestParams::UrlElicitationParam {meta, message, url, elicitation_id,} => {
     ///           // Open URL in browser for user to complete elicitation
     ///           open_url_in_browser(url).await?;
-    ///          Ok(CreateElicitationResult {
+    ///          Ok(ElicitResult {
     ///              action: ElicitationAction::Accept,
     ///             content: None,
     ///             meta: None,
@@ -164,13 +167,12 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     /// ```
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         context: RequestContext<RoleClient>,
-    ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + MaybeSendFuture + '_
-    {
+    ) -> impl Future<Output = Result<ElicitResult, McpError>> + MaybeSendFuture + '_ {
         // Default implementation declines all requests - real clients should override this
         let _ = (request, context);
-        std::future::ready(Ok(CreateElicitationResult {
+        std::future::ready(Ok(ElicitResult {
             action: ElicitationAction::Decline,
             content: None,
             meta: None,
@@ -245,6 +247,13 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
     ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         std::future::ready(())
     }
+    fn on_task_status(
+        &self,
+        params: TaskStatusNotificationParam,
+        context: NotificationContext<RoleClient>,
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+        std::future::ready(())
+    }
     fn on_custom_notification(
         &self,
         notification: CustomNotification,
@@ -283,22 +292,24 @@ macro_rules! impl_client_handler_for_wrapper {
                 &self,
                 params: CreateMessageRequestParams,
                 context: RequestContext<RoleClient>,
-            ) -> impl Future<Output = Result<CreateMessageResult, McpError>> + MaybeSendFuture + '_ {
+            ) -> impl Future<Output = Result<CreateMessageResult, McpError>> + MaybeSendFuture + '_
+            {
                 (**self).create_message(params, context)
             }
 
             fn list_roots(
                 &self,
                 context: RequestContext<RoleClient>,
-            ) -> impl Future<Output = Result<ListRootsResult, McpError>> + MaybeSendFuture + '_ {
+            ) -> impl Future<Output = Result<ListRootsResult, McpError>> + MaybeSendFuture + '_
+            {
                 (**self).list_roots(context)
             }
 
             fn create_elicitation(
                 &self,
-                request: CreateElicitationRequestParams,
+                request: ElicitRequestParams,
                 context: RequestContext<RoleClient>,
-            ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + MaybeSendFuture + '_ {
+            ) -> impl Future<Output = Result<ElicitResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).create_elicitation(request, context)
             }
 
@@ -361,6 +372,14 @@ macro_rules! impl_client_handler_for_wrapper {
                 context: NotificationContext<RoleClient>,
             ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_prompt_list_changed(context)
+            }
+
+            fn on_task_status(
+                &self,
+                params: TaskStatusNotificationParam,
+                context: NotificationContext<RoleClient>,
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+                (**self).on_task_status(params, context)
             }
 
             fn on_custom_notification(

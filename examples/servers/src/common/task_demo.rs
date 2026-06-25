@@ -16,7 +16,7 @@ use std::sync::Arc;
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content},
+    model::{CallToolResult, ContentBlock},
     schemars, task_handler,
     task_manager::OperationProcessor,
     tool, tool_handler, tool_router,
@@ -70,7 +70,7 @@ impl TaskDemo {
         Parameters(SumArgs { a, b }): Parameters<SumArgs>,
     ) -> Result<CallToolResult, McpError> {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             (a + b).to_string(),
         )]))
     }
@@ -81,7 +81,7 @@ impl TaskDemo {
         &self,
         Parameters(EchoArgs { message }): Parameters<EchoArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(message)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(message)]))
     }
 }
 

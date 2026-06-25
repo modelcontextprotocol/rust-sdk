@@ -148,7 +148,7 @@ async fn test_inflight_response_drain_on_eof() -> anyhow::Result<()> {
     let text = result
         .content
         .first()
-        .and_then(|c| c.raw.as_text())
+        .and_then(|c| c.as_text())
         .map(|t| t.text.as_str())
         .expect("expected text content in tool result");
     assert_eq!(text, "done after 200ms");

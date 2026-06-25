@@ -325,7 +325,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     let result_text = result
         .content
         .first()
-        .and_then(|content| content.raw.as_text())
+        .and_then(|content| content.as_text())
         .map(|text| text.text.as_str())
         .expect("Expected text content");
 
@@ -352,7 +352,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     let some_result_text = some_result
         .content
         .first()
-        .and_then(|content| content.raw.as_text())
+        .and_then(|content| content.as_text())
         .map(|text| text.text.as_str())
         .expect("Expected text content");
 
@@ -438,7 +438,7 @@ async fn test_minimal_server_tool_call() -> anyhow::Result<()> {
     let text = result
         .content
         .first()
-        .and_then(|c| c.raw.as_text())
+        .and_then(|c| c.as_text())
         .map(|t| t.text.as_str())
         .expect("Expected text content");
 
@@ -496,7 +496,7 @@ async fn test_tool_router_server_handler_flag_end_to_end_tool_call() -> anyhow::
     let text = result
         .content
         .first()
-        .and_then(|c| c.raw.as_text())
+        .and_then(|c| c.as_text())
         .map(|t| t.text.as_str())
         .expect("Expected text content");
 

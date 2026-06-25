@@ -117,11 +117,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tasks(request.params, context)
                 .await
                 .map(ServerResult::ListTasksResult),
-            ClientRequest::GetTaskInfoRequest(request) => self
+            ClientRequest::GetTaskRequest(request) => self
                 .get_task_info(request.params, context)
                 .await
                 .map(ServerResult::GetTaskResult),
-            ClientRequest::GetTaskResultRequest(request) => self
+            ClientRequest::GetTaskPayloadRequest(request) => self
                 .get_task_result(request.params, context)
                 .await
                 .map(ServerResult::GetTaskPayloadResult),
@@ -160,6 +160,9 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             }
             ClientNotification::RootsListChangedNotification(_notification) => {
                 self.on_roots_list_changed(context).await
+            }
+            ClientNotification::TaskStatusNotification(notification) => {
+                self.on_task_status(notification.params, context).await
             }
             ClientNotification::CustomNotification(notification) => {
                 self.on_custom_notification(notification, context).await
@@ -359,6 +362,13 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             std::future::ready(())
         }
+        fn on_task_status(
+            &self,
+            params: TaskStatusNotificationParam,
+            context: NotificationContext<RoleServer>,
+        ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+            std::future::ready(())
+        }
         fn on_custom_notification(
             &self,
             notification: CustomNotification,
@@ -382,20 +392,20 @@ macro_rules! server_handler_methods {
 
         fn get_task_info(
             &self,
-            request: GetTaskInfoParams,
+            request: GetTaskParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
             let _ = (request, context);
-            std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
+            std::future::ready(Err(McpError::method_not_found::<GetTaskMethod>()))
         }
 
         fn get_task_result(
             &self,
-            request: GetTaskResultParams,
+            request: GetTaskPayloadParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
             let _ = (request, context);
-            std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
+            std::future::ready(Err(McpError::method_not_found::<GetTaskPayloadMethod>()))
         }
 
         fn cancel_task(
@@ -578,6 +588,14 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_roots_list_changed(context)
             }
 
+            fn on_task_status(
+                &self,
+                params: TaskStatusNotificationParam,
+                context: NotificationContext<RoleServer>,
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+                (**self).on_task_status(params, context)
+            }
+
             fn on_custom_notification(
                 &self,
                 notification: CustomNotification,
@@ -600,7 +618,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_task_info(
                 &self,
-                request: GetTaskInfoParams,
+                request: GetTaskParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_task_info(request, context)
@@ -608,7 +626,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_task_result(
                 &self,
-                request: GetTaskResultParams,
+                request: GetTaskPayloadParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_task_result(request, context)

@@ -400,8 +400,9 @@ impl<R: ServiceRole> RequestHandle<R> {
     async fn send_timeout_cancel_notification(&self, reason: &str) {
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
-                request_id: self.id.clone(),
+                request_id: Some(self.id.clone()),
                 reason: Some(reason.to_owned()),
+                meta: None,
             },
             method: crate::model::CancelledNotificationMethod,
             extensions: Default::default(),
@@ -473,8 +474,9 @@ impl<R: ServiceRole> RequestHandle<R> {
         .await;
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
-                request_id: self.id,
+                request_id: Some(self.id),
                 reason,
+                meta: None,
             },
             method: crate::model::CancelledNotificationMethod,
             extensions: Default::default(),
@@ -1084,11 +1086,13 @@ where
                     };
                     let _ = responder.send(response);
                     if let Some(param) = cancellation_param {
-                        if let Some(responder) = local_responder_pool.remove(&param.request_id) {
-                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
-                            let _response_result = responder.send(Err(ServiceError::Cancelled {
-                                reason: param.reason.clone(),
-                            }));
+                        if let Some(request_id) = &param.request_id {
+                            if let Some(responder) = local_responder_pool.remove(request_id) {
+                                tracing::info!(id = %request_id, reason = param.reason, "cancelled");
+                                let _response_result = responder.send(Err(ServiceError::Cancelled {
+                                    reason: param.reason.clone(),
+                                }));
+                            }
                         }
                     }
                 }
@@ -1201,9 +1205,11 @@ where
                     // catch cancelled notification
                     let mut notification = match notification.try_into() {
                         Ok::<CancelledNotification, _>(cancelled) => {
-                            if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
-                                tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
-                                ct.cancel();
+                            if let Some(request_id) = &cancelled.params.request_id {
+                                if let Some(ct) = local_ct_pool.remove(request_id) {
+                                    tracing::info!(id = %request_id, reason = cancelled.params.reason, "cancelled");
+                                    ct.cancel();
+                                }
                             }
                             cancelled.into()
                         }

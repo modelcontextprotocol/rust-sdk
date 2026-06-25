@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::{
     ClientNotification, ClientRequest, CustomNotification, CustomRequest, Extensions, JsonObject,
-    JsonRpcMessage, NumberOrString, ProgressToken, ServerNotification, ServerRequest,
+    JsonRpcMessage, NumberOrString, ProgressToken, ServerNotification, ServerRequest, TaskMetadata,
 };
 
 pub trait GetMeta {
@@ -54,11 +54,11 @@ pub trait RequestParamsMeta {
 /// can include a `task` field to signal that the caller wants task-augmented execution.
 pub trait TaskAugmentedRequestParamsMeta: RequestParamsMeta {
     /// Get a reference to the task field
-    fn task(&self) -> Option<&JsonObject>;
+    fn task(&self) -> Option<&TaskMetadata>;
     /// Get a mutable reference to the task field
-    fn task_mut(&mut self) -> &mut Option<JsonObject>;
+    fn task_mut(&mut self) -> &mut Option<TaskMetadata>;
     /// Set the task field
-    fn set_task(&mut self, task: JsonObject) {
+    fn set_task(&mut self, task: TaskMetadata) {
         *self.task_mut() = Some(task);
     }
 }
@@ -152,9 +152,9 @@ variant_extension! {
         CallToolRequest
         ListToolsRequest
         CustomRequest
-        GetTaskInfoRequest
+        GetTaskRequest
         ListTasksRequest
-        GetTaskResultRequest
+        GetTaskPayloadRequest
         CancelTaskRequest
     }
 }
@@ -164,7 +164,7 @@ variant_extension! {
         PingRequest
         CreateMessageRequest
         ListRootsRequest
-        CreateElicitationRequest
+        ElicitRequest
         CustomRequest
     }
 }
@@ -175,6 +175,7 @@ variant_extension! {
         ProgressNotification
         InitializedNotification
         RootsListChangedNotification
+        TaskStatusNotification
         CustomNotification
     }
 }
@@ -188,7 +189,8 @@ variant_extension! {
         ResourceListChangedNotification
         ToolListChangedNotification
         PromptListChangedNotification
-        ElicitationCompletionNotification
+        ElicitationCompleteNotification
+        TaskStatusNotification
         CustomNotification
     }
 }

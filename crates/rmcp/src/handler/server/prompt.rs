@@ -105,6 +105,7 @@ impl IntoGetPromptResult for Vec<PromptMessage> {
         Ok(GetPromptResult {
             description: None,
             messages: self,
+            meta: None,
         })
     }
 }

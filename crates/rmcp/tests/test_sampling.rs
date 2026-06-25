@@ -345,7 +345,7 @@ async fn test_tool_use_content_serialization() -> Result<()> {
 async fn test_tool_result_content_serialization() -> Result<()> {
     let tool_result = ToolResultContent::new(
         "call_123",
-        vec![Content::text(
+        vec![ContentBlock::text(
             "The weather in San Francisco is 72°F and sunny.",
         )],
     );
@@ -357,6 +357,17 @@ async fn test_tool_result_content_serialization() -> Result<()> {
     assert!(!deserialized.content.is_empty());
 
     Ok(())
+}
+
+#[test]
+fn test_tool_result_content_requires_content() {
+    let raw = serde_json::json!({
+        "toolUseId": "call_123"
+    });
+
+    let err = serde_json::from_value::<ToolResultContent>(raw).unwrap_err();
+
+    assert!(err.to_string().contains("missing field `content`"));
 }
 
 #[tokio::test]
@@ -386,7 +397,7 @@ async fn test_sampling_message_with_tool_use() -> Result<()> {
 #[tokio::test]
 async fn test_sampling_message_with_tool_result() -> Result<()> {
     let message =
-        SamplingMessage::user_tool_result("call_123", vec![Content::text("72°F and sunny")]);
+        SamplingMessage::user_tool_result("call_123", vec![ContentBlock::text("72°F and sunny")]);
 
     let json = serde_json::to_string(&message)?;
     let deserialized: SamplingMessage = serde_json::from_str(&json)?;
@@ -431,10 +442,8 @@ async fn test_create_message_result_tool_use_stop_reason() -> Result<()> {
 
 #[tokio::test]
 async fn test_sampling_capability() -> Result<()> {
-    let cap = SamplingCapability {
-        tools: Some(JsonObject::default()),
-        context: None,
-    };
+    let mut cap = SamplingCapability::default();
+    cap.tools = Some(JsonObject::default());
 
     let json = serde_json::to_string(&cap)?;
     let deserialized: SamplingCapability = serde_json::from_str(&json)?;
@@ -507,16 +516,19 @@ async fn test_backward_compat_sampling_capability_empty_object() -> Result<()> {
 async fn test_content_to_sampling_message_content_conversion() -> Result<()> {
     use std::convert::TryInto;
 
-    let content = Content::text("Hello");
-    let sampling_content: SamplingMessageContent =
+    let content = ContentBlock::text("Hello");
+    let sampling_content: SamplingMessageContentBlock =
         content.try_into().map_err(|e: &str| anyhow::anyhow!(e))?;
     assert!(sampling_content.as_text().is_some());
     assert_eq!(sampling_content.as_text().unwrap().text, "Hello");
 
-    let content = Content::image("base64data", "image/png");
-    let sampling_content: SamplingMessageContent =
+    let content = ContentBlock::image("base64data", "image/png");
+    let sampling_content: SamplingMessageContentBlock =
         content.try_into().map_err(|e: &str| anyhow::anyhow!(e))?;
-    assert!(matches!(sampling_content, SamplingMessageContent::Image(_)));
+    assert!(matches!(
+        sampling_content,
+        SamplingMessageContentBlock::Image(_)
+    ));
 
     Ok(())
 }
@@ -525,8 +537,8 @@ async fn test_content_to_sampling_message_content_conversion() -> Result<()> {
 async fn test_content_to_sampling_content_conversion() -> Result<()> {
     use std::convert::TryInto;
 
-    let content = Content::text("Hello");
-    let sampling_content: SamplingContent<SamplingMessageContent> =
+    let content = ContentBlock::text("Hello");
+    let sampling_content: SamplingContent<SamplingMessageContentBlock> =
         content.try_into().map_err(|e: &str| anyhow::anyhow!(e))?;
     assert_eq!(sampling_content.len(), 1);
     assert!(sampling_content.first().unwrap().as_text().is_some());
@@ -540,14 +552,14 @@ async fn test_content_conversion_unsupported_variants() {
 
     use rmcp::model::ResourceContents;
 
-    let resource_content = Content::resource(ResourceContents::TextResourceContents {
+    let resource_content = ContentBlock::resource(ResourceContents::TextResourceContents {
         uri: "file:///test.txt".to_string(),
         mime_type: Some("text/plain".to_string()),
         text: "test".to_string(),
         meta: None,
     });
 
-    let result: Result<SamplingMessageContent, _> = resource_content.try_into();
+    let result: Result<SamplingMessageContentBlock, _> = resource_content.try_into();
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err(),
@@ -560,7 +572,7 @@ async fn test_validate_rejects_tool_use_in_user_message() {
     let params = CreateMessageRequestParams::new(
         vec![SamplingMessage::new(
             Role::User,
-            SamplingMessageContent::tool_use("call_1", "some_tool", Default::default()),
+            SamplingMessageContentBlock::tool_use("call_1", "some_tool", Default::default()),
         )],
         100,
     );
@@ -577,7 +589,7 @@ async fn test_validate_rejects_tool_result_in_assistant_message() {
     let params = CreateMessageRequestParams::new(
         vec![SamplingMessage::new(
             Role::Assistant,
-            SamplingMessageContent::tool_result("call_1", vec![Content::text("result")]),
+            SamplingMessageContentBlock::tool_result("call_1", vec![ContentBlock::text("result")]),
         )],
         100,
     );
@@ -595,8 +607,11 @@ async fn test_validate_rejects_mixed_content_with_tool_result() {
         vec![SamplingMessage::new_multiple(
             Role::User,
             vec![
-                SamplingMessageContent::tool_result("call_1", vec![Content::text("result")]),
-                SamplingMessageContent::text("some extra text"),
+                SamplingMessageContentBlock::tool_result(
+                    "call_1",
+                    vec![ContentBlock::text("result")],
+                ),
+                SamplingMessageContentBlock::text("some extra text"),
             ],
         )],
         100,
@@ -631,7 +646,10 @@ async fn test_validate_rejects_tool_result_without_matching_use() {
     let params = CreateMessageRequestParams::new(
         vec![
             SamplingMessage::user_text("Hello"),
-            SamplingMessage::user_tool_result("nonexistent_call", vec![Content::text("result")]),
+            SamplingMessage::user_tool_result(
+                "nonexistent_call",
+                vec![ContentBlock::text("result")],
+            ),
         ],
         100,
     );
@@ -656,7 +674,7 @@ async fn test_validate_accepts_valid_tool_conversation() {
                     .unwrap()
                     .clone(),
             ),
-            SamplingMessage::user_tool_result("call_1", vec![Content::text("72°F and sunny")]),
+            SamplingMessage::user_tool_result("call_1", vec![ContentBlock::text("72°F and sunny")]),
             SamplingMessage::assistant_text("It's 72°F and sunny in SF."),
         ],
         100,

@@ -59,12 +59,11 @@ impl ProgressTimeoutServer {
         for step in 0..4 {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let _ = client
-                .notify_progress(ProgressNotificationParam {
-                    progress_token: progress_token.clone(),
-                    progress: step as f64,
-                    total: Some(4.0),
-                    message: Some("working".into()),
-                })
+                .notify_progress(
+                    ProgressNotificationParam::new(progress_token.clone(), step as f64)
+                        .with_total(4.0)
+                        .with_message("working"),
+                )
                 .await;
         }
 
@@ -79,12 +78,14 @@ impl ProgressTimeoutServer {
         for step in 0..4 {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let _ = client
-                .notify_progress(ProgressNotificationParam {
-                    progress_token: ProgressToken(NumberOrString::Number(999_999)),
-                    progress: step as f64,
-                    total: Some(4.0),
-                    message: Some("unrelated".into()),
-                })
+                .notify_progress(
+                    ProgressNotificationParam::new(
+                        ProgressToken(NumberOrString::Number(999_999)),
+                        step as f64,
+                    )
+                    .with_total(4.0)
+                    .with_message("unrelated"),
+                )
                 .await;
         }
 

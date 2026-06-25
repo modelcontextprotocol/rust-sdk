@@ -429,9 +429,10 @@ impl LocalSessionWorker {
         notification: &JsonRpcNotification<ClientNotification>,
     ) {
         if let ClientNotification::CancelledNotification(n) = &notification.notification {
-            let request_id = n.params.request_id.clone();
-            let resource = ResourceKey::McpRequestId(request_id);
-            self.unregister_resource(&resource);
+            if let Some(request_id) = n.params.request_id.clone() {
+                let resource = ResourceKey::McpRequestId(request_id);
+                self.unregister_resource(&resource);
+            }
         }
     }
     fn evict_expired_channels(&mut self) {
@@ -496,13 +497,17 @@ impl LocalSessionWorker {
                     }),
                 ..
             }) => {
-                if let Some(id) = self
-                    .resource_router
-                    .get(&ResourceKey::McpRequestId(request_id.clone()))
-                {
-                    OutboundChannel::RequestWise {
-                        id: *id,
-                        close: false,
+                if let Some(req_id) = request_id {
+                    if let Some(id) = self
+                        .resource_router
+                        .get(&ResourceKey::McpRequestId(req_id.clone()))
+                    {
+                        OutboundChannel::RequestWise {
+                            id: *id,
+                            close: false,
+                        }
+                    } else {
+                        OutboundChannel::Common
                     }
                 } else {
                     OutboundChannel::Common

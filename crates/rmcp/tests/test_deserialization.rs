@@ -126,7 +126,8 @@ mod untagged_server_result {
 
     #[test]
     fn round_trip_call_tool_result_preserves_variant() {
-        let original = CallToolResult::success(vec![rmcp::model::Content::text("hello world")]);
+        let original =
+            CallToolResult::success(vec![rmcp::model::ContentBlock::text("hello world")]);
         let json = serde_json::to_value(&original).unwrap();
         let result = parse_result(wrap_response(json));
         assert!(matches!(result, ServerResult::CallToolResult(_)));
