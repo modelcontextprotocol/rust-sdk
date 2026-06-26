@@ -7,6 +7,8 @@
 //! [`SamplingMessageContentBlock`] extends the union with `tool_use` and `tool_result`
 //! variants for sampling messages (SEP-1577).
 
+// ToolUseContent/ToolResultContent are SEP-2577-deprecated; internal references are expected.
+#![expect(deprecated)]
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -178,6 +180,10 @@ impl EmbeddedResource {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ToolUseContent {
     pub id: String,
     pub name: String,
@@ -191,6 +197,10 @@ pub struct ToolUseContent {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ToolResultContent {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,

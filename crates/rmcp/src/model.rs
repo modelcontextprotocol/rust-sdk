@@ -1,3 +1,6 @@
+// Internal references to the SEP-2577-deprecated Roots/Sampling/Logging types
+// defined in this module are expected; the deprecation is advisory for downstream users.
+#![expect(deprecated)]
 use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
@@ -1488,6 +1491,10 @@ pub type ToolListChangedNotification = NotificationNoParam<ToolListChangedNotifi
 #[serde(rename_all = "lowercase")] //match spec
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub enum LoggingLevel {
     Debug,
     Info,
@@ -1505,6 +1512,10 @@ const_string!(SetLevelRequestMethod = "logging/setLevel");
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct SetLevelRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1534,6 +1545,10 @@ impl RequestParamsMeta for SetLevelRequestParams {
 pub type SetLevelRequestParam = SetLevelRequestParams;
 
 /// Request to set the logging level
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParams>;
 
 const_string!(LoggingMessageNotificationMethod = "notifications/message");
@@ -1542,6 +1557,10 @@ const_string!(LoggingMessageNotificationMethod = "notifications/message");
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct LoggingMessageNotificationParam {
     /// The severity level of this log message
     pub level: LoggingLevel,
@@ -1573,6 +1592,10 @@ impl LoggingMessageNotificationParam {
 }
 
 /// Notification containing a log message
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type LoggingMessageNotification =
     Notification<LoggingMessageNotificationMethod, LoggingMessageNotificationParam>;
 
@@ -1581,6 +1604,10 @@ pub type LoggingMessageNotification =
 // =============================================================================
 
 const_string!(CreateMessageRequestMethod = "sampling/createMessage");
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParams>;
 
 /// Represents the role of a participant in a conversation or message exchange.
@@ -1618,6 +1645,10 @@ pub enum ToolChoiceMode {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ToolChoice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<ToolChoiceMode>,
@@ -1750,6 +1781,10 @@ impl<T> From<Vec<T>> for SamplingContent<T> {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct SamplingMessage {
     /// The role of the message sender (User or Assistant)
     pub role: Role,
@@ -1764,6 +1799,10 @@ pub struct SamplingMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub enum SamplingMessageContentBlock {
     Text(TextContent),
     Image(ImageContent),
@@ -1912,6 +1951,10 @@ pub enum ContextInclusion {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct CreateMessageRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -2125,6 +2168,10 @@ pub type CreateMessageRequestParam = CreateMessageRequestParams;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ModelPreferences {
     /// Specific model names or families to prefer (e.g., "claude", "gpt")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2189,6 +2236,10 @@ impl Default for ModelPreferences {
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ModelHint {
     /// The suggested model name or family identifier
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2522,6 +2573,10 @@ impl ArgumentInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct Root {
     pub uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2554,12 +2609,20 @@ impl Root {
 }
 
 const_string!(ListRootsRequestMethod = "roots/list");
+#[deprecated(
+    since = "2.0.0",
+    note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -3167,6 +3230,10 @@ pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct CreateMessageResult {
     /// The identifier of the model that generated the response
     pub model: String,

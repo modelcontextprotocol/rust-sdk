@@ -1,3 +1,5 @@
+// Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
+#![expect(deprecated)]
 pub mod progress;
 use std::sync::Arc;
 
