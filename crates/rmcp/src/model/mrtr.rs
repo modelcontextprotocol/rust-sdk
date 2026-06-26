@@ -10,13 +10,47 @@
 //! [`InputRequiredResult`] instead of the normal result. The client fulfills the
 //! [`InputRequests`], then retries the original request with [`InputResponses`] and
 //! the echoed `requestState`.
+//!
+//! # Using MRTR
+//!
+//! **Server:** return an [`InputRequiredResult`] from a tool/prompt/resource
+//! handler via the matching outcome enum ([`CallToolResponse`],
+//! [`GetPromptResponse`], [`ReadResourceResponse`]). The SDK only lets an
+//! `InputRequiredResult` reach a peer that negotiated protocol version
+//! `2026-07-28` or newer; older peers get a protocol error instead.
+//!
+//! **Client:** the high-level `RunningService` helpers — `call_tool`,
+//! `get_prompt`, and `read_resource` — automatically fulfil each
+//! [`InputRequest`] through the local `ClientHandler` and retry, up to
+//! [`DEFAULT_MRTR_MAX_ROUNDS`]. Use the `*_once` variants (e.g.
+//! `call_tool_once`) to receive an [`InputRequiredResult`] directly and drive
+//! the rounds yourself.
+//!
+//! # `requestState` is untrusted
+//!
+//! The client echoes `requestState` back verbatim, so a stateless server that
+//! stores meaningful data in it MUST verify integrity before trusting the echoed
+//! value. Enable the `request-state` feature and use `RequestStateCodec` to seal
+//! and open it, or keep the state server-side and use `requestState` only as an
+//! opaque handle.
+//!
+//! A complete runnable walkthrough lives in the `servers_mrtr` example.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{CreateMessageRequest, ElicitRequest, ListRootsRequest, Meta, ResultType};
+use super::{
+    CallToolResult, CreateMessageRequest, ElicitRequest, GetPromptResult, ListRootsRequest, Meta,
+    ReadResourceResult, ResultType, ServerResult,
+};
+
+/// Default maximum number of MRTR rounds a high-level client call will drive.
+///
+/// This matches the default used by other Tier 1 SDKs and prevents a
+/// misbehaving peer from keeping a request alive indefinitely.
+pub const DEFAULT_MRTR_MAX_ROUNDS: usize = 10;
 
 /// A server-initiated request that can appear inside [`InputRequests`].
 ///
@@ -52,6 +86,101 @@ pub type InputRequests = BTreeMap<String, InputRequest>;
 /// heterogeneous `ClientResult` union does not derive the traits required
 /// for use as a `BTreeMap` value.
 pub type InputResponses = BTreeMap<String, Value>;
+
+/// Result of a `tools/call` request, including the MRTR intermediate result.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum CallToolResponse {
+    /// The server completed the tool call.
+    Complete(CallToolResult),
+    /// The server requires client-side input before the tool call can complete.
+    InputRequired(InputRequiredResult),
+}
+
+impl From<CallToolResult> for CallToolResponse {
+    fn from(result: CallToolResult) -> Self {
+        Self::Complete(result)
+    }
+}
+
+impl From<InputRequiredResult> for CallToolResponse {
+    fn from(result: InputRequiredResult) -> Self {
+        Self::InputRequired(result)
+    }
+}
+
+impl From<CallToolResponse> for ServerResult {
+    fn from(response: CallToolResponse) -> Self {
+        match response {
+            CallToolResponse::Complete(result) => ServerResult::CallToolResult(result),
+            CallToolResponse::InputRequired(result) => ServerResult::InputRequiredResult(result),
+        }
+    }
+}
+
+/// Result of a `prompts/get` request, including the MRTR intermediate result.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum GetPromptResponse {
+    /// The server completed the prompt request.
+    Complete(GetPromptResult),
+    /// The server requires client-side input before the prompt can be returned.
+    InputRequired(InputRequiredResult),
+}
+
+impl From<GetPromptResult> for GetPromptResponse {
+    fn from(result: GetPromptResult) -> Self {
+        Self::Complete(result)
+    }
+}
+
+impl From<InputRequiredResult> for GetPromptResponse {
+    fn from(result: InputRequiredResult) -> Self {
+        Self::InputRequired(result)
+    }
+}
+
+impl From<GetPromptResponse> for ServerResult {
+    fn from(response: GetPromptResponse) -> Self {
+        match response {
+            GetPromptResponse::Complete(result) => ServerResult::GetPromptResult(result),
+            GetPromptResponse::InputRequired(result) => ServerResult::InputRequiredResult(result),
+        }
+    }
+}
+
+/// Result of a `resources/read` request, including the MRTR intermediate result.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ReadResourceResponse {
+    /// The server completed the resource read.
+    Complete(ReadResourceResult),
+    /// The server requires client-side input before the resource can be returned.
+    InputRequired(InputRequiredResult),
+}
+
+impl From<ReadResourceResult> for ReadResourceResponse {
+    fn from(result: ReadResourceResult) -> Self {
+        Self::Complete(result)
+    }
+}
+
+impl From<InputRequiredResult> for ReadResourceResponse {
+    fn from(result: InputRequiredResult) -> Self {
+        Self::InputRequired(result)
+    }
+}
+
+impl From<ReadResourceResponse> for ServerResult {
+    fn from(response: ReadResourceResponse) -> Self {
+        match response {
+            ReadResourceResponse::Complete(result) => ServerResult::ReadResourceResult(result),
+            ReadResourceResponse::InputRequired(result) => {
+                ServerResult::InputRequiredResult(result)
+            }
+        }
+    }
+}
 
 /// A result indicating that additional input is needed before the request
 /// can be completed.

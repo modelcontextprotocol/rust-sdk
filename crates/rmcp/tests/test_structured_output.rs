@@ -3,7 +3,7 @@
 use rmcp::{
     Json, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, ServerResult, Tool},
+    model::{CallToolResponse, CallToolResult, ContentBlock, ServerResult, Tool},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -224,11 +224,13 @@ async fn test_structured_return_conversion() {
     };
 
     let structured = Json(calc_result);
-    let result: Result<CallToolResult, rmcp::ErrorData> =
+    let result: Result<CallToolResponse, rmcp::ErrorData> =
         rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(structured);
 
     assert!(result.is_ok());
-    let call_result = result.unwrap();
+    let CallToolResponse::Complete(call_result) = result.unwrap() else {
+        panic!("expected complete CallToolResult");
+    };
 
     // Tools which return structured content should also return a serialized version as
     // Content::text for backwards compatibility.
@@ -285,11 +287,13 @@ async fn test_output_schema_requires_structured_content() {
     let result = server.calculate(params).await.unwrap();
 
     // Convert the Json<CalculationResult> to CallToolResult
-    let call_result: Result<CallToolResult, rmcp::ErrorData> =
+    let call_result: Result<CallToolResponse, rmcp::ErrorData> =
         IntoCallToolResult::into_call_tool_result(result);
 
     assert!(call_result.is_ok());
-    let call_result = call_result.unwrap();
+    let CallToolResponse::Complete(call_result) = call_result.unwrap() else {
+        panic!("expected complete CallToolResult");
+    };
 
     // Verify it has structured_content and content
     assert!(call_result.structured_content.is_some());

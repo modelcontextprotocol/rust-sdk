@@ -106,7 +106,7 @@ where
                         context,
                     );
                     let result = self.tool_router.call(tool_call_context).await?;
-                    Ok(ServerResult::CallToolResult(result))
+                    Ok(ServerResult::from(result))
                 } else {
                     self.service
                         .handle_request(ClientRequest::CallToolRequest(request), context)
@@ -129,7 +129,7 @@ where
                         context,
                     );
                     let result = self.prompt_router.get_prompt(prompt_context).await?;
-                    Ok(ServerResult::GetPromptResult(result))
+                    Ok(ServerResult::from(result))
                 } else {
                     self.service
                         .handle_request(ClientRequest::GetPromptRequest(request), context)
@@ -193,7 +193,7 @@ mod tests {
     async fn test_router_deferred_notifier_e2e() {
         let mut router = Router::new(DummyHandler).with_tool(tool::ToolRoute::new_dyn(
             Tool::new("my_tool", "test", Arc::new(Default::default())),
-            |_ctx| Box::pin(async { Ok(CallToolResult::default()) }),
+            |_ctx| Box::pin(async { Ok(CallToolResult::default().into()) }),
         ));
 
         let id_provider: Arc<dyn RequestIdProvider> =

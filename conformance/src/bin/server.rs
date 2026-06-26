@@ -213,9 +213,9 @@ impl ServerHandler for ConformanceServer {
         &self,
         request: CallToolRequestParams,
         cx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let args = request.arguments.unwrap_or_default();
-        match request.name.as_ref() {
+        let result = match request.name.as_ref() {
             "test_simple_text" => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "This is a simple text response for testing.",
             )])),
@@ -530,7 +530,8 @@ impl ServerHandler for ConformanceServer {
                 format!("Unknown tool: {}", request.name),
                 None,
             )),
-        }
+        };
+        result.map(Into::into)
     }
 
     async fn list_resources(
@@ -555,9 +556,9 @@ impl ServerHandler for ConformanceServer {
         &self,
         request: ReadResourceRequestParams,
         _cx: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         let uri = request.uri.as_str();
-        match uri {
+        let result = match uri {
             "test://static-text" => Ok(ReadResourceResult::new(vec![
                 ResourceContents::TextResourceContents {
                     uri: uri.into(),
@@ -598,7 +599,8 @@ impl ServerHandler for ConformanceServer {
                     ))
                 }
             }
-        }
+        };
+        result.map(Into::into)
     }
 
     async fn list_resource_templates(
@@ -679,8 +681,8 @@ impl ServerHandler for ConformanceServer {
         &self,
         request: GetPromptRequestParams,
         _cx: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, ErrorData> {
-        match request.name.as_str() {
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let result = match request.name.as_str() {
             "test_simple_prompt" => Ok(GetPromptResult::new(vec![PromptMessage::new_text(
                 Role::User,
                 "This is a simple test prompt.",
@@ -724,7 +726,8 @@ impl ServerHandler for ConformanceServer {
                 format!("Unknown prompt: {}", request.name),
                 None,
             )),
-        }
+        };
+        result.map(Into::into)
     }
 
     async fn complete(
