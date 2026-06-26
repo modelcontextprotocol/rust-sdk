@@ -17,9 +17,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-pub struct CodeReviewRequest {
-    pub file_path: String,
-    pub language: String,
+struct CodeReviewRequest {
+    file_path: String,
+    language: String,
 }
 
 #[prompt_handler(router = self.prompt_router)]
@@ -194,17 +194,17 @@ impl CodeReviewRequest {}
 
 // Struct defined for testing optional field schema generation
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct OptionalFieldTestSchema {
+struct OptionalFieldTestSchema {
     #[schemars(description = "An optional description field")]
-    pub description: Option<String>,
+    description: Option<String>,
 }
 
 // Struct defined for testing optional i64 field schema generation and null handling
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct OptionalI64TestSchema {
+struct OptionalI64TestSchema {
     #[schemars(description = "An optional i64 field")]
-    pub count: Option<i64>,
-    pub mandatory_field: String, // Added to ensure non-empty object schema
+    count: Option<i64>,
+    mandatory_field: String, // Added to ensure non-empty object schema
 }
 
 // Dummy struct to host the test prompt method

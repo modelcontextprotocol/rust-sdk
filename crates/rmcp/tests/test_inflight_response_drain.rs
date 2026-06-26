@@ -23,6 +23,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 // A slow tool server that sleeps before returning a response.
 #[derive(Debug, Clone)]
 struct SlowToolServer {
+    #[expect(dead_code, reason = "tool_handler macro accesses this router field")]
     tool_router: ToolRouter<Self>,
 }
 
