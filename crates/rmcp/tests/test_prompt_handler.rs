@@ -3,13 +3,7 @@
 // the ServerHandler trait implementation methods.
 #![allow(dead_code)]
 
-use rmcp::{
-    RoleServer, ServerHandler,
-    handler::server::router::prompt::PromptRouter,
-    model::{GetPromptRequestParams, GetPromptResult, ListPromptsResult, PaginatedRequestParams},
-    prompt_handler,
-    service::RequestContext,
-};
+use rmcp::{ServerHandler, handler::server::router::prompt::PromptRouter, prompt_handler};
 
 #[derive(Debug, Clone)]
 pub struct TestPromptServer {
