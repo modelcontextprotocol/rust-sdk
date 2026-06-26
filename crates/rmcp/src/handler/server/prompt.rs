@@ -15,7 +15,7 @@ pub use super::common::{Extension, RequestId};
 use crate::{
     RoleServer,
     handler::server::wrapper::Parameters,
-    model::{GetPromptResult, PromptMessage},
+    model::{GetPromptResponse, GetPromptResult, InputRequiredResult, PromptMessage},
     service::{MaybeBoxFuture, MaybeSend, MaybeSendFuture, RequestContext},
 };
 
@@ -59,12 +59,12 @@ pub trait GetPromptHandler<S, A> {
     fn handle(
         self,
         context: PromptContext<'_, S>,
-    ) -> MaybeBoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>;
+    ) -> MaybeBoxFuture<'_, Result<GetPromptResponse, crate::ErrorData>>;
 }
 
 /// Type alias for dynamic prompt handlers
 #[cfg(not(feature = "local"))]
-pub type DynGetPromptHandler<S> = dyn for<'a> Fn(PromptContext<'a, S>) -> BoxFuture<'a, Result<GetPromptResult, crate::ErrorData>>
+pub type DynGetPromptHandler<S> = dyn for<'a> Fn(PromptContext<'a, S>) -> BoxFuture<'a, Result<GetPromptResponse, crate::ErrorData>>
     + Send
     + Sync;
 
@@ -73,7 +73,7 @@ pub type DynGetPromptHandler<S> = dyn for<'a> Fn(
     PromptContext<'a, S>,
 ) -> futures::future::LocalBoxFuture<
     'a,
-    Result<GetPromptResult, crate::ErrorData>,
+    Result<GetPromptResponse, crate::ErrorData>,
 >;
 
 /// Adapter type for async methods that return `Vec<PromptMessage>`
@@ -91,28 +91,35 @@ pub struct SyncPromptMethodAdapter<P, R>(PhantomData<fn(P) -> R>);
 
 /// Trait for types that can be converted into GetPromptResult
 pub trait IntoGetPromptResult {
-    fn into_get_prompt_result(self) -> Result<GetPromptResult, crate::ErrorData>;
+    fn into_get_prompt_result(self) -> Result<GetPromptResponse, crate::ErrorData>;
 }
 
 impl IntoGetPromptResult for GetPromptResult {
-    fn into_get_prompt_result(self) -> Result<GetPromptResult, crate::ErrorData> {
-        Ok(self)
+    fn into_get_prompt_result(self) -> Result<GetPromptResponse, crate::ErrorData> {
+        Ok(self.into())
+    }
+}
+
+impl IntoGetPromptResult for InputRequiredResult {
+    fn into_get_prompt_result(self) -> Result<GetPromptResponse, crate::ErrorData> {
+        Ok(self.into())
     }
 }
 
 impl IntoGetPromptResult for Vec<PromptMessage> {
-    fn into_get_prompt_result(self) -> Result<GetPromptResult, crate::ErrorData> {
+    fn into_get_prompt_result(self) -> Result<GetPromptResponse, crate::ErrorData> {
         Ok(GetPromptResult {
             result_type: Default::default(),
             description: None,
             messages: self,
             meta: None,
-        })
+        }
+        .into())
     }
 }
 
 impl<T: IntoGetPromptResult> IntoGetPromptResult for Result<T, crate::ErrorData> {
-    fn into_get_prompt_result(self) -> Result<GetPromptResult, crate::ErrorData> {
+    fn into_get_prompt_result(self) -> Result<GetPromptResponse, crate::ErrorData> {
         self.and_then(|v| v.into_get_prompt_result())
     }
 }
@@ -129,7 +136,7 @@ pin_project_lite::pin_project! {
         },
         Ready {
             #[pin]
-            result: futures::future::Ready<Result<GetPromptResult, crate::ErrorData>>,
+            result: futures::future::Ready<Result<GetPromptResponse, crate::ErrorData>>,
         }
     }
 }
@@ -139,7 +146,7 @@ where
     F: Future<Output = R>,
     R: IntoGetPromptResult,
 {
-    type Output = Result<GetPromptResult, crate::ErrorData>;
+    type Output = Result<GetPromptResponse, crate::ErrorData>;
 
     fn poll(
         self: std::pin::Pin<&mut Self>,
@@ -216,7 +223,7 @@ macro_rules! impl_prompt_handler_for {
             fn handle(
                 self,
                 mut context: PromptContext<'_, S>,
-            ) -> MaybeBoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
+            ) -> MaybeBoxFuture<'_, Result<GetPromptResponse, crate::ErrorData>>
             {
                 $(
                     let result = $Tn::from_context_part(&mut context);
@@ -249,7 +256,7 @@ macro_rules! impl_prompt_handler_for {
             fn handle(
                 self,
                 mut context: PromptContext<'_, S>,
-            ) -> MaybeBoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
+            ) -> MaybeBoxFuture<'_, Result<GetPromptResponse, crate::ErrorData>>
             {
                 $(
                     let result = $Tn::from_context_part(&mut context);
@@ -280,7 +287,7 @@ macro_rules! impl_prompt_handler_for {
             fn handle(
                 self,
                 mut context: PromptContext<'_, S>,
-            ) -> MaybeBoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
+            ) -> MaybeBoxFuture<'_, Result<GetPromptResponse, crate::ErrorData>>
             {
                 // Extract all parameters before moving into the async block
                 $(
@@ -315,7 +322,7 @@ macro_rules! impl_prompt_handler_for {
             fn handle(
                 self,
                 mut context: PromptContext<'_, S>,
-            ) -> MaybeBoxFuture<'_, Result<GetPromptResult, crate::ErrorData>>
+            ) -> MaybeBoxFuture<'_, Result<GetPromptResponse, crate::ErrorData>>
             {
                 $(
                     let result = $Tn::from_context_part(&mut context);

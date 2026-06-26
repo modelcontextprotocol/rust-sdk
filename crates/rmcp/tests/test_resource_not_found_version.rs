@@ -9,7 +9,7 @@ use rmcp::{
     ClientHandler, RoleServer, ServerHandler, ServiceError, ServiceExt,
     model::{
         ClientInfo, ErrorCode, ErrorData, ProtocolVersion, ReadResourceRequestParams,
-        ReadResourceResult,
+        ReadResourceResponse,
     },
     service::RequestContext,
 };
@@ -22,7 +22,7 @@ impl ServerHandler for ResourceServer {
         &self,
         _request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         Err(ErrorData::resource_not_found("resource not found", None))
     }
 }

@@ -86,6 +86,9 @@ pub enum ServiceError {
     Cancelled { reason: Option<String> },
     #[error("request timeout after {}", chrono::Duration::from_std(*timeout).unwrap_or_default())]
     Timeout { timeout: Duration },
+    /// The peer kept returning `input_required` beyond the configured round cap.
+    #[error("input_required did not complete within {max_rounds} MRTR rounds")]
+    InputRequiredRoundsExceeded { max_rounds: usize },
 }
 
 trait TransferObject:

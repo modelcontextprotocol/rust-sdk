@@ -1,24 +1,26 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use thiserror::Error;
 
 use super::*;
 use crate::{
     model::{
-        ArgumentInfo, CallToolRequest, CallToolRequestParams, CallToolResult,
+        ArgumentInfo, CallToolRequest, CallToolRequestParams, CallToolResponse, CallToolResult,
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams,
-        CompleteResult, CompletionContext, CompletionInfo, ErrorData, GetPromptRequest,
-        GetPromptRequestParams, GetPromptResult, InitializeRequest, InitializedNotification,
-        JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
-        ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-        ListToolsResult, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
-        ReadResourceRequest, ReadResourceRequestParams, ReadResourceResult, Reference, RequestId,
-        RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
-        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SubscribeRequest,
-        SubscribeRequestParams, UnsubscribeRequest, UnsubscribeRequestParams,
+        CompleteResult, CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, ErrorData,
+        GetExtensions, GetMeta, GetPromptRequest, GetPromptRequestParams, GetPromptResponse,
+        GetPromptResult, InitializeRequest, InitializedNotification, InputRequest,
+        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
+        ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
+        ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
+        NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
+        ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+        Reference, RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage,
+        ServerNotification, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams,
+        SubscribeRequest, SubscribeRequestParams, UnsubscribeRequest, UnsubscribeRequestParams,
     },
     transport::DynamicTransportError,
 };
@@ -361,6 +363,72 @@ macro_rules! method {
 }
 
 impl Peer<RoleClient> {
+    /// Send one `tools/call` request and return either a final result or an MRTR
+    /// `InputRequiredResult` without driving any follow-up rounds.
+    pub async fn call_tool_once(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResponse, ServiceError> {
+        let result = self
+            .send_request(ClientRequest::CallToolRequest(CallToolRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::CallToolResult(result) => Ok(CallToolResponse::Complete(result)),
+            ServerResult::InputRequiredResult(result) => {
+                Ok(CallToolResponse::InputRequired(result))
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// Send one `prompts/get` request and return either a final result or an MRTR
+    /// `InputRequiredResult` without driving any follow-up rounds.
+    pub async fn get_prompt_once(
+        &self,
+        params: GetPromptRequestParams,
+    ) -> Result<GetPromptResponse, ServiceError> {
+        let result = self
+            .send_request(ClientRequest::GetPromptRequest(GetPromptRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::GetPromptResult(result) => Ok(GetPromptResponse::Complete(result)),
+            ServerResult::InputRequiredResult(result) => {
+                Ok(GetPromptResponse::InputRequired(result))
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// Send one `resources/read` request and return either a final result or an
+    /// MRTR `InputRequiredResult` without driving any follow-up rounds.
+    pub async fn read_resource_once(
+        &self,
+        params: ReadResourceRequestParams,
+    ) -> Result<ReadResourceResponse, ServiceError> {
+        let result = self
+            .send_request(ClientRequest::ReadResourceRequest(ReadResourceRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::ReadResourceResult(result) => Ok(ReadResourceResponse::Complete(result)),
+            ServerResult::InputRequiredResult(result) => {
+                Ok(ReadResourceResponse::InputRequired(result))
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
     method!(peer_req complete CompleteRequest(CompleteRequestParams) => CompleteResult);
     method!(
         #[deprecated(
@@ -556,5 +624,296 @@ impl Peer<RoleClient> {
             .complete_resource_argument(uri_template, argument_name, current_value, None)
             .await?;
         Ok(completion.values)
+    }
+}
+
+impl<S> RunningService<RoleClient, S>
+where
+    S: Service<RoleClient>,
+{
+    /// Send one `tools/call` request without driving MRTR follow-up rounds.
+    pub async fn call_tool_once(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResponse, ServiceError> {
+        self.peer.call_tool_once(params).await
+    }
+
+    /// Send one `prompts/get` request without driving MRTR follow-up rounds.
+    pub async fn get_prompt_once(
+        &self,
+        params: GetPromptRequestParams,
+    ) -> Result<GetPromptResponse, ServiceError> {
+        self.peer.get_prompt_once(params).await
+    }
+
+    /// Send one `resources/read` request without driving MRTR follow-up rounds.
+    pub async fn read_resource_once(
+        &self,
+        params: ReadResourceRequestParams,
+    ) -> Result<ReadResourceResponse, ServiceError> {
+        self.peer.read_resource_once(params).await
+    }
+
+    /// High-level `tools/call` helper that automatically fulfils SEP-2322
+    /// `input_required` rounds through the local [`ClientHandler`](crate::ClientHandler) service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InputRequiredRoundsExceeded`] if the peer does
+    /// not produce a final [`CallToolResult`] within the default MRTR round cap.
+    /// Other transport, protocol, and local input-handler errors are propagated.
+    pub async fn call_tool(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResult, ServiceError> {
+        self.call_tool_with_mrtr_max_rounds(params, DEFAULT_MRTR_MAX_ROUNDS)
+            .await
+    }
+
+    /// Same as [`Self::call_tool`], with an explicit MRTR round cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InputRequiredRoundsExceeded`] once `max_rounds`
+    /// `input_required` responses have been driven without receiving a final
+    /// [`CallToolResult`]. Other transport, protocol, and local input-handler
+    /// errors are propagated.
+    pub async fn call_tool_with_mrtr_max_rounds(
+        &self,
+        mut params: CallToolRequestParams,
+        max_rounds: usize,
+    ) -> Result<CallToolResult, ServiceError> {
+        let mut state_only_rounds = 0usize;
+        for _round in 0..max_rounds {
+            match self.peer.call_tool_once(params.clone()).await? {
+                CallToolResponse::Complete(result) => return Ok(result),
+                CallToolResponse::InputRequired(result) => {
+                    let (input_responses, request_state) = self
+                        .prepare_input_required_retry(result, &mut state_only_rounds)
+                        .await?;
+                    params.input_responses = input_responses;
+                    params.request_state = request_state;
+                }
+            }
+        }
+        Err(ServiceError::InputRequiredRoundsExceeded { max_rounds })
+    }
+
+    /// High-level `prompts/get` helper that automatically fulfils SEP-2322
+    /// `input_required` rounds through the local [`ClientHandler`](crate::ClientHandler) service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InputRequiredRoundsExceeded`] if the peer does
+    /// not produce a final [`GetPromptResult`] within the default MRTR round cap.
+    /// Other transport, protocol, and local input-handler errors are propagated.
+    pub async fn get_prompt(
+        &self,
+        params: GetPromptRequestParams,
+    ) -> Result<GetPromptResult, ServiceError> {
+        self.get_prompt_with_mrtr_max_rounds(params, DEFAULT_MRTR_MAX_ROUNDS)
+            .await
+    }
+
+    /// Same as [`Self::get_prompt`], with an explicit MRTR round cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InputRequiredRoundsExceeded`] once `max_rounds`
+    /// `input_required` responses have been driven without receiving a final
+    /// [`GetPromptResult`]. Other transport, protocol, and local input-handler
+    /// errors are propagated.
+    pub async fn get_prompt_with_mrtr_max_rounds(
+        &self,
+        mut params: GetPromptRequestParams,
+        max_rounds: usize,
+    ) -> Result<GetPromptResult, ServiceError> {
+        let mut state_only_rounds = 0usize;
+        for _round in 0..max_rounds {
+            match self.peer.get_prompt_once(params.clone()).await? {
+                GetPromptResponse::Complete(result) => return Ok(result),
+                GetPromptResponse::InputRequired(result) => {
+                    let (input_responses, request_state) = self
+                        .prepare_input_required_retry(result, &mut state_only_rounds)
+                        .await?;
+                    params.input_responses = input_responses;
+                    params.request_state = request_state;
+                }
+            }
+        }
+        Err(ServiceError::InputRequiredRoundsExceeded { max_rounds })
+    }
+
+    /// High-level `resources/read` helper that automatically fulfils SEP-2322
+    /// `input_required` rounds through the local [`ClientHandler`](crate::ClientHandler) service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InputRequiredRoundsExceeded`] if the peer does
+    /// not produce a final [`ReadResourceResult`] within the default MRTR round
+    /// cap. Other transport, protocol, and local input-handler errors are
+    /// propagated.
+    pub async fn read_resource(
+        &self,
+        params: ReadResourceRequestParams,
+    ) -> Result<ReadResourceResult, ServiceError> {
+        self.read_resource_with_mrtr_max_rounds(params, DEFAULT_MRTR_MAX_ROUNDS)
+            .await
+    }
+
+    /// Same as [`Self::read_resource`], with an explicit MRTR round cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceError::InputRequiredRoundsExceeded`] once `max_rounds`
+    /// `input_required` responses have been driven without receiving a final
+    /// [`ReadResourceResult`]. Other transport, protocol, and local input-handler
+    /// errors are propagated.
+    pub async fn read_resource_with_mrtr_max_rounds(
+        &self,
+        mut params: ReadResourceRequestParams,
+        max_rounds: usize,
+    ) -> Result<ReadResourceResult, ServiceError> {
+        let mut state_only_rounds = 0usize;
+        for _round in 0..max_rounds {
+            match self.peer.read_resource_once(params.clone()).await? {
+                ReadResourceResponse::Complete(result) => return Ok(result),
+                ReadResourceResponse::InputRequired(result) => {
+                    let (input_responses, request_state) = self
+                        .prepare_input_required_retry(result, &mut state_only_rounds)
+                        .await?;
+                    params.input_responses = input_responses;
+                    params.request_state = request_state;
+                }
+            }
+        }
+        Err(ServiceError::InputRequiredRoundsExceeded { max_rounds })
+    }
+
+    async fn prepare_input_required_retry(
+        &self,
+        result: InputRequiredResult,
+        state_only_rounds: &mut usize,
+    ) -> Result<(Option<InputResponses>, Option<String>), ServiceError> {
+        let had_input_requests = result
+            .input_requests
+            .as_ref()
+            .is_some_and(|requests| !requests.is_empty());
+        if !had_input_requests && result.request_state.is_none() {
+            return Err(ServiceError::UnexpectedResponse);
+        }
+
+        let responses = self
+            .fulfill_input_requests(result.input_requests.unwrap_or_default())
+            .await?;
+        if had_input_requests {
+            *state_only_rounds = 0;
+        } else {
+            Self::sleep_state_only_round(*state_only_rounds).await;
+            *state_only_rounds += 1;
+        }
+
+        Ok((
+            (!responses.is_empty()).then_some(responses),
+            result.request_state,
+        ))
+    }
+
+    async fn fulfill_input_requests(
+        &self,
+        requests: crate::model::InputRequests,
+    ) -> Result<InputResponses, ServiceError> {
+        let responses = futures::future::try_join_all(
+            requests
+                .into_iter()
+                .map(|(key, request)| self.fulfill_input_request(key, request)),
+        )
+        .await?;
+        Ok(responses.into_iter().collect())
+    }
+
+    async fn fulfill_input_request(
+        &self,
+        key: String,
+        request: InputRequest,
+    ) -> Result<(String, serde_json::Value), ServiceError> {
+        let response = match request {
+            InputRequest::CreateMessage(request) => {
+                let mut request = ServerRequest::CreateMessageRequest(request);
+                let context = self.input_request_context(&key, &mut request);
+                match self
+                    .service
+                    .handle_request(request, context)
+                    .await
+                    .map_err(ServiceError::McpError)?
+                {
+                    ClientResult::CreateMessageResult(result) => {
+                        serde_json::to_value(result).map_err(Self::serde_to_service_error)?
+                    }
+                    _ => return Err(ServiceError::UnexpectedResponse),
+                }
+            }
+            InputRequest::Elicitation(request) => {
+                let mut request = ServerRequest::ElicitRequest(request);
+                let context = self.input_request_context(&key, &mut request);
+                match self
+                    .service
+                    .handle_request(request, context)
+                    .await
+                    .map_err(ServiceError::McpError)?
+                {
+                    ClientResult::ElicitResult(result) => {
+                        serde_json::to_value(result).map_err(Self::serde_to_service_error)?
+                    }
+                    _ => return Err(ServiceError::UnexpectedResponse),
+                }
+            }
+            InputRequest::ListRoots(request) => {
+                let mut request = ServerRequest::ListRootsRequest(request);
+                let context = self.input_request_context(&key, &mut request);
+                match self
+                    .service
+                    .handle_request(request, context)
+                    .await
+                    .map_err(ServiceError::McpError)?
+                {
+                    ClientResult::ListRootsResult(result) => {
+                        serde_json::to_value(result).map_err(Self::serde_to_service_error)?
+                    }
+                    _ => return Err(ServiceError::UnexpectedResponse),
+                }
+            }
+        };
+        Ok((key, response))
+    }
+
+    fn input_request_context<T>(&self, key: &str, request: &mut T) -> RequestContext<RoleClient>
+    where
+        T: GetMeta + GetExtensions,
+    {
+        let mut meta = Default::default();
+        let mut extensions = Default::default();
+        std::mem::swap(&mut meta, request.get_meta_mut());
+        std::mem::swap(&mut extensions, request.extensions_mut());
+        RequestContext {
+            ct: tokio_util::sync::CancellationToken::new(),
+            id: NumberOrString::String(Arc::from(key)),
+            peer: self.peer.clone(),
+            meta,
+            extensions,
+        }
+    }
+
+    async fn sleep_state_only_round(state_only_rounds: usize) {
+        let millis = (50u64.saturating_mul(1_u64 << state_only_rounds.min(3))).min(250);
+        tokio::time::sleep(Duration::from_millis(millis)).await;
+    }
+
+    fn serde_to_service_error(error: serde_json::Error) -> ServiceError {
+        ServiceError::McpError(ErrorData::internal_error(
+            format!("failed to serialize MRTR input response: {error}"),
+            None,
+        ))
     }
 }

@@ -2,7 +2,7 @@ use std::{borrow::Cow, sync::Arc};
 
 use crate::{
     handler::server::prompt::{DynGetPromptHandler, GetPromptHandler, PromptContext},
-    model::{GetPromptResult, Prompt},
+    model::{GetPromptResponse, Prompt},
     service::{MaybeBoxFuture, MaybeSend},
 };
 
@@ -50,7 +50,8 @@ impl<S: MaybeSend + 'static> PromptRoute<S> {
     where
         H: for<'a> Fn(
                 PromptContext<'a, S>,
-            ) -> MaybeBoxFuture<'a, Result<GetPromptResult, crate::ErrorData>>
+            )
+                -> MaybeBoxFuture<'a, Result<GetPromptResponse, crate::ErrorData>>
             + MaybeSend
             + 'static,
     {
@@ -175,7 +176,7 @@ where
     pub async fn get_prompt(
         &self,
         context: PromptContext<'_, S>,
-    ) -> Result<GetPromptResult, crate::ErrorData> {
+    ) -> Result<GetPromptResponse, crate::ErrorData> {
         let item = self.map.get(context.name.as_str()).ok_or_else(|| {
             crate::ErrorData::invalid_params(
                 format!("prompt '{}' not found", context.name),

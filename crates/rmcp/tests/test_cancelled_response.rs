@@ -7,7 +7,10 @@ use std::{collections::BTreeSet, process::Stdio, time::Duration};
 
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
-    model::{CallToolRequestParams, CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
+        ServerInfo,
+    },
     service::RequestContext,
 };
 use serde_json::{Value, json};
@@ -96,11 +99,9 @@ impl ServerHandler for WaitForCancelServer {
         &self,
         _request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         context.ct.cancelled().await;
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            "late response",
-        )]))
+        Ok(CallToolResult::success(vec![ContentBlock::text("late response")]).into())
     }
 }
 

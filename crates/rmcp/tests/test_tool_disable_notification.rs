@@ -9,7 +9,7 @@ use std::sync::{
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRoute, tool::ToolCallContext},
-    model::{CallToolResult, ServerCapabilities, ServerInfo, Tool},
+    model::{CallToolResponse, CallToolResult, ServerCapabilities, ServerInfo, Tool},
     service::{MaybeSendFuture, NotificationContext},
 };
 use tokio::sync::{Notify, RwLock};
@@ -26,11 +26,11 @@ impl TestToolServer {
         let mut tool_router = rmcp::handler::server::router::tool::ToolRouter::<Self>::new();
         tool_router.add_route(ToolRoute::new_dyn(
             Tool::new("tool_a", "Tool A", Arc::new(Default::default())),
-            |_ctx| Box::pin(async { Ok(CallToolResult::default()) }),
+            |_ctx| Box::pin(async { Ok(CallToolResult::default().into()) }),
         ));
         tool_router.add_route(ToolRoute::new_dyn(
             Tool::new("tool_b", "Tool B", Arc::new(Default::default())),
-            |_ctx| Box::pin(async { Ok(CallToolResult::default()) }),
+            |_ctx| Box::pin(async { Ok(CallToolResult::default().into()) }),
         ));
         Self {
             router: Arc::new(RwLock::new(tool_router)),
@@ -49,7 +49,7 @@ impl ServerHandler for TestToolServer {
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let router = self.router.read().await;
         let tcc = ToolCallContext::new(self, request, context);
         router.call(tcc).await

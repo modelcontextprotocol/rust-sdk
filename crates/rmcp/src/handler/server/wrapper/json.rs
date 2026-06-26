@@ -3,7 +3,10 @@ use std::borrow::Cow;
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::{handler::server::tool::IntoCallToolResult, model::CallToolResult};
+use crate::{
+    handler::server::tool::IntoCallToolResult,
+    model::{CallToolResponse, CallToolResult},
+};
 
 /// Json wrapper for structured output
 ///
@@ -27,7 +30,7 @@ impl<T: JsonSchema> JsonSchema for Json<T> {
 
 // Implementation for Json<T> to create structured content
 impl<T: Serialize + JsonSchema + 'static> IntoCallToolResult for Json<T> {
-    fn into_call_tool_result(self) -> Result<CallToolResult, crate::ErrorData> {
+    fn into_call_tool_result(self) -> Result<CallToolResponse, crate::ErrorData> {
         let value = serde_json::to_value(self.0).map_err(|e| {
             crate::ErrorData::internal_error(
                 format!("Failed to serialize structured content: {}", e),
@@ -35,6 +38,6 @@ impl<T: Serialize + JsonSchema + 'static> IntoCallToolResult for Json<T> {
             )
         })?;
 
-        Ok(CallToolResult::structured(value))
+        Ok(CallToolResult::structured(value).into())
     }
 }

@@ -35,7 +35,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
             &self,
             request: rmcp::model::GetPromptRequestParams,
             context: rmcp::service::RequestContext<rmcp::RoleServer>,
-        ) -> Result<rmcp::model::GetPromptResult, rmcp::ErrorData> {
+        ) -> Result<rmcp::model::GetPromptResponse, rmcp::ErrorData> {
             let prompt_context = rmcp::handler::server::prompt::PromptContext::new(
                 self,
                 request.name,

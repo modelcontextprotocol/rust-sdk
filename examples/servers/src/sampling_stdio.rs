@@ -31,7 +31,7 @@ impl ServerHandler for SamplingDemoServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         match request.name.as_ref() {
             "ask_llm" => {
                 // Get the question from arguments
@@ -79,7 +79,8 @@ impl ServerHandler for SamplingDemoServer {
                         .and_then(|c| c.as_text())
                         .map(|t| &t.text)
                         .unwrap_or(&"No text response".to_string())
-                ))]))
+                ))])
+                .into())
             }
 
             _ => Err(ErrorData::new(

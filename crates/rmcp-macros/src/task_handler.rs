@@ -77,7 +77,16 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
 
                 let task_result_id = task_id.clone();
                 let future = Box::pin(async move {
-                    let result = server.call_tool(future_request, future_context).await;
+                    let result = server
+                        .call_tool(future_request, future_context)
+                        .await
+                        .and_then(|response| match response {
+                            rmcp::model::CallToolResponse::Complete(result) => Ok(result),
+                            _ => Err(rmcp::ErrorData::internal_error(
+                                "input_required is not supported for task-based tool calls",
+                                None,
+                            )),
+                        });
                     Ok(
                         Box::new(ToolCallTaskResult::new(task_result_id, result))
                             as Box<dyn OperationResultTransport>,

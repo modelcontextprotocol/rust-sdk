@@ -260,22 +260,16 @@ impl ServerHandler for Counter {
         &self,
         request: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let uri = &request.uri;
         match uri.as_str() {
             "str:////Users/to/some/path/" => {
                 let cwd = "/Users/to/some/path/";
-                Ok(ReadResourceResult::new(vec![ResourceContents::text(
-                    cwd,
-                    uri.clone(),
-                )]))
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(cwd, uri.clone())]).into())
             }
             "memo://insights" => {
                 let memo = "Business Intelligence Memo\n\nAnalysis has revealed 5 key insights ...";
-                Ok(ReadResourceResult::new(vec![ResourceContents::text(
-                    memo,
-                    uri.clone(),
-                )]))
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(memo, uri.clone())]).into())
             }
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",

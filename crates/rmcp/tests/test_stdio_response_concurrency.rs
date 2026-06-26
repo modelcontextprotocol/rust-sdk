@@ -4,7 +4,10 @@ use std::{collections::BTreeSet, process::Stdio, time::Duration};
 
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
-    model::{CallToolRequestParams, CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
+        ServerInfo,
+    },
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -87,11 +90,9 @@ impl ServerHandler for LargeResponseServer {
         &self,
         request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         assert_eq!("large-response", request.name.as_ref());
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            "x".repeat(RESPONSE_BYTES),
-        )]))
+        Ok(CallToolResult::success(vec![ContentBlock::text("x".repeat(RESPONSE_BYTES))]).into())
     }
 }
 

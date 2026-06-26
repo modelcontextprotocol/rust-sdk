@@ -27,6 +27,9 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
         // `context` is moved into the dispatch below, so read the negotiated version first.
         let protocol_version = context.protocol_version();
+        let mrtr_supported = protocol_version
+            .as_ref()
+            .is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
         let result = match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
@@ -46,7 +49,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             ClientRequest::GetPromptRequest(request) => self
                 .get_prompt(request.params, context)
                 .await
-                .map(ServerResult::GetPromptResult),
+                .map(ServerResult::from),
             ClientRequest::ListPromptsRequest(request) => self
                 .list_prompts(request.params, context)
                 .await
@@ -62,7 +65,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             ClientRequest::ReadResourceRequest(request) => self
                 .read_resource(request.params, context)
                 .await
-                .map(ServerResult::ReadResourceResult),
+                .map(ServerResult::from),
             ClientRequest::SubscribeRequest(request) => self
                 .subscribe(request.params, context)
                 .await
@@ -105,7 +108,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 } else {
                     self.call_tool(request.params, context)
                         .await
-                        .map(ServerResult::CallToolResult)
+                        .map(ServerResult::from)
                 }
             }
             ClientRequest::ListToolsRequest(request) => self
@@ -133,6 +136,17 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::CancelTaskResult),
         };
+        let result = result.and_then(|result| {
+            if matches!(result, ServerResult::InputRequiredResult(_)) && !mrtr_supported {
+                Err(McpError::invalid_request(
+                    "InputRequiredResult requires negotiated protocol version 2026-07-28 or newer",
+                    None,
+                ))
+            } else {
+                Ok(result)
+            }
+        });
+
         // SEP-2164: peers negotiating 2026-07-28+ get the standard INVALID_PARAMS code for
         // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
         // compare lexically the same as chronologically.
@@ -229,7 +243,7 @@ macro_rules! server_handler_methods {
             &self,
             request: GetPromptRequestParams,
             context: RequestContext<RoleServer>,
-        ) -> impl Future<Output = Result<GetPromptResult, McpError>> + MaybeSendFuture + '_ {
+        ) -> impl Future<Output = Result<GetPromptResponse, McpError>> + MaybeSendFuture + '_ {
             std::future::ready(Err(McpError::method_not_found::<GetPromptRequestMethod>()))
         }
         fn list_prompts(
@@ -259,7 +273,7 @@ macro_rules! server_handler_methods {
             &self,
             request: ReadResourceRequestParams,
             context: RequestContext<RoleServer>,
-        ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + MaybeSendFuture + '_ {
+        ) -> impl Future<Output = Result<ReadResourceResponse, McpError>> + MaybeSendFuture + '_ {
             std::future::ready(Err(
                 McpError::method_not_found::<ReadResourceRequestMethod>(),
             ))
@@ -312,7 +326,7 @@ macro_rules! server_handler_methods {
             &self,
             request: CallToolRequestParams,
             context: RequestContext<RoleServer>,
-        ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
+        ) -> impl Future<Output = Result<CallToolResponse, McpError>> + MaybeSendFuture + '_ {
             std::future::ready(Err(McpError::method_not_found::<CallToolRequestMethod>()))
         }
         fn list_tools(
@@ -485,7 +499,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: GetPromptRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<GetPromptResult, McpError>> + MaybeSendFuture + '_ {
+            ) -> impl Future<Output = Result<GetPromptResponse, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_prompt(request, context)
             }
 
@@ -518,7 +532,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: ReadResourceRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + MaybeSendFuture + '_ {
+            ) -> impl Future<Output = Result<ReadResourceResponse, McpError>> + MaybeSendFuture + '_ {
                 (**self).read_resource(request, context)
             }
 
@@ -542,7 +556,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 &self,
                 request: CallToolRequestParams,
                 context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CallToolResult, McpError>> + MaybeSendFuture + '_ {
+            ) -> impl Future<Output = Result<CallToolResponse, McpError>> + MaybeSendFuture + '_ {
                 (**self).call_tool(request, context)
             }
 
