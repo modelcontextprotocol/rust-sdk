@@ -3454,7 +3454,13 @@
             "null"
           ]
         },
-        "structuredContent": true,
+        "structuredContent": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "toolUseId": {
           "type": "string"
         }
