@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           
@@ -39,7 +39,7 @@ jobs:
     name: Code Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust fmt
         run: rustup toolchain install nightly --component rustfmt
@@ -51,7 +51,7 @@ jobs:
     name: Lint with Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -80,12 +80,22 @@ jobs:
         with:
           tool: cargo-semver-checks
 
+      - name: Determine semver release type
+        run: |
+          if git log --format=%B \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} \
+            | grep -Eq '(^[A-Za-z0-9_-]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:)'; then
+            echo "SEMVER_RELEASE_TYPE=major" >> "$GITHUB_ENV"
+          else
+            echo "SEMVER_RELEASE_TYPE=minor" >> "$GITHUB_ENV"
+          fi
+
       - name: Check rmcp (default features)
         run: |
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
-            --release-type minor \
+            --release-type "$SEMVER_RELEASE_TYPE" \
             --only-explicit-features \
             --features default
 
@@ -98,15 +108,86 @@ jobs:
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
-            --release-type minor \
+            --release-type "$SEMVER_RELEASE_TYPE" \
             --only-explicit-features \
             --features "$FEATURES"
+
+  public-api:
+    name: Public API Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # cargo-public-api builds rustdoc JSON, which requires a nightly toolchain
+      # to be installed (it does not need to be the default; the tool invokes it
+      # via `cargo +nightly`).
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-public-api
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api
+
+      # Mirror the SemVer Check job's release-type detection: a breaking-change
+      # commit marker (`!:` or `BREAKING CHANGE:`) means a major release (any API
+      # change is allowed); otherwise a minor release (additions allowed, but
+      # changed/removed public items are denied). This catches breaking changes
+      # that cargo-semver-checks cannot yet detect, such as a change to a
+      # function's return type or a field's type.
+      # See https://github.com/obi1kenobi/cargo-semver-checks/issues/5
+      - name: Determine release type and deny flags
+        run: |
+          if git log --format=%B \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} \
+            | grep -Eq '(^[A-Za-z0-9_-]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:)'; then
+            SEMVER_RELEASE_TYPE=major
+          else
+            SEMVER_RELEASE_TYPE=minor
+          fi
+          case "$SEMVER_RELEASE_TYPE" in
+            major) DENY="" ;;
+            patch) DENY="--deny added --deny changed --deny removed" ;;
+            *)     DENY="--deny changed --deny removed" ;;
+          esac
+          echo "SEMVER_RELEASE_TYPE=$SEMVER_RELEASE_TYPE" >> "$GITHUB_ENV"
+          echo "DENY=$DENY" >> "$GITHUB_ENV"
+
+      - name: Check rmcp (default features)
+        run: |
+          cargo public-api \
+            --package rmcp \
+            -ss \
+            diff \
+            $DENY \
+            --force \
+            ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
+
+      - name: Check rmcp (all features except local)
+        run: |
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
+                      | select(startswith("__") | not)
+                      | select(. != "local")] | join(",")')
+          cargo public-api \
+            --package rmcp \
+            --features "$FEATURES" \
+            -ss \
+            diff \
+            $DENY \
+            --force \
+            ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
 
   spelling:
     name: spell check with typos
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Spell Check Repo
       uses: crate-ci/typos@master
 
@@ -114,7 +195,7 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       
       # install nodejs
       - name: Setup Node.js
@@ -143,7 +224,7 @@ jobs:
     name: Run Tests (no local feature)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # install nodejs
       - name: Setup Node.js
@@ -179,7 +260,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # install nodejs
       - name: Setup Node.js
@@ -214,7 +295,7 @@ jobs:
     name: Example test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # install nodejs
       - name: Setup Node.js
@@ -270,7 +351,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -287,7 +368,7 @@ jobs:
     name: Generate Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -313,7 +394,7 @@ jobs:
       # This happened recently in the attack on `tj-actions/changed-files`, but
       # has happened many times before as well.
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Update Rust
         run: | 

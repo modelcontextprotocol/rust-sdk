@@ -3,7 +3,7 @@
 use rmcp::{
     Json, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
-    model::{CallToolResult, Content, ServerResult, Tool},
+    model::{CallToolResult, ContentBlock, ServerResult, Tool},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -26,6 +26,16 @@ pub struct CalculationResult {
 pub struct UserInfo {
     pub name: String,
     pub age: u32,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct GreetingRequest {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct GetUserRequest {
+    pub user_id: String,
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -64,14 +74,17 @@ impl TestServer {
 
     /// Tool that returns regular string output
     #[tool(name = "get-greeting", description = "Get a greeting")]
-    pub async fn get_greeting(&self, name: Parameters<String>) -> String {
-        format!("Hello, {}!", name.0)
+    pub async fn get_greeting(&self, params: Parameters<GreetingRequest>) -> String {
+        format!("Hello, {}!", params.0.name)
     }
 
     /// Tool that returns structured user info
     #[tool(name = "get-user", description = "Get user info")]
-    pub async fn get_user(&self, user_id: Parameters<String>) -> Result<Json<UserInfo>, String> {
-        if user_id.0 == "123" {
+    pub async fn get_user(
+        &self,
+        params: Parameters<GetUserRequest>,
+    ) -> Result<Json<UserInfo>, String> {
+        if params.0.user_id == "123" {
             Ok(Json(UserInfo {
                 name: "Alice".to_string(),
                 age: 30,
@@ -179,7 +192,8 @@ async fn test_mutual_exclusivity_validation() {
         message: "Hello".into(),
     };
     // Test that content and structured_content can both be passed separately
-    let content_result = CallToolResult::success(vec![Content::json(response.clone()).unwrap()]);
+    let content_result =
+        CallToolResult::success(vec![ContentBlock::json(response.clone()).unwrap()]);
     let structured_result = CallToolResult::structured(json!({"message": "Hello"}));
 
     // Verify the validation

@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::{collections::HashSet, sync::Arc};
 
 use rmcp::{
@@ -216,25 +217,21 @@ impl ServerHandler for ConformanceServer {
     ) -> Result<CallToolResult, ErrorData> {
         let args = request.arguments.unwrap_or_default();
         match request.name.as_ref() {
-            "test_simple_text" => Ok(CallToolResult::success(vec![Content::text(
+            "test_simple_text" => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "This is a simple text response for testing.",
             )])),
 
-            "test_image_content" => Ok(CallToolResult::success(vec![Content::image(
+            "test_image_content" => Ok(CallToolResult::success(vec![ContentBlock::image(
                 TEST_IMAGE_DATA,
                 "image/png",
             )])),
 
             "test_audio_content" => {
-                let audio = RawContent::Audio(RawAudioContent {
-                    data: TEST_AUDIO_DATA.into(),
-                    mime_type: "audio/wav".into(),
-                })
-                .no_annotation();
+                let audio = ContentBlock::Audio(AudioContent::new(TEST_AUDIO_DATA, "audio/wav"));
                 Ok(CallToolResult::success(vec![audio]))
             }
 
-            "test_embedded_resource" => Ok(CallToolResult::success(vec![Content::resource(
+            "test_embedded_resource" => Ok(CallToolResult::success(vec![ContentBlock::resource(
                 ResourceContents::TextResourceContents {
                     uri: "test://embedded-resource".into(),
                     mime_type: Some("text/plain".into()),
@@ -244,9 +241,9 @@ impl ServerHandler for ConformanceServer {
             )])),
 
             "test_multiple_content_types" => Ok(CallToolResult::success(vec![
-                Content::text("Multiple content types test:"),
-                Content::image(TEST_IMAGE_DATA, "image/png"),
-                Content::resource(ResourceContents::TextResourceContents {
+                ContentBlock::text("Multiple content types test:"),
+                ContentBlock::image(TEST_IMAGE_DATA, "image/png"),
+                ContentBlock::resource(ResourceContents::TextResourceContents {
                     uri: "test://mixed-content-resource".into(),
                     mime_type: Some("application/json".into()),
                     text: r#"{"test":"data","value":123}"#.into(),
@@ -262,21 +259,20 @@ impl ServerHandler for ConformanceServer {
                 ] {
                     let _ = cx
                         .peer
-                        .notify_logging_message(LoggingMessageNotificationParam {
-                            level: LoggingLevel::Info,
-                            logger: Some("conformance-server".into()),
-                            data: json!(msg),
-                        })
+                        .notify_logging_message(
+                            LoggingMessageNotificationParam::new(LoggingLevel::Info, json!(msg))
+                                .with_logger("conformance-server"),
+                        )
                         .await;
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(
+                Ok(CallToolResult::success(vec![ContentBlock::text(
                     "Logging test completed",
                 )]))
             }
 
-            "test_error_handling" => Ok(CallToolResult::error(vec![Content::text(
+            "test_error_handling" => Ok(CallToolResult::error(vec![ContentBlock::text(
                 "This tool intentionally returns an error for testing",
             )])),
 
@@ -289,18 +285,17 @@ impl ServerHandler for ConformanceServer {
                     if let Some(token) = &progress_token {
                         let _ = cx
                             .peer
-                            .notify_progress(ProgressNotificationParam {
-                                progress_token: token.clone(),
-                                progress,
-                                total: Some(100.0),
-                                message: Some(message.into()),
-                            })
+                            .notify_progress(
+                                ProgressNotificationParam::new(token.clone(), progress)
+                                    .with_total(100.0)
+                                    .with_message(message),
+                            )
                             .await;
                     }
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(
+                Ok(CallToolResult::success(vec![ContentBlock::text(
                     "Progress test completed",
                 )]))
             }
@@ -327,12 +322,12 @@ impl ServerHandler for ConformanceServer {
                             .and_then(|c| c.as_text())
                             .map(|t| t.text.clone())
                             .unwrap_or_else(|| "No text response".into());
-                        Ok(CallToolResult::success(vec![Content::text(format!(
+                        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                             "LLM response: {}",
                             text
                         ))]))
                     }
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Sampling error: {}",
                         e
                     ))])),
@@ -364,23 +359,24 @@ impl ServerHandler for ConformanceServer {
 
                 match cx
                     .peer
-                    .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                    .create_elicitation(ElicitRequestParams::FormElicitationParams {
                         meta: None,
                         message: message.into(),
                         requested_schema: schema,
                     })
                     .await
                 {
-                    Ok(result) => Ok(CallToolResult::success(vec![Content::text(format!(
+                    Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "User response: action={}, content={:?}",
                         match result.action {
                             ElicitationAction::Accept => "accept",
                             ElicitationAction::Decline => "decline",
                             ElicitationAction::Cancel => "cancel",
+                            _ => "unknown",
                         },
                         result.content
                     ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Elicitation error: {}",
                         e
                     ))])),
@@ -424,23 +420,24 @@ impl ServerHandler for ConformanceServer {
 
                 match cx
                     .peer
-                    .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                    .create_elicitation(ElicitRequestParams::FormElicitationParams {
                         meta: None,
                         message: "Please provide values (all have defaults)".into(),
                         requested_schema: schema,
                     })
                     .await
                 {
-                    Ok(result) => Ok(CallToolResult::success(vec![Content::text(format!(
+                    Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Elicitation completed: action={}, content={:?}",
                         match result.action {
                             ElicitationAction::Accept => "accept",
                             ElicitationAction::Decline => "decline",
                             ElicitationAction::Cancel => "cancel",
+                            _ => "unknown",
                         },
                         result.content
                     ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Elicitation error: {}",
                         e
                     ))])),
@@ -492,22 +489,23 @@ impl ServerHandler for ConformanceServer {
 
                 match cx
                     .peer
-                    .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                    .create_elicitation(ElicitRequestParams::FormElicitationParams {
                         meta: None,
                         message: "Test enum schema improvements".into(),
                         requested_schema: schema,
                     })
                     .await
                 {
-                    Ok(result) => Ok(CallToolResult::success(vec![Content::text(format!(
+                    Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Enum elicitation completed: action={}",
                         match result.action {
                             ElicitationAction::Accept => "accept",
                             ElicitationAction::Decline => "decline",
                             ElicitationAction::Cancel => "cancel",
+                            _ => "unknown",
                         }
                     ))])),
-                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                    Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                         "Elicitation error: {}",
                         e
                     ))])),
@@ -516,7 +514,7 @@ impl ServerHandler for ConformanceServer {
 
             "json_schema_2020_12_tool" => {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("world");
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Hello, {}!",
                     name
                 ))]))
@@ -524,7 +522,7 @@ impl ServerHandler for ConformanceServer {
 
             "test_reconnection" => {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                Ok(CallToolResult::success(vec![Content::text(
+                Ok(CallToolResult::success(vec![ContentBlock::text(
                     "Reconnection test completed",
                 )]))
             }
@@ -544,28 +542,12 @@ impl ServerHandler for ConformanceServer {
         Ok(ListResourcesResult {
             meta: None,
             resources: vec![
-                RawResource {
-                    uri: "test://static-text".into(),
-                    name: "Static Text Resource".into(),
-                    title: None,
-                    description: Some("A static text resource for testing".into()),
-                    mime_type: Some("text/plain".into()),
-                    size: None,
-                    icons: None,
-                    meta: None,
-                }
-                .no_annotation(),
-                RawResource {
-                    uri: "test://static-binary".into(),
-                    name: "Static Binary Resource".into(),
-                    title: None,
-                    description: Some("A static binary/blob resource for testing".into()),
-                    mime_type: Some("image/png".into()),
-                    size: None,
-                    icons: None,
-                    meta: None,
-                }
-                .no_annotation(),
+                Resource::new("test://static-text", "Static Text Resource")
+                    .with_description("A static text resource for testing")
+                    .with_mime_type("text/plain"),
+                Resource::new("test://static-binary", "Static Binary Resource")
+                    .with_description("A static binary/blob resource for testing")
+                    .with_mime_type("image/png"),
             ],
             next_cursor: None,
         })
@@ -614,7 +596,7 @@ impl ServerHandler for ConformanceServer {
                 } else {
                     Err(ErrorData::resource_not_found(
                         format!("Resource not found: {}", uri),
-                        None,
+                        Some(json!({ "uri": uri })),
                     ))
                 }
             }
@@ -629,15 +611,9 @@ impl ServerHandler for ConformanceServer {
         Ok(ListResourceTemplatesResult {
             meta: None,
             resource_templates: vec![
-                RawResourceTemplate {
-                    uri_template: "test://template/{id}/data".into(),
-                    name: "Dynamic Resource".into(),
-                    title: None,
-                    description: Some("A dynamic resource with parameter substitution".into()),
-                    mime_type: Some("application/json".into()),
-                    icons: None,
-                }
-                .no_annotation(),
+                ResourceTemplate::new("test://template/{id}/data", "Dynamic Resource")
+                    .with_description("A dynamic resource with parameter substitution")
+                    .with_mime_type("application/json"),
             ],
             next_cursor: None,
         })
@@ -710,7 +686,7 @@ impl ServerHandler for ConformanceServer {
     ) -> Result<GetPromptResult, ErrorData> {
         match request.name.as_str() {
             "test_simple_prompt" => Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 "This is a simple test prompt.",
             )])
             .with_description("A simple test prompt")),
@@ -722,15 +698,15 @@ impl ServerHandler for ConformanceServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("friendly");
                 Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-                    PromptMessageRole::User,
+                    Role::User,
                     format!("Please greet {} in a {} style.", name, style),
                 )])
                 .with_description("A prompt with arguments"))
             }
             "test_prompt_with_embedded_resource" => Ok(GetPromptResult::new(vec![
-                PromptMessage::new_text(PromptMessageRole::User, "Here is a resource:"),
+                PromptMessage::new_text(Role::User, "Here is a resource:"),
                 PromptMessage::new_resource(
-                    PromptMessageRole::User,
+                    Role::User,
                     "test://static-text".into(),
                     Some("text/plain".into()),
                     Some("Resource content for prompt".into()),
@@ -741,19 +717,10 @@ impl ServerHandler for ConformanceServer {
             ])
             .with_description("A prompt with an embedded resource")),
             "test_prompt_with_image" => {
-                let image_content = RawImageContent {
-                    data: TEST_IMAGE_DATA.into(),
-                    mime_type: "image/png".into(),
-                    meta: None,
-                };
+                let image_content = ImageContent::new(TEST_IMAGE_DATA, "image/png");
                 Ok(GetPromptResult::new(vec![
-                    PromptMessage::new_text(PromptMessageRole::User, "Here is an image:"),
-                    PromptMessage::new(
-                        PromptMessageRole::User,
-                        PromptMessageContent::Image {
-                            image: image_content.no_annotation(),
-                        },
-                    ),
+                    PromptMessage::new_text(Role::User, "Here is an image:"),
+                    PromptMessage::new(Role::User, ContentBlock::Image(image_content)),
                 ])
                 .with_description("A prompt with an image"))
             }
@@ -786,6 +753,7 @@ impl ServerHandler for ConformanceServer {
                     vec![prompt_ref.name.clone()]
                 }
             }
+            _ => vec![],
         };
         Ok(CompleteResult::new(
             CompletionInfo::new(values).map_err(|e| ErrorData::internal_error(e, None))?,

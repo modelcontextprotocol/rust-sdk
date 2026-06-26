@@ -114,7 +114,7 @@ impl ElicitationEnumFormServer {
     #[tool(description = "Get current enum selection form")]
     async fn get_enum_form(&self) -> Result<CallToolResult, McpError> {
         let guard = self.selection.lock().await;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{}",
             *guard
         ))]))
@@ -133,13 +133,13 @@ impl ElicitationEnumFormServer {
             Ok(Some(form)) => {
                 let mut guard = self.selection.lock().await;
                 *guard = form;
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Updated Selection:\n{}",
                     *guard
                 ))]))
             }
             Ok(None) => {
-                return Ok(CallToolResult::success(vec![Content::text(
+                return Ok(CallToolResult::success(vec![ContentBlock::text(
                     "Elicitation cancelled by user.",
                 )]));
             }

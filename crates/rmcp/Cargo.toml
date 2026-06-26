@@ -253,6 +253,11 @@ required-features = ["server", "client", "macros"]
 path = "tests/test_progress_subscriber.rs"
 
 [[test]]
+name = "test_request_timeout_progress"
+required-features = ["server", "client", "macros"]
+path = "tests/test_request_timeout_progress.rs"
+
+[[test]]
 name = "test_elicitation"
 required-features = ["elicitation", "client", "server"]
 path = "tests/test_elicitation.rs"

@@ -10,6 +10,7 @@ use rmcp::{
 
 mod common;
 use common::progress_demo::ProgressDemo;
+use tracing_subscriber::EnvFilter;
 
 const HTTP_BIND_ADDRESS: &str = "127.0.0.1:8001";
 
@@ -19,6 +20,10 @@ async fn main() -> anyhow::Result<()> {
     let transport_mode = env::args()
         .nth(1)
         .unwrap_or_else(|| env::var("TRANSPORT_MODE").unwrap_or_else(|_| "stdio".to_string()));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     match transport_mode.as_str() {
         "stdio" => run_stdio().await,

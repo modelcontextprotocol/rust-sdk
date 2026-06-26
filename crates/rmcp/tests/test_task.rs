@@ -1,8 +1,12 @@
 use std::{any::Any, time::Duration};
 
-use rmcp::task_manager::{
-    OperationDescriptor, OperationMessage, OperationProcessor, OperationResultTransport,
+use rmcp::{
+    model::TaskStatusNotificationParam,
+    task_manager::{
+        OperationDescriptor, OperationMessage, OperationProcessor, OperationResultTransport,
+    },
 };
+use serde_json::json;
 
 struct DummyTransport {
     id: String,
@@ -74,4 +78,29 @@ async fn rejects_duplicate_operation_ids() {
         .submit_operation(OperationMessage::new(descriptor_dup, future_dup))
         .expect_err("duplicate should fail");
     assert!(format!("{err}").contains("already running"));
+}
+
+#[test]
+fn task_status_notification_param_preserves_meta() {
+    let raw = json!({
+        "_meta": {
+            "traceId": "trace-1"
+        },
+        "taskId": "task-1",
+        "status": "working",
+        "createdAt": "2026-06-24T00:00:00Z",
+        "lastUpdatedAt": "2026-06-24T00:00:01Z",
+        "ttl": null
+    });
+
+    let params: TaskStatusNotificationParam = serde_json::from_value(raw).unwrap();
+
+    assert_eq!(params.task.task_id, "task-1");
+    assert_eq!(params.task_id, "task-1");
+    assert_eq!(params.meta.as_ref().unwrap().0["traceId"], json!("trace-1"));
+
+    let serialized = serde_json::to_value(&params).unwrap();
+
+    assert_eq!(serialized["_meta"]["traceId"], json!("trace-1"));
+    assert_eq!(serialized["taskId"], json!("task-1"));
 }

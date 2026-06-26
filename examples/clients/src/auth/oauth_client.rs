@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -38,6 +38,7 @@ struct AppState {
 struct CallbackParams {
     code: String,
     state: String,
+    iss: Option<String>,
 }
 
 async fn callback_handler(
@@ -114,8 +115,16 @@ async fn main() -> Result<()> {
         client_metadata_url
     );
 
+    // Configure the HTTP client used for OAuth discovery, registration, token
+    // exchange, and refresh. Customize this builder for proxies, TLS roots,
+    // default headers, or other reqwest settings required by your environment.
+    let oauth_http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("Failed to build OAuth HTTP client")?;
+
     // initialize oauth state machine
-    let mut oauth_state = OAuthState::new(&server_url, None)
+    let mut oauth_state = OAuthState::new(&server_url, Some(oauth_http_client))
         .await
         .context("Failed to initialize oauth state machine")?;
     // use CIMD (SEP-991) with client metadata URL.
@@ -150,6 +159,7 @@ async fn main() -> Result<()> {
     let CallbackParams {
         code: auth_code,
         state: csrf_token,
+        iss,
     } = code_receiver
         .await
         .context("Failed to get authorization code")?;
@@ -157,7 +167,7 @@ async fn main() -> Result<()> {
     // Exchange code for access token
     tracing::info!("Exchanging authorization code for access token...");
     oauth_state
-        .handle_callback(&auth_code, &csrf_token)
+        .handle_callback_with_issuer(&auth_code, &csrf_token, iss.as_deref())
         .await
         .context("Failed to handle callback")?;
     tracing::info!("Successfully obtained access token");

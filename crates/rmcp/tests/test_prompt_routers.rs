@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 use rmcp::{
     ServerHandler,
     handler::server::wrapper::Parameters,
-    model::{GetPromptResult, PromptMessage, PromptMessageRole},
+    model::{GetPromptResult, PromptMessage, Role},
 };
 
 #[derive(Debug, Default)]
@@ -35,7 +35,7 @@ impl<T> TestHandler<T> {
     ) -> Vec<PromptMessage> {
         drop(fields);
         vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Async method response",
         )]
     }
@@ -47,7 +47,7 @@ impl<T> TestHandler<T> {
     ) -> Vec<PromptMessage> {
         drop(fields);
         vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Sync method response",
         )]
     }
@@ -57,7 +57,7 @@ impl<T> TestHandler<T> {
 async fn async_function(Parameters(Request { fields }): Parameters<Request>) -> Vec<PromptMessage> {
     drop(fields);
     vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Async function response",
     )]
 }
@@ -66,7 +66,7 @@ async fn async_function(Parameters(Request { fields }): Parameters<Request>) -> 
 fn async_function2<T>(_callee: &TestHandler<T>) -> BoxFuture<'_, GetPromptResult> {
     Box::pin(async move {
         GetPromptResult::new(vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Async function 2 response",
         )])
         .with_description("Async function 2")

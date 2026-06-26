@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -68,7 +69,7 @@ impl ServerHandler for SamplingDemoServer {
                         )
                     })?;
                 tracing::debug!("Response: {:?}", response);
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Question: {}\nAnswer: {}",
                     question,
                     response

@@ -1,3 +1,5 @@
+// Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
+#![expect(deprecated)]
 use std::sync::Arc;
 
 use crate::{
@@ -22,7 +24,9 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         request: <RoleServer as ServiceRole>::PeerReq,
         context: RequestContext<RoleServer>,
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
-        match request {
+        // `context` is moved into the dispatch below, so read the negotiated version first.
+        let protocol_version = context.protocol_version();
+        let result = match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
                 .await
@@ -115,11 +119,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tasks(request.params, context)
                 .await
                 .map(ServerResult::ListTasksResult),
-            ClientRequest::GetTaskInfoRequest(request) => self
+            ClientRequest::GetTaskRequest(request) => self
                 .get_task_info(request.params, context)
                 .await
                 .map(ServerResult::GetTaskResult),
-            ClientRequest::GetTaskResultRequest(request) => self
+            ClientRequest::GetTaskPayloadRequest(request) => self
                 .get_task_result(request.params, context)
                 .await
                 .map(ServerResult::GetTaskPayloadResult),
@@ -127,7 +131,18 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .cancel_task(request.params, context)
                 .await
                 .map(ServerResult::CancelTaskResult),
-        }
+        };
+        // SEP-2164: peers negotiating 2026-07-28+ get the standard INVALID_PARAMS code for
+        // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
+        // compare lexically the same as chronologically.
+        let use_invalid_params =
+            protocol_version.is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        result.map_err(|mut error| {
+            if use_invalid_params && error.code == ErrorCode::RESOURCE_NOT_FOUND {
+                error.code = ErrorCode::INVALID_PARAMS;
+            }
+            error
+        })
     }
 
     async fn handle_notification(
@@ -147,6 +162,9 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             }
             ClientNotification::RootsListChangedNotification(_notification) => {
                 self.on_roots_list_changed(context).await
+            }
+            ClientNotification::TaskStatusNotification(notification) => {
+                self.on_task_status(notification.params, context).await
             }
             ClientNotification::CustomNotification(notification) => {
                 self.on_custom_notification(notification, context).await
@@ -184,9 +202,7 @@ macro_rules! server_handler_methods {
             request: InitializeRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
-            if context.peer.peer_info().is_none() {
-                context.peer.set_peer_info(request);
-            }
+            context.peer.set_peer_info(request);
             std::future::ready(Ok(self.get_info()))
         }
         fn complete(
@@ -258,6 +274,34 @@ macro_rules! server_handler_methods {
                 McpError::method_not_found::<UnsubscribeRequestMethod>(),
             ))
         }
+        /// Handle a `tools/call` request from a client.
+        ///
+        /// # Choosing a return value
+        ///
+        /// MCP distinguishes two failure modes; the API forces you to pick
+        /// the right one explicitly because they reach the caller's UI very
+        /// differently:
+        ///
+        /// - `Ok(`[`CallToolResult::error`]`(...))` — the tool ran (or tried
+        ///   to) and produced a failure the caller should see. The
+        ///   `content` you supply is rendered in the caller's MCP client,
+        ///   so the user gets your message. **This is the right return
+        ///   value for almost every "the tool didn't work" path** — empty
+        ///   results, validation failures the user can fix, downstream
+        ///   service unavailability, etc.
+        ///
+        /// - `Err(`[`McpError`]`)` — a JSON-RPC protocol error. Use this
+        ///   only when the request itself is unroutable: unknown tool
+        ///   ([`ErrorCode::METHOD_NOT_FOUND`]), malformed request shape that
+        ///   cannot be treated as a valid `tools/call`, or a server-internal
+        ///   failure that means the server cannot serve any request right now
+        ///   ([`ErrorCode::INTERNAL_ERROR`], `-32603`). MCP clients
+        ///   typically render protocol errors opaquely; **the caller will
+        ///   not see your message** — they see something like "Tool result
+        ///   missing due to internal error". If you want the caller to read
+        ///   your error, use `Ok(CallToolResult::error(...))`.
+        ///
+        /// See [`CallToolResult::error`] for a worked example.
         fn call_tool(
             &self,
             request: CallToolRequestParams,
@@ -320,6 +364,13 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             std::future::ready(())
         }
+        fn on_task_status(
+            &self,
+            params: TaskStatusNotificationParam,
+            context: NotificationContext<RoleServer>,
+        ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+            std::future::ready(())
+        }
         fn on_custom_notification(
             &self,
             notification: CustomNotification,
@@ -343,20 +394,20 @@ macro_rules! server_handler_methods {
 
         fn get_task_info(
             &self,
-            request: GetTaskInfoParams,
+            request: GetTaskParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
             let _ = (request, context);
-            std::future::ready(Err(McpError::method_not_found::<GetTaskInfoMethod>()))
+            std::future::ready(Err(McpError::method_not_found::<GetTaskMethod>()))
         }
 
         fn get_task_result(
             &self,
-            request: GetTaskResultParams,
+            request: GetTaskPayloadParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
             let _ = (request, context);
-            std::future::ready(Err(McpError::method_not_found::<GetTaskResultMethod>()))
+            std::future::ready(Err(McpError::method_not_found::<GetTaskPayloadMethod>()))
         }
 
         fn cancel_task(
@@ -539,6 +590,14 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_roots_list_changed(context)
             }
 
+            fn on_task_status(
+                &self,
+                params: TaskStatusNotificationParam,
+                context: NotificationContext<RoleServer>,
+            ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+                (**self).on_task_status(params, context)
+            }
+
             fn on_custom_notification(
                 &self,
                 notification: CustomNotification,
@@ -561,7 +620,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_task_info(
                 &self,
-                request: GetTaskInfoParams,
+                request: GetTaskParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<GetTaskResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_task_info(request, context)
@@ -569,7 +628,7 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_task_result(
                 &self,
-                request: GetTaskResultParams,
+                request: GetTaskPayloadParams,
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<GetTaskPayloadResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).get_task_result(request, context)

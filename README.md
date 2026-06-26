@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-The generated tool `inputSchema` is derived from the fields of `T`. The type name and documentation on `T` are ignored; only field names, field types, and field documentation are used.
+The generated tool `inputSchema` and `outputSchema` are derived from the fields of `T`. The type name and documentation on `T` are ignored; only field names, field types, and field documentation are used.
 
 When you need custom server metadata or multiple capabilities (tools + prompts), use explicit `#[tool_handler]`:
 
@@ -239,12 +239,11 @@ struct MyServer;
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_resources()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn list_resources(
@@ -254,8 +253,8 @@ impl ServerHandler for MyServer {
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
             resources: vec![
-                RawResource::new("file:///config.json", "config").no_annotation(),
-                RawResource::new("memo://insights", "insights").no_annotation(),
+                Resource::new("file:///config.json", "config"),
+                Resource::new("memo://insights", "insights"),
             ],
             next_cursor: None,
             meta: None,
@@ -268,12 +267,12 @@ impl ServerHandler for MyServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         match request.uri.as_str() {
-            "file:///config.json" => Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(r#"{"key": "value"}"#, &request.uri)],
-            }),
-            "memo://insights" => Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text("Analysis results...", &request.uri)],
-            }),
+            "file:///config.json" => Ok(ReadResourceResult::new(vec![
+                ResourceContents::text(r#"{"key": "value"}"#, &request.uri),
+            ])),
+            "memo://insights" => Ok(ReadResourceResult::new(vec![
+                ResourceContents::text("Analysis results...", &request.uri),
+            ])),
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
                 Some(json!({ "uri": request.uri })),
@@ -304,10 +303,9 @@ use rmcp::model::{ReadResourceRequestParams};
 let resources = client.list_all_resources().await?;
 
 // Read a specific resource by URI
-let result = client.read_resource(ReadResourceRequestParams {
-    meta: None,
-    uri: "file:///config.json".into(),
-}).await?;
+let result = client.read_resource(
+    ReadResourceRequestParams::new("file:///config.json"),
+).await?;
 
 // List resource templates
 let templates = client.list_all_resource_templates().await?;
@@ -322,9 +320,9 @@ Servers can notify clients when the resource list changes or when a specific res
 context.peer.notify_resource_list_changed().await?;
 
 // Notify that a specific resource was updated
-context.peer.notify_resource_updated(ResourceUpdatedNotificationParam {
-    uri: "file:///config.json".into(),
-}).await?;
+context.peer.notify_resource_updated(
+    ResourceUpdatedNotificationParam::new("file:///config.json"),
+).await?;
 ```
 
 Clients handle these via `ClientHandler`:
@@ -397,7 +395,7 @@ impl MyServer {
     #[prompt(name = "greeting", description = "A simple greeting")]
     async fn greeting(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             "Hello! How can you help me today?",
         )]
     }
@@ -411,25 +409,20 @@ impl MyServer {
         let focus = args.focus_areas
             .unwrap_or_else(|| vec!["correctness".into()]);
 
-        Ok(GetPromptResult {
-            description: Some(format!("Code review for {}", args.language)),
-            messages: vec![
-                PromptMessage::new_text(
-                    PromptMessageRole::User,
-                    format!("Review my {} code. Focus on: {}", args.language, focus.join(", ")),
-                ),
-            ],
-        })
+        Ok(GetPromptResult::new(vec![
+            PromptMessage::new_text(
+                Role::User,
+                format!("Review my {} code. Focus on: {}", args.language, focus.join(", ")),
+            ),
+        ])
+        .with_description(format!("Code review for {}", args.language)))
     }
 }
 
 #[prompt_handler]
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_prompts().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_prompts().build())
     }
 }
 ```
@@ -471,6 +464,8 @@ context.peer.notify_prompt_list_changed().await?;
 
 ## Sampling
 
+> **Deprecated (SEP-2577):** Sampling is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
+
 Sampling flips the usual direction: the server asks the client to run an LLM completion. The server sends a `create_message` request, the client processes it through its LLM, and returns the result.
 
 **MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)
@@ -483,25 +478,22 @@ Access the client's sampling capability through `context.peer.create_message()`:
 use rmcp::model::*;
 
 // Inside a ServerHandler method (e.g., call_tool):
-let response = context.peer.create_message(CreateMessageRequestParams {
-    meta: None,
-    task: None,
-    messages: vec![SamplingMessage::user_text("Explain this error: connection refused")],
-    model_preferences: Some(ModelPreferences {
-        hints: Some(vec![ModelHint { name: Some("claude".into()) }]),
-        cost_priority: Some(0.3),
-        speed_priority: Some(0.8),
-        intelligence_priority: Some(0.7),
-    }),
-    system_prompt: Some("You are a helpful assistant.".into()),
-    include_context: Some(ContextInclusion::None),
-    temperature: Some(0.7),
-    max_tokens: 150,
-    stop_sequences: None,
-    metadata: None,
-    tools: None,
-    tool_choice: None,
-}).await?;
+let response = context.peer.create_message(
+    CreateMessageRequestParams::new(
+        vec![SamplingMessage::user_text("Explain this error: connection refused")],
+        150,
+    )
+    .with_model_preferences(
+        ModelPreferences::new()
+            .with_hints(vec![ModelHint::new("claude")])
+            .with_cost_priority(0.3)
+            .with_speed_priority(0.8)
+            .with_intelligence_priority(0.7),
+    )
+    .with_system_prompt("You are a helpful assistant.")
+    .with_include_context(ContextInclusion::None)
+    .with_temperature(0.7),
+).await?;
 
 // Extract the response text
 let text = response.message.content
@@ -529,11 +521,11 @@ impl ClientHandler for MyClient {
         // Forward to your LLM, or return a mock response:
         let response_text = call_your_llm(&params.messages).await;
 
-        Ok(CreateMessageResult {
-            message: SamplingMessage::assistant_text(response_text),
-            model: "my-model".into(),
-            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.into()),
-        })
+        Ok(CreateMessageResult::new(
+            SamplingMessage::assistant_text(response_text),
+            "my-model".into(),
+        )
+        .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN))
     }
 }
 ```
@@ -543,6 +535,8 @@ impl ClientHandler for MyClient {
 ---
 
 ## Roots
+
+> **Deprecated (SEP-2577):** Roots is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
 
 Roots tell servers which directories or projects the client is working in. A root is a URI (typically `file://`) pointing to a workspace or repository. Servers can query roots to know where to look for files and how to scope their work.
 
@@ -589,14 +583,9 @@ impl ClientHandler for MyClient {
         &self,
         _context: RequestContext<RoleClient>,
     ) -> Result<ListRootsResult, ErrorData> {
-        Ok(ListRootsResult {
-            roots: vec![
-                Root {
-                    uri: "file:///home/user/project".into(),
-                    name: Some("My Project".into()),
-                },
-            ],
-        })
+        Ok(ListRootsResult::new(vec![
+            Root::new("file:///home/user/project").with_name("My Project"),
+        ]))
     }
 }
 ```
@@ -612,6 +601,8 @@ client.notify_roots_list_changed().await?;
 
 ## Logging
 
+> **Deprecated (SEP-2577):** Logging is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
+
 Servers can send structured log messages to clients. The client sets a minimum severity level, and the server sends messages through the peer notification interface.
 
 **MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/logging)
@@ -625,12 +616,11 @@ use rmcp::{ServerHandler, model::*, service::RequestContext};
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_logging()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     // Client sets the minimum log level
@@ -645,14 +635,16 @@ impl ServerHandler for MyServer {
 }
 
 // Send a log message from any handler with access to the peer:
-context.peer.notify_logging_message(LoggingMessageNotificationParam {
-    level: LoggingLevel::Info,
-    logger: Some("my-server".into()),
-    data: serde_json::json!({
-        "message": "Processing completed",
-        "items_processed": 42
-    }),
-}).await?;
+context.peer.notify_logging_message(
+    LoggingMessageNotificationParam::new(
+        LoggingLevel::Info,
+        serde_json::json!({
+            "message": "Processing completed",
+            "items_processed": 42
+        }),
+    )
+    .with_logger("my-server"),
+).await?;
 ```
 
 Available log levels (from least to most severe): `Debug`, `Info`, `Notice`, `Warning`, `Error`, `Critical`, `Alert`, `Emergency`.
@@ -677,10 +669,7 @@ impl ClientHandler for MyClient {
 Clients can also set the server's log level:
 
 ```rust
-client.set_level(SetLevelRequestParams {
-    level: LoggingLevel::Warning,
-    meta: None,
-}).await?;
+client.set_level(SetLevelRequestParams::new(LoggingLevel::Warning)).await?;
 ```
 
 ---
@@ -700,13 +689,12 @@ use rmcp::{ErrorData as McpError, ServerHandler, model::*, service::RequestConte
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn complete(
@@ -744,13 +732,9 @@ impl ServerHandler for MyServer {
             .filter(|v| v.to_lowercase().contains(&request.argument.value.to_lowercase()))
             .collect();
 
-        Ok(CompleteResult {
-            completion: CompletionInfo {
-                values: filtered,
-                total: None,
-                has_more: Some(false),
-            },
-        })
+        let completion = CompletionInfo::with_pagination(filtered, None, false)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        Ok(CompleteResult::new(completion))
     }
 }
 ```
@@ -760,17 +744,10 @@ impl ServerHandler for MyServer {
 ```rust
 use rmcp::model::*;
 
-let result = client.complete(CompleteRequestParams {
-    meta: None,
-    r#ref: Reference::Prompt(PromptReference {
-        name: "sql_query".into(),
-    }),
-    argument: ArgumentInfo {
-        name: "operation".into(),
-        value: "SEL".into(),
-    },
-    context: None,
-}).await?;
+let result = client.complete(CompleteRequestParams::new(
+    Reference::for_prompt("sql_query"),
+    ArgumentInfo::new("operation", "SEL"),
+)).await?;
 
 // result.completion.values contains suggestions like ["SELECT"]
 ```
@@ -796,12 +773,14 @@ use rmcp::model::*;
 for i in 0..total_items {
     process_item(i).await;
 
-    context.peer.notify_progress(ProgressNotificationParam {
-        progress_token: ProgressToken(NumberOrString::Number(i as i64)),
-        progress: i as f64,
-        total: Some(total_items as f64),
-        message: Some(format!("Processing item {}/{}", i + 1, total_items)),
-    }).await?;
+    context.peer.notify_progress(
+        ProgressNotificationParam::new(
+            ProgressToken(NumberOrString::Number(i as i64)),
+            i as f64,
+        )
+        .with_total(total_items as f64)
+        .with_message(format!("Processing item {}/{}", i + 1, total_items)),
+    ).await?;
 }
 ```
 
@@ -811,10 +790,10 @@ Either side can cancel an in-progress request:
 
 ```rust
 // Send a cancellation
-context.peer.notify_cancelled(CancelledNotificationParam {
-    request_id: the_request_id,
-    reason: Some("User requested cancellation".into()),
-}).await?;
+context.peer.notify_cancelled(CancelledNotificationParam::new(
+    Some(the_request_id),
+    Some("User requested cancellation".into()),
+)).await?;
 ```
 
 Handle cancellation in `ServerHandler` or `ClientHandler`:
@@ -885,13 +864,12 @@ struct MyServer {
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn subscribe(
@@ -918,9 +896,9 @@ When a subscribed resource changes, notify the client:
 
 ```rust
 // Check if the resource has subscribers, then notify
-context.peer.notify_resource_updated(ResourceUpdatedNotificationParam {
-    uri: "file:///config.json".into(),
-}).await?;
+context.peer.notify_resource_updated(
+    ResourceUpdatedNotificationParam::new("file:///config.json"),
+).await?;
 ```
 
 ### Client-side
@@ -929,16 +907,10 @@ context.peer.notify_resource_updated(ResourceUpdatedNotificationParam {
 use rmcp::model::*;
 
 // Subscribe to updates for a resource
-client.subscribe(SubscribeRequestParams {
-    meta: None,
-    uri: "file:///config.json".into(),
-}).await?;
+client.subscribe(SubscribeRequestParams::new("file:///config.json")).await?;
 
 // Unsubscribe when no longer needed
-client.unsubscribe(UnsubscribeRequestParams {
-    meta: None,
-    uri: "file:///config.json".into(),
-}).await?;
+client.unsubscribe(UnsubscribeRequestParams::new("file:///config.json")).await?;
 ```
 
 Handle update notifications in `ClientHandler`:
@@ -1014,6 +986,7 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [spreadsheet-mcp](https://github.com/PSU3D0/spreadsheet-mcp) - Token-efficient MCP server for spreadsheet analysis with automatic region detection, recalculation, screenshot, and editing support for LLM agents
 - [hyper-mcp](https://github.com/hyper-mcp-rs/hyper-mcp) - A fast, secure MCP server that extends its capabilities through WebAssembly (WASM) plugins
 - [rudof-mcp](https://github.com/rudof-project/rudof/tree/master/rudof_mcp) - RDF validation and data processing MCP server with ShEx/SHACL validation, SPARQL queries, and format conversion. Supports stdio and streamable HTTP transports with full MCP capabilities (tools, prompts, resources, logging, completions, tasks)
+- [MCPMate](https://github.com/loocor/MCPMate) - Desktop app for progressive MCP management: start with guided server import, then grow into multi-client profiles and Unify meta tools to keep tool exposure, token use, and runtime state under control, with more options for efficiency, cost, and reliability
 - [McpMux](https://github.com/mcpmux/mcp-mux) - Desktop app to configure MCP servers once at McpMux, connect every AI client (Cursor, Claude Desktop, VS Code, Windsurf) through a single encrypted local gateway with Spaces for project organization, FeatureSets to switch toolsets per client, and a built-in server registry
 - [systemprompt-template](https://github.com/systempromptio/systemprompt-template) - Single-binary Rust runtime providing MCP governance — authentication, authorisation, rate-limiting, audit trails, and cost tracking for AI agents. Self-hosted, air-gap capable, 3,300+ req/s with sub-5ms governance overhead
 - [jilebi-mcp](https://github.com/datron/jilebi) - an extensible MCP server through plugins in Javascript with a secure permissions model

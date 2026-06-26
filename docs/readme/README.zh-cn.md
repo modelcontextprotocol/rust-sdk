@@ -237,12 +237,11 @@ struct MyServer;
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_resources()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn list_resources(
@@ -252,8 +251,8 @@ impl ServerHandler for MyServer {
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
             resources: vec![
-                RawResource::new("file:///config.json", "config").no_annotation(),
-                RawResource::new("memo://insights", "insights").no_annotation(),
+                Resource::new("file:///config.json", "config"),
+                Resource::new("memo://insights", "insights"),
             ],
             next_cursor: None,
             meta: None,
@@ -266,12 +265,12 @@ impl ServerHandler for MyServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         match request.uri.as_str() {
-            "file:///config.json" => Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text(r#"{"key": "value"}"#, &request.uri)],
-            }),
-            "memo://insights" => Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text("Analysis results...", &request.uri)],
-            }),
+            "file:///config.json" => Ok(ReadResourceResult::new(vec![
+                ResourceContents::text(r#"{"key": "value"}"#, &request.uri),
+            ])),
+            "memo://insights" => Ok(ReadResourceResult::new(vec![
+                ResourceContents::text("Analysis results...", &request.uri),
+            ])),
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
                 Some(json!({ "uri": request.uri })),
@@ -302,10 +301,9 @@ use rmcp::model::{ReadResourceRequestParams};
 let resources = client.list_all_resources().await?;
 
 // 通过 URI 读取特定资源
-let result = client.read_resource(ReadResourceRequestParams {
-    meta: None,
-    uri: "file:///config.json".into(),
-}).await?;
+let result = client.read_resource(
+    ReadResourceRequestParams::new("file:///config.json"),
+).await?;
 
 // 列出资源模板
 let templates = client.list_all_resource_templates().await?;
@@ -320,9 +318,9 @@ let templates = client.list_all_resource_templates().await?;
 context.peer.notify_resource_list_changed().await?;
 
 // 通知特定资源已更新
-context.peer.notify_resource_updated(ResourceUpdatedNotificationParam {
-    uri: "file:///config.json".into(),
-}).await?;
+context.peer.notify_resource_updated(
+    ResourceUpdatedNotificationParam::new("file:///config.json"),
+).await?;
 ```
 
 客户端通过 `ClientHandler` 处理这些通知：
@@ -395,7 +393,7 @@ impl MyServer {
     #[prompt(name = "greeting", description = "A simple greeting")]
     async fn greeting(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             "Hello! How can you help me today?",
         )]
     }
@@ -409,25 +407,20 @@ impl MyServer {
         let focus = args.focus_areas
             .unwrap_or_else(|| vec!["correctness".into()]);
 
-        Ok(GetPromptResult {
-            description: Some(format!("Code review for {}", args.language)),
-            messages: vec![
-                PromptMessage::new_text(
-                    PromptMessageRole::User,
-                    format!("Review my {} code. Focus on: {}", args.language, focus.join(", ")),
-                ),
-            ],
-        })
+        Ok(GetPromptResult::new(vec![
+            PromptMessage::new_text(
+                Role::User,
+                format!("Review my {} code. Focus on: {}", args.language, focus.join(", ")),
+            ),
+        ])
+        .with_description(format!("Code review for {}", args.language)))
     }
 }
 
 #[prompt_handler]
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_prompts().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_prompts().build())
     }
 }
 ```
@@ -481,25 +474,22 @@ context.peer.notify_prompt_list_changed().await?;
 use rmcp::model::*;
 
 // 在 ServerHandler 方法内部（例如 call_tool）：
-let response = context.peer.create_message(CreateMessageRequestParams {
-    meta: None,
-    task: None,
-    messages: vec![SamplingMessage::user_text("Explain this error: connection refused")],
-    model_preferences: Some(ModelPreferences {
-        hints: Some(vec![ModelHint { name: Some("claude".into()) }]),
-        cost_priority: Some(0.3),
-        speed_priority: Some(0.8),
-        intelligence_priority: Some(0.7),
-    }),
-    system_prompt: Some("You are a helpful assistant.".into()),
-    include_context: Some(ContextInclusion::None),
-    temperature: Some(0.7),
-    max_tokens: 150,
-    stop_sequences: None,
-    metadata: None,
-    tools: None,
-    tool_choice: None,
-}).await?;
+let response = context.peer.create_message(
+    CreateMessageRequestParams::new(
+        vec![SamplingMessage::user_text("Explain this error: connection refused")],
+        150,
+    )
+    .with_model_preferences(
+        ModelPreferences::new()
+            .with_hints(vec![ModelHint::new("claude")])
+            .with_cost_priority(0.3)
+            .with_speed_priority(0.8)
+            .with_intelligence_priority(0.7),
+    )
+    .with_system_prompt("You are a helpful assistant.")
+    .with_include_context(ContextInclusion::None)
+    .with_temperature(0.7),
+).await?;
 
 // 提取响应文本
 let text = response.message.content
@@ -527,11 +517,11 @@ impl ClientHandler for MyClient {
         // 转发到你的 LLM，或返回模拟响应：
         let response_text = call_your_llm(&params.messages).await;
 
-        Ok(CreateMessageResult {
-            message: SamplingMessage::assistant_text(response_text),
-            model: "my-model".into(),
-            stop_reason: Some(CreateMessageResult::STOP_REASON_END_TURN.into()),
-        })
+        Ok(CreateMessageResult::new(
+            SamplingMessage::assistant_text(response_text),
+            "my-model".into(),
+        )
+        .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN))
     }
 }
 ```
@@ -587,14 +577,9 @@ impl ClientHandler for MyClient {
         &self,
         _context: RequestContext<RoleClient>,
     ) -> Result<ListRootsResult, ErrorData> {
-        Ok(ListRootsResult {
-            roots: vec![
-                Root {
-                    uri: "file:///home/user/project".into(),
-                    name: Some("My Project".into()),
-                },
-            ],
-        })
+        Ok(ListRootsResult::new(vec![
+            Root::new("file:///home/user/project").with_name("My Project"),
+        ]))
     }
 }
 ```
@@ -623,12 +608,11 @@ use rmcp::{ServerHandler, model::*, service::RequestContext};
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_logging()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     // 客户端设置最低日志级别
@@ -643,14 +627,16 @@ impl ServerHandler for MyServer {
 }
 
 // 在任何可以访问 peer 的处理器中发送日志消息：
-context.peer.notify_logging_message(LoggingMessageNotificationParam {
-    level: LoggingLevel::Info,
-    logger: Some("my-server".into()),
-    data: serde_json::json!({
-        "message": "Processing completed",
-        "items_processed": 42
-    }),
-}).await?;
+context.peer.notify_logging_message(
+    LoggingMessageNotificationParam::new(
+        LoggingLevel::Info,
+        serde_json::json!({
+            "message": "Processing completed",
+            "items_processed": 42
+        }),
+    )
+    .with_logger("my-server"),
+).await?;
 ```
 
 可用日志级别（从低到高）：`Debug`、`Info`、`Notice`、`Warning`、`Error`、`Critical`、`Alert`、`Emergency`。
@@ -675,10 +661,7 @@ impl ClientHandler for MyClient {
 客户端也可以设置服务端的日志级别：
 
 ```rust
-client.set_level(SetLevelRequestParams {
-    level: LoggingLevel::Warning,
-    meta: None,
-}).await?;
+client.set_level(SetLevelRequestParams::new(LoggingLevel::Warning)).await?;
 ```
 
 ---
@@ -698,13 +681,12 @@ use rmcp::{ErrorData as McpError, ServerHandler, model::*, service::RequestConte
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn complete(
@@ -742,13 +724,9 @@ impl ServerHandler for MyServer {
             .filter(|v| v.to_lowercase().contains(&request.argument.value.to_lowercase()))
             .collect();
 
-        Ok(CompleteResult {
-            completion: CompletionInfo {
-                values: filtered,
-                total: None,
-                has_more: Some(false),
-            },
-        })
+        let completion = CompletionInfo::with_pagination(filtered, None, false)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        Ok(CompleteResult::new(completion))
     }
 }
 ```
@@ -758,17 +736,10 @@ impl ServerHandler for MyServer {
 ```rust
 use rmcp::model::*;
 
-let result = client.complete(CompleteRequestParams {
-    meta: None,
-    r#ref: Reference::Prompt(PromptReference {
-        name: "sql_query".into(),
-    }),
-    argument: ArgumentInfo {
-        name: "operation".into(),
-        value: "SEL".into(),
-    },
-    context: None,
-}).await?;
+let result = client.complete(CompleteRequestParams::new(
+    Reference::for_prompt("sql_query"),
+    ArgumentInfo::new("operation", "SEL"),
+)).await?;
 
 // result.completion.values 包含建议，例如 ["SELECT"]
 ```
@@ -794,12 +765,14 @@ use rmcp::model::*;
 for i in 0..total_items {
     process_item(i).await;
 
-    context.peer.notify_progress(ProgressNotificationParam {
-        progress_token: ProgressToken(NumberOrString::Number(i as i64)),
-        progress: i as f64,
-        total: Some(total_items as f64),
-        message: Some(format!("Processing item {}/{}", i + 1, total_items)),
-    }).await?;
+    context.peer.notify_progress(
+        ProgressNotificationParam::new(
+            ProgressToken(NumberOrString::Number(i as i64)),
+            i as f64,
+        )
+        .with_total(total_items as f64)
+        .with_message(format!("Processing item {}/{}", i + 1, total_items)),
+    ).await?;
 }
 ```
 
@@ -809,10 +782,10 @@ for i in 0..total_items {
 
 ```rust
 // 发送取消通知
-context.peer.notify_cancelled(CancelledNotificationParam {
-    request_id: the_request_id,
-    reason: Some("User requested cancellation".into()),
-}).await?;
+context.peer.notify_cancelled(CancelledNotificationParam::new(
+    Some(the_request_id),
+    Some("User requested cancellation".into()),
+)).await?;
 ```
 
 在 `ServerHandler` 或 `ClientHandler` 中处理取消：
@@ -883,13 +856,12 @@ struct MyServer {
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()
                 .build(),
-            ..Default::default()
-        }
+        )
     }
 
     async fn subscribe(
@@ -916,9 +888,9 @@ impl ServerHandler for MyServer {
 
 ```rust
 // 检查资源是否有订阅者，然后通知
-context.peer.notify_resource_updated(ResourceUpdatedNotificationParam {
-    uri: "file:///config.json".into(),
-}).await?;
+context.peer.notify_resource_updated(
+    ResourceUpdatedNotificationParam::new("file:///config.json"),
+).await?;
 ```
 
 ### 客户端
@@ -927,16 +899,10 @@ context.peer.notify_resource_updated(ResourceUpdatedNotificationParam {
 use rmcp::model::*;
 
 // 订阅资源更新
-client.subscribe(SubscribeRequestParams {
-    meta: None,
-    uri: "file:///config.json".into(),
-}).await?;
+client.subscribe(SubscribeRequestParams::new("file:///config.json")).await?;
 
 // 不再需要时取消订阅
-client.unsubscribe(UnsubscribeRequestParams {
-    meta: None,
-    uri: "file:///config.json".into(),
-}).await?;
+client.unsubscribe(UnsubscribeRequestParams::new("file:///config.json")).await?;
 ```
 
 在 `ClientHandler` 中处理更新通知：
@@ -1010,6 +976,7 @@ impl ServerHandler for TaskDemo {}
 - [spreadsheet-mcp](https://github.com/PSU3D0/spreadsheet-mcp) - 面向 LLM 智能体的高效 Token 使用的电子表格分析 MCP 服务，支持自动区域检测、重新计算、截图和编辑
 - [hyper-mcp](https://github.com/hyper-mcp-rs/hyper-mcp) - 通过 WebAssembly (WASM) 插件扩展功能的快速、安全的 MCP 服务
 - [rudof-mcp](https://github.com/rudof-project/rudof/tree/master/rudof_mcp) - RDF 验证和数据处理 MCP 服务，支持 ShEx/SHACL 验证、SPARQL 查询和格式转换。支持 stdio 和 Streamable HTTP 传输，具备完整的 MCP 功能（工具、提示词、资源、日志、补全、任务）
+- [MCPMate](https://github.com/loocor/MCPMate) - 渐进式 MCP 管理桌面应用：从引导式服务导入开始，逐步扩展到多客户端配置集和 Unify 元工具，让能力暴露、Token 消耗与运行状态更可控，并在效率、成本和可靠性上提供更多选择
 
 
 ## 开发

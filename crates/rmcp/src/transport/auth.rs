@@ -1,19 +1,22 @@
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    EmptyExtraTokenFields, ExtraTokenFields, HttpClientError, HttpRequest, HttpResponse,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope,
-    StandardTokenResponse, TokenResponse, TokenUrl, basic::BasicTokenType,
+    EmptyExtraTokenFields, ExtraTokenFields, HttpRequest, HttpResponse, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, StandardTokenResponse,
+    TokenResponse, TokenUrl, basic::BasicTokenType,
 };
 use reqwest::{
-    Client as HttpClient, IntoUrl, StatusCode, Url,
-    header::{AUTHORIZATION, WWW_AUTHENTICATE},
+    Client as ReqwestClient, IntoUrl, StatusCode, Url,
+    header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,40 +26,156 @@ use tracing::{debug, warn};
 
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 
-/// Owned wrapper around [`reqwest::Client`] that implements [`AsyncHttpClient`] for oauth2.
-struct OAuthReqwestClient(HttpClient);
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 
-impl<'c> AsyncHttpClient<'c> for OAuthReqwestClient {
-    type Error = HttpClientError<reqwest::Error>;
+/// Redirect handling requested for an outbound OAuth HTTP operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OAuthHttpRedirectPolicy {
+    /// Follow redirects using the client's normal limits.
+    #[default]
+    Follow,
+    /// Return the redirect response without following its location.
+    Stop,
+}
 
-    type Future = std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<HttpResponse, Self::Error>> + Send + Sync + 'c>,
-    >;
+/// A complete outbound HTTP operation requested by the OAuth implementation.
+#[non_exhaustive]
+pub struct OAuthHttpRequest {
+    /// HTTP request with an absolute URI and buffered body.
+    pub request: HttpRequest,
+    /// Redirect behavior required by the OAuth operation.
+    pub redirect_policy: OAuthHttpRedirectPolicy,
+    /// Suggested maximum duration for the operation, or no SDK-specified timeout.
+    /// Implementations with their own timeout policy may retain it instead.
+    pub timeout: Option<Duration>,
+}
 
-    fn call(&'c self, request: HttpRequest) -> Self::Future {
-        Box::pin(async move {
-            let response = self
-                .0
-                .execute(request.try_into().map_err(Box::new)?)
-                .await
-                .map_err(Box::new)?;
+impl OAuthHttpRequest {
+    fn new(request: HttpRequest, redirect_policy: OAuthHttpRedirectPolicy) -> Self {
+        Self {
+            request,
+            redirect_policy,
+            timeout: Some(DEFAULT_HTTP_TIMEOUT),
+        }
+    }
+}
 
-            let mut builder = oauth2::http::Response::builder()
-                .status(response.status())
-                .version(response.version());
+/// Error returned by a custom OAuth HTTP client.
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub struct OAuthHttpClientError {
+    message: String,
+}
 
-            for (name, value) in response.headers().iter() {
-                builder = builder.header(name, value);
-            }
+impl OAuthHttpClientError {
+    /// Create an error from a transport-provided message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
 
-            builder
-                .body(response.bytes().await.map_err(Box::new)?.to_vec())
-                .map_err(HttpClientError::Http)
+/// Future returned by [`OAuthHttpClient::execute`].
+pub type OAuthHttpClientFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<HttpResponse, OAuthHttpClientError>> + Send + 'a>>;
+
+/// Executes every outbound HTTP request made by the OAuth state machine.
+///
+/// Implementations may route requests through a remote execution environment.
+/// They must honor the request's redirect policy and return the raw response
+/// status, headers, and body.
+pub trait OAuthHttpClient: Send + Sync {
+    /// Execute one OAuth HTTP operation.
+    fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_>;
+}
+
+struct ReqwestOAuthHttpClient {
+    follow_redirects: ReqwestClient,
+    stop_redirects: ReqwestClient,
+}
+
+impl ReqwestOAuthHttpClient {
+    fn new(follow_redirects: ReqwestClient) -> Result<Self, AuthError> {
+        let stop_redirects = ReqwestClient::builder()
+            .timeout(DEFAULT_HTTP_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        Ok(Self {
+            follow_redirects,
+            stop_redirects,
         })
     }
 }
 
+impl OAuthHttpClient for ReqwestOAuthHttpClient {
+    fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+        Box::pin(async move {
+            let OAuthHttpRequest {
+                request,
+                redirect_policy,
+                ..
+            } = request;
+            let client = match redirect_policy {
+                OAuthHttpRedirectPolicy::Follow => &self.follow_redirects,
+                OAuthHttpRedirectPolicy::Stop => &self.stop_redirects,
+            };
+            let request = reqwest::Request::try_from(request)
+                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+            let response = client
+                .execute(request)
+                .await
+                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+
+            let mut builder = oauth2::http::Response::builder()
+                .status(response.status())
+                .version(response.version());
+            for (name, value) in response.headers() {
+                builder = builder.header(name, value);
+            }
+            let mut body = Vec::new();
+            let mut body_stream = response.bytes_stream();
+            while let Some(chunk) = body_stream.next().await {
+                let chunk = chunk.map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                if chunk.len() > MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES - body.len() {
+                    return Err(OAuthHttpClientError::new(format!(
+                        "OAuth HTTP response body exceeds {MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES} bytes"
+                    )));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            builder
+                .body(body)
+                .map_err(|error| OAuthHttpClientError::new(error.to_string()))
+        })
+    }
+}
+
+struct OAuth2HttpClient<'a> {
+    client: &'a dyn OAuthHttpClient,
+    redirect_policy: OAuthHttpRedirectPolicy,
+}
+
+impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
+    type Error = OAuthHttpClientError;
+
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<HttpResponse, Self::Error>> + Send + 'c>,
+    >;
+
+    fn call(&'c self, request: HttpRequest) -> Self::Future {
+        self.client
+            .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+    }
+}
+
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
+
+/// Default OIDC Dynamic Client Registration `application_type` (SEP-837)
+const DEFAULT_APPLICATION_TYPE: &str = "native";
 
 /// Stored credentials for OAuth2 authorization
 #[derive(Clone, Serialize, Deserialize)]
@@ -156,6 +275,10 @@ impl CredentialStore for InMemoryCredentialStore {
 pub struct StoredAuthorizationState {
     pub pkce_verifier: String,
     pub csrf_token: String,
+    #[serde(default)]
+    pub expected_issuer: Option<String>,
+    #[serde(default)]
+    pub require_issuer: bool,
     pub created_at: u64,
 }
 
@@ -164,6 +287,8 @@ impl std::fmt::Debug for StoredAuthorizationState {
         f.debug_struct("StoredAuthorizationState")
             .field("pkce_verifier", &"[REDACTED]")
             .field("csrf_token", &"[REDACTED]")
+            .field("expected_issuer", &self.expected_issuer)
+            .field("require_issuer", &self.require_issuer)
             .field("created_at", &self.created_at)
             .finish()
     }
@@ -198,9 +323,20 @@ impl ExtraTokenFields for VendorExtraTokenFields {}
 
 impl StoredAuthorizationState {
     pub fn new(pkce_verifier: &PkceCodeVerifier, csrf_token: &CsrfToken) -> Self {
+        Self::new_with_expected_issuer(pkce_verifier, csrf_token, None, false)
+    }
+
+    pub fn new_with_expected_issuer(
+        pkce_verifier: &PkceCodeVerifier,
+        csrf_token: &CsrfToken,
+        expected_issuer: Option<String>,
+        require_issuer: bool,
+    ) -> Self {
         Self {
             pkce_verifier: pkce_verifier.secret().to_string(),
             csrf_token: csrf_token.secret().to_string(),
+            expected_issuer,
+            require_issuer,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -361,6 +497,17 @@ pub enum AuthError {
         upgrade_url: Option<String>,
     },
 
+    #[error(
+        "Authorization server issuer mismatch: expected {expected_issuer}, received {received_issuer}"
+    )]
+    AuthorizationServerMismatch {
+        expected_issuer: String,
+        received_issuer: String,
+    },
+
+    #[error("Authorization server response missing required issuer: expected {expected_issuer}")]
+    AuthorizationServerMissingIssuer { expected_issuer: String },
+
     #[error("Client credentials error: {0}")]
     ClientCredentialsError(String),
 
@@ -423,6 +570,7 @@ pub struct OAuthClientConfig {
     pub client_secret: Option<String>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
+    pub application_type: Option<String>,
 }
 
 impl OAuthClientConfig {
@@ -432,6 +580,7 @@ impl OAuthClientConfig {
             client_secret: None,
             scopes: Vec::new(),
             redirect_uri: redirect_uri.into(),
+            application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         }
     }
 
@@ -442,6 +591,12 @@ impl OAuthClientConfig {
 
     pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
         self.scopes = scopes;
+        self
+    }
+
+    /// Set the OIDC Dynamic Client Registration `application_type` (SEP-837), e.g. `"native"` or `"web"`
+    pub fn with_application_type(mut self, application_type: impl Into<String>) -> Self {
+        self.application_type = Some(application_type.into());
         self
     }
 }
@@ -600,7 +755,9 @@ impl Default for ScopeUpgradeConfig {
 
 /// oauth2 auth manager
 pub struct AuthorizationManager {
-    http_client: HttpClient,
+    http_client: Arc<dyn OAuthHttpClient>,
+    // Preserve legacy reqwest refresh behavior without weakening custom clients.
+    refresh_redirect_policy: OAuthHttpRedirectPolicy,
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
     credential_store: Arc<dyn CredentialStore>,
@@ -613,6 +770,8 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// OIDC Dynamic Client Registration `application_type` (SEP-837)
+    application_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -624,6 +783,8 @@ pub(crate) struct ClientRegistrationRequest {
     pub response_types: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -689,14 +850,36 @@ impl AuthorizationManager {
 
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
-        let base_url = base_url.into_url()?;
-        let http_client = HttpClient::builder()
-            .timeout(Duration::from_secs(30))
+        let http_client = ReqwestClient::builder()
+            .timeout(DEFAULT_HTTP_TIMEOUT)
             .build()
             .map_err(|e| AuthError::InternalError(e.to_string()))?;
+        Self::new_inner(
+            base_url,
+            Arc::new(ReqwestOAuthHttpClient::new(http_client)?),
+            OAuthHttpRedirectPolicy::Stop,
+        )
+        .await
+    }
+
+    /// Create an auth manager with a client used for every OAuth HTTP operation.
+    pub async fn new_with_oauth_http_client<U: IntoUrl>(
+        base_url: U,
+        http_client: Arc<dyn OAuthHttpClient>,
+    ) -> Result<Self, AuthError> {
+        Self::new_inner(base_url, http_client, OAuthHttpRedirectPolicy::Stop).await
+    }
+
+    async fn new_inner<U: IntoUrl>(
+        base_url: U,
+        http_client: Arc<dyn OAuthHttpClient>,
+        refresh_redirect_policy: OAuthHttpRedirectPolicy,
+    ) -> Result<Self, AuthError> {
+        let base_url = base_url.into_url()?;
 
         let manager = Self {
             http_client,
+            refresh_redirect_policy,
             metadata: None,
             oauth_client: None,
             credential_store: Arc::new(InMemoryCredentialStore::new()),
@@ -707,6 +890,7 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         };
 
         Ok(manager)
@@ -760,8 +944,21 @@ impl AuthorizationManager {
         Ok(false)
     }
 
-    pub fn with_client(&mut self, http_client: HttpClient) -> Result<(), AuthError> {
-        self.http_client = http_client;
+    /// Use a caller-configured `reqwest::Client` for every OAuth HTTP operation,
+    /// preserving all of its settings (proxy, TLS, timeout, default headers).
+    ///
+    /// The same client is reused for all requests, so its own redirect policy applies
+    /// and [`OAuthHttpRedirectPolicy::Stop`] is not enforced for token operations.
+    /// Callers needing strict no-redirect handling should pass a custom
+    /// [`OAuthHttpClient`] to [`AuthorizationManager::new_with_oauth_http_client`].
+    pub fn with_client(&mut self, http_client: ReqwestClient) -> Result<(), AuthError> {
+        // One client for both modes: a built reqwest::Client can't be rebuilt as a
+        // no-redirect variant without dropping the caller's configuration.
+        self.http_client = Arc::new(ReqwestOAuthHttpClient {
+            follow_redirects: http_client.clone(),
+            stop_redirects: http_client,
+        });
+        self.refresh_redirect_policy = OAuthHttpRedirectPolicy::Follow;
         Ok(())
     }
 
@@ -798,6 +995,11 @@ impl AuthorizationManager {
     pub fn configure_client(&mut self, config: OAuthClientConfig) -> Result<(), AuthError> {
         if self.metadata.is_none() {
             return Err(AuthError::NoAuthorizationSupport);
+        }
+
+        // SEP-837: only override application_type when the config sets one
+        if let Some(application_type) = &config.application_type {
+            self.application_type = Some(application_type.clone());
         }
 
         let metadata = self.metadata.as_ref().unwrap();
@@ -890,6 +1092,7 @@ impl AuthorizationManager {
         };
         self.validate_server_metadata("code")?;
 
+        let application_type = self.application_type.clone();
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
             redirect_uris: vec![redirect_uri.to_string()],
@@ -904,13 +1107,24 @@ impl AuthorizationManager {
             } else {
                 Some(scopes.join(" "))
             },
+            application_type: application_type.clone(),
         };
 
+        let request = oauth2::http::Request::builder()
+            .method("POST")
+            .uri(registration_url)
+            .header(CONTENT_TYPE, "application/json")
+            .body(
+                serde_json::to_vec(&registration_request)
+                    .map_err(|error| AuthError::RegistrationFailed(error.to_string()))?,
+            )
+            .map_err(|error| AuthError::RegistrationFailed(error.to_string()))?;
         let response = match self
             .http_client
-            .post(registration_url)
-            .json(&registration_request)
-            .send()
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Follow,
+            ))
             .await
         {
             Ok(response) => response,
@@ -924,10 +1138,7 @@ impl AuthorizationManager {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = match response.text().await {
-                Ok(text) => text,
-                Err(_) => "cannot get error details".to_string(),
-            };
+            let error_text = String::from_utf8_lossy(response.body());
 
             return Err(AuthError::RegistrationFailed(format!(
                 "HTTP {}: {}",
@@ -935,16 +1146,17 @@ impl AuthorizationManager {
             )));
         }
 
-        debug!("registration response: {:?}", response);
-        let reg_response = match response.json::<ClientRegistrationResponse>().await {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(AuthError::RegistrationFailed(format!(
-                    "analyze response error: {}",
-                    e
-                )));
-            }
-        };
+        debug!("registration response status: {:?}", response.status());
+        let reg_response =
+            match serde_json::from_slice::<ClientRegistrationResponse>(response.body()) {
+                Ok(response) => response,
+                Err(e) => {
+                    return Err(AuthError::RegistrationFailed(format!(
+                        "analyze response error: {}",
+                        e
+                    )));
+                }
+            };
 
         let config = OAuthClientConfig {
             client_id: reg_response.client_id,
@@ -958,6 +1170,7 @@ impl AuthorizationManager {
             client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
             redirect_uri: redirect_uri.to_string(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
+            application_type,
         };
 
         self.configure_client(config.clone())?;
@@ -972,6 +1185,8 @@ impl AuthorizationManager {
             client_secret: None,
             scopes: vec![],
             redirect_uri: self.base_url.to_string(),
+            // keep the manager's current application_type
+            application_type: None,
         };
         self.configure_client(config)
     }
@@ -1000,8 +1215,27 @@ impl AuthorizationManager {
 
         let (auth_url, csrf_token) = auth_request.url();
 
-        // store pkce verifier for later use via state store
-        let stored_state = StoredAuthorizationState::new(&pkce_verifier, &csrf_token);
+        // store pkce verifier and expected issuer for later use via state store
+        let expected_issuer = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.issuer.clone());
+        let require_issuer = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| {
+                metadata
+                    .additional_fields
+                    .get("authorization_response_iss_parameter_supported")
+                    .and_then(|value| value.as_bool())
+            })
+            .unwrap_or(false);
+        let stored_state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce_verifier,
+            &csrf_token,
+            expected_issuer,
+            require_issuer,
+        );
         self.state_store
             .save(csrf_token.secret(), stored_state)
             .await?;
@@ -1119,7 +1353,8 @@ impl AuthorizationManager {
         drop(attempts);
 
         let current_scopes = self.current_scopes.read().await.clone();
-        let upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+        let mut upgraded_scopes = Self::compute_scope_union(&current_scopes, required_scope);
+        self.add_offline_access_if_supported(&mut upgraded_scopes);
 
         debug!(
             "Requesting scope upgrade: current={:?}, required={}, union={:?}",
@@ -1140,11 +1375,58 @@ impl AuthorizationManager {
         *self.scope_upgrade_attempts.read().await
     }
 
+    fn validate_authorization_response_issuer(
+        stored_state: &StoredAuthorizationState,
+        received_issuer: Option<&str>,
+    ) -> Result<(), AuthError> {
+        let Some(expected_issuer) = stored_state.expected_issuer.as_deref() else {
+            if received_issuer.is_some() || stored_state.require_issuer {
+                return Err(AuthError::AuthorizationFailed(
+                    "Authorization callback issuer cannot be validated because expected issuer was not recorded"
+                        .to_string(),
+                ));
+            }
+            // Without issuer metadata from discovery and without an issuer-bearing
+            // callback, there is no stable value to bind to. This preserves
+            // compatibility with older authorization servers.
+            return Ok(());
+        };
+        let Some(received_issuer) = received_issuer else {
+            if stored_state.require_issuer {
+                return Err(AuthError::AuthorizationServerMissingIssuer {
+                    expected_issuer: expected_issuer.to_string(),
+                });
+            }
+            // SEP-2468 recommends RFC 9207 `iss`, but tolerate older authorization
+            // servers that do not advertise support for backwards compatibility.
+            return Ok(());
+        };
+        if received_issuer != expected_issuer {
+            return Err(AuthError::AuthorizationServerMismatch {
+                expected_issuer: expected_issuer.to_string(),
+                received_issuer: received_issuer.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// exchange authorization code for access token
     pub async fn exchange_code_for_token(
         &self,
         code: &str,
         csrf_token: &str,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        self.exchange_code_for_token_with_issuer(code, csrf_token, None)
+            .await
+    }
+
+    /// exchange authorization code for access token, validating the optional
+    /// RFC 9207 authorization response issuer (`iss`) when present.
+    pub async fn exchange_code_for_token_with_issuer(
+        &self,
+        code: &str,
+        csrf_token: &str,
+        received_issuer: Option<&str>,
     ) -> Result<OAuthTokenResponse, AuthError> {
         debug!("start exchange code for token: {:?}", code);
         let oauth_client = self
@@ -1161,13 +1443,11 @@ impl AuthorizationManager {
         // Delete state after retrieval (one-time use)
         self.state_store.delete(csrf_token).await?;
 
+        Self::validate_authorization_response_issuer(&stored_state, received_issuer)?;
+
         // Reconstruct the PKCE verifier
         let pkce_verifier = stored_state.into_pkce_verifier();
 
-        let http_client = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
         debug!("client_id: {:?}", oauth_client.client_id());
 
         // exchange token
@@ -1175,7 +1455,10 @@ impl AuthorizationManager {
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
             .add_extra_param("resource", self.base_url.to_string())
-            .request_async(&OAuthReqwestClient(http_client))
+            .request_async(&OAuth2HttpClient {
+                client: self.http_client.as_ref(),
+                redirect_policy: OAuthHttpRedirectPolicy::Stop,
+            })
             .await
         {
             Ok(token) => token,
@@ -1303,11 +1586,16 @@ impl AuthorizationManager {
 
         let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
         let mut refresh_request = oauth_client.exchange_refresh_token(&refresh_token_value);
-        for scope in &stored_credentials.granted_scopes {
-            refresh_request = refresh_request.add_scope(Scope::new(scope.clone()));
+        let mut refresh_scopes = stored_credentials.granted_scopes;
+        self.add_offline_access_if_supported(&mut refresh_scopes);
+        for scope in refresh_scopes {
+            refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let token_result = refresh_request
-            .request_async(&OAuthReqwestClient(self.http_client.clone()))
+            .request_async(&OAuth2HttpClient {
+                client: self.http_client.as_ref(),
+                redirect_policy: self.refresh_redirect_policy,
+            })
             .await
             .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
 
@@ -1383,7 +1671,7 @@ impl AuthorizationManager {
             push_candidate("/.well-known/oauth-authorization-server".to_string());
             push_candidate("/.well-known/openid-configuration".to_string());
         } else {
-            // Path components present: follow spec priority order
+            // Path components present: prefer OAuth discovery before OpenID Connect fallbacks.
             // 1. OAuth 2.0 with path insertion
             push_candidate(format!("/.well-known/oauth-authorization-server/{trimmed}"));
             // 2. OpenID Connect with path insertion
@@ -1414,13 +1702,7 @@ impl AuthorizationManager {
         discovery_url: &Url,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         debug!("discovery url: {:?}", discovery_url);
-        let response = match self
-            .http_client
-            .get(discovery_url.clone())
-            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
-            .send()
-            .await
-        {
+        let response = match self.discovery_get(discovery_url).await {
             Ok(r) => r,
             Err(e) => {
                 debug!("discovery request failed: {}", e);
@@ -1433,8 +1715,7 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        let body = response.text().await?;
-        match serde_json::from_str::<AuthorizationMetadata>(&body) {
+        match serde_json::from_slice::<AuthorizationMetadata>(response.body()) {
             Ok(metadata) => Ok(Some(metadata)),
             Err(err) => {
                 debug!("Failed to parse metadata for {}: {}", discovery_url, err);
@@ -1534,13 +1815,7 @@ impl AuthorizationManager {
     /// Extract the resource metadata url from the WWW-Authenticate header value.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
     async fn fetch_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
-        let response = match self
-            .http_client
-            .get(url.clone())
-            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
-            .send()
-            .await
-        {
+        let response = match self.discovery_get(url).await {
             Ok(r) => r,
             Err(e) => {
                 debug!("resource metadata probe failed: {}", e);
@@ -1587,13 +1862,7 @@ impl AuthorizationManager {
             "resource metadata discovery url: {:?}",
             resource_metadata_url
         );
-        let response = match self
-            .http_client
-            .get(resource_metadata_url.clone())
-            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
-            .send()
-            .await
-        {
+        let response = match self.discovery_get(resource_metadata_url).await {
             Ok(r) => r,
             Err(e) => {
                 debug!("resource metadata request failed: {}", e);
@@ -1609,7 +1878,7 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        let metadata = match response.json::<ResourceServerMetadata>().await {
+        let metadata = match serde_json::from_slice::<ResourceServerMetadata>(response.body()) {
             Ok(metadata) => metadata,
             Err(e) => {
                 debug!("failed to parse resource metadata as JSON: {}", e);
@@ -1617,6 +1886,21 @@ impl AuthorizationManager {
             }
         };
         Ok(Some(metadata))
+    }
+
+    async fn discovery_get(&self, url: &Url) -> Result<HttpResponse, OAuthHttpClientError> {
+        let request = oauth2::http::Request::builder()
+            .method("GET")
+            .uri(url.as_str())
+            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
+            .body(Vec::new())
+            .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+        self.http_client
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Follow,
+            ))
+            .await
     }
 
     /// extract parameters from WWW-Authenticate header (resource_metadata and scope)
@@ -1891,13 +2175,11 @@ impl AuthorizationManager {
             request = request.add_extra_param("resource", resource);
         }
 
-        let http_client = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
-
         let token_result = match request
-            .request_async(&OAuthReqwestClient(http_client))
+            .request_async(&OAuth2HttpClient {
+                client: self.http_client.as_ref(),
+                redirect_policy: OAuthHttpRedirectPolicy::Stop,
+            })
             .await
         {
             Ok(token) => token,
@@ -2010,28 +2292,28 @@ impl AuthorizationManager {
         }
         let body_str = serializer.finish();
 
-        let http_client = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
-
-        let response = http_client
-            .post(token_endpoint_url.as_str())
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body_str)
-            .send()
+        let request = oauth2::http::Request::builder()
+            .method("POST")
+            .uri(token_endpoint_url.as_str())
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(body_str.into_bytes())
+            .map_err(|error| AuthError::ClientCredentialsError(error.to_string()))?;
+        let response = self
+            .http_client
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Stop,
+            ))
             .await
             .map_err(|e| {
                 AuthError::ClientCredentialsError(format!("Token exchange request failed: {e}"))
             })?;
 
         let status = response.status();
-        let body = response.bytes().await.map_err(|e| {
-            AuthError::ClientCredentialsError(format!("Failed to read token response: {e}"))
-        })?;
+        let body = response.body();
 
         if !status.is_success() {
-            let msg = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+            let msg = if let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) {
                 let error = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown");
                 let desc = v
                     .get("error_description")
@@ -2044,7 +2326,7 @@ impl AuthorizationManager {
             return Err(AuthError::ClientCredentialsError(msg));
         }
 
-        let token_result = serde_json::from_slice::<OAuthTokenResponse>(&body).map_err(|e| {
+        let token_result = serde_json::from_slice::<OAuthTokenResponse>(body).map_err(|e| {
             AuthError::ClientCredentialsError(format!("Failed to parse token response: {e}"))
         })?;
 
@@ -2106,6 +2388,47 @@ impl AuthorizationManager {
     }
 }
 
+/// Parameters returned by an OAuth authorization redirect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AuthorizationCallback {
+    pub code: String,
+    pub csrf_token: String,
+    pub issuer: Option<String>,
+}
+
+impl AuthorizationCallback {
+    /// Parse an OAuth redirect URL and extract `code`, `state`, and optional RFC 9207 `iss`.
+    pub fn from_redirect_url(url: &str) -> Result<Self, AuthError> {
+        let url = Url::parse(url)?;
+        let mut code = None;
+        let mut csrf_token = None;
+        let mut issuer = None;
+
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "code" => code = Some(value.into_owned()),
+                "state" => csrf_token = Some(value.into_owned()),
+                "iss" => issuer = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+
+        let code = code.ok_or_else(|| {
+            AuthError::AuthorizationFailed("Authorization callback missing code".to_string())
+        })?;
+        let csrf_token = csrf_token.ok_or_else(|| {
+            AuthError::AuthorizationFailed("Authorization callback missing state".to_string())
+        })?;
+
+        Ok(Self {
+            code,
+            csrf_token,
+            issuer,
+        })
+    }
+}
+
 /// oauth2 authorization session, for guiding user to complete the authorization process
 #[non_exhaustive]
 pub struct AuthorizationSession {
@@ -2140,12 +2463,14 @@ impl AuthorizationSession {
                         client_metadata_url
                     )));
                 }
-                // SEP-991: URL-based Client IDs - use URL as client_id directly
+                // SEP-991: URL-based Client IDs - use URL as client_id directly.
+                // SEP-837: match the hosted client-metadata.json application_type ("native")
                 OAuthClientConfig {
                     client_id: client_metadata_url.to_string(),
                     client_secret: None,
                     scopes: scopes.iter().map(|s| s.to_string()).collect(),
                     redirect_uri: redirect_uri.to_string(),
+                    application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
                 }
             } else {
                 // Fallback to dynamic registration
@@ -2212,21 +2537,47 @@ impl AuthorizationSession {
         code: &str,
         csrf_token: &str,
     ) -> Result<OAuthTokenResponse, AuthError> {
-        self.auth_manager
-            .exchange_code_for_token(code, csrf_token)
+        self.handle_callback_with_issuer(code, csrf_token, None)
             .await
+    }
+
+    /// handle authorization code callback, validating the optional RFC 9207
+    /// authorization response issuer (`iss`) when present.
+    pub async fn handle_callback_with_issuer(
+        &self,
+        code: &str,
+        csrf_token: &str,
+        issuer: Option<&str>,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        self.auth_manager
+            .exchange_code_for_token_with_issuer(code, csrf_token, issuer)
+            .await
+    }
+
+    /// handle an OAuth redirect URL, including optional RFC 9207 `iss` validation.
+    pub async fn handle_callback_url(
+        &self,
+        callback_url: &str,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let callback = AuthorizationCallback::from_redirect_url(callback_url)?;
+        self.handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await
     }
 }
 
 /// http client extension, automatically add authorization header
 pub struct AuthorizedHttpClient {
     auth_manager: Arc<AuthorizationManager>,
-    inner_client: HttpClient,
+    inner_client: ReqwestClient,
 }
 
 impl AuthorizedHttpClient {
     /// create new authorized http client
-    pub fn new(auth_manager: Arc<AuthorizationManager>, client: Option<HttpClient>) -> Self {
+    pub fn new(auth_manager: Arc<AuthorizationManager>, client: Option<ReqwestClient>) -> Self {
         let inner_client = client.unwrap_or_default();
         Self {
             auth_manager,
@@ -2273,16 +2624,50 @@ pub enum OAuthState {
 }
 
 impl OAuthState {
+    fn oauth_http_client_config(&self) -> (Arc<dyn OAuthHttpClient>, OAuthHttpRedirectPolicy) {
+        let manager = match self {
+            OAuthState::Unauthorized(manager) | OAuthState::Authorized(manager) => manager,
+            OAuthState::Session(session) => &session.auth_manager,
+            OAuthState::AuthorizedHttpClient(client) => &client.auth_manager,
+        };
+        (
+            Arc::clone(&manager.http_client),
+            manager.refresh_redirect_policy,
+        )
+    }
+
+    async fn placeholder(&self) -> Result<Self, AuthError> {
+        let (http_client, refresh_redirect_policy) = self.oauth_http_client_config();
+        Ok(OAuthState::Unauthorized(
+            AuthorizationManager::new_inner(
+                DEFAULT_EXCHANGE_URL,
+                http_client,
+                refresh_redirect_policy,
+            )
+            .await?,
+        ))
+    }
+
     /// Create new OAuth state machine
     pub async fn new<U: IntoUrl>(
         base_url: U,
-        client: Option<HttpClient>,
+        client: Option<ReqwestClient>,
     ) -> Result<Self, AuthError> {
         let mut manager = AuthorizationManager::new(base_url).await?;
         if let Some(client) = client {
             manager.with_client(client)?;
         }
 
+        Ok(OAuthState::Unauthorized(manager))
+    }
+
+    /// Create an OAuth state machine that routes all OAuth HTTP operations
+    /// through the supplied client.
+    pub async fn new_with_oauth_http_client<U: IntoUrl>(
+        base_url: U,
+        client: Arc<dyn OAuthHttpClient>,
+    ) -> Result<Self, AuthError> {
+        let manager = AuthorizationManager::new_with_oauth_http_client(base_url, client).await?;
         Ok(OAuthState::Unauthorized(manager))
     }
 
@@ -2306,10 +2691,13 @@ impl OAuthState {
         credentials: OAuthTokenResponse,
     ) -> Result<(), AuthError> {
         if let OAuthState::Unauthorized(manager) = self {
-            let mut manager = std::mem::replace(
-                manager,
-                AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?,
-            );
+            let replacement = AuthorizationManager::new_inner(
+                DEFAULT_EXCHANGE_URL,
+                Arc::clone(&manager.http_client),
+                manager.refresh_redirect_policy,
+            )
+            .await?;
+            let mut manager = std::mem::replace(manager, replacement);
 
             let granted_scopes: Vec<String> = credentials
                 .scopes()
@@ -2359,10 +2747,8 @@ impl OAuthState {
         client_name: Option<&str>,
         client_metadata_url: Option<&str>,
     ) -> Result<(), AuthError> {
-        if let OAuthState::Unauthorized(mut manager) = std::mem::replace(
-            self,
-            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
-        ) {
+        let placeholder = self.placeholder().await?;
+        if let OAuthState::Unauthorized(mut manager) = std::mem::replace(self, placeholder) {
             debug!("start discovery");
             let metadata = manager.discover_metadata().await?;
             manager.metadata = Some(metadata);
@@ -2394,10 +2780,8 @@ impl OAuthState {
 
     /// complete authorization
     pub async fn complete_authorization(&mut self) -> Result<(), AuthError> {
-        if let OAuthState::Session(session) = std::mem::replace(
-            self,
-            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
-        ) {
+        let placeholder = self.placeholder().await?;
+        if let OAuthState::Session(session) = std::mem::replace(self, placeholder) {
             *self = OAuthState::Authorized(session.auth_manager);
             Ok(())
         } else {
@@ -2406,10 +2790,8 @@ impl OAuthState {
     }
     /// covert to authorized http client
     pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
-        if let OAuthState::Authorized(manager) = std::mem::replace(
-            self,
-            OAuthState::Authorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
-        ) {
+        let placeholder = self.placeholder().await?;
+        if let OAuthState::Authorized(manager) = std::mem::replace(self, placeholder) {
             *self = OAuthState::AuthorizedHttpClient(AuthorizedHttpClient::new(
                 Arc::new(manager),
                 None,
@@ -2428,8 +2810,7 @@ impl OAuthState {
         required_scope: &str,
         redirect_uri: &str,
     ) -> Result<String, AuthError> {
-        let placeholder =
-            OAuthState::Authorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?);
+        let placeholder = self.placeholder().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Authorized(manager) = old else {
             *self = old;
@@ -2468,9 +2849,23 @@ impl OAuthState {
 
     /// handle authorization callback
     pub async fn handle_callback(&mut self, code: &str, csrf_token: &str) -> Result<(), AuthError> {
+        self.handle_callback_with_issuer(code, csrf_token, None)
+            .await
+    }
+
+    /// handle authorization callback, validating the optional RFC 9207
+    /// authorization response issuer (`iss`) when present.
+    pub async fn handle_callback_with_issuer(
+        &mut self,
+        code: &str,
+        csrf_token: &str,
+        issuer: Option<&str>,
+    ) -> Result<(), AuthError> {
         match self {
             OAuthState::Session(session) => {
-                session.handle_callback(code, csrf_token).await?;
+                session
+                    .handle_callback_with_issuer(code, csrf_token, issuer)
+                    .await?;
                 self.complete_authorization().await
             }
             OAuthState::Unauthorized(_) => {
@@ -2483,6 +2878,17 @@ impl OAuthState {
                 Err(AuthError::InternalError("Already authorized".to_string()))
             }
         }
+    }
+
+    /// handle an OAuth redirect URL, including optional RFC 9207 `iss` validation.
+    pub async fn handle_callback_url(&mut self, callback_url: &str) -> Result<(), AuthError> {
+        let callback = AuthorizationCallback::from_redirect_url(callback_url)?;
+        self.handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await
     }
 
     /// get access token
@@ -2536,10 +2942,8 @@ impl OAuthState {
         &mut self,
         config: ClientCredentialsConfig,
     ) -> Result<(), AuthError> {
-        let OAuthState::Unauthorized(mut manager) = std::mem::replace(
-            self,
-            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
-        ) else {
+        let placeholder = self.placeholder().await?;
+        let OAuthState::Unauthorized(mut manager) = std::mem::replace(self, placeholder) else {
             return Err(AuthError::InternalError(
                 "Client credentials flow requires Unauthorized state".to_string(),
             ));
@@ -2565,16 +2969,227 @@ impl OAuthState {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::{Arc, Mutex as StdMutex},
+    };
 
-    use oauth2::{AuthType, CsrfToken, PkceCodeVerifier};
+    use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier};
     use url::Url;
 
     use super::{
-        AuthError, AuthorizationManager, AuthorizationMetadata, InMemoryStateStore,
-        OAuthClientConfig, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
+        AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
+        InMemoryStateStore, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
+        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
+        StateStore, StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct RecordedOAuthRequest {
+        method: String,
+        uri: String,
+        redirect_policy: OAuthHttpRedirectPolicy,
+        body: Vec<u8>,
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingOAuthHttpClient {
+        requests: Arc<StdMutex<Vec<RecordedOAuthRequest>>>,
+        responses: Arc<StdMutex<VecDeque<HttpResponse>>>,
+    }
+
+    impl RecordingOAuthHttpClient {
+        fn with_responses(responses: Vec<HttpResponse>) -> Self {
+            Self {
+                responses: Arc::new(StdMutex::new(responses.into())),
+                ..Default::default()
+            }
+        }
+
+        fn requests(&self) -> Vec<RecordedOAuthRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl OAuthHttpClient for RecordingOAuthHttpClient {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            self.requests.lock().unwrap().push(RecordedOAuthRequest {
+                method: request.request.method().to_string(),
+                uri: request.request.uri().to_string(),
+                redirect_policy: request.redirect_policy,
+                body: request.request.body().clone(),
+            });
+            let response = self.responses.lock().unwrap().pop_front();
+            Box::pin(async move {
+                response.ok_or_else(|| OAuthHttpClientError::new("missing fake response"))
+            })
+        }
+    }
+
+    fn http_response(status: u16, body: serde_json::Value) -> HttpResponse {
+        oauth2::http::Response::builder()
+            .status(status)
+            .body(serde_json::to_vec(&body).unwrap())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn custom_http_client_handles_protected_resource_discovery() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.discover_metadata().await.unwrap();
+
+        assert_eq!(metadata.token_endpoint, "https://auth.example.com/token");
+        assert_eq!(
+            client.requests(),
+            vec![
+                RecordedOAuthRequest {
+                    method: "GET".to_string(),
+                    uri: "https://mcp.example.com/mcp".to_string(),
+                    redirect_policy: OAuthHttpRedirectPolicy::Follow,
+                    body: Vec::new(),
+                },
+                RecordedOAuthRequest {
+                    method: "GET".to_string(),
+                    uri: "https://mcp.example.com/.well-known/oauth-protected-resource".to_string(),
+                    redirect_policy: OAuthHttpRedirectPolicy::Follow,
+                    body: Vec::new(),
+                },
+                RecordedOAuthRequest {
+                    method: "GET".to_string(),
+                    uri: "https://auth.example.com/.well-known/oauth-authorization-server"
+                        .to_string(),
+                    redirect_policy: OAuthHttpRedirectPolicy::Follow,
+                    body: Vec::new(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_http_client_handles_registration_exchange_and_refresh() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            http_response(
+                201,
+                serde_json::json!({
+                    "client_id": "test-client",
+                    "redirect_uris": ["http://localhost/callback"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "access_token": "access-1",
+                    "token_type": "bearer",
+                    "refresh_token": "refresh-1",
+                    "expires_in": 3600
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "access_token": "access-2",
+                    "token_type": "bearer",
+                    "refresh_token": "refresh-2",
+                    "expires_in": 3600
+                }),
+            ),
+        ]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: Some("https://auth.example.com/register".to_string()),
+            response_types_supported: Some(vec!["code".to_string()]),
+            ..Default::default()
+        });
+        manager
+            .register_client(
+                "Codex",
+                "http://localhost/callback",
+                &["profile", "offline_access"],
+            )
+            .await
+            .unwrap();
+        let authorization_url = manager
+            .get_authorization_url(&["profile", "offline_access"])
+            .await
+            .unwrap();
+        let state = Url::parse(&authorization_url)
+            .unwrap()
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .unwrap()
+            .1
+            .into_owned();
+
+        manager
+            .exchange_code_for_token("authorization-code", &state)
+            .await
+            .unwrap();
+        manager.refresh_token().await.unwrap();
+
+        let requests = client.requests();
+        let registration: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(registration["scope"], "profile offline_access");
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.uri.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://auth.example.com/register",
+                "https://auth.example.com/token",
+                "https://auth.example.com/token",
+            ]
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.redirect_policy)
+                .collect::<Vec<_>>(),
+            vec![
+                OAuthHttpRedirectPolicy::Follow,
+                OAuthHttpRedirectPolicy::Stop,
+                OAuthHttpRedirectPolicy::Stop,
+            ]
+        );
+    }
 
     // -- url helpers --
 
@@ -2894,6 +3509,29 @@ mod tests {
 
         assert_eq!(deserialized.pkce_verifier, "my-verifier");
         assert_eq!(deserialized.csrf_token, "my-csrf");
+        assert_eq!(deserialized.expected_issuer, None);
+        assert!(!deserialized.require_issuer);
+    }
+
+    #[test]
+    fn test_stored_authorization_state_records_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("my-verifier".to_string());
+        let csrf = CsrfToken::new("my-csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            false,
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: StoredAuthorizationState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            deserialized.expected_issuer.as_deref(),
+            Some("https://auth.example.com")
+        );
+        assert!(!deserialized.require_issuer);
     }
 
     #[test]
@@ -2906,7 +3544,7 @@ mod tests {
         assert!(!debug_output.contains("super-secret-verifier"));
         assert!(!debug_output.contains("super-secret-csrf"));
         assert!(debug_output.contains("[REDACTED]"));
-        assert!(debug_output.contains("created_at"));
+        assert!(debug_output.contains("expected_issuer"));
         assert!(debug_output.contains("created_at"));
     }
 
@@ -3117,6 +3755,7 @@ mod tests {
             client_secret: Some("my-secret".to_string()),
             scopes: vec![],
             redirect_uri: "http://localhost/callback".to_string(),
+            application_type: None,
         }
     }
 
@@ -3340,6 +3979,167 @@ mod tests {
         assert!(scope.contains("write"));
     }
 
+    #[test]
+    fn authorization_callback_parses_optional_issuer() {
+        let callback = AuthorizationCallback::from_redirect_url(
+            "http://localhost/callback?code=abc&state=csrf&iss=https%3A%2F%2Fauth.example.com",
+        )
+        .unwrap();
+
+        assert_eq!(callback.code, "abc");
+        assert_eq!(callback.csrf_token, "csrf");
+        assert_eq!(callback.issuer.as_deref(), Some("https://auth.example.com"));
+    }
+
+    #[test]
+    fn authorization_callback_requires_code_and_state() {
+        let missing_code = AuthorizationCallback::from_redirect_url(
+            "http://localhost/callback?state=csrf&iss=https%3A%2F%2Fauth.example.com",
+        );
+        assert!(matches!(
+            missing_code,
+            Err(AuthError::AuthorizationFailed(message)) if message.contains("missing code")
+        ));
+
+        let missing_state = AuthorizationCallback::from_redirect_url(
+            "http://localhost/callback?code=abc&iss=https%3A%2F%2Fauth.example.com",
+        );
+        assert!(matches!(
+            missing_state,
+            Err(AuthError::AuthorizationFailed(message)) if message.contains("missing state")
+        ));
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_accepts_match_and_missing_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            false,
+        );
+
+        assert!(
+            AuthorizationManager::validate_authorization_response_issuer(
+                &state,
+                Some("https://auth.example.com")
+            )
+            .is_ok()
+        );
+        assert!(AuthorizationManager::validate_authorization_response_issuer(&state, None).is_ok());
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_requires_issuer_when_advertised() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            true,
+        );
+
+        let error =
+            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
+
+        assert!(matches!(
+            error,
+            AuthError::AuthorizationServerMissingIssuer { expected_issuer }
+                if expected_issuer == "https://auth.example.com"
+        ));
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_present_issuer_without_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, false);
+
+        let error = AuthorizationManager::validate_authorization_response_issuer(
+            &state,
+            Some("https://auth.example.com"),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+        );
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_required_issuer_without_expected_issuer() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, true);
+
+        let error =
+            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+        );
+    }
+
+    #[test]
+    fn validate_authorization_response_issuer_rejects_mismatch() {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            false,
+        );
+
+        let error = AuthorizationManager::validate_authorization_response_issuer(
+            &state,
+            Some("https://evil.example.com"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            AuthError::AuthorizationServerMismatch {
+                expected_issuer,
+                received_issuer
+            } if expected_issuer == "https://auth.example.com"
+                && received_issuer == "https://evil.example.com"
+        ));
+    }
+
+    #[tokio::test]
+    async fn authorization_url_stores_expected_issuer_for_callback_validation() {
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager.get_authorization_url(&[]).await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let state = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+            .expect("authorization URL should contain state");
+
+        let stored_state = manager
+            .state_store
+            .load(&state)
+            .await
+            .unwrap()
+            .expect("authorization state should be stored");
+        assert_eq!(
+            stored_state.expected_issuer.as_deref(),
+            Some("https://auth.example.com")
+        );
+    }
+
     // -- scope management --
 
     #[test]
@@ -3510,6 +4310,29 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn scope_upgrade_adds_offline_access_when_as_supports_it() {
+        let mut mgr = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "http://localhost/authorize".to_string(),
+            token_endpoint: "http://localhost/token".to_string(),
+            scopes_supported: Some(vec!["profile".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        mgr.configure_client_id("my-client").unwrap();
+        *mgr.current_scopes.write().await = vec!["profile".to_string()];
+
+        let auth_url = mgr.request_scope_upgrade("email").await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let scope = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "scope").then(|| value.into_owned()))
+            .expect("scope should be present");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["email", "offline_access", "profile"]);
+    }
+
     #[test]
     fn scope_upgrade_config_default_values() {
         let config = ScopeUpgradeConfig::default();
@@ -3678,6 +4501,7 @@ mod tests {
             token_endpoint_auth_method: "none".to_string(),
             response_types: vec!["code".to_string()],
             scope: Some("read write".to_string()),
+            application_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["scope"], "read write");
@@ -3692,9 +4516,57 @@ mod tests {
             token_endpoint_auth_method: "none".to_string(),
             response_types: vec!["code".to_string()],
             scope: None,
+            application_type: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(!json.as_object().unwrap().contains_key("scope"));
+    }
+
+    // -- ClientRegistrationRequest application_type (SEP-837) --
+
+    #[test]
+    fn client_registration_request_includes_application_type_when_present() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+            application_type: Some("native".to_string()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["application_type"], "native");
+    }
+
+    #[test]
+    fn client_registration_request_omits_application_type_when_none() {
+        let req = super::ClientRegistrationRequest {
+            client_name: "test".to_string(),
+            redirect_uris: vec!["http://localhost/callback".to_string()],
+            grant_types: vec!["authorization_code".to_string()],
+            token_endpoint_auth_method: "none".to_string(),
+            response_types: vec!["code".to_string()],
+            scope: None,
+            application_type: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("application_type"));
+    }
+
+    // -- OAuthClientConfig application_type (SEP-837) --
+
+    #[test]
+    fn oauth_client_config_defaults_application_type_to_native() {
+        let config = super::OAuthClientConfig::new("client-id", "http://127.0.0.1:8080/callback");
+        assert_eq!(config.application_type.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn oauth_client_config_with_application_type_overrides_default() {
+        let config = super::OAuthClientConfig::new("client-id", "https://app.example.com/callback")
+            .with_application_type("web");
+        assert_eq!(config.application_type.as_deref(), Some("web"));
     }
 
     // -- client credentials (SEP-1046) --
@@ -3943,6 +4815,217 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn refresh_token_uses_client_configured_by_with_client() {
+        use axum::{Router, body::Body, http::Response, routing::post};
+
+        let received_header = Arc::new(std::sync::Mutex::new(None));
+        let received_header_clone = Arc::clone(&received_header);
+        let app = Router::new().route(
+            "/token",
+            post(move |headers: axum::http::HeaderMap| {
+                let received_header = Arc::clone(&received_header_clone);
+                async move {
+                    *received_header.lock().unwrap() = headers
+                        .get("x-custom-client")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600}"#,
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert("x-custom-client", "configured".parse().unwrap());
+        manager
+            .with_client(
+                reqwest::Client::builder()
+                    .default_headers(default_headers)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: "my-client".to_string(),
+                token_response: Some(make_token_response_with_refresh(
+                    "old-token",
+                    "my-refresh-token",
+                )),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            })
+            .await
+            .unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        assert_eq!(
+            received_header.lock().unwrap().as_deref(),
+            Some("configured")
+        );
+    }
+
+    #[tokio::test]
+    async fn exchange_code_uses_client_configured_by_with_client() {
+        use axum::{Router, body::Body, http::Response, routing::post};
+
+        let received_header = Arc::new(std::sync::Mutex::new(None));
+        let received_header_clone = Arc::clone(&received_header);
+        let app = Router::new().route(
+            "/token",
+            post(move |headers: axum::http::HeaderMap| {
+                let received_header = Arc::clone(&received_header_clone);
+                async move {
+                    *received_header.lock().unwrap() = headers
+                        .get("x-custom-client")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600}"#,
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert("x-custom-client", "configured".parse().unwrap());
+        manager
+            .with_client(
+                reqwest::Client::builder()
+                    .default_headers(default_headers)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        manager.configure_client(test_client_config()).unwrap();
+        let authorization_url = manager.get_authorization_url(&[]).await.unwrap();
+        let state = Url::parse(&authorization_url)
+            .unwrap()
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .unwrap()
+            .1
+            .into_owned();
+
+        manager
+            .exchange_code_for_token("authorization-code", &state)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            received_header.lock().unwrap().as_deref(),
+            Some("configured")
+        );
+    }
+
+    #[tokio::test]
+    async fn exchange_code_follows_redirects_with_with_client() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use axum::{
+            Router,
+            body::Body,
+            http::{Response, StatusCode},
+            routing::post,
+        };
+
+        // The token endpoint replies with a 307 redirect; the with_client path reuses
+        // the caller's redirect-following client, so the request is expected to follow
+        // it to the final endpoint that returns the token.
+        let final_endpoint_hit = Arc::new(AtomicBool::new(false));
+        let final_endpoint_hit_clone = Arc::clone(&final_endpoint_hit);
+        let app = Router::new()
+            .route(
+                "/token",
+                post(|| async {
+                    Response::builder()
+                        .status(StatusCode::TEMPORARY_REDIRECT)
+                        .header("location", "/token-final")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/token-final",
+                post(move || {
+                    let final_endpoint_hit = Arc::clone(&final_endpoint_hit_clone);
+                    async move {
+                        final_endpoint_hit.store(true, Ordering::SeqCst);
+                        Response::builder()
+                            .status(200)
+                            .header("content-type", "application/json")
+                            .body(Body::from(
+                                r#"{"access_token":"redirected-token","token_type":"Bearer","expires_in":3600}"#,
+                            ))
+                            .unwrap()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager
+            .with_client(reqwest::Client::builder().build().unwrap())
+            .unwrap();
+        manager.configure_client(test_client_config()).unwrap();
+        let authorization_url = manager.get_authorization_url(&[]).await.unwrap();
+        let state = Url::parse(&authorization_url)
+            .unwrap()
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .unwrap()
+            .1
+            .into_owned();
+
+        manager
+            .exchange_code_for_token("authorization-code", &state)
+            .await
+            .unwrap();
+
+        assert!(
+            final_endpoint_hit.load(Ordering::SeqCst),
+            "with_client path should follow redirects on token exchange"
+        );
+    }
+
     async fn start_token_server() -> (String, Arc<std::sync::Mutex<Option<String>>>) {
         use axum::{Router, body::Body, http::Response, routing::post};
         let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
@@ -4008,6 +5091,44 @@ mod tests {
         let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
         scope_parts.sort_unstable();
         assert_eq!(scope_parts, vec!["read", "write"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_adds_offline_access_when_as_supports_it() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            scopes_supported: Some(vec!["read".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        let scope = params
+            .get("scope")
+            .expect("scope should be present in refresh request");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["offline_access", "read"]);
     }
 
     #[tokio::test]

@@ -1,94 +1,195 @@
-//! Content sent around agents, extensions, and LLMs
-//! The various content types can be display to humans but also understood by models
-//! They include optional annotations used to help inform agent usage
+//! Content types that flow between agents, tools, prompts, and LLMs.
+//!
+//! The core union is [`ContentBlock`] (text | image | audio | resource_link | resource),
+//! matching the MCP 2025-11-25 `ContentBlock` definition. Each variant carries optional
+//! [`Annotations`] and `_meta` inline.
+//!
+//! [`SamplingMessageContentBlock`] extends the union with `tool_use` and `tool_result`
+//! variants for sampling messages (SEP-1577).
+
+// ToolUseContent/ToolResultContent are SEP-2577-deprecated; internal references are expected.
+#![expect(deprecated)]
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{AnnotateAble, Annotated, resource::ResourceContents};
+use super::{Annotations, Meta, resource::ResourceContents};
 
+// ---------------------------------------------------------------------------
+// Flat content structs
+// ---------------------------------------------------------------------------
+
+/// Text content block (spec `TextContent`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct RawTextContent {
+#[non_exhaustive]
+pub struct TextContent {
+    /// The text content of the message.
     pub text: String,
-    /// Optional protocol-level metadata for this content block
+    /// Optional protocol-level metadata for this content block.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<super::Meta>,
-}
-pub type TextContent = Annotated<RawTextContent>;
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct RawImageContent {
-    /// The base64-encoded image
-    pub data: String,
-    pub mime_type: String,
-    /// Optional protocol-level metadata for this content block
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<super::Meta>,
+    pub meta: Option<Meta>,
+    /// Optional annotations describing how the client should use this content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Annotations>,
 }
 
-pub type ImageContent = Annotated<RawImageContent>;
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct RawEmbeddedResource {
-    /// Optional protocol-level metadata for this content block
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<super::Meta>,
-    pub resource: ResourceContents,
-}
-
-impl RawEmbeddedResource {
-    /// Create a new RawEmbeddedResource.
-    pub fn new(resource: ResourceContents) -> Self {
+impl TextContent {
+    pub fn new(text: impl Into<String>) -> Self {
         Self {
+            text: text.into(),
             meta: None,
-            resource,
+            annotations: None,
         }
+    }
+
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+
+    pub fn with_annotations(mut self, annotations: Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
     }
 }
 
-pub type EmbeddedResource = Annotated<RawEmbeddedResource>;
+/// Image content with base64-encoded data (spec `ImageContent`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ImageContent {
+    /// The base64-encoded image data.
+    pub data: String,
+    /// The MIME type of the image (e.g. `image/png`).
+    pub mime_type: String,
+    /// Optional protocol-level metadata for this content block.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    /// Optional annotations describing how the client should use this content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Annotations>,
+}
+
+impl ImageContent {
+    pub fn new(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self {
+            data: data.into(),
+            mime_type: mime_type.into(),
+            meta: None,
+            annotations: None,
+        }
+    }
+
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+
+    pub fn with_annotations(mut self, annotations: Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+}
+
+/// Audio content with base64-encoded data (spec `AudioContent`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct AudioContent {
+    /// The base64-encoded audio data.
+    pub data: String,
+    /// The MIME type of the audio (e.g. `audio/wav`).
+    pub mime_type: String,
+    /// Optional protocol-level metadata for this content block.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    /// Optional annotations describing how the client should use this content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Annotations>,
+}
+
+impl AudioContent {
+    pub fn new(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self {
+            data: data.into(),
+            mime_type: mime_type.into(),
+            meta: None,
+            annotations: None,
+        }
+    }
+
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+
+    pub fn with_annotations(mut self, annotations: Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+}
+
+/// Embedded resource content (spec `EmbeddedResource`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct EmbeddedResource {
+    /// The embedded resource contents (text or blob).
+    pub resource: ResourceContents,
+    /// Optional protocol-level metadata for this content block.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    /// Optional annotations describing how the client should use this content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Annotations>,
+}
 
 impl EmbeddedResource {
+    pub fn new(resource: ResourceContents) -> Self {
+        Self {
+            resource,
+            meta: None,
+            annotations: None,
+        }
+    }
+
     pub fn get_text(&self) -> String {
         match &self.resource {
             ResourceContents::TextResourceContents { text, .. } => text.clone(),
             _ => String::new(),
         }
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct RawAudioContent {
-    pub data: String,
-    pub mime_type: String,
-}
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 
-pub type AudioContent = Annotated<RawAudioContent>;
+    pub fn with_annotations(mut self, annotations: Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+}
 
 /// Tool call request from assistant (SEP-1577).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ToolUseContent {
-    /// Unique identifier for this tool call
     pub id: String,
-    /// Name of the tool to call
     pub name: String,
-    /// Input arguments for the tool
     pub input: super::JsonObject,
-    /// Optional metadata (preserved for caching)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<super::Meta>,
+    pub meta: Option<Meta>,
 }
 
 /// Tool execution result in user message (SEP-1577).
@@ -96,19 +197,17 @@ pub struct ToolUseContent {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ToolResultContent {
-    /// Optional metadata
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<super::Meta>,
-    /// ID of the corresponding tool use
+    pub meta: Option<Meta>,
     pub tool_use_id: String,
-    /// Content blocks returned by the tool
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<Content>,
-    /// Optional structured result
+    pub content: Vec<ContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<super::JsonObject>,
-    /// Whether tool execution failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
@@ -125,7 +224,7 @@ impl ToolUseContent {
 }
 
 impl ToolResultContent {
-    pub fn new(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+    pub fn new(tool_use_id: impl Into<String>, content: Vec<ContentBlock>) -> Self {
         Self {
             meta: None,
             tool_use_id: tool_use_id.into(),
@@ -135,7 +234,7 @@ impl ToolResultContent {
         }
     }
 
-    pub fn error(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+    pub fn error(tool_use_id: impl Into<String>, content: Vec<ContentBlock>) -> Self {
         Self {
             meta: None,
             tool_use_id: tool_use_id.into(),
@@ -146,21 +245,26 @@ impl ToolResultContent {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ContentBlock — the unified content union (spec `ContentBlock`)
+// ---------------------------------------------------------------------------
+
+/// Unified content block union (spec `ContentBlock`).
+///
+/// `text | image | audio | resource_link | resource`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
-pub enum RawContent {
-    Text(RawTextContent),
-    Image(RawImageContent),
-    Resource(RawEmbeddedResource),
-    Audio(RawAudioContent),
-    ResourceLink(super::resource::RawResource),
+#[non_exhaustive]
+pub enum ContentBlock {
+    Text(TextContent),
+    Image(ImageContent),
+    Audio(AudioContent),
+    Resource(EmbeddedResource),
+    ResourceLink(super::resource::Resource),
 }
 
-pub type Content = Annotated<RawContent>;
-
-impl RawContent {
+impl ContentBlock {
     pub fn json<S: Serialize>(json: S) -> Result<Self, crate::ErrorData> {
         let json = serde_json::to_string(&json).map_err(|e| {
             crate::ErrorData::internal_error(
@@ -170,129 +274,106 @@ impl RawContent {
                 )),
             )
         })?;
-        Ok(RawContent::text(json))
+        Ok(ContentBlock::text(json))
     }
 
-    pub fn text<S: Into<String>>(text: S) -> Self {
-        RawContent::Text(RawTextContent {
-            text: text.into(),
-            meta: None,
-        })
+    pub fn text(text: impl Into<String>) -> Self {
+        ContentBlock::Text(TextContent::new(text))
     }
 
-    pub fn image<S: Into<String>, T: Into<String>>(data: S, mime_type: T) -> Self {
-        RawContent::Image(RawImageContent {
-            data: data.into(),
-            mime_type: mime_type.into(),
-            meta: None,
-        })
+    pub fn image(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        ContentBlock::Image(ImageContent::new(data, mime_type))
+    }
+
+    pub fn audio(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        ContentBlock::Audio(AudioContent::new(data, mime_type))
     }
 
     pub fn resource(resource: ResourceContents) -> Self {
-        RawContent::Resource(RawEmbeddedResource {
-            meta: None,
-            resource,
-        })
+        ContentBlock::Resource(EmbeddedResource::new(resource))
     }
 
-    pub fn embedded_text<S: Into<String>, T: Into<String>>(uri: S, content: T) -> Self {
-        RawContent::Resource(RawEmbeddedResource {
-            meta: None,
-            resource: ResourceContents::TextResourceContents {
+    pub fn embedded_text(uri: impl Into<String>, content: impl Into<String>) -> Self {
+        ContentBlock::Resource(EmbeddedResource::new(
+            ResourceContents::TextResourceContents {
                 uri: uri.into(),
                 mime_type: Some("text".to_string()),
                 text: content.into(),
                 meta: None,
             },
-        })
+        ))
     }
 
-    /// Get the text content if this is a TextContent variant
-    pub fn as_text(&self) -> Option<&RawTextContent> {
+    pub fn resource_link(resource: super::resource::Resource) -> Self {
+        ContentBlock::ResourceLink(resource)
+    }
+
+    pub fn as_text(&self) -> Option<&TextContent> {
         match self {
-            RawContent::Text(text) => Some(text),
+            ContentBlock::Text(text) => Some(text),
             _ => None,
         }
     }
 
-    /// Get the image content if this is an ImageContent variant
-    pub fn as_image(&self) -> Option<&RawImageContent> {
+    pub fn as_image(&self) -> Option<&ImageContent> {
         match self {
-            RawContent::Image(image) => Some(image),
+            ContentBlock::Image(image) => Some(image),
             _ => None,
         }
     }
 
-    /// Get the resource content if this is an ImageContent variant
-    pub fn as_resource(&self) -> Option<&RawEmbeddedResource> {
+    pub fn as_resource(&self) -> Option<&EmbeddedResource> {
         match self {
-            RawContent::Resource(resource) => Some(resource),
+            ContentBlock::Resource(resource) => Some(resource),
             _ => None,
         }
     }
 
-    /// Get the resource link if this is a ResourceLink variant
-    pub fn as_resource_link(&self) -> Option<&super::resource::RawResource> {
+    pub fn as_resource_link(&self) -> Option<&super::resource::Resource> {
         match self {
-            RawContent::ResourceLink(link) => Some(link),
+            ContentBlock::ResourceLink(link) => Some(link),
             _ => None,
         }
     }
 
-    /// Create a resource link content
-    pub fn resource_link(resource: super::resource::RawResource) -> Self {
-        RawContent::ResourceLink(resource)
+    pub fn as_audio(&self) -> Option<&AudioContent> {
+        match self {
+            ContentBlock::Audio(audio) => Some(audio),
+            _ => None,
+        }
     }
 }
 
-impl Content {
-    pub fn text<S: Into<String>>(text: S) -> Self {
-        RawContent::text(text).no_annotation()
-    }
-
-    pub fn image<S: Into<String>, T: Into<String>>(data: S, mime_type: T) -> Self {
-        RawContent::image(data, mime_type).no_annotation()
-    }
-
-    pub fn resource(resource: ResourceContents) -> Self {
-        RawContent::resource(resource).no_annotation()
-    }
-
-    pub fn embedded_text<S: Into<String>, T: Into<String>>(uri: S, content: T) -> Self {
-        RawContent::embedded_text(uri, content).no_annotation()
-    }
-
-    pub fn json<S: Serialize>(json: S) -> Result<Self, crate::ErrorData> {
-        RawContent::json(json).map(|c| c.no_annotation())
-    }
-
-    /// Create a resource link content
-    pub fn resource_link(resource: super::resource::RawResource) -> Self {
-        RawContent::resource_link(resource).no_annotation()
-    }
-}
+// ---------------------------------------------------------------------------
+// JsonContent (unchanged)
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonContent<S: Serialize>(S);
-/// Types that can be converted into a list of contents
+
+// ---------------------------------------------------------------------------
+// IntoContents
+// ---------------------------------------------------------------------------
+
+/// Types that can be converted into a list of content blocks.
 pub trait IntoContents {
-    fn into_contents(self) -> Vec<Content>;
+    fn into_contents(self) -> Vec<ContentBlock>;
 }
 
-impl IntoContents for Content {
-    fn into_contents(self) -> Vec<Content> {
+impl IntoContents for ContentBlock {
+    fn into_contents(self) -> Vec<ContentBlock> {
         vec![self]
     }
 }
 
 impl IntoContents for String {
-    fn into_contents(self) -> Vec<Content> {
-        vec![Content::text(self)]
+    fn into_contents(self) -> Vec<ContentBlock> {
+        vec![ContentBlock::text(self)]
     }
 }
 
 impl IntoContents for () {
-    fn into_contents(self) -> Vec<Content> {
+    fn into_contents(self) -> Vec<ContentBlock> {
         vec![]
     }
 }
@@ -305,40 +386,32 @@ mod tests {
 
     #[test]
     fn test_image_content_serialization() {
-        let image_content = RawImageContent {
-            data: "base64data".to_string(),
-            mime_type: "image/png".to_string(),
-            meta: None,
-        };
-
-        let json = serde_json::to_string(&image_content).unwrap();
-        println!("ImageContent JSON: {}", json);
-
-        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        let image = ImageContent::new("base64data", "image/png");
+        let json = serde_json::to_string(&image).unwrap();
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
     }
 
     #[test]
     fn test_audio_content_serialization() {
-        let audio_content = RawAudioContent {
-            data: "base64audiodata".to_string(),
-            mime_type: "audio/wav".to_string(),
-        };
-
-        let json = serde_json::to_string(&audio_content).unwrap();
-        println!("AudioContent JSON: {}", json);
-
-        // Verify it contains mimeType (camelCase) not mime_type (snake_case)
+        let audio = AudioContent::new("base64audiodata", "audio/wav");
+        let json = serde_json::to_string(&audio).unwrap();
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
     }
 
     #[test]
-    fn test_resource_link_serialization() {
-        use super::super::resource::RawResource;
+    fn test_audio_content_has_meta() {
+        let audio = AudioContent::new("data", "audio/wav").with_meta(Meta::default());
+        let json = serde_json::to_value(&audio).unwrap();
+        assert!(json.get("_meta").is_some());
+    }
 
-        let resource_link = RawContent::ResourceLink(RawResource {
+    #[test]
+    fn test_resource_link_serialization() {
+        use super::super::resource::Resource;
+
+        let resource_link = ContentBlock::ResourceLink(Resource {
             uri: "file:///test.txt".to_string(),
             name: "test.txt".to_string(),
             title: None,
@@ -347,12 +420,10 @@ mod tests {
             size: Some(100),
             icons: None,
             meta: None,
+            annotations: None,
         });
 
         let json = serde_json::to_string(&resource_link).unwrap();
-        println!("ResourceLink JSON: {}", json);
-
-        // Verify it contains the correct type tag
         assert!(json.contains("\"type\":\"resource_link\""));
         assert!(json.contains("\"uri\":\"file:///test.txt\""));
         assert!(json.contains("\"name\":\"test.txt\""));
@@ -368,9 +439,9 @@ mod tests {
             "mimeType": "text/plain"
         }"#;
 
-        let content: RawContent = serde_json::from_str(json).unwrap();
+        let content: ContentBlock = serde_json::from_str(json).unwrap();
 
-        if let RawContent::ResourceLink(resource) = content {
+        if let ContentBlock::ResourceLink(resource) = content {
             assert_eq!(resource.uri, "file:///example.txt");
             assert_eq!(resource.name, "example.txt");
             assert_eq!(resource.description, Some("Example file".to_string()));
@@ -378,5 +449,16 @@ mod tests {
         } else {
             panic!("Expected ResourceLink variant");
         }
+    }
+
+    #[test]
+    fn test_content_block_text_with_annotations() {
+        let block = ContentBlock::Text(
+            TextContent::new("hello").with_annotations(Annotations::default().with_priority(0.8)),
+        );
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["text"], "hello");
+        assert_eq!(json["annotations"]["priority"], 0.8_f32);
     }
 }

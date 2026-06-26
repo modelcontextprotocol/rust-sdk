@@ -299,6 +299,67 @@ async fn server_pinned_version_used_as_fallback_for_unknown_client_request() {
     assert_eq!(negotiated, ProtocolVersion::V_2025_06_18);
 }
 
+fn duplicate_init_request(id: u64, version: &str) -> ClientJsonRpcMessage {
+    msg(&format!(
+        r#"{{
+            "jsonrpc": "2.0",
+            "id": {id},
+            "method": "initialize",
+            "params": {{
+                "protocolVersion": "{version}",
+                "capabilities": {{ "sampling": {{}} }},
+                "clientInfo": {{ "name": "renegotiated-client", "version": "9.9.9" }}
+            }}
+        }}"#
+    ))
+}
+
+#[tokio::test]
+async fn server_accepts_duplicate_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let _server = tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    do_initialize(&mut client).await;
+    client.send(initialized_notification()).await.unwrap();
+
+    client
+        .send(duplicate_init_request(2, "2025-11-25"))
+        .await
+        .unwrap();
+    let response = client.receive().await.unwrap();
+    assert!(
+        matches!(response, ServerJsonRpcMessage::Response(_)),
+        "expected successful InitializeResult, got: {response:?}"
+    );
+}
+
+#[tokio::test]
+async fn server_session_remains_usable_after_renegotiation() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let _server = tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    do_initialize(&mut client).await;
+    client.send(initialized_notification()).await.unwrap();
+    client
+        .send(duplicate_init_request(2, "2025-11-25"))
+        .await
+        .unwrap();
+    let _renegotiated = client.receive().await.unwrap();
+
+    client.send(ping_request(3)).await.unwrap();
+    let pong = client.receive().await.unwrap();
+    assert!(
+        matches!(
+            pong,
+            ServerJsonRpcMessage::Response(ref r)
+                if matches!(r.result, ServerResult::EmptyResult(_))
+        ),
+        "expected EmptyResult ping after renegotiation, got: {pong:?}"
+    );
+}
+
 // Server buffers multiple requests before initialized and processes them in order.
 #[tokio::test]
 async fn server_init_buffers_multiple_requests_before_initialized() {

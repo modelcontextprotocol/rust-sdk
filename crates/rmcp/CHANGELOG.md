@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.7.0...rmcp-v1.8.0) - 2026-06-22
+
+### Added
+
+- standardize resource-not-found error code (SEP-2164) ([#899](https://github.com/modelcontextprotocol/rust-sdk/pull/899))
+- validate OAuth authorization response issuer ([#896](https://github.com/modelcontextprotocol/rust-sdk/pull/896))
+- specify OIDC application_type during dynamic client registration (SEP-837) ([#883](https://github.com/modelcontextprotocol/rust-sdk/pull/883))
+- deprecate roots, sampling, and logging (SEP-2577) ([#884](https://github.com/modelcontextprotocol/rust-sdk/pull/884))
+
+### Fixed
+
+- *(auth)* preserve configured reqwest client ([#917](https://github.com/modelcontextprotocol/rust-sdk/pull/917))
+- *(auth)* align OAuth metadata discovery ordering ([#887](https://github.com/modelcontextprotocol/rust-sdk/pull/887))
+- align progress timeout token ([#909](https://github.com/modelcontextprotocol/rust-sdk/pull/909))
+- *(elicitation)* preserve enumNames through ElicitationSchema serde round-trip ([#905](https://github.com/modelcontextprotocol/rust-sdk/pull/905))
+- return tool errors for invalid arguments ([#894](https://github.com/modelcontextprotocol/rust-sdk/pull/894))
+- *(auth)* apply offline_access to reauth paths ([#897](https://github.com/modelcontextprotocol/rust-sdk/pull/897))
+- update peer info on duplicate initialize ([#862](https://github.com/modelcontextprotocol/rust-sdk/pull/862))
+- strip and validate tool outputSchema and inputSchema ([#860](https://github.com/modelcontextprotocol/rust-sdk/pull/860))
+- remove unnecessary fields from tools' inputSchema ([#856](https://github.com/modelcontextprotocol/rust-sdk/pull/856))
+- reject init header/body version mismatch ([#853](https://github.com/modelcontextprotocol/rust-sdk/pull/853))
+- align protocol version negotiation ([#855](https://github.com/modelcontextprotocol/rust-sdk/pull/855))
+- accept 200 with empty body in response to notifications in addition to 202 ([#849](https://github.com/modelcontextprotocol/rust-sdk/pull/849))
+
+### Other
+
+- Allow custom HTTP clients for OAuth ([#908](https://github.com/modelcontextprotocol/rust-sdk/pull/908))
+- Add progress-aware request timeout reset ([#858](https://github.com/modelcontextprotocol/rust-sdk/pull/858))
+- *(server)* document Err vs Ok(CallToolResult::error) visibility contract on ServerHandler::call_tool ([#854](https://github.com/modelcontextprotocol/rust-sdk/pull/854))
+- refine mcpmate listing copy ([#885](https://github.com/modelcontextprotocol/rust-sdk/pull/885))
+- added jilebi-mcp to the list of built with rmcp ([#861](https://github.com/modelcontextprotocol/rust-sdk/pull/861))
+
 ## [1.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.6.0...rmcp-v1.7.0) - 2026-05-13
 
 ### Added

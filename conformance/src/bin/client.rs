@@ -3,7 +3,8 @@ use rmcp::{
     model::*,
     service::RequestContext,
     transport::{
-        AuthClient, AuthorizationManager, StreamableHttpClientTransport, auth::OAuthState,
+        AuthClient, AuthorizationManager, StreamableHttpClientTransport,
+        auth::{AuthorizationCallback, OAuthState},
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
@@ -44,48 +45,46 @@ struct ElicitationDefaultsClientHandler;
 impl ClientHandler for ElicitationDefaultsClientHandler {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
-        info.capabilities.elicitation = Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(true),
-            }),
-            url: None,
-        });
+        info.capabilities.elicitation = Some(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+        );
         info
     }
 
     async fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, ErrorData> {
+    ) -> Result<ElicitResult, ErrorData> {
         let content = match &request {
-            CreateElicitationRequestParams::FormElicitationParams {
+            ElicitRequestParams::FormElicitationParams {
                 requested_schema, ..
             } => {
                 let mut defaults = serde_json::Map::new();
                 for (name, prop) in &requested_schema.properties {
                     match prop {
-                        PrimitiveSchema::String(s) => {
+                        PrimitiveSchemaDefinition::String(s) => {
                             if let Some(d) = &s.default {
                                 defaults.insert(name.clone(), Value::String(d.clone()));
                             }
                         }
-                        PrimitiveSchema::Number(n) => {
+                        PrimitiveSchemaDefinition::Number(n) => {
                             if let Some(d) = n.default {
                                 defaults.insert(name.clone(), json!(d));
                             }
                         }
-                        PrimitiveSchema::Integer(i) => {
+                        PrimitiveSchemaDefinition::Integer(i) => {
                             if let Some(d) = i.default {
                                 defaults.insert(name.clone(), json!(d));
                             }
                         }
-                        PrimitiveSchema::Boolean(b) => {
+                        PrimitiveSchemaDefinition::Boolean(b) => {
                             if let Some(d) = b.default {
                                 defaults.insert(name.clone(), Value::Bool(d));
                             }
                         }
-                        PrimitiveSchema::Enum(e) => {
+                        PrimitiveSchemaDefinition::Enum(e) => {
                             let val = match e {
                                 EnumSchema::Single(SingleSelectEnumSchema::Untitled(u)) => {
                                     u.default.as_ref().map(|d| Value::String(d.clone()))
@@ -108,22 +107,24 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
                                     })
                                 }
                                 EnumSchema::Legacy(_) => None,
+                                _ => None,
                             };
                             if let Some(v) = val {
                                 defaults.insert(name.clone(), v);
                             }
                         }
+                        _ => {}
                     }
                 }
                 Some(Value::Object(defaults))
             }
             _ => Some(json!({})),
         };
-        Ok(CreateElicitationResult {
-            action: ElicitationAction::Accept,
-            content,
-            meta: None,
-        })
+        let mut result = ElicitResult::new(ElicitationAction::Accept);
+        if let Some(c) = content {
+            result = result.with_content(c);
+        }
+        Ok(result)
     }
 }
 
@@ -133,12 +134,10 @@ struct FullClientHandler;
 impl ClientHandler for FullClientHandler {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
-        info.capabilities.elicitation = Some(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(true),
-            }),
-            url: None,
-        });
+        info.capabilities.elicitation = Some(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+        );
         info
     }
 
@@ -157,7 +156,7 @@ impl ClientHandler for FullClientHandler {
         Ok(CreateMessageResult::new(
             SamplingMessage::new(
                 Role::Assistant,
-                SamplingMessageContent::text(format!(
+                SamplingMessageContentBlock::text(format!(
                     "This is a mock LLM response to: {}",
                     prompt_text
                 )),
@@ -169,14 +168,11 @@ impl ClientHandler for FullClientHandler {
 
     async fn create_elicitation(
         &self,
-        _request: CreateElicitationRequestParams,
+        _request: ElicitRequestParams,
         _cx: RequestContext<RoleClient>,
-    ) -> Result<CreateElicitationResult, ErrorData> {
-        Ok(CreateElicitationResult {
-            action: ElicitationAction::Accept,
-            content: Some(json!({"username": "testuser", "email": "test@example.com"})),
-            meta: None,
-        })
+    ) -> Result<ElicitResult, ErrorData> {
+        Ok(ElicitResult::new(ElicitationAction::Accept)
+            .with_content(json!({"username": "testuser", "email": "test@example.com"})))
     }
 }
 
@@ -221,20 +217,16 @@ async fn perform_oauth_flow(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| anyhow::anyhow!("No Location header in auth redirect"))?;
 
-    let redirect_url = url::Url::parse(location)?;
-    let code = redirect_url
-        .query_pairs()
-        .find(|(k, _)| k == "code")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No code in redirect URL"))?;
-    let state = redirect_url
-        .query_pairs()
-        .find(|(k, _)| k == "state")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No state in redirect URL"))?;
+    let callback = AuthorizationCallback::from_redirect_url(location)?;
 
     tracing::debug!("Got auth code, exchanging for token...");
-    oauth.handle_callback(&code, &state).await?;
+    oauth
+        .handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await?;
 
     let am = oauth
         .into_authorization_manager()
@@ -334,8 +326,14 @@ async fn run_auth_scope_step_up_client(
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
-    let (code, state) = headless_authorize(&auth_url).await?;
-    oauth.handle_callback(&code, &state).await?;
+    let callback = headless_authorize(&auth_url).await?;
+    oauth
+        .handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await?;
 
     let am = oauth
         .into_authorization_manager()
@@ -380,8 +378,14 @@ async fn run_auth_scope_step_up_client(
                     )
                     .await?;
                 let auth_url2 = oauth2.get_authorization_url().await?;
-                let (code2, state2) = headless_authorize(&auth_url2).await?;
-                oauth2.handle_callback(&code2, &state2).await?;
+                let callback2 = headless_authorize(&auth_url2).await?;
+                oauth2
+                    .handle_callback_with_issuer(
+                        &callback2.code,
+                        &callback2.csrf_token,
+                        callback2.issuer.as_deref(),
+                    )
+                    .await?;
 
                 let am2 = oauth2.into_authorization_manager().unwrap();
                 let auth_client2 = AuthClient::new(reqwest::Client::default(), am2);
@@ -422,8 +426,14 @@ async fn run_auth_scope_retry_limit_client(
             )
             .await?;
         let auth_url = oauth.get_authorization_url().await?;
-        let (code, state) = headless_authorize(&auth_url).await?;
-        oauth.handle_callback(&code, &state).await?;
+        let callback = headless_authorize(&auth_url).await?;
+        oauth
+            .handle_callback_with_issuer(
+                &callback.code,
+                &callback.csrf_token,
+                callback.issuer.as_deref(),
+            )
+            .await?;
 
         let am = oauth.into_authorization_manager().unwrap();
         let auth_client = AuthClient::new(reqwest::Client::default(), am);
@@ -696,8 +706,8 @@ async fn run_cross_app_access_client(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/// Fetch an authorization URL headlessly, returning (code, state).
-async fn headless_authorize(auth_url: &str) -> anyhow::Result<(String, String)> {
+/// Fetch an authorization URL headlessly, returning the callback parameters.
+async fn headless_authorize(auth_url: &str) -> anyhow::Result<AuthorizationCallback> {
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
@@ -707,18 +717,7 @@ async fn headless_authorize(auth_url: &str) -> anyhow::Result<(String, String)> 
         .get("location")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| anyhow::anyhow!("No Location header in auth redirect"))?;
-    let redirect_url = url::Url::parse(location)?;
-    let code = redirect_url
-        .query_pairs()
-        .find(|(k, _)| k == "code")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No code in redirect URL"))?;
-    let state = redirect_url
-        .query_pairs()
-        .find(|(k, _)| k == "state")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No state in redirect URL"))?;
-    Ok((code, state))
+    AuthorizationCallback::from_redirect_url(location).map_err(Into::into)
 }
 
 /// Build a `CallToolRequestParams` for a tool, optionally with arguments.
