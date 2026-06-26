@@ -203,13 +203,12 @@ macro_rules! server_handler_methods {
             request: InitializeRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
-            let negotiated = negotiate_protocol_version(
-                &request.protocol_version,
-                ProtocolVersion::LATEST,
-            );
-            context.peer.set_peer_info(request);
+            context.peer.set_peer_info(request.clone());
             let mut info = self.get_info();
-            info.protocol_version = negotiated;
+            info.protocol_version = negotiate_protocol_version(
+                &request.protocol_version,
+                info.protocol_version,
+            );
             std::future::ready(Ok(info))
         }
         fn complete(
