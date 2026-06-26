@@ -18,6 +18,7 @@ use rmcp::{
 /// Server with tools having different task support modes.
 #[derive(Debug, Clone)]
 pub struct TaskSupportTestServer {
+    #[expect(dead_code, reason = "tool_handler macro accesses this router field")]
     tool_router: ToolRouter<Self>,
 }
 

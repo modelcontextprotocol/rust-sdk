@@ -309,6 +309,8 @@ impl StreamableHttpClientTransport<reqwest::Client> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::parse_json_rpc_error;
     use crate::{
         model::JsonRpcMessage,
@@ -346,25 +348,15 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn parse_json_rpc_error_rejects_non_error_request() {
-        // A valid JSON-RPC request (method + id) must not be accepted as an error.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    #[rstest]
+    #[case::non_error_request(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#)]
+    #[case::notification(
+        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#
+    )]
+    #[case::plain_text("not json at all")]
+    #[case::empty("")]
+    #[case::truncated_json(r#"{"broken":"#)]
+    fn parse_json_rpc_error_rejects_non_error_bodies(#[case] body: &str) {
         assert!(parse_json_rpc_error(body).is_none());
-    }
-
-    #[test]
-    fn parse_json_rpc_error_rejects_notification() {
-        // A notification (method, no id) must not be accepted as an error.
-        let body =
-            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#;
-        assert!(parse_json_rpc_error(body).is_none());
-    }
-
-    #[test]
-    fn parse_json_rpc_error_rejects_malformed_json() {
-        assert!(parse_json_rpc_error("not json at all").is_none());
-        assert!(parse_json_rpc_error("").is_none());
-        assert!(parse_json_rpc_error(r#"{"broken":"#).is_none());
     }
 }

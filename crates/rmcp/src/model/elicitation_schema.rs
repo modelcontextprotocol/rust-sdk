@@ -1701,49 +1701,70 @@ impl ElicitationSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
 
-    #[test]
-    fn test_string_schema_serialization() {
-        let schema = StringSchema::email().description("Email address");
-        let json = serde_json::to_value(&schema).unwrap();
-
-        assert_eq!(json["type"], "string");
-        assert_eq!(json["format"], "email");
-        assert_eq!(json["description"], "Email address");
+    fn string_schema_json() -> serde_json::Value {
+        serde_json::to_value(StringSchema::email().description("Email address")).unwrap()
     }
 
-    #[test]
-    fn test_number_schema_serialization() {
-        let schema = NumberSchema::new()
-            .range(0.0, 100.0)
-            .description("Percentage");
-        let json = serde_json::to_value(&schema).unwrap();
-
-        assert_eq!(json["type"], "number");
-        assert_eq!(json["minimum"], 0.0);
-        assert_eq!(json["maximum"], 100.0);
+    fn number_schema_json() -> serde_json::Value {
+        serde_json::to_value(
+            NumberSchema::new()
+                .range(0.0, 100.0)
+                .description("Percentage"),
+        )
+        .unwrap()
     }
 
-    #[test]
-    fn test_integer_schema_serialization() {
-        let schema = IntegerSchema::new().range(0, 150);
-        let json = serde_json::to_value(&schema).unwrap();
-
-        assert_eq!(json["type"], "integer");
-        assert_eq!(json["minimum"], 0);
-        assert_eq!(json["maximum"], 150);
+    fn integer_schema_json() -> serde_json::Value {
+        serde_json::to_value(IntegerSchema::new().range(0, 150)).unwrap()
     }
 
-    #[test]
-    fn test_boolean_schema_serialization() {
-        let schema = BooleanSchema::new().with_default(true);
-        let json = serde_json::to_value(&schema).unwrap();
+    fn boolean_schema_json() -> serde_json::Value {
+        serde_json::to_value(BooleanSchema::new().with_default(true)).unwrap()
+    }
 
-        assert_eq!(json["type"], "boolean");
-        assert_eq!(json["default"], true);
+    #[rstest]
+    #[case::string_schema(
+        string_schema_json,
+        json!({
+            "type": "string",
+            "format": "email",
+            "description": "Email address",
+        })
+    )]
+    #[case::number_schema(
+        number_schema_json,
+        json!({
+            "type": "number",
+            "description": "Percentage",
+            "minimum": 0.0,
+            "maximum": 100.0,
+        })
+    )]
+    #[case::integer_schema(
+        integer_schema_json,
+        json!({
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150,
+        })
+    )]
+    #[case::boolean_schema(
+        boolean_schema_json,
+        json!({
+            "type": "boolean",
+            "default": true,
+        })
+    )]
+    fn primitive_schema_serializes_to_expected_json(
+        #[case] schema_json: fn() -> serde_json::Value,
+        #[case] expected: serde_json::Value,
+    ) {
+        assert_eq!(schema_json(), expected);
     }
 
     #[test]

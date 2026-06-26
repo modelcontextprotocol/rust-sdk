@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 
 /// Parameters for weather tool.
 #[derive(Serialize, Deserialize, JsonSchema)]
-pub struct GetWeatherRequest {
+struct GetWeatherRequest {
     /// City of interest.
-    pub city: String,
+    city: String,
     /// Date of interest.
-    pub date: String,
+    date: String,
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -162,21 +162,21 @@ impl GetWeatherRequest {}
 
 /// Struct defined for testing optional field schema generation.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct OptionalFieldTestSchema {
+struct OptionalFieldTestSchema {
     /// Field description.
     #[schemars(description = "An optional description field")]
-    pub description: Option<String>,
+    description: Option<String>,
 }
 
 /// Struct defined for testing optional i64 field schema generation and null handling.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct OptionalI64TestSchema {
+struct OptionalI64TestSchema {
     /// Optional count field.
     #[schemars(description = "An optional i64 field")]
-    pub count: Option<i64>,
+    count: Option<i64>,
 
     /// Added to ensure non-empty object schema.
-    pub mandatory_field: String,
+    mandatory_field: String,
 }
 
 /// Dummy struct to host the test tool method.
@@ -370,7 +370,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
 
 /// Minimal server: no tool_router field, no new(), no get_info().
 #[derive(Debug, Clone)]
-pub struct MinimalServer;
+struct MinimalServer;
 
 #[tool_router]
 impl MinimalServer {
@@ -452,7 +452,7 @@ async fn test_minimal_server_tool_call() -> anyhow::Result<()> {
 /// Same minimal pattern as [`MinimalServer`], but `#[tool_handler]` is omitted using
 /// `#[tool_router(server_handler)]` (emits `#[tool_handler]` for a second macro pass).
 #[derive(Debug, Clone)]
-pub struct ElidedToolHandlerServer;
+struct ElidedToolHandlerServer;
 
 #[tool_router(server_handler)]
 impl ElidedToolHandlerServer {
@@ -509,7 +509,7 @@ async fn test_tool_router_server_handler_flag_end_to_end_tool_call() -> anyhow::
 
 /// Server with custom name/version/instructions via tool_handler attributes.
 #[derive(Debug, Clone)]
-pub struct CustomInfoServer;
+struct CustomInfoServer;
 
 #[tool_router]
 impl CustomInfoServer {
@@ -539,7 +539,7 @@ fn test_custom_info_server() {
 
 /// Server that provides its own get_info() — macro should not override it.
 #[derive(Debug, Clone)]
-pub struct ManualInfoServer;
+struct ManualInfoServer;
 
 #[tool_router]
 impl ManualInfoServer {

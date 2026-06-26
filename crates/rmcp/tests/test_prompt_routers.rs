@@ -9,21 +9,21 @@ use rmcp::{
 };
 
 #[derive(Debug, Default)]
-pub struct TestHandler<T: 'static = ()> {
-    pub _marker: std::marker::PhantomData<fn(*const T)>,
+struct TestHandler<T: 'static = ()> {
+    _marker: std::marker::PhantomData<fn(*const T)>,
 }
 
 impl<T: 'static> ServerHandler for TestHandler<T> {}
 
 #[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct Request {
-    pub fields: HashMap<String, String>,
+struct Request {
+    fields: HashMap<String, String>,
 }
 
 #[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct Sum {
-    pub a: i32,
-    pub b: i32,
+struct Sum {
+    a: i32,
+    b: i32,
 }
 
 #[rmcp::prompt_router(router = "test_router")]

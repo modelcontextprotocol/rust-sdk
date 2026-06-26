@@ -2975,6 +2975,7 @@ mod tests {
     };
 
     use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier};
+    use rstest::rstest;
     use url::Url;
 
     use super::{
@@ -3348,44 +3349,35 @@ mod tests {
 
     // -- header value parsing --
 
-    #[test]
-    fn parse_auth_param_value_handles_quoted_string() {
-        let fragment = r#""example", realm="foo""#;
-        let parsed = AuthorizationManager::parse_next_header_value(fragment).unwrap();
-        assert_eq!(parsed.0, "example");
-        assert_eq!(parsed.1, 9);
-    }
+    #[rstest]
+    #[case::quoted_string(r#""example", realm="foo""#, "example", r#""example""#)]
+    #[case::escaped_quotes_and_whitespace(
+        r#"   "a\"b\\c" ,next=value"#,
+        r#"a"b\c"#,
+        r#"   "a\"b\\c""#
+    )]
+    #[case::token_values("  token,next", "token", "  token")]
+    #[case::semicolon_separated_tokens(
+        r#"  https://example.com/meta; error="invalid_token""#,
+        "https://example.com/meta",
+        "  https://example.com/meta"
+    )]
+    #[case::semicolon_after_quoted_value(
+        r#"  "https://example.com/meta"; error="invalid_token""#,
+        "https://example.com/meta",
+        r#"  "https://example.com/meta""#
+    )]
+    fn parse_auth_param_value_handles_supported_values(
+        #[case] fragment: &str,
+        #[case] expected_value: &str,
+        #[case] expected_consumed_prefix: &str,
+    ) {
+        let (value, consumed) = AuthorizationManager::parse_next_header_value(fragment).unwrap();
 
-    #[test]
-    fn parse_auth_param_value_handles_escaped_quotes_and_whitespace() {
-        let fragment = r#"   "a\"b\\c" ,next=value"#;
-        let parsed = AuthorizationManager::parse_next_header_value(fragment).unwrap();
-        assert_eq!(parsed.0, r#"a"b\c"#);
-        assert_eq!(parsed.1, 12);
-    }
-
-    #[test]
-    fn parse_auth_param_value_handles_token_values() {
-        let fragment = "  token,next";
-        let parsed = AuthorizationManager::parse_next_header_value(fragment).unwrap();
-        assert_eq!(parsed.0, "token");
-        assert_eq!(parsed.1, 7);
-    }
-
-    #[test]
-    fn parse_auth_param_value_handles_semicolon_separated_tokens() {
-        let fragment = r#"  https://example.com/meta; error="invalid_token""#;
-        let parsed = AuthorizationManager::parse_next_header_value(fragment).unwrap();
-        assert_eq!(parsed.0, "https://example.com/meta");
-        assert_eq!(&fragment[..parsed.1], "  https://example.com/meta");
-    }
-
-    #[test]
-    fn parse_auth_param_value_handles_semicolon_after_quoted_value() {
-        let fragment = r#"  "https://example.com/meta"; error="invalid_token""#;
-        let parsed = AuthorizationManager::parse_next_header_value(fragment).unwrap();
-        assert_eq!(parsed.0, "https://example.com/meta");
-        assert_eq!(&fragment[..parsed.1], r#"  "https://example.com/meta""#);
+        assert_eq!(
+            (value.as_str(), &fragment[..consumed]),
+            (expected_value, expected_consumed_prefix)
+        );
     }
 
     #[test]
@@ -4010,104 +4002,113 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn validate_authorization_response_issuer_accepts_match_and_missing_issuer() {
+    #[rstest]
+    #[case::matching_issuer(
+        Some("https://auth.example.com"),
+        false,
+        Some("https://auth.example.com")
+    )]
+    #[case::missing_issuer_when_not_required(Some("https://auth.example.com"), false, None)]
+    fn validate_authorization_response_issuer_accepts_valid_cases(
+        #[case] expected_issuer: Option<&str>,
+        #[case] require_issuer: bool,
+        #[case] received_issuer: Option<&str>,
+    ) {
         let pkce = PkceCodeVerifier::new("verifier".to_string());
         let csrf = CsrfToken::new("csrf".to_string());
         let state = StoredAuthorizationState::new_with_expected_issuer(
             &pkce,
             &csrf,
-            Some("https://auth.example.com".to_string()),
-            false,
+            expected_issuer.map(str::to_owned),
+            require_issuer,
         );
 
         assert!(
-            AuthorizationManager::validate_authorization_response_issuer(
-                &state,
-                Some("https://auth.example.com")
-            )
-            .is_ok()
-        );
-        assert!(AuthorizationManager::validate_authorization_response_issuer(&state, None).is_ok());
-    }
-
-    #[test]
-    fn validate_authorization_response_issuer_requires_issuer_when_advertised() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new_with_expected_issuer(
-            &pkce,
-            &csrf,
-            Some("https://auth.example.com".to_string()),
-            true,
-        );
-
-        let error =
-            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
-
-        assert!(matches!(
-            error,
-            AuthError::AuthorizationServerMissingIssuer { expected_issuer }
-                if expected_issuer == "https://auth.example.com"
-        ));
-    }
-
-    #[test]
-    fn validate_authorization_response_issuer_rejects_present_issuer_without_expected_issuer() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, false);
-
-        let error = AuthorizationManager::validate_authorization_response_issuer(
-            &state,
-            Some("https://auth.example.com"),
-        )
-        .unwrap_err();
-
-        assert!(
-            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+            AuthorizationManager::validate_authorization_response_issuer(&state, received_issuer)
+                .is_ok()
         );
     }
 
-    #[test]
-    fn validate_authorization_response_issuer_rejects_required_issuer_without_expected_issuer() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new_with_expected_issuer(&pkce, &csrf, None, true);
-
-        let error =
-            AuthorizationManager::validate_authorization_response_issuer(&state, None).unwrap_err();
-
-        assert!(
-            matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
-        );
+    #[derive(Clone, Copy, Debug)]
+    enum ExpectedIssuerError {
+        Missing {
+            expected_issuer: &'static str,
+        },
+        NotRecorded,
+        Mismatch {
+            expected_issuer: &'static str,
+            received_issuer: &'static str,
+        },
     }
 
-    #[test]
-    fn validate_authorization_response_issuer_rejects_mismatch() {
-        let pkce = PkceCodeVerifier::new("verifier".to_string());
-        let csrf = CsrfToken::new("csrf".to_string());
-        let state = StoredAuthorizationState::new_with_expected_issuer(
-            &pkce,
-            &csrf,
-            Some("https://auth.example.com".to_string()),
-            false,
-        );
-
-        let error = AuthorizationManager::validate_authorization_response_issuer(
-            &state,
-            Some("https://evil.example.com"),
-        )
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            AuthError::AuthorizationServerMismatch {
+    fn assert_expected_issuer_error(error: AuthError, expected: ExpectedIssuerError) {
+        match expected {
+            ExpectedIssuerError::Missing { expected_issuer } => assert!(matches!(
+                error,
+                AuthError::AuthorizationServerMissingIssuer { expected_issuer: actual }
+                    if actual == expected_issuer
+            )),
+            ExpectedIssuerError::NotRecorded => assert!(
+                matches!(error, AuthError::AuthorizationFailed(message) if message.contains("expected issuer was not recorded"))
+            ),
+            ExpectedIssuerError::Mismatch {
                 expected_issuer,
-                received_issuer
-            } if expected_issuer == "https://auth.example.com"
-                && received_issuer == "https://evil.example.com"
-        ));
+                received_issuer,
+            } => assert!(matches!(
+                error,
+                AuthError::AuthorizationServerMismatch {
+                    expected_issuer: actual_expected,
+                    received_issuer: actual_received
+                } if actual_expected == expected_issuer && actual_received == received_issuer
+            )),
+        }
+    }
+
+    #[rstest]
+    #[case::requires_advertised_issuer(
+        Some("https://auth.example.com"),
+        true,
+        None,
+        ExpectedIssuerError::Missing {
+            expected_issuer: "https://auth.example.com",
+        }
+    )]
+    #[case::present_issuer_without_expected(
+        None,
+        false,
+        Some("https://auth.example.com"),
+        ExpectedIssuerError::NotRecorded
+    )]
+    #[case::required_issuer_without_expected(None, true, None, ExpectedIssuerError::NotRecorded)]
+    #[case::mismatched_issuer(
+        Some("https://auth.example.com"),
+        false,
+        Some("https://evil.example.com"),
+        ExpectedIssuerError::Mismatch {
+            expected_issuer: "https://auth.example.com",
+            received_issuer: "https://evil.example.com",
+        }
+    )]
+    fn validate_authorization_response_issuer_rejects_invalid_cases(
+        #[case] expected_issuer: Option<&str>,
+        #[case] require_issuer: bool,
+        #[case] received_issuer: Option<&str>,
+        #[case] expected_error: ExpectedIssuerError,
+    ) {
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            expected_issuer.map(str::to_owned),
+            require_issuer,
+        );
+
+        let error =
+            AuthorizationManager::validate_authorization_response_issuer(&state, received_issuer)
+                .unwrap_err();
+
+        assert_expected_issuer_error(error, expected_error);
     }
 
     #[tokio::test]
@@ -4642,62 +4643,40 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn validate_client_credentials_metadata_accepts_supported_method() {
+    fn client_secret_credentials_config() -> super::ClientCredentialsConfig {
+        super::ClientCredentialsConfig::ClientSecret {
+            client_id: "id".to_string(),
+            client_secret: "secret".to_string(),
+            scopes: vec![],
+            resource: None,
+        }
+    }
+
+    fn metadata_with_auth_methods(methods: serde_json::Value) -> AuthorizationMetadata {
         let mut additional_fields = HashMap::new();
-        additional_fields.insert(
-            "token_endpoint_auth_methods_supported".to_string(),
-            serde_json::json!(["client_secret_post", "client_secret_basic"]),
-        );
-        let meta = AuthorizationMetadata {
+        additional_fields.insert("token_endpoint_auth_methods_supported".to_string(), methods);
+        AuthorizationMetadata {
             authorization_endpoint: "http://localhost/authorize".to_string(),
             token_endpoint: "http://localhost/token".to_string(),
             additional_fields,
             ..Default::default()
-        };
-        let mgr = manager_with_metadata(Some(meta)).await;
-        let config = super::ClientCredentialsConfig::ClientSecret {
-            client_id: "id".to_string(),
-            client_secret: "secret".to_string(),
-            scopes: vec![],
-            resource: None,
-        };
-        mgr.validate_client_credentials_metadata(&config).unwrap();
+        }
     }
 
+    #[rstest]
+    #[case::supported_methods(Some(serde_json::json!([
+        "client_secret_post",
+        "client_secret_basic"
+    ])))]
+    #[case::field_absent(None)]
+    #[case::client_secret_basic_only(Some(serde_json::json!(["client_secret_basic"])))]
     #[tokio::test]
-    async fn validate_client_credentials_metadata_permits_when_field_absent() {
-        let mgr = manager_with_metadata(None).await;
-        let config = super::ClientCredentialsConfig::ClientSecret {
-            client_id: "id".to_string(),
-            client_secret: "secret".to_string(),
-            scopes: vec![],
-            resource: None,
-        };
-        mgr.validate_client_credentials_metadata(&config).unwrap();
-    }
+    async fn validate_client_credentials_metadata_accepts_supported_configurations(
+        #[case] auth_methods: Option<serde_json::Value>,
+    ) {
+        let mgr = manager_with_metadata(auth_methods.map(metadata_with_auth_methods)).await;
+        let config = client_secret_credentials_config();
 
-    #[tokio::test]
-    async fn validate_client_credentials_metadata_accepts_client_secret_basic_only() {
-        let mut additional_fields = HashMap::new();
-        additional_fields.insert(
-            "token_endpoint_auth_methods_supported".to_string(),
-            serde_json::json!(["client_secret_basic"]),
-        );
-        let meta = AuthorizationMetadata {
-            authorization_endpoint: "http://localhost/authorize".to_string(),
-            token_endpoint: "http://localhost/token".to_string(),
-            additional_fields,
-            ..Default::default()
-        };
-        let mgr = manager_with_metadata(Some(meta)).await;
-        let config = super::ClientCredentialsConfig::ClientSecret {
-            client_id: "id".to_string(),
-            client_secret: "secret".to_string(),
-            scopes: vec![],
-            resource: None,
-        };
-        // A server advertising only client_secret_basic must be accepted.
         mgr.validate_client_credentials_metadata(&config).unwrap();
     }
 

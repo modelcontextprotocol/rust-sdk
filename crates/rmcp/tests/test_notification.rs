@@ -12,7 +12,7 @@ use serde_json::json;
 use tokio::sync::{Mutex, Notify};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-pub struct Server {}
+struct Server {}
 
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
