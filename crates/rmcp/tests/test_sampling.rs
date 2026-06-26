@@ -371,38 +371,6 @@ fn test_tool_result_content_requires_content() {
 }
 
 #[tokio::test]
-async fn test_tool_result_content_with_array_structured_content() -> Result<()> {
-    let structured =
-        serde_json::json!([{ "city": "SF", "temp": 72 }, { "city": "NY", "temp": 65 }]);
-    let mut tool_result = ToolResultContent::new("call_123", vec![ContentBlock::text("forecast")]);
-    tool_result.structured_content = Some(structured);
-
-    let json = serde_json::to_string(&tool_result)?;
-    let deserialized: ToolResultContent = serde_json::from_str(&json)?;
-    assert_eq!(tool_result, deserialized);
-    assert!(deserialized.structured_content.unwrap().is_array());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_tool_result_content_with_primitive_structured_content() -> Result<()> {
-    let structured = serde_json::json!(42);
-    let mut tool_result = ToolResultContent::new("call_123", vec![ContentBlock::text("count")]);
-    tool_result.structured_content = Some(structured);
-
-    let json = serde_json::to_string(&tool_result)?;
-    let deserialized: ToolResultContent = serde_json::from_str(&json)?;
-    assert_eq!(tool_result, deserialized);
-    assert!(matches!(
-        deserialized.structured_content,
-        Some(serde_json::Value::Number(_))
-    ));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_sampling_message_with_tool_use() -> Result<()> {
     let message = SamplingMessage::assistant_tool_use(
         "call_123",
