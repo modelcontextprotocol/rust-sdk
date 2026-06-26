@@ -283,6 +283,16 @@ required-features = ["server", "client", "transport-streamable-http-server", "re
 path = "tests/test_streamable_http_protocol_version.rs"
 
 [[test]]
+name = "test_stateless_protocol_version"
+required-features = ["server", "transport-streamable-http-server", "reqwest"]
+path = "tests/test_stateless_protocol_version.rs"
+
+[[test]]
+name = "test_protocol_version_negotiation"
+required-features = ["server", "client"]
+path = "tests/test_protocol_version_negotiation.rs"
+
+[[test]]
 name = "test_streamable_http_4xx_error_body"
 required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]
 path = "tests/test_streamable_http_4xx_error_body.rs"
