@@ -1124,44 +1124,40 @@ where
                     }
                 }
             } else {
+                // Capture init params for external store persistence before
+                // extensions are injected (which would require Clone).
+                let stored_init_params = match &mut message {
+                    ClientJsonRpcMessage::Request(req) => {
+                        let ClientRequest::InitializeRequest(init_req) = &req.request else {
+                            return Err(unexpected_message_response("initialize request"));
+                        };
+                        // Reject mismatched MCP-Protocol-Version header before binding the session to anything.
+                        validate_header_matches_init_body(
+                            &part.headers,
+                            init_req.params.protocol_version.as_str(),
+                            Some(req.id.clone()),
+                        )?;
+                        let stored_init_params = self
+                            .config
+                            .session_store
+                            .as_ref()
+                            .map(|_| init_req.params.clone());
+                        // inject request part to extensions
+                        req.request.extensions_mut().insert(part);
+                        stored_init_params
+                    }
+                    _ => {
+                        return Err(unexpected_message_response("initialize request"));
+                    }
+                };
+                let service = self
+                    .get_service()
+                    .map_err(internal_error_response("get service"))?;
                 let (session_id, transport) = self
                     .session_manager
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
-                // Capture init params for external store persistence before
-                // extensions are injected (which would require Clone).
-                let stored_init_params = if self.config.session_store.is_some() {
-                    if let ClientJsonRpcMessage::Request(req) = &message {
-                        if let ClientRequest::InitializeRequest(init_req) = &req.request {
-                            Some(init_req.params.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let ClientJsonRpcMessage::Request(req) = &mut message {
-                    let ClientRequest::InitializeRequest(init_req) = &req.request else {
-                        return Err(unexpected_message_response("initialize request"));
-                    };
-                    // Reject mismatched MCP-Protocol-Version header before binding the session to anything.
-                    validate_header_matches_init_body(
-                        &part.headers,
-                        init_req.params.protocol_version.as_str(),
-                        Some(req.id.clone()),
-                    )?;
-                    // inject request part to extensions
-                    req.request.extensions_mut().insert(part);
-                } else {
-                    return Err(unexpected_message_response("initialize request"));
-                }
-                let service = self
-                    .get_service()
-                    .map_err(internal_error_response("get service"))?;
                 // spawn a task to serve the session
                 Self::spawn_session_worker(
                     self.session_manager.clone(),
