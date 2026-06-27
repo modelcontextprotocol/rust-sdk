@@ -915,7 +915,7 @@ impl AuthorizationManager {
         if Self::is_same_origin_resource_metadata_url(base_url, &url) {
             Some(url)
         } else {
-            debug!(
+            warn!(
                 "rejecting resource metadata URL `{url}` because it is not same-origin with `{base_url}`"
             );
             None
@@ -1873,7 +1873,7 @@ impl AuthorizationManager {
             };
 
             if !Self::is_allowed_authorization_server_metadata_url(&candidate_url) {
-                debug!("rejecting authorization server metadata URL `{candidate_url}`");
+                warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
 
