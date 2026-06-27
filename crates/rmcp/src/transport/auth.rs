@@ -542,6 +542,7 @@ pub struct AuthorizationMetadata {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ResourceServerMetadata {
+    resource: Option<String>,
     authorization_server: Option<String>,
     authorization_servers: Option<Vec<String>>,
     scopes_supported: Option<Vec<String>>,
@@ -1839,6 +1840,8 @@ impl AuthorizationManager {
             return Ok(None);
         };
 
+        self.validate_resource_metadata_resource(&resource_metadata)?;
+
         // store scopes_supported from protected resource metadata for select_scopes()
         if let Some(scopes) = resource_metadata.scopes_supported {
             if !scopes.is_empty() {
@@ -1890,6 +1893,39 @@ impl AuthorizationManager {
         }
 
         Ok(None)
+    }
+
+    fn validate_resource_metadata_resource(
+        &self,
+        metadata: &ResourceServerMetadata,
+    ) -> Result<(), AuthError> {
+        let Some(resource) = metadata.resource.as_deref() else {
+            return Err(AuthError::MetadataError(
+                "Protected resource metadata missing required resource field".to_string(),
+            ));
+        };
+
+        if !Self::resource_identifiers_match(self.base_url.as_str(), resource) {
+            return Err(AuthError::MetadataError(format!(
+                "Protected resource metadata resource mismatch: expected '{}', got '{}'",
+                self.base_url, resource
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn resource_identifiers_match(expected: &str, actual: &str) -> bool {
+        expected == actual
+            || (Self::is_root_resource_identifier(expected)
+                && actual == expected.trim_end_matches('/'))
+            || (Self::is_root_resource_identifier(actual)
+                && expected == actual.trim_end_matches('/'))
+    }
+
+    fn is_root_resource_identifier(value: &str) -> bool {
+        Url::parse(value)
+            .is_ok_and(|url| url.path() == "/" && url.query().is_none() && url.fragment().is_none())
     }
 
     async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
@@ -3190,6 +3226,7 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
                     "authorization_servers": ["https://auth.example.com"]
                 }),
             ),
@@ -3315,6 +3352,7 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
                     "authorization_servers": [
                         "http://169.254.169.254/latest/meta-data/",
                         "https://auth.example.com"
@@ -3356,6 +3394,98 @@ mod tests {
                 ]
             )
         );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_discovery_rejects_mismatched_resource() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://real.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.discover_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::MetadataError(ref message) if message.contains("resource mismatch")),
+            "expected resource mismatch metadata error, got: {error:?}"
+        );
+        assert_eq!(client.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn protected_resource_discovery_rejects_missing_resource() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.discover_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::MetadataError(ref message) if message.contains("missing required resource")),
+            "expected missing resource metadata error, got: {error:?}"
+        );
+        assert_eq!(client.requests().len(), 2);
+    }
+
+    #[test]
+    fn resource_identifier_matching_allows_only_root_trailing_slash_difference() {
+        assert!(AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com/",
+            "https://mcp.example.com"
+        ));
+        assert!(AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com",
+            "https://mcp.example.com/"
+        ));
+
+        assert!(!AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com/mcp",
+            "https://mcp.example.com/mcp/"
+        ));
+        assert!(!AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com/mcp",
+            "https://real.example.com/mcp"
+        ));
     }
 
     #[tokio::test]
