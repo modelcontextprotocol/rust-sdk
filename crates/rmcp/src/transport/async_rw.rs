@@ -140,12 +140,12 @@ where
                 Ok(Some(msg)) => return Some(msg),
                 Ok(None) => continue,
                 Err(JsonRpcMessageCodecError::Serde(e)) => {
-                    // Don't respond to unparseable input. The message id is unknown, so a response
+                    // Don't respond to unparsable input. The message id is unknown, so a response
                     // can't be correlated to a request, and replying to invalid data can trigger an
                     // error storm if the peer echoes the response back as more invalid data. This
-                    // matches the other official MCP SDKs, which ignore unparseable messages.
+                    // matches the other official MCP SDKs, which ignore unparsable messages.
                     // See https://github.com/modelcontextprotocol/rust-sdk/issues/938
-                    tracing::debug!("Ignoring unparseable incoming message: {e}");
+                    tracing::debug!("Ignoring unparsable incoming message: {e}");
                 }
                 Err(e) => {
                     tracing::error!("Error reading from stream: {}", e);
@@ -631,7 +631,7 @@ mod test {
             .await
             .unwrap();
 
-        // The unparseable line is skipped and the next valid message is still yielded.
+        // The unparsable line is skipped and the next valid message is still yielded.
         let received = transport
             .receive()
             .await
@@ -641,14 +641,14 @@ mod test {
             "notifications/initialized",
         );
 
-        // No response is sent back for the unparseable message (issue #938). Dropping the
+        // No response is sent back for the unparsable message (issue #938). Dropping the
         // transport closes its write side, so the peer reads to EOF and should see no bytes.
         drop(transport);
         let mut reply_buf = Vec::new();
         client_r.read_to_end(&mut reply_buf).await.unwrap();
         assert!(
             reply_buf.is_empty(),
-            "expected no response to an unparseable message, got: {}",
+            "expected no response to an unparsable message, got: {}",
             String::from_utf8_lossy(&reply_buf),
         );
     }
