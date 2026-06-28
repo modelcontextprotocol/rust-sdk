@@ -13,10 +13,7 @@ use tokio_util::{
 };
 
 use super::{IntoTransport, Transport};
-use crate::{
-    model::ErrorData,
-    service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
-};
+use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 #[non_exhaustive]
 pub enum TransportAdapterAsyncRW {}
@@ -143,16 +140,12 @@ where
                 Ok(Some(msg)) => return Some(msg),
                 Ok(None) => continue,
                 Err(JsonRpcMessageCodecError::Serde(e)) => {
-                    tracing::debug!("Parse error on incoming message: {e}");
-                    let mut write = self.write.lock().await;
-                    let framed = write.as_mut()?;
-                    let response = TxJsonRpcMessage::<Role>::error(
-                        ErrorData::parse_error("Parse error", None),
-                        None,
-                    );
-                    if framed.send(response).await.is_err() {
-                        return None;
-                    }
+                    // Don't respond to unparseable input. The message id is unknown, so a response
+                    // can't be correlated to a request, and replying to invalid data can trigger an
+                    // error storm if the peer echoes the response back as more invalid data. This
+                    // matches the other official MCP SDKs, which ignore unparseable messages.
+                    // See https://github.com/modelcontextprotocol/rust-sdk/issues/938
+                    tracing::debug!("Ignoring unparseable incoming message: {e}");
                 }
                 Err(e) => {
                     tracing::error!("Error reading from stream: {}", e);
@@ -618,8 +611,8 @@ mod test {
 
     #[cfg(feature = "server")]
     #[tokio::test]
-    async fn receive_recovers_from_parse_error() {
-        use tokio::io::AsyncWriteExt;
+    async fn receive_ignores_parse_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         use crate::{RoleServer, transport::Transport};
 
@@ -638,28 +631,25 @@ mod test {
             .await
             .unwrap();
 
+        // The unparseable line is skipped and the next valid message is still yielded.
         let received = transport
             .receive()
             .await
-            .expect("transport should recover and yield the next valid message");
-
-        // Read one line back from the peer side and parse as JSON.
-        let mut reply_buf = Vec::new();
-        let mut peer = tokio::io::BufReader::new(&mut client_r);
-        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
-        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
-
-        // Per MCP 2025-11-25: id is omitted when the server can't read the request id.
-        assert_eq!(
-            reply,
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": "Parse error"},
-            })
-        );
+            .expect("transport should skip the invalid line and yield the next valid message");
         assert_eq!(
             serde_json::to_value(&received).unwrap()["method"],
             "notifications/initialized",
+        );
+
+        // No response is sent back for the unparseable message (issue #938). Dropping the
+        // transport closes its write side, so the peer reads to EOF and should see no bytes.
+        drop(transport);
+        let mut reply_buf = Vec::new();
+        client_r.read_to_end(&mut reply_buf).await.unwrap();
+        assert!(
+            reply_buf.is_empty(),
+            "expected no response to an unparseable message, got: {}",
+            String::from_utf8_lossy(&reply_buf),
         );
     }
 }
