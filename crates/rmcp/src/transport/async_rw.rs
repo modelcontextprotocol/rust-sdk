@@ -607,8 +607,10 @@ mod test {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn receive_recovers_from_parse_error() {
-        use tokio::io::AsyncWriteExt;
-        use tokio::time::{Duration, timeout};
+        use tokio::{
+            io::AsyncWriteExt,
+            time::{Duration, timeout},
+        };
 
         use crate::{RoleServer, transport::Transport};
 
