@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    ClientNotification, ClientRequest, CustomNotification, CustomRequest, Extensions, JsonObject,
-    JsonRpcMessage, NumberOrString, ProgressToken, ServerNotification, ServerRequest, TaskMetadata,
+    ClientCapabilities, ClientNotification, ClientRequest, CustomNotification, CustomRequest,
+    Extensions, Implementation, JsonObject, JsonRpcMessage, LoggingLevel, NumberOrString,
+    ProgressToken, ProtocolVersion, ServerNotification, ServerRequest, TaskMetadata,
 };
 
 pub trait GetMeta {
@@ -199,8 +200,14 @@ variant_extension! {
 #[serde(transparent)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Meta(pub JsonObject);
-const PROGRESS_TOKEN_FIELD: &str = "progressToken";
+
 impl Meta {
+    const PROGRESS_TOKEN_FIELD: &str = "progressToken";
+    const META_KEY_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+    const META_KEY_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
+    const META_KEY_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+    const META_KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
+
     pub fn new() -> Self {
         Self(JsonObject::new())
     }
@@ -218,41 +225,105 @@ impl Meta {
     }
 
     pub fn get_progress_token(&self) -> Option<ProgressToken> {
-        self.0.get(PROGRESS_TOKEN_FIELD).and_then(|v| match v {
-            Value::String(s) => Some(ProgressToken(NumberOrString::String(s.to_string().into()))),
-            Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Some(ProgressToken(NumberOrString::Number(i)))
-                } else if let Some(u) = n.as_u64() {
-                    if u <= i64::MAX as u64 {
-                        Some(ProgressToken(NumberOrString::Number(u as i64)))
+        self.0
+            .get(Self::PROGRESS_TOKEN_FIELD)
+            .and_then(|v| match v {
+                Value::String(s) => {
+                    Some(ProgressToken(NumberOrString::String(s.to_string().into())))
+                }
+                Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        Some(ProgressToken(NumberOrString::Number(i)))
+                    } else if let Some(u) = n.as_u64() {
+                        if u <= i64::MAX as u64 {
+                            Some(ProgressToken(NumberOrString::Number(u as i64)))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
-                } else {
-                    None
                 }
-            }
-            _ => None,
-        })
+                _ => None,
+            })
     }
 
     pub fn set_progress_token(&mut self, token: ProgressToken) {
         match token.0 {
             NumberOrString::String(ref s) => self.0.insert(
-                PROGRESS_TOKEN_FIELD.to_string(),
+                Self::PROGRESS_TOKEN_FIELD.to_string(),
                 Value::String(s.to_string()),
             ),
-            NumberOrString::Number(n) => self
-                .0
-                .insert(PROGRESS_TOKEN_FIELD.to_string(), Value::Number(n.into())),
+            NumberOrString::Number(n) => self.0.insert(
+                Self::PROGRESS_TOKEN_FIELD.to_string(),
+                Value::Number(n.into()),
+            ),
         };
+    }
+
+    /// Get the MCP protocol version carried in `_meta`, if present and valid.
+    pub fn protocol_version(&self) -> Option<ProtocolVersion> {
+        self.decode_value(Self::META_KEY_PROTOCOL_VERSION)
+    }
+
+    /// Set the MCP protocol version carried in `_meta`.
+    pub fn set_protocol_version(&mut self, protocol_version: ProtocolVersion) {
+        self.0.insert(
+            Self::META_KEY_PROTOCOL_VERSION.to_string(),
+            Value::String(protocol_version.to_string()),
+        );
+    }
+
+    /// Get the client implementation identity carried in `_meta`, if present and valid.
+    pub fn client_info(&self) -> Option<Implementation> {
+        self.decode_value(Self::META_KEY_CLIENT_INFO)
+    }
+
+    /// Set the client implementation identity carried in `_meta`.
+    pub fn set_client_info(&mut self, client_info: Implementation) {
+        self.insert_serialized(Self::META_KEY_CLIENT_INFO, client_info);
+    }
+
+    /// Get the client capabilities carried in `_meta`, if present and valid.
+    pub fn client_capabilities(&self) -> Option<ClientCapabilities> {
+        self.decode_value(Self::META_KEY_CLIENT_CAPABILITIES)
+    }
+
+    /// Set the client capabilities carried in `_meta`.
+    pub fn set_client_capabilities(&mut self, client_capabilities: ClientCapabilities) {
+        self.insert_serialized(Self::META_KEY_CLIENT_CAPABILITIES, client_capabilities);
+    }
+
+    /// Get the requested per-request log level carried in `_meta`, if present and valid.
+    pub fn log_level(&self) -> Option<LoggingLevel> {
+        self.decode_value(Self::META_KEY_LOG_LEVEL)
+    }
+
+    /// Set the requested per-request log level carried in `_meta`.
+    pub fn set_log_level(&mut self, log_level: LoggingLevel) {
+        self.insert_serialized(Self::META_KEY_LOG_LEVEL, log_level);
     }
 
     pub fn extend(&mut self, other: Meta) {
         for (k, v) in other.0.into_iter() {
             self.0.insert(k, v);
         }
+    }
+
+    fn decode_value<T>(&self, key: &str) -> Option<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.0.get(key).and_then(|value| T::deserialize(value).ok())
+    }
+
+    fn insert_serialized<T>(&mut self, key: &str, value: T)
+    where
+        T: Serialize,
+    {
+        let value = serde_json::to_value(value)
+            .expect("MCP meta helper value should serialize to valid JSON");
+        self.0.insert(key.to_string(), value);
     }
 }
 
