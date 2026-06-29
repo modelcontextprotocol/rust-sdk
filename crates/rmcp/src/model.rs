@@ -808,6 +808,55 @@ impl CustomRequest {
     }
 }
 
+const_string!(DiscoverRequestMethod = "server/discover");
+
+/// Sent from the client to discover server identity, capabilities, and supported protocol versions.
+pub type DiscoverRequest = Request<DiscoverRequestMethod, EmptyObject>;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DiscoverResult {
+    pub supported_versions: Vec<ProtocolVersion>,
+    pub capabilities: ServerCapabilities,
+    pub server_info: Implementation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+impl DiscoverResult {
+    pub fn new(
+        supported_versions: impl Into<Vec<ProtocolVersion>>,
+        capabilities: ServerCapabilities,
+    ) -> Self {
+        Self {
+            supported_versions: supported_versions.into(),
+            capabilities,
+            server_info: Implementation::from_build_env(),
+            instructions: None,
+            meta: None,
+        }
+    }
+
+    pub fn with_server_info(mut self, server_info: Implementation) -> Self {
+        self.server_info = server_info;
+        self
+    }
+
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
 const_string!(InitializeResultMethod = "initialize");
 /// # Initialization
 /// This request is sent from the client to the server when it first connects, asking it to begin initialization.
@@ -3572,6 +3621,7 @@ macro_rules! ts_union {
 
 ts_union!(
     export type ClientRequest =
+    | DiscoverRequest
     | PingRequest
     | InitializeRequest
     | CompleteRequest
@@ -3595,6 +3645,7 @@ ts_union!(
 impl ClientRequest {
     pub fn method(&self) -> &str {
         match &self {
+            ClientRequest::DiscoverRequest(r) => r.method.as_str(),
             ClientRequest::PingRequest(r) => r.method.as_str(),
             ClientRequest::InitializeRequest(r) => r.method.as_str(),
             ClientRequest::CompleteRequest(r) => r.method.as_str(),
@@ -3669,6 +3720,7 @@ ts_union!(
 
 ts_union!(
     export type ServerResult =
+    | DiscoverResult
     | InitializeResult
     | CompleteResult
     | GetPromptResult

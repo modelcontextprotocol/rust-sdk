@@ -619,6 +619,41 @@
     "CustomResult": {
       "description": "A catch-all response either side can use for custom requests."
     },
+    "DiscoverResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "capabilities": {
+          "$ref": "#/definitions/ServerCapabilities"
+        },
+        "instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serverInfo": {
+          "$ref": "#/definitions/Implementation"
+        },
+        "supportedVersions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProtocolVersion"
+          }
+        }
+      },
+      "required": [
+        "supportedVersions",
+        "capabilities",
+        "serverInfo"
+      ]
+    },
     "ElicitRequestParams": {
       "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n1. Form-based elicitation request\n```rust\nuse rmcp::model::*;\n\nlet params = ElicitRequestParams::FormElicitationParams {\n   meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```\n2. URL-based elicitation request\n```rust\nuse rmcp::model::*;\nlet params = ElicitRequestParams::UrlElicitationParams {\n    meta: None,\n    message: \"Please provide your feedback at the following URL\".to_string(),\n    url: \"https://example.com/feedback\".to_string(),\n    elicitation_id: \"unique-id-123\".to_string(),\n};\n```",
       "anyOf": [
@@ -2696,6 +2731,9 @@
     },
     "ServerResult": {
       "anyOf": [
+        {
+          "$ref": "#/definitions/DiscoverResult"
+        },
         {
           "$ref": "#/definitions/InitializeResult"
         },

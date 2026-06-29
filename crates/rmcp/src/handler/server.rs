@@ -27,6 +27,9 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         // `context` is moved into the dispatch below, so read the negotiated version first.
         let protocol_version = context.protocol_version();
         let result = match request {
+            ClientRequest::DiscoverRequest(_request) => {
+                Err(McpError::method_not_found::<DiscoverRequestMethod>())
+            }
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
                 .await
