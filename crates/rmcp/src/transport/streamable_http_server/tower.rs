@@ -194,7 +194,7 @@ fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), Box
                 )
                 .expect("valid response")
         })?;
-        let is_known = ProtocolVersion::KNOWN_VERSIONS
+        let is_known = ProtocolVersion::SUPPORTED_PROTOCOL_VERSIONS
             .iter()
             .any(|v| v.as_str() == version_str);
         if !is_known {
@@ -1359,8 +1359,9 @@ where
             headers
                 .get(HEADER_MCP_PROTOCOL_VERSION)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
-                .unwrap_or(ProtocolVersion::V_2025_03_26)
+                .map(ProtocolVersion::from_wire_str)
+                // Spec backwards-compat: assume 2025-03-26 when the header is absent.
+                .unwrap_or(ProtocolVersion::DEFAULT_NEGOTIATED_PROTOCOL_VERSION)
         };
         Some(InitializeRequestParams {
             meta: None,

@@ -861,10 +861,23 @@ async fn test_server_rejects_unsupported_protocol_version() {
     );
 }
 
-/// Unit test: ProtocolVersion::as_str and KNOWN_VERSIONS
+/// Unit test: ProtocolVersion::as_str and version constants
 #[test]
 fn test_protocol_version_utilities() {
     use rmcp::model::ProtocolVersion;
+
+    assert_eq!(
+        ProtocolVersion::LATEST,
+        ProtocolVersion::LATEST_PROTOCOL_VERSION
+    );
+    assert_eq!(
+        ProtocolVersion::DEFAULT_NEGOTIATED_PROTOCOL_VERSION,
+        ProtocolVersion::V_2025_03_26
+    );
+    assert_eq!(
+        ProtocolVersion::KNOWN_VERSIONS,
+        ProtocolVersion::SUPPORTED_PROTOCOL_VERSIONS
+    );
 
     assert_eq!(ProtocolVersion::V_2026_07_28.as_str(), "2026-07-28");
     assert_eq!(ProtocolVersion::V_2025_11_25.as_str(), "2025-11-25");

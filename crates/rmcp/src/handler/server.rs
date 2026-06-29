@@ -7,7 +7,6 @@ use crate::{
     model::{TaskSupport, *},
     service::{
         MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service, ServiceRole,
-        negotiate_protocol_version,
     },
 };
 
@@ -137,7 +136,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
         // compare lexically the same as chronologically.
         let use_invalid_params =
-            protocol_version.is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+            protocol_version.is_some_and(|v| v >= ProtocolVersion::V_2026_07_28);
         result.map_err(|mut error| {
             if use_invalid_params && error.code == ErrorCode::RESOURCE_NOT_FOUND {
                 error.code = ErrorCode::INVALID_PARAMS;
@@ -205,7 +204,7 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
             context.peer.set_peer_info(request.clone());
             let mut info = self.get_info();
-            info.protocol_version = negotiate_protocol_version(
+            info.protocol_version = ProtocolVersion::negotiate(
                 &request.protocol_version,
                 info.protocol_version,
             );

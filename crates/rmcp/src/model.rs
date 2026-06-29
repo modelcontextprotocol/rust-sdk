@@ -142,13 +142,17 @@ const_string!(JsonRpcVersion2_0 = "2.0");
 ///
 /// This ensures compatibility between clients and servers by specifying
 /// which version of the Model Context Protocol is being used.
+// Ordering (derived `PartialOrd`) is lexical over the underlying string. MCP
+// versions are ISO `YYYY-MM-DD`, so lexical order matches chronological order,
+// and `a < b` means "`a` is older than `b`". Kept as a non-doc comment so it
+// does not leak into the generated JSON schema.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ProtocolVersion(Cow<'static, str>);
 
 impl Default for ProtocolVersion {
     fn default() -> Self {
-        Self::LATEST
+        Self::LATEST_PROTOCOL_VERSION
     }
 }
 
@@ -164,20 +168,62 @@ impl ProtocolVersion {
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const LATEST: Self = Self::V_2025_11_25;
+    /// Protocol version this SDK uses by default for initialize requests and responses.
+    pub const LATEST_PROTOCOL_VERSION: Self = Self::V_2025_11_25;
+
+    /// Protocol version assumed when a Streamable HTTP request omits the
+    /// `MCP-Protocol-Version` header and no negotiated version is available.
+    pub const DEFAULT_NEGOTIATED_PROTOCOL_VERSION: Self = Self::V_2025_03_26;
+
+    pub const LATEST: Self = Self::LATEST_PROTOCOL_VERSION;
 
     /// All protocol versions known to this SDK.
-    pub const KNOWN_VERSIONS: &[Self] = &[
+    pub const SUPPORTED_PROTOCOL_VERSIONS: &[Self] = &[
         Self::V_2024_11_05,
         Self::V_2025_03_26,
         Self::V_2025_06_18,
         Self::V_2025_11_25,
         Self::V_2026_07_28,
     ];
+    pub const KNOWN_VERSIONS: &[Self] = Self::SUPPORTED_PROTOCOL_VERSIONS;
 
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Parses a wire string into a [`ProtocolVersion`].
+    ///
+    /// Known versions map to their interned `'static` constant so that
+    /// [`SUPPORTED_PROTOCOL_VERSIONS`](Self::SUPPORTED_PROTOCOL_VERSIONS) stays
+    /// the only source of truth for the supported set; any other string is kept
+    /// verbatim for forward compatibility with versions newer than this SDK.
+    pub(crate) fn from_wire_str(s: &str) -> Self {
+        Self::SUPPORTED_PROTOCOL_VERSIONS
+            .iter()
+            .find(|known| known.as_str() == s)
+            .cloned()
+            .unwrap_or_else(|| Self(Cow::Owned(s.to_owned())))
+    }
+
+    /// Negotiates the protocol version to advertise back to the client.
+    ///
+    /// Echoes `client_requested` when it is a version this SDK knows; otherwise
+    /// falls back to `server_fallback` (and logs a warning). `server_fallback`
+    /// is the server's own version, used only as the default for unknown
+    /// requests rather than as a ceiling.
+    #[cfg(feature = "server")]
+    pub(crate) fn negotiate(client_requested: &Self, server_fallback: Self) -> Self {
+        if Self::SUPPORTED_PROTOCOL_VERSIONS.contains(client_requested) {
+            client_requested.clone()
+        } else {
+            tracing::warn!(
+                client_requested = %client_requested,
+                server_fallback = %server_fallback,
+                "client requested unsupported protocol version; falling back to server default"
+            );
+            server_fallback
+        }
     }
 }
 
@@ -196,16 +242,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
         D: serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        #[allow(clippy::single_match)]
-        match s.as_str() {
-            "2024-11-05" => return Ok(ProtocolVersion::V_2024_11_05),
-            "2025-03-26" => return Ok(ProtocolVersion::V_2025_03_26),
-            "2025-06-18" => return Ok(ProtocolVersion::V_2025_06_18),
-            "2025-11-25" => return Ok(ProtocolVersion::V_2025_11_25),
-            "2026-07-28" => return Ok(ProtocolVersion::V_2026_07_28),
-            _ => {}
-        }
-        Ok(ProtocolVersion(Cow::Owned(s)))
+        Ok(ProtocolVersion::from_wire_str(&s))
     }
 }
 
@@ -4091,6 +4128,44 @@ mod tests {
         assert!(v1 < v2);
         assert!(v2 < v3);
         assert!(v3 < v4);
+    }
+
+    #[cfg(feature = "server")]
+    mod negotiate {
+        use super::*;
+
+        #[test]
+        fn echoes_known_client_version() {
+            let negotiated =
+                ProtocolVersion::negotiate(&ProtocolVersion::V_2025_06_18, ProtocolVersion::LATEST);
+            assert_eq!(negotiated, ProtocolVersion::V_2025_06_18);
+        }
+
+        #[test]
+        fn echoes_known_client_version_newer_than_server() {
+            // The client requested a version this SDK knows that is newer than the
+            // server's own (`LATEST`), so negotiation echoes it (up-negotiation):
+            // `server_fallback` is a default for unknown versions, not a ceiling.
+            let negotiated =
+                ProtocolVersion::negotiate(&ProtocolVersion::V_2026_07_28, ProtocolVersion::LATEST);
+            assert_eq!(negotiated, ProtocolVersion::V_2026_07_28);
+        }
+
+        #[test]
+        fn keeps_version_when_client_equals_server() {
+            let negotiated = ProtocolVersion::negotiate(
+                &ProtocolVersion::V_2025_06_18,
+                ProtocolVersion::V_2025_06_18,
+            );
+            assert_eq!(negotiated, ProtocolVersion::V_2025_06_18);
+        }
+
+        #[test]
+        fn falls_back_to_server_when_client_version_unknown() {
+            let unknown = ProtocolVersion(Cow::Borrowed("1999-01-01"));
+            let negotiated = ProtocolVersion::negotiate(&unknown, ProtocolVersion::LATEST);
+            assert_eq!(negotiated, ProtocolVersion::LATEST);
+        }
     }
 
     #[test]

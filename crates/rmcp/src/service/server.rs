@@ -161,23 +161,6 @@ where
     }
 }
 
-/// Echoes the client-requested version if known; otherwise returns `server_fallback`.
-pub(crate) fn negotiate_protocol_version(
-    client_requested: &ProtocolVersion,
-    server_fallback: ProtocolVersion,
-) -> ProtocolVersion {
-    if ProtocolVersion::KNOWN_VERSIONS.contains(client_requested) {
-        client_requested.clone()
-    } else {
-        tracing::warn!(
-            client_requested = %client_requested,
-            server_fallback = %server_fallback,
-            "client requested unsupported protocol version; falling back to server default"
-        );
-        server_fallback
-    }
-}
-
 async fn serve_server_with_ct_inner<S, T>(
     service: S,
     transport: T,
@@ -250,7 +233,7 @@ where
             return Err(ServerInitializeError::InitializeFailed(e));
         }
     };
-    init_response.protocol_version = negotiate_protocol_version(
+    init_response.protocol_version = ProtocolVersion::negotiate(
         &peer_info.params.protocol_version,
         init_response.protocol_version,
     );
