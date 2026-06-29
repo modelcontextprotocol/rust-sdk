@@ -7,6 +7,7 @@ use crate::{
     model::{TaskSupport, *},
     service::{
         MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service, ServiceRole,
+        negotiate_protocol_version,
     },
 };
 
@@ -202,8 +203,13 @@ macro_rules! server_handler_methods {
             request: InitializeRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
-            context.peer.set_peer_info(request);
-            std::future::ready(Ok(self.get_info()))
+            context.peer.set_peer_info(request.clone());
+            let mut info = self.get_info();
+            info.protocol_version = negotiate_protocol_version(
+                &request.protocol_version,
+                info.protocol_version,
+            );
+            std::future::ready(Ok(info))
         }
         fn complete(
             &self,
