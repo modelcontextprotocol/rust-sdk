@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.8.0...rmcp-v2.0.0) - 2026-06-27
+
+### Added
+
+- [**breaking**] relax tool result structuredContent type ([#919](https://github.com/modelcontextprotocol/rust-sdk/pull/919))
+- deprecate roots/sampling/logging types ([#923](https://github.com/modelcontextprotocol/rust-sdk/pull/923))
+- [**breaking**] align model types with MCP 2025-11-25 spec ([#927](https://github.com/modelcontextprotocol/rust-sdk/pull/927))
+
+### Fixed
+
+- prevent OAuth resource spoofing ([#937](https://github.com/modelcontextprotocol/rust-sdk/pull/937))
+- block oauth metadata ssrf ([#935](https://github.com/modelcontextprotocol/rust-sdk/pull/935))
+- prevent streamable HTTP session leak ([#934](https://github.com/modelcontextprotocol/rust-sdk/pull/934))
+- fill missing fully qualified syntax in prompt_handler macros ([#866](https://github.com/modelcontextprotocol/rust-sdk/pull/866))
+- *(rmcp)* add Audio variant to PromptMessageContent ([#865](https://github.com/modelcontextprotocol/rust-sdk/pull/865))
+
+### Other
+
+- consolidate repeated rmcp tests ([#931](https://github.com/modelcontextprotocol/rust-sdk/pull/931))
+- Revert "feat!: relax tool result structuredContent type ([#919](https://github.com/modelcontextprotocol/rust-sdk/pull/919))" ([#932](https://github.com/modelcontextprotocol/rust-sdk/pull/932))
+- align README examples with v2 model API ([#928](https://github.com/modelcontextprotocol/rust-sdk/pull/928))
+
 ## [1.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.7.0...rmcp-v1.8.0) - 2026-06-22
 
 ### Added
