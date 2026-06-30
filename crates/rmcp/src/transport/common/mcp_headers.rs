@@ -252,7 +252,7 @@ pub(crate) fn standard_request_headers(
 /// Validates incoming SEP-2243 headers against the request body.
 ///
 /// Returns `Err(reason)` when a required header is missing or its value does not
-/// match the body; the caller maps this to a JSON-RPC `-32001` error (HTTP 400).
+/// match the body; the caller maps this to a JSON-RPC `-32020` error (HTTP 400).
 #[cfg(feature = "server-side-http")]
 pub(crate) fn validate_request_headers(
     headers: &http::HeaderMap,
