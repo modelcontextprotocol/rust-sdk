@@ -3,6 +3,7 @@
 #![expect(deprecated)]
 use std::{
     borrow::Cow,
+    collections::BTreeMap,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -29,6 +30,15 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 pub use task::*;
 pub use tool::*;
+
+#[deprecated(since = "2.0.0", note = "Renamed to ContentBlock")]
+pub type Content = ContentBlock;
+
+#[deprecated(since = "2.0.0", note = "Renamed to ContentBlock")]
+pub type PromptMessageContent = ContentBlock;
+
+#[deprecated(since = "2.0.0", note = "Renamed to Role")]
+pub type PromptMessageRole = Role;
 
 /// A JSON object type alias for convenient handling of JSON data.
 ///
@@ -867,6 +877,10 @@ impl RequestParamsMeta for InitializeRequestParams {
 #[deprecated(since = "0.13.0", note = "Use InitializeRequestParams instead")]
 pub type InitializeRequestParam = InitializeRequestParams;
 
+const_string!(DiscoverRequestMethod = "server/discover");
+/// Request to discover a server's supported protocol versions and capabilities.
+pub type DiscoverRequest = RequestOptionalParam<DiscoverRequestMethod, EmptyObject>;
+
 /// The server's response to an initialization request.
 ///
 /// Contains the server's protocol version, capabilities, and implementation
@@ -922,6 +936,59 @@ impl InitializeResult {
 
 pub type ServerInfo = InitializeResult;
 pub type ClientInfo = InitializeRequestParams;
+
+/// Result of a `server/discover` request.
+///
+/// This result advertises the protocol versions and capabilities that a server
+/// supports without requiring an initialization handshake.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DiscoverResult {
+    /// The MCP protocol versions this server supports.
+    pub supported_versions: Vec<ProtocolVersion>,
+    /// The capabilities this server provides.
+    pub capabilities: ServerCapabilities,
+    /// Information about the server implementation.
+    pub server_info: Implementation,
+    /// Optional human-readable instructions about using this server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+impl DiscoverResult {
+    /// Create a new `DiscoverResult` with supported versions and capabilities.
+    pub fn new(supported_versions: Vec<ProtocolVersion>, capabilities: ServerCapabilities) -> Self {
+        Self {
+            supported_versions,
+            capabilities,
+            server_info: Implementation::from_build_env(),
+            instructions: None,
+            meta: None,
+        }
+    }
+
+    /// Set the server info on this result.
+    pub fn with_server_info(mut self, server_info: Implementation) -> Self {
+        self.server_info = server_info;
+        self
+    }
+
+    /// Set instructions on this result.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    /// Set the metadata on this result.
+    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
+        self.meta = meta;
+        self
+    }
+}
 
 #[allow(clippy::derivable_impls)]
 impl Default for ServerInfo {
@@ -2920,6 +2987,94 @@ pub type ElicitationCompletionNotification = ElicitationCompleteNotification;
 // TOOL EXECUTION RESULTS
 // =============================================================================
 
+/// Indicates the type of a protocol result.
+///
+/// If `resultType` is absent on the wire, clients should treat the result as
+/// [`ResultType::COMPLETE`] for backward compatibility.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ResultType(Cow<'static, str>);
+
+impl ResultType {
+    pub const COMPLETE: Self = Self(Cow::Borrowed("complete"));
+    pub const INPUT_REQUIRED: Self = Self(Cow::Borrowed("input_required"));
+
+    /// Returns the string representation of this result type.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for ResultType {
+    fn default() -> Self {
+        Self::COMPLETE
+    }
+}
+
+impl std::fmt::Display for ResultType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Serialize for ResultType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResultType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        match s.as_str() {
+            "complete" => Ok(ResultType::COMPLETE),
+            "input_required" => Ok(ResultType::INPUT_REQUIRED),
+            _ => Ok(ResultType(Cow::Owned(s))),
+        }
+    }
+}
+
+/// Server-to-client requests that can be embedded in an MRTR
+/// `InputRequiredResult`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum InputRequest {
+    /// Sampling is deprecated by SEP-2577, but MRTR can still carry legacy
+    /// sampling requests while the protocol retains the feature.
+    CreateMessageRequest(Box<CreateMessageRequest>),
+    ListRootsRequest(ListRootsRequest),
+    ElicitRequest(ElicitRequest),
+}
+
+impl From<CreateMessageRequest> for InputRequest {
+    fn from(value: CreateMessageRequest) -> Self {
+        Self::CreateMessageRequest(Box::new(value))
+    }
+}
+
+impl From<ListRootsRequest> for InputRequest {
+    fn from(value: ListRootsRequest) -> Self {
+        Self::ListRootsRequest(value)
+    }
+}
+
+impl From<ElicitRequest> for InputRequest {
+    fn from(value: ElicitRequest) -> Self {
+        Self::ElicitRequest(value)
+    }
+}
+
+pub type InputRequests = BTreeMap<String, InputRequest>;
+
 /// The result of a tool call operation.
 ///
 /// Contains the content returned by the tool execution and an optional
@@ -2929,6 +3084,9 @@ pub type ElicitationCompletionNotification = ElicitationCompleteNotification;
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct CallToolResult {
+    /// The protocol result type. If absent, clients should treat it as `complete`.
+    #[serde(rename = "resultType", skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<ResultType>,
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
     pub content: Vec<ContentBlock>,
@@ -2956,6 +3114,8 @@ impl<'de> Deserialize<'de> for CallToolResult {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Helper {
+            #[serde(rename = "resultType")]
+            result_type: Option<ResultType>,
             content: Option<Vec<ContentBlock>>,
             structured_content: Option<Value>,
             is_error: Option<bool>,
@@ -2977,6 +3137,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
         }
 
         Ok(CallToolResult {
+            result_type: helper.result_type,
             content: helper.content.unwrap_or_default(),
             structured_content: helper.structured_content,
             is_error: helper.is_error,
@@ -2989,6 +3150,7 @@ impl CallToolResult {
     /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
+            result_type: None,
             content,
             structured_content: None,
             is_error: Some(false),
@@ -3046,6 +3208,7 @@ impl CallToolResult {
     /// ```
     pub fn error(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
+            result_type: None,
             content,
             structured_content: None,
             is_error: Some(true),
@@ -3068,6 +3231,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
+            result_type: None,
             content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
@@ -3094,6 +3258,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
+            result_type: None,
             content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
@@ -3147,79 +3312,6 @@ paginated_result!(
 );
 
 const_string!(CallToolRequestMethod = "tools/call");
-/// Parameters for calling a tool provided by an MCP server.
-///
-/// Contains the tool name and optional arguments needed to execute
-/// the tool operation.
-///
-/// This implements `TaskAugmentedRequestParamsMeta` as tool calls can be
-/// long-running and may benefit from task-based execution.
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct CallToolRequestParams {
-    /// Protocol-level metadata for this request (SEP-1319)
-    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-    /// The name of the tool to call
-    pub name: Cow<'static, str>,
-    /// Arguments to pass to the tool (must match the tool's input schema)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<JsonObject>,
-    /// Task metadata for async task management (SEP-1319)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<TaskMetadata>,
-}
-
-impl CallToolRequestParams {
-    /// Creates a new `CallToolRequestParams` with the given tool name.
-    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            meta: None,
-            name: name.into(),
-            arguments: None,
-            task: None,
-        }
-    }
-
-    /// Sets the arguments for this tool call.
-    pub fn with_arguments(mut self, arguments: JsonObject) -> Self {
-        self.arguments = Some(arguments);
-        self
-    }
-
-    /// Sets the task metadata for this tool call.
-    pub fn with_task(mut self, task: TaskMetadata) -> Self {
-        self.task = Some(task);
-        self
-    }
-}
-
-impl RequestParamsMeta for CallToolRequestParams {
-    fn meta(&self) -> Option<&Meta> {
-        self.meta.as_ref()
-    }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
-        &mut self.meta
-    }
-}
-
-impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
-    fn task(&self) -> Option<&TaskMetadata> {
-        self.task.as_ref()
-    }
-    fn task_mut(&mut self) -> &mut Option<TaskMetadata> {
-        &mut self.task
-    }
-}
-
-/// Deprecated: Use [`CallToolRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CallToolRequestParams instead")]
-pub type CallToolRequestParam = CallToolRequestParams;
-
-/// Request to call a specific tool
-pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>;
 
 /// Result of sampling/createMessage (SEP-1577).
 /// The result of a sampling/createMessage request containing the generated response.
@@ -3280,6 +3372,201 @@ impl CreateMessageResult {
         Ok(())
     }
 }
+
+/// Client-to-server responses to MRTR input requests.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum InputResponse {
+    /// Sampling is deprecated by SEP-2577, but MRTR can still carry legacy
+    /// sampling responses while the protocol retains the feature.
+    CreateMessageResult(Box<CreateMessageResult>),
+    ListRootsResult(ListRootsResult),
+    ElicitResult(ElicitResult),
+}
+
+impl From<CreateMessageResult> for InputResponse {
+    fn from(value: CreateMessageResult) -> Self {
+        Self::CreateMessageResult(Box::new(value))
+    }
+}
+
+impl From<ListRootsResult> for InputResponse {
+    fn from(value: ListRootsResult) -> Self {
+        Self::ListRootsResult(value)
+    }
+}
+
+impl From<ElicitResult> for InputResponse {
+    fn from(value: ElicitResult) -> Self {
+        Self::ElicitResult(value)
+    }
+}
+
+pub type InputResponses = BTreeMap<String, InputResponse>;
+
+/// Result returned when a request needs additional client input before it can
+/// complete.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct InputRequiredResult {
+    #[serde(rename = "resultType")]
+    pub result_type: ResultType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_requests: Option<InputRequests>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+impl<'de> Deserialize<'de> for InputRequiredResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Helper {
+            #[serde(rename = "resultType")]
+            result_type: ResultType,
+            input_requests: Option<InputRequests>,
+            request_state: Option<String>,
+            #[serde(rename = "_meta")]
+            meta: Option<Meta>,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+        if helper.result_type != ResultType::INPUT_REQUIRED {
+            return Err(serde::de::Error::custom(
+                "expected resultType to be input_required",
+            ));
+        }
+
+        Ok(InputRequiredResult {
+            result_type: helper.result_type,
+            input_requests: helper.input_requests,
+            request_state: helper.request_state,
+            meta: helper.meta,
+        })
+    }
+}
+
+impl InputRequiredResult {
+    /// Create a new `InputRequiredResult`.
+    pub fn new(input_requests: Option<InputRequests>, request_state: Option<String>) -> Self {
+        Self {
+            result_type: ResultType::INPUT_REQUIRED,
+            input_requests,
+            request_state,
+            meta: None,
+        }
+    }
+
+    /// Set the metadata on this result.
+    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
+        self.meta = meta;
+        self
+    }
+}
+
+/// Parameters for calling a tool provided by an MCP server.
+///
+/// Contains the tool name and optional arguments needed to execute
+/// the tool operation.
+///
+/// This implements `TaskAugmentedRequestParamsMeta` as tool calls can be
+/// long-running and may benefit from task-based execution.
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct CallToolRequestParams {
+    /// Protocol-level metadata for this request (SEP-1319)
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    /// The name of the tool to call
+    pub name: Cow<'static, str>,
+    /// Arguments to pass to the tool (must match the tool's input schema)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<JsonObject>,
+    /// Responses to input requests from a previous `InputRequiredResult`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_responses: Option<InputResponses>,
+    /// Opaque request state echoed back from a previous `InputRequiredResult`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
+    /// Task metadata for async task management (SEP-1319)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskMetadata>,
+}
+
+impl CallToolRequestParams {
+    /// Creates a new `CallToolRequestParams` with the given tool name.
+    pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            meta: None,
+            name: name.into(),
+            arguments: None,
+            input_responses: None,
+            request_state: None,
+            task: None,
+        }
+    }
+
+    /// Sets the arguments for this tool call.
+    pub fn with_arguments(mut self, arguments: JsonObject) -> Self {
+        self.arguments = Some(arguments);
+        self
+    }
+
+    /// Sets the input responses for this tool call.
+    pub fn with_input_responses(mut self, input_responses: InputResponses) -> Self {
+        self.input_responses = Some(input_responses);
+        self
+    }
+
+    /// Sets the request state for this tool call.
+    pub fn with_request_state(mut self, request_state: impl Into<String>) -> Self {
+        self.request_state = Some(request_state.into());
+        self
+    }
+
+    /// Sets the task metadata for this tool call.
+    pub fn with_task(mut self, task: TaskMetadata) -> Self {
+        self.task = Some(task);
+        self
+    }
+}
+
+impl RequestParamsMeta for CallToolRequestParams {
+    fn meta(&self) -> Option<&Meta> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<Meta> {
+        &mut self.meta
+    }
+}
+
+impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
+    fn task(&self) -> Option<&TaskMetadata> {
+        self.task.as_ref()
+    }
+    fn task_mut(&mut self) -> &mut Option<TaskMetadata> {
+        &mut self.task
+    }
+}
+
+/// Deprecated: Use [`CallToolRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use CallToolRequestParams instead")]
+pub type CallToolRequestParam = CallToolRequestParams;
+
+/// Request to call a specific tool
+pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>;
 
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -3692,6 +3979,22 @@ ts_union!(
 impl ServerResult {
     pub fn empty(_: ()) -> ServerResult {
         ServerResult::EmptyResult(EmptyResult {})
+    }
+}
+
+impl From<DiscoverResult> for ServerResult {
+    fn from(value: DiscoverResult) -> Self {
+        ServerResult::CustomResult(CustomResult::new(
+            serde_json::to_value(value).expect("DiscoverResult serialization should not fail"),
+        ))
+    }
+}
+
+impl From<InputRequiredResult> for ServerResult {
+    fn from(value: InputRequiredResult) -> Self {
+        ServerResult::CustomResult(CustomResult::new(
+            serde_json::to_value(value).expect("InputRequiredResult serialization should not fail"),
+        ))
     }
 }
 

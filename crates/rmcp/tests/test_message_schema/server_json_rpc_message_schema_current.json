@@ -178,6 +178,17 @@
             "null"
           ]
         },
+        "resultType": {
+          "description": "The protocol result type. If absent, clients should treat it as `complete`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
         }
@@ -2441,6 +2452,10 @@
           ]
         }
       }
+    },
+    "ResultType": {
+      "description": "Indicates the type of a protocol result.\n\nIf `resultType` is absent on the wire, clients should treat the result as\n[`ResultType::COMPLETE`] for backward compatibility.",
+      "type": "string"
     },
     "Role": {
       "description": "Represents the role of a participant in a conversation or message exchange.\n\nUsed in sampling and chat contexts to distinguish between different\ntypes of message senders in the conversation flow.",

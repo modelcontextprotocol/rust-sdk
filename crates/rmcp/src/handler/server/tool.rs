@@ -45,6 +45,8 @@ impl<'s, S> ToolCallContext<'s, S> {
             meta: _,
             name,
             arguments,
+            input_responses: _,
+            request_state: _,
             task,
         }: CallToolRequestParams,
         request_context: RequestContext<RoleServer>,

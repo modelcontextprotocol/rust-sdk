@@ -143,9 +143,26 @@
           ],
           "additionalProperties": true
         },
+        "inputResponses": {
+          "description": "Responses to input requests from a previous `InputRequiredResult`.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/InputResponse"
+          }
+        },
         "name": {
           "description": "The name of the tool to call",
           "type": "string"
+        },
+        "requestState": {
+          "description": "Opaque request state echoed back from a previous `InputRequiredResult`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "task": {
           "description": "Task metadata for async task management (SEP-1319)",
@@ -969,6 +986,25 @@
       "type": "string",
       "format": "const",
       "const": "notifications/initialized"
+    },
+    "InputResponse": {
+      "description": "Client-to-server responses to MRTR input requests.",
+      "anyOf": [
+        {
+          "description": "Sampling is deprecated by SEP-2577, but MRTR can still carry legacy\nsampling responses while the protocol retains the feature.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CreateMessageResult"
+            }
+          ]
+        },
+        {
+          "$ref": "#/definitions/ListRootsResult"
+        },
+        {
+          "$ref": "#/definitions/ElicitResult"
+        }
+      ]
     },
     "JsonRpcError": {
       "type": "object",

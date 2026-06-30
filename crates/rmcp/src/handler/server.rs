@@ -112,10 +112,18 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
-            ClientRequest::CustomRequest(request) => self
-                .on_custom_request(request, context)
-                .await
-                .map(ServerResult::CustomResult),
+            ClientRequest::CustomRequest(request) => {
+                if request.method == DiscoverRequestMethod.as_str() {
+                    let params = request
+                        .params_as::<EmptyObject>()
+                        .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+                    self.discover(params, context).await.map(ServerResult::from)
+                } else {
+                    self.on_custom_request(request, context)
+                        .await
+                        .map(ServerResult::CustomResult)
+                }
+            }
             ClientRequest::ListTasksRequest(request) => self
                 .list_tasks(request.params, context)
                 .await
@@ -210,6 +218,21 @@ macro_rules! server_handler_methods {
                 info.protocol_version,
             );
             std::future::ready(Ok(info))
+        }
+        fn discover(
+            &self,
+            request: Option<EmptyObject>,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<DiscoverResult, McpError>> + MaybeSendFuture + '_ {
+            let _ = (request, context);
+            let info = self.get_info();
+            std::future::ready(Ok(DiscoverResult {
+                supported_versions: ProtocolVersion::KNOWN_VERSIONS.to_vec(),
+                capabilities: info.capabilities,
+                server_info: info.server_info,
+                instructions: info.instructions,
+                meta: info.meta,
+            }))
         }
         fn complete(
             &self,
@@ -463,6 +486,14 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).initialize(request, context)
+            }
+
+            fn discover(
+                &self,
+                request: Option<EmptyObject>,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<DiscoverResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).discover(request, context)
             }
 
             fn complete(
