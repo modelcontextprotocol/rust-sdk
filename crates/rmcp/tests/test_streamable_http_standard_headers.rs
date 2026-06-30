@@ -102,7 +102,7 @@ async fn accepts_matching_standard_headers() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
     // Matching headers pass validation and reach dispatch. (Stateless mode without a
-    // prior initialize yields an unrelated -32601, which still proves -32001 was not raised.)
+    // prior initialize yields an unrelated -32601, which still proves -32020 was not raised.)
     let response = post_tool_call(
         &client,
         &url,
@@ -116,7 +116,7 @@ async fn accepts_matching_standard_headers() -> anyhow::Result<()> {
     .await;
     let body: serde_json::Value = response.json().await?;
     assert_ne!(
-        body["error"]["code"], -32001,
+        body["error"]["code"], -32020,
         "matching headers must not be rejected as a header mismatch, got: {body}"
     );
 
@@ -125,7 +125,7 @@ async fn accepts_matching_standard_headers() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn rejects_method_mismatch_with_32001() -> anyhow::Result<()> {
+async fn rejects_method_mismatch_with_32020() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
     let response = post_tool_call(
@@ -141,14 +141,14 @@ async fn rejects_method_mismatch_with_32001() -> anyhow::Result<()> {
     .await;
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["error"]["code"], -32001);
+    assert_eq!(body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())
 }
 
 #[tokio::test]
-async fn rejects_missing_method_header_with_32001() -> anyhow::Result<()> {
+async fn rejects_missing_method_header_with_32020() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
     let response = post_tool_call(
@@ -164,14 +164,14 @@ async fn rejects_missing_method_header_with_32001() -> anyhow::Result<()> {
     .await;
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["error"]["code"], -32001);
+    assert_eq!(body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())
 }
 
 #[tokio::test]
-async fn rejects_name_mismatch_with_32001() -> anyhow::Result<()> {
+async fn rejects_name_mismatch_with_32020() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
     let response = post_tool_call(
@@ -187,7 +187,7 @@ async fn rejects_name_mismatch_with_32001() -> anyhow::Result<()> {
     .await;
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["error"]["code"], -32001);
+    assert_eq!(body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())
@@ -211,7 +211,7 @@ async fn skips_validation_for_pre_sep_version() -> anyhow::Result<()> {
     .await;
     let body: serde_json::Value = response.json().await?;
     assert_ne!(
-        body["error"]["code"], -32001,
+        body["error"]["code"], -32020,
         "pre-SEP versions must skip header validation, got: {body}"
     );
 
@@ -236,7 +236,7 @@ async fn accepts_matching_param_header() -> anyhow::Result<()> {
     .await;
     let body: serde_json::Value = response.json().await?;
     assert_ne!(
-        body["error"]["code"], -32001,
+        body["error"]["code"], -32020,
         "matching Mcp-Param-* must not be rejected, got: {body}"
     );
 
@@ -245,7 +245,7 @@ async fn accepts_matching_param_header() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn rejects_param_mismatch_with_32001() -> anyhow::Result<()> {
+async fn rejects_param_mismatch_with_32020() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
     let response = post_tool_call(
@@ -261,14 +261,14 @@ async fn rejects_param_mismatch_with_32001() -> anyhow::Result<()> {
     .await;
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["error"]["code"], -32001);
+    assert_eq!(body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())
 }
 
 #[tokio::test]
-async fn rejects_missing_param_header_with_32001() -> anyhow::Result<()> {
+async fn rejects_missing_param_header_with_32020() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
     // `region` argument is present but the annotated `Mcp-Param-Region` header is absent.
@@ -285,7 +285,7 @@ async fn rejects_missing_param_header_with_32001() -> anyhow::Result<()> {
     .await;
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["error"]["code"], -32001);
+    assert_eq!(body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())

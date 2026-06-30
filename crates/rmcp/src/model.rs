@@ -513,7 +513,7 @@ pub struct JsonRpcNotification<N = Notification> {
 pub struct ErrorCode(pub i32);
 
 impl ErrorCode {
-    pub const HEADER_MISMATCH: Self = Self(-32001);
+    pub const HEADER_MISMATCH: Self = Self(-32020);
     pub const RESOURCE_NOT_FOUND: Self = Self(-32002);
     pub const INVALID_REQUEST: Self = Self(-32600);
     pub const METHOD_NOT_FOUND: Self = Self(-32601);
