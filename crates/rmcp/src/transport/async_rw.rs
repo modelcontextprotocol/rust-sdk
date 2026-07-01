@@ -13,7 +13,10 @@ use tokio_util::{
 };
 
 use super::{IntoTransport, Transport};
-use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
+use crate::{
+    model::ErrorData,
+    service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
+};
 
 #[non_exhaustive]
 pub enum TransportAdapterAsyncRW {}
@@ -140,12 +143,31 @@ where
                 Ok(Some(msg)) => return Some(msg),
                 Ok(None) => continue,
                 Err(JsonRpcMessageCodecError::Serde(e)) => {
-                    // Don't respond to unparsable input. The message id is unknown, so a response
-                    // can't be correlated to a request, and replying to invalid data can trigger an
-                    // error storm if the peer echoes the response back as more invalid data. This
-                    // matches the other official MCP SDKs, which ignore unparsable messages.
-                    // See https://github.com/modelcontextprotocol/rust-sdk/issues/938
-                    tracing::debug!("Ignoring unparsable incoming message: {e}");
+                    match e.classify() {
+                        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+                            // The input isn't valid JSON, so there's no message id to correlate a
+                            // response to, and replying to invalid data can trigger an error storm
+                            // if the peer echoes the response back as more invalid data. This
+                            // matches the other official MCP SDKs, which ignore unparsable input.
+                            // See https://github.com/modelcontextprotocol/rust-sdk/issues/938
+                            tracing::debug!("Ignoring unparsable incoming message: {e}");
+                        }
+                        serde_json::error::Category::Data | serde_json::error::Category::Io => {
+                            // Valid JSON that doesn't match the expected message shape is a real
+                            // protocol error rather than unparsable input, so surface it with a
+                            // response instead of silently dropping it.
+                            tracing::debug!("Protocol error on incoming message: {e}");
+                            let mut write = self.write.lock().await;
+                            let framed = write.as_mut()?;
+                            let response = TxJsonRpcMessage::<Role>::error(
+                                ErrorData::parse_error("Parse error", None),
+                                None,
+                            );
+                            if framed.send(response).await.is_err() {
+                                return None;
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Error reading from stream: {}", e);
@@ -650,6 +672,51 @@ mod test {
             reply_buf.is_empty(),
             "expected no response to an unparsable message, got: {}",
             String::from_utf8_lossy(&reply_buf),
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn receive_responds_to_protocol_error() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        use crate::{RoleServer, transport::Transport};
+
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        let (server_r, server_w) = tokio::io::split(server_io);
+        let (client_r, mut client_w) = tokio::io::split(client_io);
+
+        let mut transport = AsyncRwTransport::<RoleServer, _, _>::new(server_r, server_w);
+
+        // Well-formed JSON that does not match the JSON-RPC message shape, followed by a
+        // valid notification. Unlike unparsable bytes, this is a protocol error: the
+        // transport should reply to it and still yield the next valid message.
+        client_w
+            .write_all(
+                b"{\"foo\":\"bar\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            )
+            .await
+            .unwrap();
+
+        let received = transport.receive().await.expect(
+            "transport should reply to the protocol error and yield the next valid message",
+        );
+        assert_eq!(
+            serde_json::to_value(&received).unwrap()["method"],
+            "notifications/initialized",
+        );
+
+        // A protocol error gets an error response back (id omitted since it can't be read).
+        let mut reply_buf = Vec::new();
+        let mut peer = BufReader::new(client_r);
+        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32700, "message": "Parse error"},
+            }),
         );
     }
 }
