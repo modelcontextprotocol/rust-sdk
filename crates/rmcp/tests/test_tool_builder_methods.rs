@@ -68,10 +68,10 @@ fn test_with_output_schema_primitive() {
 
     assert!(tool.output_schema.is_some());
 
-    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
-    assert!(schema_str.contains("\"type\":\"integer\""));
+    let schema = tool.output_schema.as_ref().unwrap();
+    assert_eq!(schema.get("type"), Some(&serde_json::json!("integer")));
     // title should be stripped from output schema
-    assert!(!schema_str.contains("title"));
+    assert!(schema.get("title").is_none());
 }
 
 #[test]

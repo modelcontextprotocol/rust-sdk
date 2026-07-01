@@ -414,6 +414,5 @@ async fn test_tool_with_primitive_output_schema() {
     let schema = get_count_tool.output_schema.as_ref().unwrap();
 
     // Check that the schema contains integer type
-    let schema_str = serde_json::to_string(schema).unwrap();
-    assert!(schema_str.contains("integer"));
+    assert_eq!(schema.get("type"), Some(&serde_json::json!("integer")));
 }
