@@ -146,6 +146,39 @@ where
 
     /// Close the transport
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Returns a handle for reading the current transport session ID, when the
+    /// transport protocol has one.
+    fn session_id_handle(&self) -> Option<TransportSessionIdHandle> {
+        None
+    }
+
+    /// Returns the current transport session ID, when the transport protocol has one.
+    fn session_id(&self) -> Option<Arc<str>> {
+        self.session_id_handle()
+            .and_then(|handle| handle.session_id())
+    }
+}
+
+/// Read-only provider for transports that negotiate a session ID.
+pub trait TransportSessionIdProvider: std::fmt::Debug + Send + Sync + 'static {
+    fn session_id(&self) -> Option<Arc<str>>;
+}
+
+/// Cloneable handle for observing a transport's current session ID.
+#[derive(Debug, Clone)]
+pub struct TransportSessionIdHandle {
+    provider: Arc<dyn TransportSessionIdProvider>,
+}
+
+impl TransportSessionIdHandle {
+    pub fn new(provider: Arc<dyn TransportSessionIdProvider>) -> Self {
+        Self { provider }
+    }
+
+    pub fn session_id(&self) -> Option<Arc<str>> {
+        self.provider.session_id()
+    }
 }
 
 pub trait IntoTransport<R, E, A>: Send + 'static
