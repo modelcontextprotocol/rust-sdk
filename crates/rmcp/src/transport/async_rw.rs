@@ -124,8 +124,19 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<Role>> {
         loop {
-            self.line_buf.clear();
+            // `read_until` is not cancellation-safe on its own, and `receive` is
+            // polled inside a `select!` in the service loop: an in-progress line
+            // read is dropped whenever another branch (e.g. an outgoing response)
+            // becomes ready. We rely on `read_until` appending into `self.line_buf`
+            // and only returning at a delimiter or EOF, so a cancelled read leaves
+            // its partial bytes in `self.line_buf`. Keeping that buffer across
+            // calls lets the next read resume the same line; it is cleared only
+            // after a whole line has been consumed. Clearing at the top of the
+            // loop (the previous behaviour) discarded the partial read and so
+            // dropped incoming requests under concurrent response load.
             match self.read.read_until(b'\n', &mut self.line_buf).await {
+                // EOF. Any bytes still in `line_buf` are an incomplete trailing
+                // message with no delimiter, so there is nothing to deliver.
                 Ok(0) => return None,
                 Ok(_) => {}
                 Err(e) => {
@@ -133,13 +144,21 @@ where
                     return None;
                 }
             }
-            let line = without_carriage_return(
-                self.line_buf.strip_suffix(b"\n").unwrap_or(&self.line_buf),
-            );
-            if line.is_empty() {
-                continue;
-            }
-            match try_parse_with_compatibility::<RxJsonRpcMessage<Role>>(line, "receive") {
+            // A returned `read_until` means a full line is buffered. Parse it
+            // (borrowing `line_buf`), then clear the buffer — retaining its
+            // capacity for the next read — before handling the parse result.
+            let parsed = {
+                let line = without_carriage_return(
+                    self.line_buf.strip_suffix(b"\n").unwrap_or(&self.line_buf),
+                );
+                if line.is_empty() {
+                    self.line_buf.clear();
+                    continue;
+                }
+                try_parse_with_compatibility::<RxJsonRpcMessage<Role>>(line, "receive")
+            };
+            self.line_buf.clear();
+            match parsed {
                 Ok(Some(msg)) => return Some(msg),
                 Ok(None) => continue,
                 Err(JsonRpcMessageCodecError::Serde(e)) => {
