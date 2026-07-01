@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v2.0.0...rmcp-v2.1.0) - 2026-07-01
+
+### Added
+
+- add SEP-414 trace context meta accessors ([#910](https://github.com/modelcontextprotocol/rust-sdk/pull/910))
+- add SEP-2575 meta helpers ([#942](https://github.com/modelcontextprotocol/rust-sdk/pull/942))
+
+### Fixed
+
+- block redirect header leaks ([#936](https://github.com/modelcontextprotocol/rust-sdk/pull/936))
+- don't respond to unparseable messages ([#940](https://github.com/modelcontextprotocol/rust-sdk/pull/940))
+- negotiate protocol version in handler ([#930](https://github.com/modelcontextprotocol/rust-sdk/pull/930))
+
 ## [2.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.8.0...rmcp-v2.0.0) - 2026-06-27
 
 ### Added
