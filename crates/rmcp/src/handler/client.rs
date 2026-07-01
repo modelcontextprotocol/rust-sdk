@@ -66,7 +66,9 @@ impl<H: ClientHandler> Service<RoleClient> for H {
             ServerNotification::PromptListChangedNotification(_notification_no_param) => {
                 self.on_prompt_list_changed(context).await
             }
-            ServerNotification::ElicitationCompleteNotification(notification) => {
+            ServerNotification::ElicitationCompleteNotification(notification) =>
+            {
+                #[allow(deprecated)]
                 self.on_url_elicitation_notification_complete(notification.params, context)
                     .await
             }
@@ -242,6 +244,10 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
         std::future::ready(())
     }
 
+    #[deprecated(
+        since = "2.0.0",
+        note = "URL elicitation is removed by SEP-2322 (Multi Round-Trip Requests). Use InputRequiredResult-based MRTR flow instead."
+    )]
     fn on_url_elicitation_notification_complete(
         &self,
         params: ElicitationResponseNotificationParam,

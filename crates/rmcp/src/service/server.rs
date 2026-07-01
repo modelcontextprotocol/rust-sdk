@@ -475,7 +475,13 @@ impl Peer<RoleServer> {
     #[cfg(feature = "elicitation")]
     method!(peer_req_with_timeout create_elicitation_with_timeout ElicitRequest(ElicitRequestParams) => ElicitResult);
     #[cfg(feature = "elicitation")]
-    method!(peer_not notify_url_elicitation_completed ElicitationCompleteNotification(ElicitationResponseNotificationParam));
+    method!(
+        #[deprecated(
+            since = "2.0.0",
+            note = "URL elicitation is removed by SEP-2322 (Multi Round-Trip Requests). Use InputRequiredResult-based MRTR flow instead."
+        )]
+        peer_not notify_url_elicitation_completed ElicitationCompleteNotification(ElicitationResponseNotificationParam)
+    );
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
