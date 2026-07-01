@@ -13,10 +13,7 @@ use tokio_util::{
 };
 
 use super::{IntoTransport, Transport};
-use crate::{
-    model::ErrorData,
-    service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
-};
+use crate::service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage};
 
 #[non_exhaustive]
 pub enum TransportAdapterAsyncRW {}
@@ -144,15 +141,6 @@ where
                 Ok(None) => continue,
                 Err(JsonRpcMessageCodecError::Serde(e)) => {
                     tracing::debug!("Parse error on incoming message: {e}");
-                    let mut write = self.write.lock().await;
-                    let framed = write.as_mut()?;
-                    let response = TxJsonRpcMessage::<Role>::error(
-                        ErrorData::parse_error("Parse error", None),
-                        None,
-                    );
-                    if framed.send(response).await.is_err() {
-                        return None;
-                    }
                 }
                 Err(e) => {
                     tracing::error!("Error reading from stream: {}", e);
@@ -619,7 +607,10 @@ mod test {
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn receive_recovers_from_parse_error() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::{
+            io::AsyncWriteExt,
+            time::{Duration, timeout},
+        };
 
         use crate::{RoleServer, transport::Transport};
 
@@ -643,20 +634,15 @@ mod test {
             .await
             .expect("transport should recover and yield the next valid message");
 
-        // Read one line back from the peer side and parse as JSON.
         let mut reply_buf = Vec::new();
         let mut peer = tokio::io::BufReader::new(&mut client_r);
-        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
-        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
+        let reply = timeout(
+            Duration::from_millis(100),
+            peer.read_until(b'\n', &mut reply_buf),
+        )
+        .await;
 
-        // Per MCP 2025-11-25: id is omitted when the server can't read the request id.
-        assert_eq!(
-            reply,
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": "Parse error"},
-            })
-        );
+        assert!(reply.is_err(), "transport should not reply to invalid JSON");
         assert_eq!(
             serde_json::to_value(&received).unwrap()["method"],
             "notifications/initialized",
