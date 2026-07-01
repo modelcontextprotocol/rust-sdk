@@ -305,6 +305,11 @@ required-features = ["server", "client"]
 path = "tests/test_custom_request.rs"
 
 [[test]]
+name = "test_trace_context"
+required-features = ["server", "client"]
+path = "tests/test_trace_context.rs"
+
+[[test]]
 name = "test_prompt_macros"
 required-features = ["server", "client"]
 path = "tests/test_prompt_macros.rs"

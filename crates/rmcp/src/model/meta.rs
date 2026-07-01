@@ -47,6 +47,34 @@ pub trait RequestParamsMeta {
             }
         }
     }
+    /// Get the W3C `traceparent` value from meta, if present (SEP-414)
+    fn traceparent(&self) -> Option<&str> {
+        self.meta().and_then(|m| m.get_traceparent())
+    }
+    /// Set the W3C `traceparent` value in meta (SEP-414)
+    fn set_traceparent(&mut self, value: &str) {
+        self.meta_or_default().set_traceparent(value);
+    }
+    /// Get the W3C `tracestate` value from meta, if present (SEP-414)
+    fn tracestate(&self) -> Option<&str> {
+        self.meta().and_then(|m| m.get_tracestate())
+    }
+    /// Set the W3C `tracestate` value in meta (SEP-414)
+    fn set_tracestate(&mut self, value: &str) {
+        self.meta_or_default().set_tracestate(value);
+    }
+    /// Get the W3C `baggage` value from meta, if present (SEP-414)
+    fn baggage(&self) -> Option<&str> {
+        self.meta().and_then(|m| m.get_baggage())
+    }
+    /// Set the W3C `baggage` value in meta (SEP-414)
+    fn set_baggage(&mut self, value: &str) {
+        self.meta_or_default().set_baggage(value);
+    }
+    /// Get a mutable reference to meta, inserting an empty one if absent.
+    fn meta_or_default(&mut self) -> &mut Meta {
+        self.meta_mut().get_or_insert_with(Meta::new)
+    }
 }
 
 /// Trait for task-augmented request params that contain both `_meta` and `task` fields.
@@ -207,6 +235,12 @@ impl Meta {
     const META_KEY_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
     const META_KEY_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
     const META_KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
+    /// Reserved `_meta` key for the W3C Trace Context `traceparent` value (SEP-414).
+    const TRACEPARENT_FIELD: &str = "traceparent";
+    /// Reserved `_meta` key for the W3C Trace Context `tracestate` value (SEP-414).
+    const TRACESTATE_FIELD: &str = "tracestate";
+    /// Reserved `_meta` key for the W3C Baggage value (SEP-414).
+    const BAGGAGE_FIELD: &str = "baggage";
 
     pub fn new() -> Self {
         Self(JsonObject::new())
@@ -304,6 +338,58 @@ impl Meta {
         self.insert_serialized(Self::META_KEY_LOG_LEVEL, log_level);
     }
 
+    /// Read a string-valued `_meta` field, or `None` if absent or not a string.
+    fn get_str(&self, field: &str) -> Option<&str> {
+        self.0.get(field).and_then(Value::as_str)
+    }
+
+    /// Write a string-valued `_meta` field.
+    fn set_str(&mut self, field: &str, value: impl Into<String>) {
+        self.0
+            .insert(field.to_string(), Value::String(value.into()));
+    }
+
+    /// Get the W3C `traceparent` value (SEP-414), if present.
+    pub fn get_traceparent(&self) -> Option<&str> {
+        self.get_str(Self::TRACEPARENT_FIELD)
+    }
+
+    /// Set the W3C `traceparent` value (SEP-414).
+    ///
+    /// ```
+    /// use rmcp::model::Meta;
+    ///
+    /// let mut meta = Meta::new();
+    /// meta.set_traceparent("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01");
+    /// assert_eq!(
+    ///     meta.get_traceparent(),
+    ///     Some("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"),
+    /// );
+    /// ```
+    pub fn set_traceparent(&mut self, value: impl Into<String>) {
+        self.set_str(Self::TRACEPARENT_FIELD, value);
+    }
+
+    /// Get the W3C `tracestate` value (SEP-414), if present.
+    pub fn get_tracestate(&self) -> Option<&str> {
+        self.get_str(Self::TRACESTATE_FIELD)
+    }
+
+    /// Set the W3C `tracestate` value (SEP-414).
+    pub fn set_tracestate(&mut self, value: impl Into<String>) {
+        self.set_str(Self::TRACESTATE_FIELD, value);
+    }
+
+    /// Get the W3C `baggage` value (SEP-414), if present.
+    pub fn get_baggage(&self) -> Option<&str> {
+        self.get_str(Self::BAGGAGE_FIELD)
+    }
+
+    /// Set the W3C `baggage` value (SEP-414).
+    pub fn set_baggage(&mut self, value: impl Into<String>) {
+        self.set_str(Self::BAGGAGE_FIELD, value);
+    }
+
     pub fn extend(&mut self, other: Meta) {
         for (k, v) in other.0.into_iter() {
             self.0.insert(k, v);
@@ -359,5 +445,61 @@ where
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Params {
+        meta: Option<Meta>,
+    }
+
+    impl RequestParamsMeta for Params {
+        fn meta(&self) -> Option<&Meta> {
+            self.meta.as_ref()
+        }
+        fn meta_mut(&mut self) -> &mut Option<Meta> {
+            &mut self.meta
+        }
+    }
+
+    const TRACEPARENT: &str = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01";
+
+    #[test]
+    fn trace_context_round_trip() {
+        let mut meta = Meta::new();
+        meta.set_traceparent(TRACEPARENT);
+        meta.set_tracestate("vendor1=value1,vendor2=value2");
+        meta.set_baggage("userId=alice,region=us-east-1");
+        assert_eq!(meta.get_traceparent(), Some(TRACEPARENT));
+        assert_eq!(meta.get_tracestate(), Some("vendor1=value1,vendor2=value2"));
+        assert_eq!(meta.get_baggage(), Some("userId=alice,region=us-east-1"));
+    }
+
+    #[test]
+    fn absent_field_is_none() {
+        let meta = Meta::new();
+        assert_eq!(meta.get_traceparent(), None);
+        assert_eq!(meta.get_tracestate(), None);
+        assert_eq!(meta.get_baggage(), None);
+    }
+
+    #[test]
+    fn non_string_value_is_none() {
+        let mut meta = Meta::new();
+        meta.0
+            .insert(Meta::TRACEPARENT_FIELD.to_string(), Value::from(42));
+        assert_eq!(meta.get_traceparent(), None);
+    }
+
+    #[test]
+    fn trait_setter_inserts_meta_when_absent() {
+        let mut params = Params::default();
+        assert_eq!(params.traceparent(), None);
+        params.set_traceparent(TRACEPARENT);
+        assert_eq!(params.traceparent(), Some(TRACEPARENT));
     }
 }
