@@ -139,12 +139,13 @@ server-side-http = [
   "dep:bytes",
   "dep:sse-stream",
   "tower",
+  "base64",
 ]
 
 transport-worker = ["dep:tokio-stream"]
 
 # SSE stream parsing utilities (used by streamable HTTP client for SSE-formatted responses)
-client-side-sse = ["dep:sse-stream", "dep:http"]
+client-side-sse = ["dep:sse-stream", "dep:http", "base64"]
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
@@ -292,6 +293,11 @@ path = "tests/test_stateless_protocol_version.rs"
 name = "test_protocol_version_negotiation"
 required-features = ["server", "client"]
 path = "tests/test_protocol_version_negotiation.rs"
+
+[[test]]
+name = "test_streamable_http_standard_headers"
+required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+path = "tests/test_streamable_http_standard_headers.rs"
 
 [[test]]
 name = "test_streamable_http_4xx_error_body"

@@ -12,16 +12,88 @@ use super::common::client_side_sse::{ExponentialBackoff, SseRetryPolicy, SseStre
 use crate::{
     RoleClient,
     model::{
-        ClientJsonRpcMessage, ClientNotification, InitializedNotification, ServerJsonRpcMessage,
-        ServerResult,
+        ClientJsonRpcMessage, ClientNotification, InitializedNotification, JsonObject,
+        ProtocolVersion, ServerJsonRpcMessage, ServerResult,
     },
     transport::{
-        common::client_side_sse::SseAutoReconnectStream,
+        common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
     },
 };
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
+
+/// Clones `base` and, when the negotiated version requires SEP-2243 headers, adds the
+/// `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` headers derived from the outgoing message.
+fn build_request_headers(
+    base: &HashMap<HeaderName, HeaderValue>,
+    message: &ClientJsonRpcMessage,
+    tool_cache: &HashMap<String, Arc<JsonObject>>,
+    version: &ProtocolVersion,
+) -> HashMap<HeaderName, HeaderValue> {
+    use serde_json::Value;
+
+    let mut headers = base.clone();
+    if *version >= ProtocolVersion::STANDARD_HEADERS {
+        if let Ok(value) = serde_json::to_value(message) {
+            let schema = value
+                .get("method")
+                .and_then(Value::as_str)
+                .filter(|method| *method == "tools/call")
+                .and_then(|_| value.get("params"))
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .and_then(|name| tool_cache.get(name))
+                .map(Arc::as_ref);
+            for (name, val) in mcp_headers::standard_request_headers(&value, schema) {
+                headers.insert(name, val);
+            }
+        }
+    }
+    headers
+}
+
+/// Caches tool input schemas from a `tools/list` response for later `Mcp-Param-*` emission.
+fn cache_tools_from_response(
+    cache: &mut HashMap<String, Arc<JsonObject>>,
+    message: &ServerJsonRpcMessage,
+) {
+    if let ServerJsonRpcMessage::Response(response) = message {
+        if let ServerResult::ListToolsResult(list) = &response.result {
+            for tool in &list.tools {
+                if let Err(reason) =
+                    mcp_headers::validate_param_header_annotations(&tool.input_schema)
+                {
+                    tracing::warn!(tool = %tool.name, "ignoring x-mcp-header annotations: {reason}");
+                    continue;
+                }
+                cache.insert(tool.name.to_string(), tool.input_schema.clone());
+            }
+        }
+    }
+}
+
+/// Derives the negotiated protocol version and base request headers from an
+/// initialize response: returns `base` with `MCP-Protocol-Version` injected
+/// (per MCP 2025-06-18) plus the version used to gate SEP-2243 headers,
+/// defaulting to a pre-SEP version when the response can't be parsed.
+fn negotiate_version_headers(
+    init_response: &ServerJsonRpcMessage,
+    base: HashMap<HeaderName, HeaderValue>,
+) -> (ProtocolVersion, HashMap<HeaderName, HeaderValue>) {
+    let mut version = ProtocolVersion::default();
+    let mut headers = base;
+    if let ServerJsonRpcMessage::Response(response) = init_response {
+        if let ServerResult::InitializeResult(init_result) = &response.result {
+            version = init_result.protocol_version.clone();
+            // HeaderName::from_static requires lowercase
+            if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
+                headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
+            }
+        }
+    }
+    (version, headers)
+}
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -405,17 +477,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 
         let new_session_id: Option<Arc<str>> = new_session_id_str.map(|s| Arc::from(s.as_str()));
 
-        // Start from custom_headers, then inject the negotiated MCP-Protocol-Version
-        // so all subsequent requests carry the right version (MCP 2025-06-18 spec).
-        let mut new_protocol_headers = custom_headers;
-        if let ServerJsonRpcMessage::Response(response) = &init_msg {
-            if let ServerResult::InitializeResult(init_result) = &response.result {
-                if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
-                    new_protocol_headers
-                        .insert(HeaderName::from_static("mcp-protocol-version"), hv);
-                }
-            }
-        }
+        let (negotiated_version, new_protocol_headers) =
+            negotiate_version_headers(&init_msg, custom_headers);
 
         let initialized_notification = ClientJsonRpcMessage::notification(
             ClientNotification::InitializedNotification(InitializedNotification {
@@ -423,13 +486,20 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                 extensions: Default::default(),
             }),
         );
+        // SEP-2243: notifications carry no Mcp-Param-*, so an empty tool cache suffices.
+        let initialized_headers = build_request_headers(
+            &new_protocol_headers,
+            &initialized_notification,
+            &HashMap::new(),
+            &negotiated_version,
+        );
         client
             .post_message(
                 uri,
                 initialized_notification,
                 new_session_id.clone(),
                 auth_header,
-                new_protocol_headers.clone(),
+                initialized_headers,
             )
             .await?
             .expect_accepted_or_json::<C::Error>()?;
@@ -505,21 +575,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             None
         };
-        // Extract the negotiated protocol version from the init response
-        // and build a custom headers map that includes MCP-Protocol-Version
-        // for all subsequent HTTP requests (per MCP 2025-06-18 spec).
-        let mut protocol_headers = {
-            let mut headers = config.custom_headers.clone();
-            if let ServerJsonRpcMessage::Response(response) = &message {
-                if let ServerResult::InitializeResult(init_result) = &response.result {
-                    if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
-                        // HeaderName::from_static requires lowercase
-                        headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
-                    }
-                }
-            }
-            headers
-        };
+        let (negotiated_version, mut protocol_headers) =
+            negotiate_version_headers(&message, config.custom_headers.clone());
+        // SEP-2243: tool input schemas (name -> schema) cached from tools/list responses,
+        // used to promote annotated tools/call arguments to Mcp-Param-* headers.
+        let mut tool_header_cache: HashMap<String, Arc<JsonObject>> = HashMap::new();
 
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
         let mut session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
@@ -533,13 +593,19 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         context.send_to_handler(message).await?;
         let initialized_notification = context.recv_from_handler().await?;
         // expect a initialized response
+        let initialized_headers = build_request_headers(
+            &protocol_headers,
+            &initialized_notification.message,
+            &tool_header_cache,
+            &negotiated_version,
+        );
         self.client
             .post_message(
                 config.uri.clone(),
                 initialized_notification.message,
                 session_id.clone(),
                 config.auth_header.clone(),
-                protocol_headers.clone(),
+                initialized_headers,
             )
             .await
             .map_err(WorkerQuitReason::fatal_context(
@@ -649,6 +715,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     // Pass a clone to the first attempt so `message` is retained for a
                     // potential re-init retry. `post_message` takes ownership and the
                     // trait cannot be changed, so the clone is unavoidable.
+                    let request_headers = build_request_headers(
+                        &protocol_headers,
+                        &message,
+                        &tool_header_cache,
+                        &negotiated_version,
+                    );
                     let response = self
                         .client
                         .post_message(
@@ -656,7 +728,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             message.clone(),
                             session_id.clone(),
                             config.auth_header.clone(),
-                            protocol_headers.clone(),
+                            request_headers,
                         )
                         .await;
                     let send_result = match response {
@@ -752,6 +824,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                         });
                                         }
 
+                                        let retry_headers = build_request_headers(
+                                            &protocol_headers,
+                                            &message,
+                                            &tool_header_cache,
+                                            &negotiated_version,
+                                        );
                                         let retry_response = self
                                             .client
                                             .post_message(
@@ -759,7 +837,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 message,
                                                 session_id.clone(),
                                                 config.auth_header.clone(),
-                                                protocol_headers.clone(),
+                                                retry_headers,
                                             )
                                             .await;
                                         match retry_response {
@@ -771,6 +849,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 Ok(())
                                             }
                                             Ok(StreamableHttpPostResponse::Json(msg, ..)) => {
+                                                cache_tools_from_response(
+                                                    &mut tool_header_cache,
+                                                    &msg,
+                                                );
                                                 context.send_to_handler(msg).await?;
                                                 Ok(())
                                             }
@@ -796,6 +878,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                         Ok(StreamableHttpPostResponse::Json(message, ..)) => {
+                            cache_tools_from_response(&mut tool_header_cache, &message);
                             context.send_to_handler(message).await?;
                             Ok(())
                         }
@@ -813,6 +896,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     let _ = responder.send(send_result);
                 }
                 Event::ServerMessage(json_rpc_message) => {
+                    cache_tools_from_response(&mut tool_header_cache, &json_rpc_message);
                     // send the message to the handler
                     if let Err(e) = context.send_to_handler(json_rpc_message).await {
                         break 'main_loop Err(e);

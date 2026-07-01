@@ -4,6 +4,15 @@ pub const HEADER_MCP_PROTOCOL_VERSION: &str = "MCP-Protocol-Version";
 pub const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 pub const JSON_MIME_TYPE: &str = "application/json";
 
+// SEP-2243 standard headers, gated on protocol version >= 2026-07-28.
+pub const HEADER_MCP_METHOD: &str = "Mcp-Method";
+pub const HEADER_MCP_NAME: &str = "Mcp-Name";
+pub const HEADER_MCP_PARAM_PREFIX: &str = "Mcp-Param-";
+
+/// Sentinel wrapping a Base64-encoded SEP-2243 header value (`=?base64?<b64>?=`).
+pub const BASE64_HEADER_PREFIX: &str = "=?base64?";
+pub const BASE64_HEADER_SUFFIX: &str = "?=";
+
 /// Reserved headers that must not be overridden by user-supplied custom headers.
 /// `MCP-Protocol-Version` is in this list but is allowed through because the worker
 /// injects it after initialization.
