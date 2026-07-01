@@ -138,6 +138,7 @@ macro_rules! variant_extension {
 
 variant_extension! {
     ClientRequest {
+        DiscoverRequest
         PingRequest
         InitializeRequest
         CompleteRequest

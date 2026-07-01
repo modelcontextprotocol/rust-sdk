@@ -1,4 +1,50 @@
-use rmcp::model::{JsonRpcResponse, ServerJsonRpcMessage, ServerResult};
+use rmcp::model::{
+    ClientJsonRpcMessage, ClientRequest, JsonRpcResponse, ServerJsonRpcMessage, ServerResult,
+};
+use serde_json::json;
+
+#[test]
+fn test_discover_request() {
+    let message: ClientJsonRpcMessage = serde_json::from_value(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {}
+    }))
+    .unwrap();
+
+    assert!(matches!(
+        message,
+        ClientJsonRpcMessage::Request(r)
+            if matches!(r.request, ClientRequest::DiscoverRequest(_))
+    ));
+}
+
+#[test]
+fn test_discover_result() {
+    let message: ServerJsonRpcMessage = serde_json::from_value(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "supportedVersions": ["2026-07-28", "2025-11-25"],
+            "capabilities": {},
+            "serverInfo": {
+                "name": "test-server",
+                "version": "1.0.0"
+            }
+        }
+    }))
+    .unwrap();
+
+    assert!(matches!(
+        message,
+        ServerJsonRpcMessage::Response(JsonRpcResponse {
+            result: ServerResult::DiscoverResult(_),
+            ..
+        })
+    ));
+}
+
 #[test]
 fn test_tool_list_result() {
     let json = std::fs::read("tests/test_deserialization/tool_list_result.json").unwrap();
