@@ -153,14 +153,14 @@ where
                             tracing::debug!("Ignoring unparsable incoming message: {e}");
                         }
                         serde_json::error::Category::Data | serde_json::error::Category::Io => {
-                            // Valid JSON that doesn't match the expected message shape is a real
-                            // protocol error rather than unparsable input, so surface it with a
-                            // response instead of silently dropping it.
+                            // Well-formed JSON that doesn't match the expected message shape is a
+                            // real protocol error rather than unparsable input, so surface it with
+                            // an Invalid Request response instead of silently dropping it.
                             tracing::debug!("Protocol error on incoming message: {e}");
                             let mut write = self.write.lock().await;
                             let framed = write.as_mut()?;
                             let response = TxJsonRpcMessage::<Role>::error(
-                                ErrorData::parse_error("Parse error", None),
+                                ErrorData::invalid_request("Invalid request", None),
                                 None,
                             );
                             if framed.send(response).await.is_err() {
@@ -715,7 +715,7 @@ mod test {
             reply,
             serde_json::json!({
                 "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": "Parse error"},
+                "error": {"code": -32600, "message": "Invalid request"},
             }),
         );
     }
