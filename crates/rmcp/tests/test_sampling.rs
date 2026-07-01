@@ -9,6 +9,7 @@ use rmcp::{
     model::*,
     service::{RequestContext, Service},
 };
+use rstest::rstest;
 
 #[tokio::test]
 async fn test_basic_sampling_message_creation() -> Result<()> {
@@ -368,6 +369,39 @@ fn test_tool_result_content_requires_content() {
     let err = serde_json::from_value::<ToolResultContent>(raw).unwrap_err();
 
     assert!(err.to_string().contains("missing field `content`"));
+}
+
+#[rstest]
+#[case::array(serde_json::json!([{ "city": "SF", "temp": 72 }, { "city": "NY", "temp": 65 }]))]
+#[case::string(serde_json::json!("sunny"))]
+#[case::integer(serde_json::json!(42))]
+#[case::float(serde_json::json!(3.14))]
+#[case::boolean(serde_json::json!(true))]
+fn tool_result_content_round_trips_non_object_structured_content(
+    #[case] structured: serde_json::Value,
+) -> Result<()> {
+    let mut tool_result = ToolResultContent::new("call_123", vec![ContentBlock::text("x")]);
+    tool_result.structured_content = Some(structured);
+
+    let json = serde_json::to_string(&tool_result)?;
+    let deserialized: ToolResultContent = serde_json::from_str(&json)?;
+    assert_eq!(tool_result, deserialized);
+
+    Ok(())
+}
+
+// `null` is a valid JSON value, but `Option<Value>` deserializes JSON `null`
+// as `None`, so `Some(Value::Null)` collapses to `None` on round-trip.
+#[test]
+fn tool_result_content_null_structured_content_round_trips_to_none() -> Result<()> {
+    let mut tool_result = ToolResultContent::new("call_123", vec![ContentBlock::text("x")]);
+    tool_result.structured_content = Some(serde_json::Value::Null);
+
+    let json = serde_json::to_string(&tool_result)?;
+    let deserialized: ToolResultContent = serde_json::from_str(&json)?;
+    assert_eq!(deserialized.structured_content, None);
+
+    Ok(())
 }
 
 #[tokio::test]
