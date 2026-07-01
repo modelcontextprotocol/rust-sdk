@@ -5,15 +5,25 @@
     not(feature = "local")
 ))]
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
+use futures::stream;
+use http::{HeaderName, HeaderValue};
 use rmcp::{
     ServiceError, ServiceExt,
-    model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+    model::{
+        CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, ClientRequest, ErrorCode,
+        ErrorData, InitializeResult, PingRequest, RequestId, ServerCapabilities,
+        ServerJsonRpcMessage, ServerResult,
+    },
     transport::{
         StreamableHttpClientTransport,
         streamable_http_client::{
             StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
+            StreamableHttpPostResponse,
         },
         streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -24,6 +34,215 @@ use tokio_util::sync::CancellationToken;
 
 mod common;
 use common::calculator::Calculator;
+
+#[derive(Debug, thiserror::Error)]
+#[error("mock streamable http client error")]
+struct MockClientError;
+
+#[derive(Clone)]
+struct ReinitDropsAcceptedResponseClient {
+    state: Arc<tokio::sync::Mutex<MockState>>,
+    stale_stream_cancelled: CancellationToken,
+    initial_request_accepted: Arc<tokio::sync::Semaphore>,
+    final_retry_accepted: Arc<tokio::sync::Semaphore>,
+}
+
+struct MockState {
+    session_counter: usize,
+    posts: VecDeque<MockPost>,
+}
+
+enum MockPost {
+    Initialize,
+    Initialized,
+    Accepted,
+    SessionExpired,
+}
+
+impl ReinitDropsAcceptedResponseClient {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(tokio::sync::Mutex::new(MockState {
+                session_counter: 0,
+                posts: VecDeque::from([
+                    MockPost::Initialize,
+                    MockPost::Initialized,
+                    MockPost::Accepted,
+                    MockPost::SessionExpired,
+                    MockPost::Initialize,
+                    MockPost::Initialized,
+                    MockPost::Accepted,
+                ]),
+            })),
+            stale_stream_cancelled: CancellationToken::new(),
+            initial_request_accepted: Arc::new(tokio::sync::Semaphore::new(0)),
+            final_retry_accepted: Arc::new(tokio::sync::Semaphore::new(0)),
+        }
+    }
+}
+
+impl StreamableHttpClient for ReinitDropsAcceptedResponseClient {
+    type Error = MockClientError;
+
+    async fn post_message(
+        &self,
+        _uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        _session_id: Option<Arc<str>>,
+        _auth_header: Option<String>,
+        _custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let mut state = self.state.lock().await;
+        match state
+            .posts
+            .pop_front()
+            .expect("unexpected mock post_message call")
+        {
+            MockPost::Initialize => {
+                state.session_counter += 1;
+                let id = match message {
+                    ClientJsonRpcMessage::Request(request) => request.id,
+                    other => panic!("expected initialize request, got {other:?}"),
+                };
+                Ok(StreamableHttpPostResponse::Json(
+                    ServerJsonRpcMessage::response(
+                        ServerResult::InitializeResult(InitializeResult::new(
+                            ServerCapabilities::builder().enable_tools().build(),
+                        )),
+                        id,
+                    ),
+                    Some(format!("session-{}", state.session_counter)),
+                ))
+            }
+            MockPost::Initialized => {
+                assert!(
+                    matches!(message, ClientJsonRpcMessage::Notification(_)),
+                    "expected initialized notification, got {message:?}"
+                );
+                Ok(StreamableHttpPostResponse::Accepted)
+            }
+            MockPost::Accepted => {
+                if state.posts.is_empty() {
+                    self.final_retry_accepted.add_permits(1);
+                } else {
+                    self.initial_request_accepted.add_permits(1);
+                }
+                Ok(StreamableHttpPostResponse::Accepted)
+            }
+            MockPost::SessionExpired => Err(StreamableHttpError::SessionExpired),
+        }
+    }
+
+    async fn delete_session(
+        &self,
+        _uri: Arc<str>,
+        _session_id: Arc<str>,
+        _auth_header: Option<String>,
+        _custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<(), StreamableHttpError<Self::Error>> {
+        Ok(())
+    }
+
+    async fn get_stream(
+        &self,
+        _uri: Arc<str>,
+        session_id: Arc<str>,
+        _last_event_id: Option<String>,
+        _auth_header: Option<String>,
+        _custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
+        StreamableHttpError<Self::Error>,
+    > {
+        if session_id.as_ref() == "session-1" {
+            let cancel = self.stale_stream_cancelled.clone();
+            Ok(Box::pin(stream::once(async move {
+                cancel.cancelled_owned().await;
+                Ok(sse_stream::Sse {
+                    event: None,
+                    data: Some(
+                        serde_json::to_string(&ServerJsonRpcMessage::error(
+                            ErrorData::new(
+                                ErrorCode::INTERNAL_ERROR,
+                                "stale stream should not deliver after re-init",
+                                None,
+                            ),
+                            Some(RequestId::Number(2)),
+                        ))
+                        .expect("serialize stale error"),
+                    ),
+                    id: None,
+                    retry: None,
+                })
+            })))
+        } else {
+            Ok(Box::pin(stream::pending()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_reinitialization_completes_accepted_sse_request_instead_of_hanging()
+-> anyhow::Result<()> {
+    let mock_client = ReinitDropsAcceptedResponseClient::new();
+    let initial_request_accepted = mock_client.initial_request_accepted.clone();
+    let final_retry_accepted = mock_client.final_retry_accepted.clone();
+    let transport = StreamableHttpClientTransport::with_client(
+        mock_client,
+        StreamableHttpClientTransportConfig::with_uri("mock://mcp"),
+    );
+    let mut client = ClientInfo::default().serve(transport).await?;
+
+    let peer = client.peer().clone();
+    let pending_call = tokio::spawn(async move {
+        peer.call_tool(CallToolRequestParams::new("slow_tool"))
+            .await
+    });
+
+    let _initial_permit = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        initial_request_accepted.acquire(),
+    )
+    .await
+    .expect("initial accepted request should be observed")
+    .expect("initial accepted request semaphore should stay open");
+
+    let reinit_trigger = {
+        let peer = client.peer().clone();
+        tokio::spawn(async move { peer.list_tools(None).await })
+    };
+
+    let _retry_permit = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        final_retry_accepted.acquire(),
+    )
+    .await
+    .expect("re-initialization retry should be accepted")
+    .expect("re-initialization retry semaphore should stay open");
+
+    let err = tokio::time::timeout(std::time::Duration::from_millis(100), pending_call)
+        .await
+        .expect("accepted SSE-backed request should complete instead of hanging")?
+        .expect_err(
+            "accepted request should fail after re-initialization drops its response stream",
+        );
+
+    match err {
+        ServiceError::McpError(error) => {
+            assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+            assert!(
+                error.message.contains("session"),
+                "expected session-related error, got: {error}"
+            );
+        }
+        other => panic!("expected McpError for orphaned request, got: {other:?}"),
+    }
+
+    reinit_trigger.abort();
+    let _ = client.close().await;
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_stale_session_id_returns_status_aware_error() -> anyhow::Result<()> {
