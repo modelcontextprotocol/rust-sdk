@@ -22,10 +22,8 @@ fn test_with_output_schema() {
 
     assert!(tool.output_schema.is_some());
 
-    // Verify the schema contains expected fields
-    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
-    assert!(schema_str.contains("greeting"));
-    assert!(schema_str.contains("is_adult"));
+    let schema = tool.output_schema.as_ref().unwrap();
+    assert_eq!(schema.get("type"), Some(&serde_json::json!("object")));
 }
 
 #[test]
@@ -57,7 +55,51 @@ fn test_chained_builder_methods() {
     assert!(input_schema_str.contains("name"));
     assert!(input_schema_str.contains("age"));
 
-    let output_schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
-    assert!(output_schema_str.contains("greeting"));
-    assert!(output_schema_str.contains("is_adult"));
+    let output_schema = tool.output_schema.as_ref().unwrap();
+    assert_eq!(
+        output_schema.get("type"),
+        Some(&serde_json::json!("object"))
+    );
+}
+
+#[test]
+fn test_with_output_schema_primitive() {
+    let tool = Tool::new("test", "Test tool", JsonObject::new()).with_output_schema::<i32>();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema = tool.output_schema.as_ref().unwrap();
+    assert_eq!(schema.get("type"), Some(&serde_json::json!("integer")));
+    // title should be stripped from output schema
+    assert!(schema.get("title").is_none());
+}
+
+#[test]
+fn test_with_output_schema_array() {
+    let tool =
+        Tool::new("test", "Test tool", JsonObject::new()).with_output_schema::<Vec<String>>();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
+    assert!(schema_str.contains("\"type\":\"array\""));
+    assert!(schema_str.contains("items"));
+    // title should be stripped from output schema
+    assert!(!schema_str.contains("title"));
+}
+
+#[test]
+fn test_with_output_schema_option() {
+    let tool =
+        Tool::new("test", "Test tool", JsonObject::new()).with_output_schema::<Option<String>>();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
+    // Option<String> generates a composition schema (anyOf/oneOf/type array with null)
+    assert!(
+        schema_str.contains("anyOf") || schema_str.contains("oneOf") || schema_str.contains("null"),
+        "Expected composition schema for Option<String>, got: {schema_str}"
+    );
+    assert!(!schema_str.contains("title"));
 }

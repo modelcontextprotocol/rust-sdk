@@ -106,32 +106,40 @@ pub fn schema_for_empty_input() -> Arc<JsonObject> {
     EMPTY.clone()
 }
 
-/// Generate a JSON schema for outputSchema (must have root type "object"; top-level "title" and "description" are removed)
-pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String> {
+/// Strip top-level `title` and `description` from a JSON schema for outputSchema.
+/// Unlike `validate_and_strip`, this performs no validation — output schemas are not
+/// restricted to `type: "object"` (per SEP-2106).
+fn strip_output(raw: &Arc<JsonObject>) -> Arc<JsonObject> {
+    let mut object = raw.as_ref().clone();
+    object.remove("title");
+    object.remove("description");
+    Arc::new(object)
+}
+
+/// Generate and strip a JSON schema for outputSchema (top-level "title" and
+/// "description" are removed; output schemas are not restricted to root type "object").
+pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     thread_local! {
-        static CACHE_FOR_OUTPUT: std::sync::RwLock<HashMap<TypeId, Result<Arc<JsonObject>, String>>> = Default::default();
+        static CACHE_FOR_OUTPUT: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
     };
 
     CACHE_FOR_OUTPUT.with(|cache| {
-        // Try to get from cache first
-        if let Some(result) = cache
+        if let Some(schema) = cache
             .read()
             .expect("output schema cache lock poisoned")
             .get(&TypeId::of::<T>())
         {
-            return result.clone();
+            return schema.clone();
         }
 
-        // Generate, validate, and strip unnecessary top-level fields
-        let result = validate_and_strip(&schema_for_type::<T>(), "outputSchema");
+        let schema = strip_output(&schema_for_type::<T>());
 
-        // Cache the result (both success and error cases)
         cache
             .write()
             .expect("output schema cache lock poisoned")
-            .insert(TypeId::of::<T>(), result.clone());
+            .insert(TypeId::of::<T>(), schema.clone());
 
-        result
+        schema
     })
 }
 
@@ -305,10 +313,69 @@ mod tests {
         assert!(Arc::ptr_eq(&schema, &cloned));
     }
 
+    #[test]
+    fn test_schema_for_output_accepts_primitive() {
+        let schema = schema_for_output::<i32>();
+        assert_eq!(schema.get("type"), Some(&serde_json::json!("integer")));
+    }
+
+    #[test]
+    fn test_schema_for_output_strips_description_for_primitive() {
+        let schema = schema_for_output::<i32>();
+        assert!(!schema.contains_key("description"));
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_composition() {
+        let schema = schema_for_output::<Option<String>>();
+        let schema_str = serde_json::to_string(&schema).unwrap();
+        assert!(
+            schema_str.contains("anyOf")
+                || schema_str.contains("oneOf")
+                || schema_str.contains("null"),
+            "Expected composition schema for Option<String>, got: {schema_str}"
+        );
+    }
+
+    #[test]
+    fn test_schema_for_output_caches_result() {
+        let schema1 = schema_for_output::<i32>();
+        let schema2 = schema_for_output::<i32>();
+        assert!(Arc::ptr_eq(&schema1, &schema2));
+    }
+
+    #[test]
+    fn test_schema_for_input_rejects_array() {
+        let result = schema_for_input::<Vec<i32>>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_unit() {
+        let _schema = schema_for_output::<()>();
+    }
+
+    #[test]
+    fn test_schema_for_output_accepts_object() {
+        let schema = schema_for_output::<TestObject>();
+        assert_eq!(schema.get("type"), Some(&serde_json::json!("object")));
+    }
+
+    #[test]
+    fn test_schema_for_output_strips_top_level_title() {
+        let schema = schema_for_output::<TestObject>();
+        assert!(!schema.contains_key("title"));
+    }
+
+    #[test]
+    fn test_schema_for_output_strips_top_level_description() {
+        let schema = schema_for_output::<TestObject>();
+        assert!(!schema.contains_key("description"));
+    }
+
     #[rstest]
-    #[case::output(schema_for_output::<i32>)]
     #[case::input(schema_for_input::<i32>)]
-    fn test_schema_for_object_wrappers_reject_primitives(
+    fn test_schema_for_input_rejects_primitives(
         #[case] schema_fn: fn() -> Result<Arc<JsonObject>, String>,
     ) {
         let result = schema_fn();
@@ -316,9 +383,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::output(schema_for_output::<TestObject>)]
     #[case::input(schema_for_input::<TestObject>)]
-    fn test_schema_for_object_wrappers_accept_objects(
+    fn test_schema_for_input_accepts_objects(
         #[case] schema_fn: fn() -> Result<Arc<JsonObject>, String>,
     ) {
         let result = schema_fn();
@@ -326,11 +392,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::output_title(schema_for_output::<TestObject>, "title")]
-    #[case::output_description(schema_for_output::<TestObject>, "description")]
     #[case::input_title(schema_for_input::<TestObject>, "title")]
     #[case::input_description(schema_for_input::<TestObject>, "description")]
-    fn test_schema_for_object_wrappers_strip_top_level_metadata(
+    fn test_schema_for_input_strips_top_level_metadata(
         #[case] schema_fn: fn() -> Result<Arc<JsonObject>, String>,
         #[case] field: &str,
     ) {
