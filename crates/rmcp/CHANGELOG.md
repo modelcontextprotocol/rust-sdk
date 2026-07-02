@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(transport)* make AsyncRwTransport::receive cancel-safe ([#941](https://github.com/modelcontextprotocol/rust-sdk/pull/941)) ([#947](https://github.com/modelcontextprotocol/rust-sdk/pull/947))
 - *(auth)* preserve refresh_token when refresh response omits it ([#949](https://github.com/modelcontextprotocol/rust-sdk/pull/949))
 - block redirect header leaks ([#936](https://github.com/modelcontextprotocol/rust-sdk/pull/936))
-- don't respond to unparseable messages ([#940](https://github.com/modelcontextprotocol/rust-sdk/pull/940))
+- don't respond to unparsable messages ([#940](https://github.com/modelcontextprotocol/rust-sdk/pull/940))
 - negotiate protocol version in handler ([#930](https://github.com/modelcontextprotocol/rust-sdk/pull/930))
 
 ## [2.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v1.8.0...rmcp-v2.0.0) - 2026-06-27
