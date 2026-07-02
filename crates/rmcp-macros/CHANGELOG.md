@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.8.0...rmcp-macros-v2.0.0) - 2026-06-27
+
+### Added
+
+- [**breaking**] align model types with MCP 2025-11-25 spec ([#927](https://github.com/modelcontextprotocol/rust-sdk/pull/927))
+
+### Fixed
+
+- fill missing fully qualified syntax in prompt_handler macros ([#866](https://github.com/modelcontextprotocol/rust-sdk/pull/866))
+
+### Other
+
+- align README examples with v2 model API ([#928](https://github.com/modelcontextprotocol/rust-sdk/pull/928))
+
 ## [1.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.7.0...rmcp-macros-v1.8.0) - 2026-06-22
 
 ### Added

@@ -162,7 +162,7 @@ where
 }
 
 /// Echoes the client-requested version if known; otherwise returns `server_fallback`.
-fn negotiate_protocol_version(
+pub(crate) fn negotiate_protocol_version(
     client_requested: &ProtocolVersion,
     server_fallback: ProtocolVersion,
 ) -> ProtocolVersion {
@@ -254,6 +254,11 @@ where
         &peer_info.params.protocol_version,
         init_response.protocol_version,
     );
+    // Update peer_info so context.protocol_version() reflects the negotiated
+    // version in all subsequent request handlers.
+    let mut negotiated_peer_info = peer_info.params.clone();
+    negotiated_peer_info.protocol_version = init_response.protocol_version.clone();
+    peer.set_peer_info(negotiated_peer_info);
     transport
         .send(ServerJsonRpcMessage::response(
             ServerResult::InitializeResult(init_response),
