@@ -518,11 +518,6 @@ impl ErrorCode {
     pub const INVALID_PARAMS: Self = Self(-32602);
     pub const INTERNAL_ERROR: Self = Self(-32603);
     pub const PARSE_ERROR: Self = Self(-32700);
-    #[deprecated(
-        since = "2.0.0",
-        note = "URLElicitationRequiredError is removed by SEP-2322 (Multi Round-Trip Requests). Use InputRequiredResult instead."
-    )]
-    pub const URL_ELICITATION_REQUIRED: Self = Self(-32042);
 }
 
 /// Error information for JSON-RPC error responses.
@@ -577,17 +572,6 @@ impl ErrorData {
     }
     pub fn internal_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
-    }
-    #[deprecated(
-        since = "2.0.0",
-        note = "URLElicitationRequiredError is removed by SEP-2322 (Multi Round-Trip Requests). Use InputRequiredResult instead."
-    )]
-    #[allow(deprecated)]
-    pub fn url_elicitation_required(
-        message: impl Into<Cow<'static, str>>,
-        data: Option<Value>,
-    ) -> Self {
-        Self::new(ErrorCode::URL_ELICITATION_REQUIRED, message, data)
     }
 }
 
@@ -2783,7 +2767,6 @@ pub type RootsListChangedNotification = NotificationNoParam<RootsListChangedNoti
 // Elicitation allows servers to request interactive input from users during tool execution.
 const_string!(ElicitationCreateRequestMethod = "elicitation/create");
 const_string!(ElicitationResponseNotificationMethod = "notifications/elicitation/response");
-const_string!(ElicitationCompletionNotificationMethod = "notifications/elicitation/complete");
 
 /// Represents the possible actions a user can take in response to an elicitation request.
 ///
@@ -3017,34 +3000,6 @@ pub type ElicitRequest = Request<ElicitationCreateRequestMethod, ElicitRequestPa
 
 #[deprecated(since = "2.0.0", note = "Renamed to ElicitRequest")]
 pub type CreateElicitationRequest = ElicitRequest;
-
-/// Notification parameters for an url elicitation completion notification.
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct ElicitationResponseNotificationParam {
-    pub elicitation_id: String,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-impl ElicitationResponseNotificationParam {
-    /// Create a new ElicitationResponseNotificationParam.
-    pub fn new(elicitation_id: impl Into<String>) -> Self {
-        Self {
-            elicitation_id: elicitation_id.into(),
-            meta: None,
-        }
-    }
-}
-
-/// Notification sent when an url elicitation process is completed.
-pub type ElicitationCompleteNotification =
-    Notification<ElicitationCompletionNotificationMethod, ElicitationResponseNotificationParam>;
-
-#[deprecated(since = "2.0.0", note = "Renamed to ElicitationCompleteNotification")]
-pub type ElicitationCompletionNotification = ElicitationCompleteNotification;
 
 // =============================================================================
 // TOOL EXECUTION RESULTS
@@ -3828,7 +3783,6 @@ ts_union!(
     | ResourceListChangedNotification
     | ToolListChangedNotification
     | PromptListChangedNotification
-    | ElicitationCompleteNotification
     | TaskStatusNotification
     | CustomNotification;
 );

@@ -770,34 +770,10 @@
         }
       ]
     },
-    "ElicitationCompletionNotificationMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "notifications/elicitation/complete"
-    },
     "ElicitationCreateRequestMethod": {
       "type": "string",
       "format": "const",
       "const": "elicitation/create"
-    },
-    "ElicitationResponseNotificationParam": {
-      "description": "Notification parameters for an url elicitation completion notification.",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "elicitationId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "elicitationId"
-      ]
     },
     "ElicitationSchema": {
       "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
@@ -1421,9 +1397,6 @@
           "$ref": "#/definitions/Notification5"
         },
         {
-          "$ref": "#/definitions/Notification6"
-        },
-        {
           "$ref": "#/definitions/CustomNotification"
         }
       ],
@@ -1892,21 +1865,6 @@
       ]
     },
     "Notification5": {
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ElicitationCompletionNotificationMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/ElicitationResponseNotificationParam"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    "Notification6": {
       "type": "object",
       "properties": {
         "method": {

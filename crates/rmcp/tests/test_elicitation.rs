@@ -1882,31 +1882,6 @@ async fn test_url_elicitation_json_rpc_protocol() {
     }
 }
 
-/// Test ElicitationCompleteNotification serialization/deserialization
-#[tokio::test]
-async fn test_elicitation_completion_notification() {
-    let notification_params = ElicitationResponseNotificationParam::new("elicit-789");
-
-    // Test serialization
-    let json = serde_json::to_value(&notification_params).unwrap();
-    let expected = json!({
-        "elicitationId": "elicit-789"
-    });
-    assert_eq!(json, expected);
-
-    // Test deserialization
-    let deserialized: ElicitationResponseNotificationParam =
-        serde_json::from_value(expected).unwrap();
-    assert_eq!(deserialized.elicitation_id, "elicit-789");
-
-    // Test complete notification structure
-    let notification = ElicitationCompleteNotification::new(notification_params);
-
-    let json = serde_json::to_value(&notification).unwrap();
-    assert_eq!(json["method"], "notifications/elicitation/complete");
-    assert_eq!(json["params"]["elicitationId"], "elicit-789");
-}
-
 /// Test UrlElicitationCapability structure and serialization
 #[tokio::test]
 async fn test_url_elicitation_capability() {
@@ -2020,40 +1995,6 @@ async fn test_elicitation_both_modes() {
     assert!(url_json.get("requestedSchema").is_none());
 }
 
-/// Test URL_ELICITATION_REQUIRED error code
-#[tokio::test]
-#[allow(deprecated)]
-async fn test_url_elicitation_required_error_code() {
-    // Test the error code constant
-    assert_eq!(ErrorCode::URL_ELICITATION_REQUIRED.0, -32042);
-
-    // Test creating error data with URL_ELICITATION_REQUIRED
-    let error_data = ErrorData::url_elicitation_required(
-        "URL elicitation is required for this operation",
-        Some(json!({
-            "url": "https://example.com/complete",
-            "elicitationId": "elicit-999"
-        })),
-    );
-
-    assert_eq!(error_data.code, ErrorCode::URL_ELICITATION_REQUIRED);
-    assert_eq!(
-        error_data.message,
-        "URL elicitation is required for this operation"
-    );
-    assert!(error_data.data.is_some());
-
-    // Test serialization
-    let json = serde_json::to_value(&error_data).unwrap();
-    assert_eq!(json["code"], -32042);
-    assert_eq!(
-        json["message"],
-        "URL elicitation is required for this operation"
-    );
-    assert_eq!(json["data"]["url"], "https://example.com/complete");
-    assert_eq!(json["data"]["elicitationId"], "elicit-999");
-}
-
 /// Test ClientCapabilities with different elicitation mode combinations
 #[tokio::test]
 async fn test_client_capabilities_elicitation_modes() {
@@ -2103,32 +2044,6 @@ async fn test_client_capabilities_elicitation_modes() {
     assert!(json["elicitation"]["url"].is_object());
 }
 
-/// Test ElicitationCompleteNotification in ServerNotification enum
-#[tokio::test]
-async fn test_elicitation_completion_in_server_notification() {
-    let notification_param = ElicitationResponseNotificationParam::new("notify-123");
-
-    let completion_notification = ElicitationCompleteNotification::new(notification_param.clone());
-
-    // Test that it's part of ServerNotification
-    let server_notification =
-        ServerNotification::ElicitationCompleteNotification(completion_notification);
-
-    // Test serialization
-    let json = serde_json::to_value(&server_notification).unwrap();
-    assert_eq!(json["method"], "notifications/elicitation/complete");
-    assert_eq!(json["params"]["elicitationId"], "notify-123");
-
-    // Test deserialization
-    let deserialized: ServerNotification = serde_json::from_value(json).unwrap();
-    match deserialized {
-        ServerNotification::ElicitationCompleteNotification(notif) => {
-            assert_eq!(notif.params.elicitation_id, "notify-123");
-        }
-        _ => panic!("Expected ElicitationCompleteNotification variant"),
-    }
-}
-
 /// Test ElicitationAction with URL elicitation workflow
 #[tokio::test]
 async fn test_url_elicitation_action_workflow() {
@@ -2161,11 +2076,5 @@ async fn test_elicitation_method_constants() {
     assert_eq!(
         ElicitationResponseNotificationMethod::VALUE,
         "notifications/elicitation/response"
-    );
-
-    // Test new completion notification method
-    assert_eq!(
-        ElicitationCompletionNotificationMethod::VALUE,
-        "notifications/elicitation/complete"
     );
 }

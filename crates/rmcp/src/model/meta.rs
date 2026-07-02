@@ -218,7 +218,6 @@ variant_extension! {
         ResourceListChangedNotification
         ToolListChangedNotification
         PromptListChangedNotification
-        ElicitationCompleteNotification
         TaskStatusNotification
         CustomNotification
     }

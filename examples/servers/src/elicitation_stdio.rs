@@ -129,18 +129,9 @@ impl ElicitationServer {
                 )
             })?;
         match elicit_result {
-            ElicitationAction::Accept => {
-                // Mock notifying completion
-                let _ = context
-                    .peer
-                    .notify_url_elicitation_completed(ElicitationResponseNotificationParam::new(
-                        "elicit_123",
-                    ))
-                    .await;
-                Ok(CallToolResult::success(vec![ContentBlock::text(
-                    "Elicitation via URL successful".to_string(),
-                )]))
-            }
+            ElicitationAction::Accept => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "Elicitation via URL successful".to_string(),
+            )])),
             ElicitationAction::Cancel => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "Elicitation via URL cancelled by user".to_string(),
             )])),
