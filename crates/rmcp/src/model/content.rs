@@ -297,7 +297,7 @@ impl ContentBlock {
         ContentBlock::Resource(EmbeddedResource::new(
             ResourceContents::TextResourceContents {
                 uri: uri.into(),
-                mime_type: Some("text".to_string()),
+                mime_type: Some("text/plain".to_string()),
                 text: content.into(),
                 meta: None,
             },
