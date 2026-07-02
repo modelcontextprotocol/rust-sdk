@@ -137,21 +137,19 @@ use crate::{
         tool::{CallToolHandler, DynCallToolHandler, ToolCallContext},
         tool_name_validation::validate_and_warn_tool_name,
     },
-    model::{CallToolResult, ContentBlock, ErrorCode, Tool, ToolAnnotations},
+    model::{CallToolResponse, CallToolResult, ContentBlock, ErrorCode, Tool, ToolAnnotations},
     service::{MaybeBoxFuture, MaybeSend},
 };
 
 const TOOL_ARGUMENT_DESERIALIZATION_ERROR_PREFIX: &str = "failed to deserialize parameters:";
 
-fn into_tool_argument_error(error: crate::ErrorData) -> Result<CallToolResult, crate::ErrorData> {
+fn into_tool_argument_error(error: crate::ErrorData) -> Result<CallToolResponse, crate::ErrorData> {
     if error.code == ErrorCode::INVALID_PARAMS
         && error
             .message
             .starts_with(TOOL_ARGUMENT_DESERIALIZATION_ERROR_PREFIX)
     {
-        return Ok(CallToolResult::error(vec![ContentBlock::text(
-            error.message,
-        )]));
+        return Ok(CallToolResult::error(vec![ContentBlock::text(error.message)]).into());
     }
 
     Err(error)
@@ -200,7 +198,8 @@ impl<S: MaybeSend + 'static> ToolRoute<S> {
     where
         C: for<'a> Fn(
                 ToolCallContext<'a, S>,
-            ) -> MaybeBoxFuture<'a, Result<CallToolResult, crate::ErrorData>>
+            )
+                -> MaybeBoxFuture<'a, Result<CallToolResponse, crate::ErrorData>>
             + MaybeSend
             + 'static,
     {
@@ -561,7 +560,7 @@ where
     pub async fn call(
         &self,
         context: ToolCallContext<'_, S>,
-    ) -> Result<CallToolResult, crate::ErrorData> {
+    ) -> Result<crate::model::CallToolResponse, crate::ErrorData> {
         let name = context.name();
         if self.disabled.contains(name) {
             return Err(crate::ErrorData::invalid_params("tool not found", None));
@@ -679,6 +678,9 @@ mod tests {
             .call(ctx)
             .await
             .expect("argument validation should be a tool result");
+        let CallToolResponse::Complete(result) = result else {
+            panic!("expected complete CallToolResult");
+        };
         assert_eq!(result.is_error, Some(true));
 
         let text = result
@@ -696,7 +698,7 @@ mod tests {
         let service = DummyService;
         let mut router = ToolRouter::new().with_route(ToolRoute::new_dyn(
             crate::model::Tool::new("test_tool", "a test tool", Arc::new(Default::default())),
-            |_ctx| Box::pin(async { Ok(CallToolResult::default()) }),
+            |_ctx| Box::pin(async { Ok(CallToolResult::default().into()) }),
         ));
         router.disable_route("test_tool");
 

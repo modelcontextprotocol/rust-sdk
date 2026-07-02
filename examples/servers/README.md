@@ -72,6 +72,17 @@ A minimal stdio server demonstrating task-based tool invocation per
 - Wires up `enqueue_task` / `tasks/get` / `tasks/result` / `tasks/cancel` via `#[task_handler]`
 - Pair with `examples/clients/src/task_stdio.rs` to see the full lifecycle (create → poll → fetch result)
 
+### MRTR Demo (`mrtr.rs`)
+
+An end-to-end walkthrough of SEP-2322 Multi Round-Trip Requests, running a
+server and client in one process over an in-memory stream.
+
+- Server answers `tools/call` with an `InputRequiredResult` asking the client to elicit a value
+- Client uses `call_tool` to auto-fulfil the elicitation and retry, then `call_tool_once` for manual control
+- Seals/opens the untrusted `requestState` with `RequestStateCodec` (HMAC integrity)
+- Both sides negotiate `2026-07-28`, the minimum version for MRTR
+- Run with `cargo run -p mcp-server-examples --example servers_mrtr`
+
 ### Progress Demo Server (`progress_demo.rs`)
 
 A server that demonstrates progress notifications during long-running operations.

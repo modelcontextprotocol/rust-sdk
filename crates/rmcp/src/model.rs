@@ -14,6 +14,8 @@ mod extension;
 mod meta;
 mod mrtr;
 mod prompt;
+#[cfg(feature = "request-state")]
+mod request_state;
 mod resource;
 mod serde_impl;
 mod task;
@@ -26,6 +28,8 @@ pub use extension::*;
 pub use meta::*;
 pub use mrtr::*;
 pub use prompt::*;
+#[cfg(feature = "request-state")]
+pub use request_state::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;

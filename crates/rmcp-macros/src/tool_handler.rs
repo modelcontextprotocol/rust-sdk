@@ -47,7 +47,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                 &self,
                 request: rmcp::model::CallToolRequestParams,
                 context: rmcp::service::RequestContext<rmcp::RoleServer>,
-            ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+            ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
                 let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
                 #router.call(tcc).await
             }
