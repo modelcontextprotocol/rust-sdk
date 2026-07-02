@@ -656,11 +656,11 @@ impl ServerHandler for ConformanceServer {
                     "test_prompt_with_arguments",
                     Some("A test prompt that accepts arguments"),
                     Some(vec![
-                        PromptArgument::new("name")
-                            .with_description("The name to greet")
+                        PromptArgument::new("arg1")
+                            .with_description("First test argument")
                             .with_required(true),
-                        PromptArgument::new("style")
-                            .with_description("The greeting style")
+                        PromptArgument::new("arg2")
+                            .with_description("Second test argument")
                             .with_required(false),
                     ]),
                 ),
@@ -692,14 +692,11 @@ impl ServerHandler for ConformanceServer {
             .with_description("A simple test prompt")),
             "test_prompt_with_arguments" => {
                 let args = request.arguments.unwrap_or_default();
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("World");
-                let style = args
-                    .get("style")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("friendly");
+                let arg1 = args.get("arg1").and_then(|v| v.as_str()).unwrap_or("");
+                let arg2 = args.get("arg2").and_then(|v| v.as_str()).unwrap_or("");
                 Ok(GetPromptResult::new(vec![PromptMessage::new_text(
                     Role::User,
-                    format!("Please greet {} in a {} style.", name, style),
+                    format!("Prompt with arguments: arg1='{}', arg2='{}'", arg1, arg2),
                 )])
                 .with_description("A prompt with arguments"))
             }
