@@ -1687,7 +1687,10 @@ impl AuthorizationManager {
         debug!("refresh token present, attempting refresh");
 
         let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
-        let mut refresh_request = oauth_client.exchange_refresh_token(&refresh_token_value);
+        let mut refresh_request = oauth_client
+            .exchange_refresh_token(&refresh_token_value)
+            // RFC 8707: the resource indicator is required on token requests, including refreshes
+            .add_extra_param("resource", self.base_url.to_string());
         let mut refresh_scopes = stored_credentials.granted_scopes;
         self.add_offline_access_if_supported(&mut refresh_scopes);
         for scope in refresh_scopes {
@@ -5480,6 +5483,42 @@ mod tests {
         let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
         scope_parts.sort_unstable();
         assert_eq!(scope_parts, vec!["read", "write"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_includes_resource_parameter() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(
+            params.get("resource").map(String::as_str),
+            Some("http://localhost/"),
+            "refresh requests must carry the RFC 8707 resource parameter, got body: {body}"
+        );
     }
 
     #[tokio::test]
