@@ -10,6 +10,31 @@
 //! [`InputRequiredResult`] instead of the normal result. The client fulfills the
 //! [`InputRequests`], then retries the original request with [`InputResponses`] and
 //! the echoed `requestState`.
+//!
+//! # Using MRTR
+//!
+//! **Server:** return an [`InputRequiredResult`] from a tool/prompt/resource
+//! handler via the matching outcome enum ([`CallToolResponse`],
+//! [`GetPromptResponse`], [`ReadResourceResponse`]). The SDK only lets an
+//! `InputRequiredResult` reach a peer that negotiated protocol version
+//! `2026-07-28` or newer; older peers get a protocol error instead.
+//!
+//! **Client:** the high-level `RunningService` helpers — `call_tool`,
+//! `get_prompt`, and `read_resource` — automatically fulfil each
+//! [`InputRequest`] through the local `ClientHandler` and retry, up to
+//! [`DEFAULT_MRTR_MAX_ROUNDS`]. Use the `*_once` variants (e.g.
+//! `call_tool_once`) to receive an [`InputRequiredResult`] directly and drive
+//! the rounds yourself.
+//!
+//! # `requestState` is untrusted
+//!
+//! The client echoes `requestState` back verbatim, so a stateless server that
+//! stores meaningful data in it MUST verify integrity before trusting the echoed
+//! value. Enable the `request-state` feature and use `RequestStateCodec` to seal
+//! and open it, or keep the state server-side and use `requestState` only as an
+//! opaque handle.
+//!
+//! A complete runnable walkthrough lives in the `servers_mrtr` example.
 
 use std::collections::BTreeMap;
 

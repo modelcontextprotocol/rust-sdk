@@ -13,6 +13,7 @@ rmcp = { workspace = true, features = [
     "transport-streamable-http-server",
     "auth",
     "elicitation",
+    "request-state",
     "schemars",
 ] }
 tokio = { version = "1", features = [
@@ -113,3 +114,7 @@ path = "src/elicitation_enum_inference.rs"
 [[example]]
 name = "servers_task_stdio"
 path = "src/task_stdio.rs"
+
+[[example]]
+name = "servers_mrtr"
+path = "src/mrtr.rs"
