@@ -29,6 +29,10 @@ pub mod task_manager;
 #[cfg(any(feature = "client", feature = "server"))]
 pub mod transport;
 
+#[cfg(feature = "discovery")]
+#[cfg_attr(docsrs, doc(cfg(feature = "discovery")))]
+pub mod discovery;
+
 // re-export
 #[cfg(all(feature = "macros", feature = "server"))]
 pub use pastey::paste;

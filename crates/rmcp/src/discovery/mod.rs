@@ -1,0 +1,359 @@
+//! Discovery of MCP servers from `mcp://` URIs per
+//! [draft-serra-mcp-discovery-uri](https://datatracker.ietf.org/doc/draft-serra-mcp-discovery-uri/).
+//!
+//! Resolution order:
+//! 1. (optional, "fast mode") DNS TXT `_mcp.{host}` for a hint, and
+//!    `_mcp-key.{host}` for the public key used to verify manifest signatures.
+//! 2. (authoritative) `GET https://{host}/.well-known/mcp-server`.
+//! 3. (fallback) direct handshake probe at `https://{host}/mcp`.
+//!
+//! A `.well-known` manifest always takes precedence over DNS hints. All
+//! endpoints must be HTTPS and the endpoint host must equal, or be a subdomain
+//! of, the discovery host. When a manifest carries a signature it MUST verify.
+
+mod dns;
+mod error;
+mod http;
+mod jws;
+mod manifest;
+
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+pub use dns::{DnsJwk, DnsLookupError, DnsResolver, HickoryDnsResolver, McpDnsHint};
+pub use error::{DiscoveryError, Result};
+pub use http::{FetchOutcome, ManifestFetcher, ReqwestFetcher};
+pub use manifest::{
+    AuthRequirements, ManifestSignature, McpServerManifest, TrustClass, host_matches,
+};
+
+pub const WELL_KNOWN_PATH: &str = "/.well-known/mcp-server";
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Which step of the resolution chain produced the final endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DiscoverySource {
+    WellKnown,
+    DirectFallback,
+}
+
+/// Options controlling resolution behaviour.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct DiscoveryOptions {
+    /// Perform the optional DNS fast-mode step (also required to verify
+    /// manifest signatures, since the public key is published in DNS).
+    pub use_dns: bool,
+    /// Reject manifests that do not carry a verifiable signature. A present
+    /// signature is always verified regardless of this flag.
+    pub require_signature: bool,
+    pub timeout: Duration,
+}
+
+impl Default for DiscoveryOptions {
+    fn default() -> Self {
+        Self {
+            use_dns: true,
+            require_signature: false,
+            timeout: DEFAULT_TIMEOUT,
+        }
+    }
+}
+
+/// A successfully discovered MCP server.
+///
+/// The caller is responsible for confirming the trust/auth posture before
+/// connecting to [`endpoint`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredServer {
+    /// Authority (host and optional port) the `mcp://` URI pointed at.
+    pub discovery_host: String,
+    /// Resolved HTTPS MCP endpoint.
+    pub endpoint: String,
+    pub manifest: McpServerManifest,
+    pub source: DiscoverySource,
+    pub signature_verified: bool,
+    pub trust_class: TrustClass,
+    /// True when a DNS `src` hint disagreed with the authoritative manifest
+    /// endpoint (the manifest wins, but the conflict is surfaced).
+    pub dns_conflict: bool,
+}
+
+impl DiscoveredServer {
+    /// Parse the resolved endpoint as a [`url::Url`], suitable for constructing
+    /// a `StreamableHttpClientTransport`.
+    pub fn endpoint_url(&self) -> Result<url::Url> {
+        url::Url::parse(&self.endpoint).map_err(|e| DiscoveryError::MalformedManifest {
+            url: self.endpoint.clone(),
+            reason: e.to_string(),
+        })
+    }
+}
+
+/// Entry point for `mcp://` URI resolution.
+#[non_exhaustive]
+pub struct McpDiscovery;
+
+impl McpDiscovery {
+    /// Resolve an `mcp://` URI using the system DNS resolver and a real HTTP client.
+    pub async fn resolve(uri: &str) -> Result<DiscoveredServer> {
+        Self::resolve_with_options(uri, DiscoveryOptions::default()).await
+    }
+
+    /// Resolve with explicit options.
+    pub async fn resolve_with_options(
+        uri: &str,
+        opts: DiscoveryOptions,
+    ) -> Result<DiscoveredServer> {
+        let fetcher = ReqwestFetcher::new(opts.timeout)?;
+        let dns = if opts.use_dns {
+            match HickoryDnsResolver::from_system() {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::debug!("DNS resolver unavailable, skipping fast-mode: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let dns_ref = dns.as_ref().map(|d| d as &dyn DnsResolver);
+        resolve_with(uri, dns_ref, &fetcher, &opts).await
+    }
+}
+
+struct ParsedUri {
+    /// host without port, used for DNS labels and host-match
+    host: String,
+    /// authority (host[:port]) used to build https URLs
+    authority: String,
+    /// path component, if the URI carried one (e.g. `mcp://host/shop`); used as
+    /// the direct-handshake fallback endpoint when present.
+    path: Option<String>,
+}
+
+fn parse_uri(uri: &str) -> Result<ParsedUri> {
+    let parsed =
+        url::Url::parse(uri).map_err(|e| DiscoveryError::InvalidUri(format!("{uri}: {e}")))?;
+    if parsed.scheme() != "mcp" {
+        return Err(DiscoveryError::InvalidUri(format!(
+            "expected scheme \"mcp\", got {:?}",
+            parsed.scheme()
+        )));
+    }
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| DiscoveryError::InvalidUri(format!("{uri}: missing host")))?
+        .to_string();
+    let authority = match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.clone(),
+    };
+    let trimmed_path = parsed.path().trim_end_matches('/');
+    let path = (!trimmed_path.is_empty()).then(|| trimmed_path.to_string());
+    Ok(ParsedUri {
+        host,
+        authority,
+        path,
+    })
+}
+
+/// An `src` hint from DNS is only usable if it is HTTPS and its host equals, or
+/// is a subdomain of, the discovery host — the same host-match rule applied to
+/// manifest endpoints, so an unauthenticated DNS answer cannot point discovery
+/// at an arbitrary host.
+fn validated_dns_src(host: &str, dns_hint: &Option<McpDnsHint>) -> Option<String> {
+    let src = dns_hint.as_ref()?.src.as_ref()?;
+    let parsed = url::Url::parse(src).ok()?;
+    if parsed.scheme() != "https" {
+        return None;
+    }
+    if !host_matches(host, parsed.host_str()?) {
+        return None;
+    }
+    Some(src.clone())
+}
+
+/// Resolve with injectable DNS and HTTP backends (used by tests).
+pub async fn resolve_with(
+    uri: &str,
+    dns: Option<&dyn DnsResolver>,
+    fetcher: &dyn ManifestFetcher,
+    opts: &DiscoveryOptions,
+) -> Result<DiscoveredServer> {
+    let ParsedUri {
+        host,
+        authority,
+        path,
+    } = parse_uri(uri)?;
+
+    // Step 1: optional DNS fast-mode. Failures are non-fatal; absent keys only
+    // matter if the manifest later claims a signature.
+    let mut dns_hint: Option<McpDnsHint> = None;
+    let mut jwks: Vec<DnsJwk> = Vec::new();
+    if let Some(resolver) = dns {
+        match resolver.txt_lookup(&format!("_mcp.{host}")).await {
+            Ok(records) => dns_hint = dns::parse_mcp_hint(&records),
+            Err(e) => tracing::debug!("_mcp.{host} TXT lookup failed: {e}"),
+        }
+        match resolver.txt_lookup(&format!("_mcp-key.{host}")).await {
+            Ok(records) => jwks = dns::parse_jwks(&records),
+            Err(e) => tracing::debug!("_mcp-key.{host} TXT lookup failed: {e}"),
+        }
+    }
+
+    // Step 2: authoritative .well-known manifest. A transport/non-404 error is
+    // NOT treated as "manifest absent": failing through to the unsigned fallback
+    // on error would let an on-path attacker who can disrupt (but not break TLS
+    // on) the well-known request strip a signed manifest's trust posture. Only a
+    // definitive 404 advances to the fallback.
+    let well_known_url = format!("https://{authority}{WELL_KNOWN_PATH}");
+    match fetcher.get(&well_known_url).await {
+        Ok(FetchOutcome::Found { body }) => {
+            return build_from_manifest(
+                &host,
+                &authority,
+                &body,
+                &well_known_url,
+                &jwks,
+                &dns_hint,
+                opts,
+            );
+        }
+        Ok(FetchOutcome::NotFound) => {}
+        Err(e) => {
+            return Err(e);
+        }
+    }
+
+    // Step 3: direct handshake fallback. Candidate endpoints, in priority order:
+    //   1. a path the caller supplied in the discovery URI (`mcp://host/shop`),
+    //   2. an `src` hint from the `_mcp.{host}` DNS record (validated: HTTPS and
+    //      host equal-or-subdomain of the discovery host, so an unauthenticated
+    //      DNS answer cannot redirect to an arbitrary host),
+    //   3. the default `https://{authority}/mcp`.
+    // The first endpoint that answers a real MCP handshake wins.
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(p) = &path {
+        candidates.push(format!("https://{authority}{p}"));
+    } else {
+        if let Some(src) = validated_dns_src(&host, &dns_hint) {
+            candidates.push(src);
+        }
+        candidates.push(format!("https://{authority}/mcp"));
+    }
+
+    let mut endpoint = None;
+    for candidate in candidates {
+        let reachable = fetcher.probe(&candidate).await?;
+        if reachable {
+            endpoint = Some(candidate);
+            break;
+        }
+    }
+    let Some(endpoint) = endpoint else {
+        return Err(DiscoveryError::NotFound(host));
+    };
+    if opts.require_signature {
+        return Err(DiscoveryError::SignatureVerification(
+            "direct-handshake fallback cannot be signed".to_string(),
+        ));
+    }
+    let manifest = McpServerManifest {
+        mcp_version: String::new(),
+        name: host.clone(),
+        endpoint: endpoint.clone(),
+        transport: "http".to_string(),
+        description: None,
+        auth: None,
+        capabilities: Vec::new(),
+        trust_class: None,
+        signature: None,
+    };
+    Ok(DiscoveredServer {
+        discovery_host: authority,
+        endpoint,
+        trust_class: manifest.effective_trust_class(),
+        manifest,
+        source: DiscoverySource::DirectFallback,
+        signature_verified: false,
+        dns_conflict: false,
+    })
+}
+
+fn build_from_manifest(
+    host: &str,
+    authority: &str,
+    body: &str,
+    url: &str,
+    jwks: &[DnsJwk],
+    dns_hint: &Option<McpDnsHint>,
+    opts: &DiscoveryOptions,
+) -> Result<DiscoveredServer> {
+    let manifest: McpServerManifest =
+        serde_json::from_str(body).map_err(|e| DiscoveryError::MalformedManifest {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
+    manifest.validate(url)?;
+
+    let endpoint_url =
+        url::Url::parse(&manifest.endpoint).map_err(|e| DiscoveryError::MalformedManifest {
+            url: url.to_string(),
+            reason: format!("invalid endpoint {:?}: {e}", manifest.endpoint),
+        })?;
+    if endpoint_url.scheme() != "https" {
+        return Err(DiscoveryError::InsecureEndpoint(manifest.endpoint.clone()));
+    }
+    let endpoint_host = endpoint_url.host_str().unwrap_or_default();
+    if !host_matches(host, endpoint_host) {
+        return Err(DiscoveryError::EndpointHostMismatch {
+            endpoint_host: endpoint_host.to_string(),
+            discovery_host: host.to_string(),
+        });
+    }
+
+    let signature_verified = match &manifest.signature {
+        Some(sig) => {
+            jws::verify_signature(body, sig, jwks)?;
+            true
+        }
+        None => {
+            if opts.require_signature {
+                return Err(DiscoveryError::SignatureVerification(
+                    "manifest is unsigned but a signature is required".to_string(),
+                ));
+            }
+            false
+        }
+    };
+
+    let dns_conflict = dns_hint
+        .as_ref()
+        .and_then(|h| h.src.as_deref())
+        .map(|src| src != manifest.endpoint)
+        .unwrap_or(false);
+    if dns_conflict {
+        tracing::warn!(
+            "DNS src hint disagrees with .well-known endpoint for {host}; using manifest endpoint"
+        );
+    }
+
+    Ok(DiscoveredServer {
+        discovery_host: authority.to_string(),
+        endpoint: manifest.endpoint.clone(),
+        trust_class: manifest.effective_trust_class(),
+        manifest,
+        source: DiscoverySource::WellKnown,
+        signature_verified,
+        dns_conflict,
+    })
+}
+
+#[cfg(test)]
+mod tests;
