@@ -28,8 +28,6 @@ use crate::{
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 
-/// Clones `base` and, when the negotiated version requires SEP-2243 headers, adds the
-/// `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` headers derived from the outgoing message.
 fn build_request_headers(
     base: &HashMap<HeaderName, HeaderValue>,
     message: &ClientJsonRpcMessage,
@@ -58,7 +56,6 @@ fn build_request_headers(
     headers
 }
 
-/// Caches tool input schemas from a `tools/list` response for later `Mcp-Param-*` emission.
 fn cache_tools_from_response(
     cache: &mut HashMap<String, Arc<JsonObject>>,
     message: &ServerJsonRpcMessage,
@@ -78,10 +75,6 @@ fn cache_tools_from_response(
     }
 }
 
-/// Derives the negotiated protocol version and base request headers from an
-/// initialize response: returns `base` with `MCP-Protocol-Version` injected
-/// (per MCP 2025-06-18) plus the version used to gate SEP-2243 headers,
-/// defaulting to a pre-SEP version when the response can't be parsed.
 fn negotiate_version_headers(
     init_response: &ServerJsonRpcMessage,
     base: HashMap<HeaderName, HeaderValue>,
