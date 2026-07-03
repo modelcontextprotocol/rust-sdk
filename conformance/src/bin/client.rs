@@ -192,6 +192,9 @@ async fn perform_oauth_flow(
     _ctx: &ConformanceContext,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
     let mut oauth = OAuthState::new(server_url, None).await?;
+    // The conformance authorization server runs on loopback; opt in so metadata
+    // discovery is not blocked by the SSRF guard.
+    oauth.set_allow_private_metadata_hosts(true);
 
     // Discover + register + get auth URL
     oauth
@@ -242,6 +245,9 @@ async fn perform_oauth_flow_preregistered(
     client_secret: &str,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
     let mut manager = AuthorizationManager::new(server_url).await?;
+    // The conformance authorization server runs on loopback; opt in so metadata
+    // discovery is not blocked by the SSRF guard.
+    manager.set_allow_private_metadata_hosts(true);
     let metadata = manager.discover_metadata().await?;
     manager.set_metadata(metadata);
 
@@ -316,6 +322,9 @@ async fn run_auth_scope_step_up_client(
 ) -> anyhow::Result<()> {
     // First auth
     let mut oauth = OAuthState::new(server_url, None).await?;
+    // The conformance authorization server runs on loopback; opt in so metadata
+    // discovery is not blocked by the SSRF guard.
+    oauth.set_allow_private_metadata_hosts(true);
     oauth
         .start_authorization_with_metadata_url(
             &[],
@@ -368,6 +377,7 @@ async fn run_auth_scope_step_up_client(
                 // Re-do the full flow; the server will give us the right scopes
                 // on the second authorization request.
                 let mut oauth2 = OAuthState::new(server_url, None).await?;
+                oauth2.set_allow_private_metadata_hosts(true);
                 // Pass the escalated scope hint
                 oauth2
                     .start_authorization_with_metadata_url(
@@ -417,6 +427,9 @@ async fn run_auth_scope_retry_limit_client(
 
     loop {
         let mut oauth = OAuthState::new(server_url, None).await?;
+        // The conformance authorization server runs on loopback; opt in so metadata
+        // discovery is not blocked by the SSRF guard.
+        oauth.set_allow_private_metadata_hosts(true);
         oauth
             .start_authorization_with_metadata_url(
                 &[],
@@ -524,6 +537,9 @@ async fn run_client_credentials_basic(
         .unwrap_or("conformance-test-secret");
 
     let mut manager = AuthorizationManager::new(server_url).await?;
+    // The conformance authorization server runs on loopback; opt in so metadata
+    // discovery is not blocked by the SSRF guard.
+    manager.set_allow_private_metadata_hosts(true);
     let metadata = manager.discover_metadata().await?;
     let token_endpoint = metadata.token_endpoint.clone();
     manager.set_metadata(metadata);
@@ -582,6 +598,9 @@ async fn run_client_credentials_jwt(
 
     // Discover metadata to get token endpoint
     let mut manager = AuthorizationManager::new(server_url).await?;
+    // The conformance authorization server runs on loopback; opt in so metadata
+    // discovery is not blocked by the SSRF guard.
+    manager.set_allow_private_metadata_hosts(true);
     let metadata = manager.discover_metadata().await?;
     let token_endpoint = metadata.token_endpoint.clone();
     manager.set_metadata(metadata);
