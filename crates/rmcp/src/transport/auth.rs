@@ -477,6 +477,9 @@ pub enum AuthError {
     #[error("Metadata error: {0}")]
     MetadataError(String),
 
+    #[error("Authorization server does not support the required PKCE code challenge method (S256)")]
+    PkceUnsupported,
+
     #[error("URL parse error: {0}")]
     UrlError(#[from] url::ParseError),
 
@@ -1159,18 +1162,21 @@ impl AuthorizationManager {
             }
         }
 
-        // for PKCE, we always send s256 since oauth 2.1 requires servers to support it,
-        // but warn if the server metadata suggests otherwise
+        // The client always sends an S256 challenge. A server that advertises
+        // methods without S256 can't do the flow we require, so refuse it. A
+        // server that omits the field is tolerated: it usually means the server
+        // didn't advertise PKCE, not that it lacks S256.
         match &metadata.code_challenge_methods_supported {
             Some(methods) if !methods.iter().any(|m| m == "S256") => {
+                return Err(AuthError::PkceUnsupported);
+            }
+            None => {
                 warn!(
-                    ?methods,
-                    "server does not advertise S256 in code_challenge_methods_supported, \
-                     proceeding with S256 anyway as oauth 2.1 requires it. \
-                     The server is not compliant with the specification!"
+                    "authorization server metadata omits code_challenge_methods_supported; \
+                     proceeding with an S256 challenge anyway"
                 );
             }
-            _ => {}
+            Some(_) => {}
         }
 
         Ok(())
@@ -4307,19 +4313,43 @@ mod tests {
         assert!(manager.validate_server_metadata("code").is_err());
     }
 
-    #[tokio::test]
-    async fn test_validate_as_metadata_passes_without_pkce_s256() {
-        let mut manager = AuthorizationManager::new("https://example.com")
-            .await
-            .unwrap();
-        let metadata = AuthorizationMetadata {
+    fn as_metadata_with_pkce(methods: Option<Vec<String>>) -> AuthorizationMetadata {
+        AuthorizationMetadata {
             authorization_endpoint: "https://auth.example.com/authorize".to_string(),
             token_endpoint: "https://auth.example.com/token".to_string(),
             response_types_supported: Some(vec!["code".to_string()]),
-            code_challenge_methods_supported: Some(vec!["plain".to_string()]),
+            code_challenge_methods_supported: methods,
             ..Default::default()
-        };
-        manager.set_metadata(metadata);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_rejects_without_pkce_s256() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        manager.set_metadata(as_metadata_with_pkce(Some(vec!["plain".to_string()])));
+        assert!(matches!(
+            manager.validate_server_metadata("code"),
+            Err(AuthError::PkceUnsupported)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_allows_absent_pkce_methods_by_default() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        manager.set_metadata(as_metadata_with_pkce(None));
+        assert!(manager.validate_server_metadata("code").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_as_metadata_passes_with_pkce_s256() {
+        let mut manager = AuthorizationManager::new("https://example.com")
+            .await
+            .unwrap();
+        manager.set_metadata(as_metadata_with_pkce(Some(vec!["S256".to_string()])));
         assert!(manager.validate_server_metadata("code").is_ok());
     }
 
