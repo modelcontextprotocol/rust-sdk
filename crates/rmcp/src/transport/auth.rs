@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr},
     pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -780,6 +780,10 @@ pub struct AuthorizationManager {
     resource_scopes: RwLock<Vec<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
+    /// Allow loopback and private-network authorization server metadata hosts.
+    /// Off by default to prevent SSRF; opt in for local development or
+    /// internal deployments. Cloud-metadata and link-local hosts stay blocked.
+    allow_private_metadata_hosts: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -859,17 +863,22 @@ impl AuthorizationManager {
             || (octets[0] == 198 && matches!(octets[1], 18 | 19))
     }
 
+    /// `fe80::/10`, the IPv6 unicast link-local range (`Ipv6Addr::is_unicast_link_local`
+    /// is still unstable, so match the prefix directly).
+    fn is_ipv6_link_local(addr: Ipv6Addr) -> bool {
+        (addr.segments()[0] & 0xffc0) == 0xfe80
+    }
+
     fn is_disallowed_metadata_ipv6(addr: Ipv6Addr) -> bool {
         if let Some(mapped) = addr.to_ipv4_mapped() {
             return Self::is_disallowed_metadata_ipv4(mapped);
         }
 
-        let segments = addr.segments();
         addr.is_loopback()
             || addr.is_unspecified()
             || addr.is_multicast()
-            || (segments[0] & 0xffc0) == 0xfe80
-            || (segments[0] & 0xfe00) == 0xfc00
+            || Self::is_ipv6_link_local(addr)
+            || (addr.segments()[0] & 0xfe00) == 0xfc00
     }
 
     fn is_disallowed_metadata_hostname(host: &str) -> bool {
@@ -878,24 +887,54 @@ impl AuthorizationManager {
             || CLOUD_METADATA_HOSTS.contains(&host)
     }
 
-    fn is_disallowed_metadata_host(host: &str) -> bool {
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        if Self::is_disallowed_metadata_hostname(&host) {
-            return true;
-        }
-
-        match host.parse::<IpAddr>() {
-            Ok(IpAddr::V4(addr)) => Self::is_disallowed_metadata_ipv4(addr),
-            Ok(IpAddr::V6(addr)) => Self::is_disallowed_metadata_ipv6(addr),
-            Err(_) => false,
+    fn is_disallowed_metadata_host(host: &url::Host<&str>) -> bool {
+        match host {
+            url::Host::Domain(name) => Self::is_disallowed_metadata_hostname(
+                &name.trim_end_matches('.').to_ascii_lowercase(),
+            ),
+            url::Host::Ipv4(addr) => Self::is_disallowed_metadata_ipv4(*addr),
+            url::Host::Ipv6(addr) => Self::is_disallowed_metadata_ipv6(*addr),
         }
     }
 
-    fn is_allowed_authorization_server_metadata_url(url: &Url) -> bool {
-        Self::is_http_url(url)
-            && url
-                .host_str()
-                .is_some_and(|host| !Self::is_disallowed_metadata_host(host))
+    /// Hosts that are never a legitimate authorization server and stay rejected
+    /// even when private metadata hosts are explicitly allowed: cloud-metadata
+    /// service hostnames and link-local addresses (e.g. `169.254.169.254`),
+    /// which are the classic SSRF pivots.
+    fn is_metadata_ssrf_sink(host: &url::Host<&str>) -> bool {
+        match host {
+            url::Host::Domain(name) => CLOUD_METADATA_HOSTS
+                .contains(&name.trim_end_matches('.').to_ascii_lowercase().as_str()),
+            url::Host::Ipv4(addr) => addr.is_link_local(),
+            // Match the IPv4-mapped form too, so `::ffff:169.254.169.254` can't
+            // slip a link-local address past the sink check.
+            url::Host::Ipv6(addr) => match addr.to_ipv4_mapped() {
+                Some(mapped) => mapped.is_link_local(),
+                None => Self::is_ipv6_link_local(*addr),
+            },
+        }
+    }
+
+    fn is_allowed_authorization_server_metadata_url(&self, url: &Url) -> bool {
+        if !Self::is_http_url(url) {
+            return false;
+        }
+        // Use the typed host rather than `host_str()` so IPv6 literals are
+        // matched as addresses instead of a bracketed string that never parses.
+        let Some(host) = url.host() else {
+            return false;
+        };
+        // Cloud-metadata and link-local hosts are never a valid authorization
+        // server; reject them regardless of configuration.
+        if Self::is_metadata_ssrf_sink(&host) {
+            return false;
+        }
+        // Loopback and private-network hosts are rejected by default to prevent
+        // SSRF, but can be explicitly allowed for local or internal deployments.
+        if self.allow_private_metadata_hosts {
+            return true;
+        }
+        !Self::is_disallowed_metadata_host(&host)
     }
 
     fn resolve_resource_metadata_url(value: &str, base_url: &Url) -> Option<Url> {
@@ -993,6 +1032,7 @@ impl AuthorizationManager {
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
+            allow_private_metadata_hosts: false,
         };
 
         Ok(manager)
@@ -1001,6 +1041,17 @@ impl AuthorizationManager {
     /// Set the scope upgrade configuration
     pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
         self.scope_upgrade_config = config;
+    }
+
+    /// Allow loopback and private-network hosts as authorization servers.
+    ///
+    /// By default these are rejected to prevent SSRF, which also blocks
+    /// legitimate local development (`http://localhost`, `127.0.0.1`) and
+    /// internal enterprise deployments (RFC 1918 addresses). Enable this only
+    /// when the authorization server is trusted. Cloud-metadata endpoints and
+    /// link-local addresses (e.g. `169.254.169.254`) remain blocked either way.
+    pub fn set_allow_private_metadata_hosts(&mut self, allow: bool) {
+        self.allow_private_metadata_hosts = allow;
     }
 
     /// Set a custom credential store
@@ -1885,7 +1936,7 @@ impl AuthorizationManager {
                 },
             };
 
-            if !Self::is_allowed_authorization_server_metadata_url(&candidate_url) {
+            if !self.is_allowed_authorization_server_metadata_url(&candidate_url) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
@@ -2849,6 +2900,18 @@ impl OAuthState {
         Ok(OAuthState::Unauthorized(manager))
     }
 
+    /// Allow loopback and private-network authorization server hosts.
+    ///
+    /// Must be called before authorization begins, while the state is still
+    /// unauthorized (metadata discovery is where the host is validated). See
+    /// [`AuthorizationManager::set_allow_private_metadata_hosts`] for the
+    /// security implications.
+    pub fn set_allow_private_metadata_hosts(&mut self, allow: bool) {
+        if let OAuthState::Unauthorized(manager) = self {
+            manager.set_allow_private_metadata_hosts(allow);
+        }
+    }
+
     /// Get client_id and OAuth credentials
     pub async fn get_credentials(&self) -> Result<Credentials, AuthError> {
         // return client_id and credentials
@@ -3404,6 +3467,57 @@ mod tests {
                 ]
             )
         );
+    }
+
+    async fn metadata_guard_manager(allow_private: bool) -> AuthorizationManager {
+        let client = RecordingOAuthHttpClient::with_responses(vec![]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+        manager.set_allow_private_metadata_hosts(allow_private);
+        manager
+    }
+
+    #[tokio::test]
+    async fn rejects_loopback_authorization_server_by_default() {
+        let manager = metadata_guard_manager(false).await;
+        let url = Url::parse("http://127.0.0.1:9000/").unwrap();
+        assert!(!manager.is_allowed_authorization_server_metadata_url(&url));
+    }
+
+    #[tokio::test]
+    async fn allows_private_authorization_server_when_opted_in() {
+        let manager = metadata_guard_manager(true).await;
+        let loopback = Url::parse("http://127.0.0.1:9000/").unwrap();
+        let private = Url::parse("http://10.0.0.5/.well-known/oauth-authorization-server").unwrap();
+        assert!(manager.is_allowed_authorization_server_metadata_url(&loopback));
+        assert!(manager.is_allowed_authorization_server_metadata_url(&private));
+    }
+
+    #[tokio::test]
+    async fn rejects_ssrf_sinks_even_when_private_hosts_allowed() {
+        let manager = metadata_guard_manager(true).await;
+        let link_local = Url::parse("http://169.254.169.254/latest/meta-data/").unwrap();
+        let cloud_metadata = Url::parse("http://metadata.google.internal/").unwrap();
+        assert!(!manager.is_allowed_authorization_server_metadata_url(&link_local));
+        assert!(!manager.is_allowed_authorization_server_metadata_url(&cloud_metadata));
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv4_mapped_link_local_when_private_hosts_allowed() {
+        let manager = metadata_guard_manager(true).await;
+        let mapped = Url::parse("http://[::ffff:169.254.169.254]/latest/meta-data/").unwrap();
+        assert!(!manager.is_allowed_authorization_server_metadata_url(&mapped));
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_loopback_authorization_server_by_default() {
+        let manager = metadata_guard_manager(false).await;
+        let url = Url::parse("http://[::1]:9000/").unwrap();
+        assert!(!manager.is_allowed_authorization_server_metadata_url(&url));
     }
 
     #[tokio::test]
