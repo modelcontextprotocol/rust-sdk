@@ -54,8 +54,7 @@
           "type": [
             "string",
             "null"
-          ],
-          "format": "date-time"
+          ]
         },
         "priority": {
           "type": [
