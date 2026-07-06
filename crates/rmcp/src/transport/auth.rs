@@ -30,6 +30,12 @@ use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OAUTH_DISCOVERY_REDIRECTS: usize = 10;
+const RESOURCE_METADATA_POST_PROBE_BODY: &str = concat!(
+    r#"{"jsonrpc":"2.0","id":"auth-discovery","method":"initialize","params":{"#,
+    r#""protocolVersion":"2024-11-05","capabilities":{},"#,
+    r#""clientInfo":{"name":"rmcp-auth-discovery","version":"0.0.0"}}"#,
+    r#"}"#
+);
 const CLOUD_METADATA_HOSTS: &[&str] = &[
     "metadata",
     "metadata.google.internal",
@@ -894,11 +900,31 @@ impl AuthorizationManager {
         }
     }
 
-    fn is_allowed_authorization_server_metadata_url(url: &Url) -> bool {
-        Self::is_http_url(url)
-            && url
-                .host_str()
-                .is_some_and(|host| !Self::is_disallowed_metadata_host(host))
+    fn is_loopback_metadata_host(host: &str) -> bool {
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        host == "localhost"
+            || host.ends_with(".localhost")
+            || matches!(host.parse::<IpAddr>(), Ok(IpAddr::V4(addr)) if addr.is_loopback())
+            || matches!(host.parse::<IpAddr>(), Ok(IpAddr::V6(addr)) if addr.is_loopback())
+    }
+
+    fn is_allowed_authorization_server_metadata_url(base_url: &Url, url: &Url) -> bool {
+        if !Self::is_http_url(url) {
+            return false;
+        }
+
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+
+        if !Self::is_disallowed_metadata_host(host) {
+            return true;
+        }
+
+        base_url
+            .host_str()
+            .is_some_and(Self::is_loopback_metadata_host)
+            && Self::is_loopback_metadata_host(host)
     }
 
     fn resolve_resource_metadata_url(value: &str, base_url: &Url) -> Option<Url> {
@@ -1077,9 +1103,25 @@ impl AuthorizationManager {
             return Ok(metadata);
         }
 
-        // No valid authorization metadata found - return error instead of guessing
-        // OAuth endpoints must be discovered from the server, not constructed by the client
-        Err(AuthError::NoAuthorizationSupport)
+        debug!("falling back to legacy OAuth endpoints derived from the base URL");
+        Ok(Self::legacy_authorization_metadata(&self.base_url))
+    }
+
+    fn legacy_authorization_metadata(base_url: &Url) -> AuthorizationMetadata {
+        let endpoint = |path: &str| {
+            let mut url = base_url.clone();
+            url.set_query(None);
+            url.set_fragment(None);
+            url.set_path(path);
+            url.to_string()
+        };
+
+        AuthorizationMetadata {
+            authorization_endpoint: endpoint("/authorize"),
+            token_endpoint: endpoint("/token"),
+            registration_endpoint: Some(endpoint("/register")),
+            ..Default::default()
+        }
     }
 
     /// get client id and credentials
@@ -1891,7 +1933,7 @@ impl AuthorizationManager {
                 },
             };
 
-            if !Self::is_allowed_authorization_server_metadata_url(&candidate_url) {
+            if !Self::is_allowed_authorization_server_metadata_url(&self.base_url, &candidate_url) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
@@ -1937,6 +1979,7 @@ impl AuthorizationManager {
                 && actual == expected.trim_end_matches('/'))
             || (Self::is_root_resource_identifier(actual)
                 && expected == actual.trim_end_matches('/'))
+            || Self::root_resource_identifier_covers_path(actual, expected)
     }
 
     fn is_root_resource_identifier(value: &str) -> bool {
@@ -1944,9 +1987,24 @@ impl AuthorizationManager {
             .is_ok_and(|url| url.path() == "/" && url.query().is_none() && url.fragment().is_none())
     }
 
+    fn root_resource_identifier_covers_path(root_resource: &str, path_resource: &str) -> bool {
+        let Ok(root_resource) = Url::parse(root_resource) else {
+            return false;
+        };
+        let Ok(path_resource) = Url::parse(path_resource) else {
+            return false;
+        };
+
+        root_resource.path() == "/"
+            && root_resource.query().is_none()
+            && root_resource.fragment().is_none()
+            && path_resource.path() != "/"
+            && Self::is_same_origin(&root_resource, &path_resource)
+    }
+
     async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
         if let Ok(Some(resource_metadata_url)) =
-            self.fetch_resource_metadata_url(&self.base_url).await
+            self.fetch_resource_metadata_url(&self.base_url, true).await
         {
             return Ok(Some(resource_metadata_url));
         }
@@ -1960,8 +2018,9 @@ impl AuthorizationManager {
             discovery_url.set_query(None);
             discovery_url.set_fragment(None);
             discovery_url.set_path(&candidate_path);
-            if let Ok(Some(resource_metadata_url)) =
-                self.fetch_resource_metadata_url(&discovery_url).await
+            if let Ok(Some(resource_metadata_url)) = self
+                .fetch_resource_metadata_url(&discovery_url, false)
+                .await
             {
                 return Ok(Some(resource_metadata_url));
             }
@@ -1972,7 +2031,11 @@ impl AuthorizationManager {
 
     /// Extract the resource metadata url from the WWW-Authenticate header value.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
-    async fn fetch_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
+    async fn fetch_resource_metadata_url(
+        &self,
+        url: &Url,
+        allow_post_probe: bool,
+    ) -> Result<Option<Url>, AuthError> {
         let response = match self.discovery_get(url).await {
             Ok(r) => r,
             Err(e) => {
@@ -1981,16 +2044,64 @@ impl AuthorizationManager {
             }
         };
 
-        if response.status() == StatusCode::OK {
-            return Ok(Some(url.clone()));
-        } else if response.status() != StatusCode::UNAUTHORIZED {
+        match response.status() {
+            StatusCode::OK => Ok(Some(url.clone())),
+            StatusCode::UNAUTHORIZED => Ok(self
+                .extract_resource_metadata_url_from_www_authenticate(&response)
+                .await),
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED if allow_post_probe => {
+                self.fetch_resource_metadata_url_with_post_probe(url).await
+            }
+            status => {
+                debug!("resource metadata probe returned unexpected status: {status}");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn fetch_resource_metadata_url_with_post_probe(
+        &self,
+        url: &Url,
+    ) -> Result<Option<Url>, AuthError> {
+        let request = oauth2::http::Request::builder()
+            .method("POST")
+            .uri(url.as_str())
+            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
+            .header(CONTENT_TYPE, "application/json")
+            .body(RESOURCE_METADATA_POST_PROBE_BODY.as_bytes().to_vec())
+            .map_err(|error| AuthError::InternalError(error.to_string()))?;
+        let response = match self
+            .http_client
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Stop,
+            ))
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                debug!("resource metadata POST probe failed: {}", error);
+                return Ok(None);
+            }
+        };
+
+        if response.status() != StatusCode::UNAUTHORIZED {
             debug!(
-                "resource metadata probe returned unexpected status: {}",
+                "resource metadata POST probe returned unexpected status: {}",
                 response.status()
             );
             return Ok(None);
         }
 
+        Ok(self
+            .extract_resource_metadata_url_from_www_authenticate(&response)
+            .await)
+    }
+
+    async fn extract_resource_metadata_url_from_www_authenticate(
+        &self,
+        response: &HttpResponse,
+    ) -> Option<Url> {
         let mut parsed_url = None;
         for value in response.headers().get_all(WWW_AUTHENTICATE).iter() {
             let Ok(value_str) = value.to_str() else {
@@ -2009,7 +2120,7 @@ impl AuthorizationManager {
             }
         }
 
-        Ok(parsed_url)
+        parsed_url
     }
 
     async fn fetch_resource_metadata_from_url(
@@ -3227,6 +3338,13 @@ mod tests {
             .unwrap()
     }
 
+    fn empty_response(status: u16) -> HttpResponse {
+        oauth2::http::Response::builder()
+            .status(status)
+            .body(Vec::new())
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn custom_http_client_handles_protected_resource_discovery() {
         let challenge = oauth2::http::Response::builder()
@@ -3287,6 +3405,181 @@ mod tests {
                     body: Vec::new(),
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_supports_authorization_server_path_insertion() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com/tenant1",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.discover_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                metadata.issuer.as_deref(),
+                metadata.authorization_endpoint.as_str(),
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| request.uri.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                Some("https://auth.example.com/tenant1"),
+                "https://auth.example.com/tenant1/authorize",
+                vec![
+                    "https://mcp.example.com/",
+                    "https://mcp.example.com/.well-known/oauth-protected-resource",
+                    "https://mcp.example.com/.well-known/oauth-protected-resource",
+                    "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
+                ],
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_supports_custom_location_and_oidc_path_append() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="/custom/metadata/location.json""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com/tenant1"]
+                }),
+            ),
+            empty_response(404),
+            empty_response(404),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com/tenant1",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.discover_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                metadata.token_endpoint.as_str(),
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| request.uri.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "https://auth.example.com/tenant1/token",
+                vec![
+                    "https://mcp.example.com/mcp",
+                    "https://mcp.example.com/mcp",
+                    "https://mcp.example.com/custom/metadata/location.json",
+                    "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
+                    "https://auth.example.com/.well-known/openid-configuration/tenant1",
+                    "https://auth.example.com/tenant1/.well-known/openid-configuration",
+                ],
+            )
+        );
+        assert_eq!(
+            client
+                .requests()
+                .iter()
+                .take(2)
+                .map(|request| request.method.as_str())
+                .collect::<Vec<_>>(),
+            vec!["GET", "POST"]
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_metadata_falls_back_to_legacy_default_endpoints() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://legacy.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.discover_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                metadata.authorization_endpoint.as_str(),
+                metadata.token_endpoint.as_str(),
+                metadata.registration_endpoint.as_deref(),
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| request.uri.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "https://legacy.example.com/authorize",
+                "https://legacy.example.com/token",
+                Some("https://legacy.example.com/register"),
+                vec![
+                    "https://legacy.example.com/",
+                    "https://legacy.example.com/",
+                    "https://legacy.example.com/.well-known/oauth-protected-resource",
+                    "https://legacy.example.com/.well-known/oauth-authorization-server",
+                    "https://legacy.example.com/.well-known/openid-configuration",
+                ],
+            )
         );
     }
 
@@ -3371,6 +3664,7 @@ mod tests {
                     "resource": "https://mcp.example.com/mcp",
                     "authorization_servers": [
                         "http://169.254.169.254/latest/meta-data/",
+                        "http://127.0.0.1:8080/tenant1",
                         "https://auth.example.com"
                     ]
                 }),
@@ -3408,6 +3702,63 @@ mod tests {
                     "https://mcp.example.com/.well-known/oauth-protected-resource",
                     "https://auth.example.com/.well-known/oauth-authorization-server"
                 ]
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn allows_loopback_authorization_server_when_resource_is_loopback() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="http://localhost/custom-metadata.json""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "http://localhost/mcp",
+                    "authorization_servers": ["http://127.0.0.1:8080/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "http://127.0.0.1:8080/tenant1",
+                    "authorization_endpoint": "http://127.0.0.1:8080/tenant1/authorize",
+                    "token_endpoint": "http://127.0.0.1:8080/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "http://localhost/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.discover_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                metadata.issuer.as_deref(),
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| request.uri.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                Some("http://127.0.0.1:8080/tenant1"),
+                vec![
+                    "http://localhost/mcp",
+                    "http://localhost/custom-metadata.json",
+                    "http://127.0.0.1:8080/.well-known/oauth-authorization-server/tenant1",
+                ],
             )
         );
     }
@@ -3493,6 +3844,10 @@ mod tests {
             "https://mcp.example.com",
             "https://mcp.example.com/"
         ));
+        assert!(AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com/mcp",
+            "https://mcp.example.com"
+        ));
 
         assert!(!AuthorizationManager::resource_identifiers_match(
             "https://mcp.example.com/mcp",
@@ -3501,6 +3856,14 @@ mod tests {
         assert!(!AuthorizationManager::resource_identifiers_match(
             "https://mcp.example.com/mcp",
             "https://real.example.com/mcp"
+        ));
+        assert!(!AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com/mcp",
+            "https://real.example.com"
+        ));
+        assert!(!AuthorizationManager::resource_identifiers_match(
+            "https://mcp.example.com/mcp",
+            "https://mcp.example.com?resource=mcp"
         ));
     }
 
