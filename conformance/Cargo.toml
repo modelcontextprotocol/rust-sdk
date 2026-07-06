@@ -32,5 +32,5 @@ anyhow = "1"
 reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2"
 url = "2"
-p256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 base64 = "0.22"
