@@ -11,13 +11,14 @@
 use rmcp::{
     ClientHandler, ServerHandler, ServiceError, ServiceExt,
     handler::server::router::tool::ToolRouter,
-    model::{CallToolRequestParams, ClientInfo, ErrorCode, JsonObject},
+    model::{CallToolRequestParams, ClientInfo, ErrorCode, TaskMetadata},
     tool, tool_handler, tool_router,
 };
 
 /// Server with tools having different task support modes.
 #[derive(Debug, Clone)]
 pub struct TaskSupportTestServer {
+    #[expect(dead_code, reason = "tool_handler macro accesses this router field")]
     tool_router: ToolRouter<Self>,
 }
 
@@ -75,8 +76,8 @@ impl ClientHandler for DummyClientHandler {
 }
 
 /// Helper to create a task object for tool calls
-fn make_task() -> JsonObject {
-    serde_json::Map::new()
+fn make_task() -> TaskMetadata {
+    TaskMetadata::new()
 }
 
 #[tokio::test]
@@ -203,7 +204,7 @@ async fn test_forbidden_task_tool_without_task_succeeds() -> anyhow::Result<()> 
     let text = result
         .content
         .first()
-        .and_then(|c| c.raw.as_text())
+        .and_then(|c| c.as_text())
         .map(|t| t.text.as_str())
         .unwrap_or("");
     assert_eq!(text, "forbidden task executed");
@@ -239,7 +240,7 @@ async fn test_optional_task_tool_without_task_succeeds() -> anyhow::Result<()> {
     let text = result
         .content
         .first()
-        .and_then(|c| c.raw.as_text())
+        .and_then(|c| c.as_text())
         .map(|t| t.text.as_str())
         .unwrap_or("");
     assert_eq!(text, "optional task executed");

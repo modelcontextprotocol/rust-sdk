@@ -94,7 +94,7 @@ impl ElicitationServer {
             }
         };
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} {}!",
             request.greeting, user_name
         ))]))
@@ -103,7 +103,7 @@ impl ElicitationServer {
     #[tool(description = "Reset stored user name")]
     async fn reset_name(&self) -> Result<CallToolResult, McpError> {
         *self.user_name.lock().await = None;
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             "User name reset. Next greeting will ask for name again.".to_string(),
         )]))
     }
@@ -133,19 +133,22 @@ impl ElicitationServer {
                 // Mock notifying completion
                 let _ = context
                     .peer
-                    .notify_url_elicitation_completed(ElicitationResponseNotificationParam {
-                        elicitation_id: "elicit_123".to_string(),
-                    })
+                    .notify_url_elicitation_completed(ElicitationResponseNotificationParam::new(
+                        "elicit_123",
+                    ))
                     .await;
-                Ok(CallToolResult::success(vec![Content::text(
+                Ok(CallToolResult::success(vec![ContentBlock::text(
                     "Elicitation via URL successful".to_string(),
                 )]))
             }
-            ElicitationAction::Cancel => Ok(CallToolResult::success(vec![Content::text(
+            ElicitationAction::Cancel => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "Elicitation via URL cancelled by user".to_string(),
             )])),
-            ElicitationAction::Decline => Ok(CallToolResult::error(vec![Content::text(
+            ElicitationAction::Decline => Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Elicitation via URL declined by user".to_string(),
+            )])),
+            _ => Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Unknown elicitation action".to_string(),
             )])),
         }
     }

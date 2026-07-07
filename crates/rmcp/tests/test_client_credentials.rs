@@ -136,6 +136,25 @@ async fn start_mock_server() -> (String, SocketAddr) {
     (base_url, addr)
 }
 
+async fn start_path_insert_metadata_server() -> (String, SocketAddr) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{}", addr);
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get(auth_server_metadata_handler),
+        )
+        .route("/token", post(token_handler));
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (base_url, addr)
+}
+
 #[tokio::test]
 async fn test_client_credentials_flow_client_secret() {
     let (base_url, _addr) = start_mock_server().await;
@@ -147,6 +166,33 @@ async fn test_client_credentials_flow_client_secret() {
         client_secret: "test-m2m-secret".to_string(),
         scopes: vec!["read".to_string(), "write".to_string()],
         resource: Some(base_url.clone()),
+    };
+
+    oauth_state
+        .authenticate_client_credentials(config)
+        .await
+        .unwrap();
+
+    let manager = oauth_state
+        .into_authorization_manager()
+        .expect("Should be in Authorized state");
+
+    let token = manager.get_access_token().await.unwrap();
+    assert_eq!(token, "m2m-access-token-12345");
+}
+
+#[tokio::test]
+async fn test_client_credentials_discovers_path_inserted_oauth_metadata() {
+    let (base_url, _addr) = start_path_insert_metadata_server().await;
+    let resource_url = format!("{base_url}/mcp");
+
+    let mut oauth_state = OAuthState::new(&resource_url, None).await.unwrap();
+
+    let config = ClientCredentialsConfig::ClientSecret {
+        client_id: "test-m2m-client".to_string(),
+        client_secret: "test-m2m-secret".to_string(),
+        scopes: vec!["read".to_string()],
+        resource: Some(resource_url),
     };
 
     oauth_state

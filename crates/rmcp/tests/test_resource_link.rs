@@ -1,14 +1,14 @@
-use rmcp::model::{CallToolResult, Content, RawResource};
+use rmcp::model::{CallToolResult, ContentBlock, Resource};
 
 #[test]
 fn test_resource_link_in_tool_result() {
     // Test creating a tool result with resource links
-    let resource = RawResource::new("file:///test/file.txt", "test.txt");
+    let resource = Resource::new("file:///test/file.txt", "test.txt");
 
     // Create a tool result with a resource link
     let result = CallToolResult::success(vec![
-        Content::text("Found a file"),
-        Content::resource_link(resource),
+        ContentBlock::text("Found a file"),
+        ContentBlock::resource_link(resource),
     ]);
 
     // Serialize to JSON to verify format
@@ -42,12 +42,12 @@ fn test_resource_link_in_tool_result() {
 
 #[test]
 fn test_resource_link_with_full_metadata() {
-    let mut resource = RawResource::new("https://example.com/data.json", "API Data");
-    resource.description = Some("JSON data from external API".to_string());
-    resource.mime_type = Some("application/json".to_string());
-    resource.size = Some(1024);
+    let resource = Resource::new("https://example.com/data.json", "API Data")
+        .with_description("JSON data from external API")
+        .with_mime_type("application/json")
+        .with_size(1024);
 
-    let result = CallToolResult::success(vec![Content::resource_link(resource)]);
+    let result = CallToolResult::success(vec![ContentBlock::resource_link(resource)]);
 
     let json = serde_json::to_string(&result).unwrap();
     let deserialized: CallToolResult = serde_json::from_str(&json).unwrap();
@@ -71,12 +71,12 @@ fn test_resource_link_with_full_metadata() {
 #[test]
 fn test_mixed_content_types() {
     // Test that resource links can be mixed with other content types
-    let resource = RawResource::new("file:///doc.pdf", "Document");
+    let resource = Resource::new("file:///doc.pdf", "Document");
 
     let result = CallToolResult::success(vec![
-        Content::text("Processing complete"),
-        Content::resource_link(resource),
-        Content::embedded_text("memo://result", "Analysis results here"),
+        ContentBlock::text("Processing complete"),
+        ContentBlock::resource_link(resource),
+        ContentBlock::embedded_text("memo://result", "Analysis results here"),
     ]);
 
     assert_eq!(result.content.len(), 3);

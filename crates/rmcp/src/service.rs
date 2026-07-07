@@ -348,7 +348,6 @@ pub struct RequestHandle<R: ServiceRole> {
     pub peer: Peer<R>,
     pub id: RequestId,
     pub progress_token: ProgressToken,
-    progress_timeout_watchers: ProgressTimeoutWatchers,
     progress_reset_rx: Option<mpsc::Receiver<()>>,
 }
 
@@ -401,8 +400,9 @@ impl<R: ServiceRole> RequestHandle<R> {
     async fn send_timeout_cancel_notification(&self, reason: &str) {
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
-                request_id: self.id.clone(),
+                request_id: Some(self.id.clone()),
                 reason: Some(reason.to_owned()),
+                meta: None,
             },
             method: crate::model::CancelledNotificationMethod,
             extensions: Default::default(),
@@ -416,8 +416,10 @@ impl<R: ServiceRole> RequestHandle<R> {
         max_total_timeout: Option<Duration>,
         reset_timeout_on_progress: bool,
     ) -> Result<R::PeerResp, ServiceError> {
-        let mut idle_sleep = timeout.map(tokio::time::sleep).map(Box::pin);
-        let mut max_total_sleep = max_total_timeout.map(tokio::time::sleep).map(Box::pin);
+        let mut idle_sleep =
+            timeout.map(|timeout| (timeout, Box::pin(tokio::time::sleep(timeout))));
+        let mut max_total_sleep =
+            max_total_timeout.map(|timeout| (timeout, Box::pin(tokio::time::sleep(timeout))));
 
         loop {
             tokio::select! {
@@ -427,32 +429,34 @@ impl<R: ServiceRole> RequestHandle<R> {
                     return response.map_err(|_e| ServiceError::TransportClosed)?;
                 }
                 _ = async {
-                    if let Some(sleep) = idle_sleep.as_mut() {
+                    if let Some((_, sleep)) = idle_sleep.as_mut() {
                         sleep.as_mut().await;
                     }
                 }, if idle_sleep.is_some() => {
-                    let timeout = timeout.expect("idle timeout exists when idle sleep exists");
-                    self.send_timeout_cancel_notification(Self::REQUEST_TIMEOUT_REASON).await;
-                    return Err(ServiceError::Timeout { timeout });
+                    if let Some((timeout, _)) = idle_sleep.as_ref() {
+                        self.send_timeout_cancel_notification(Self::REQUEST_TIMEOUT_REASON).await;
+                        return Err(ServiceError::Timeout { timeout: *timeout });
+                    }
                 }
                 _ = async {
-                    if let Some(sleep) = max_total_sleep.as_mut() {
+                    if let Some((_, sleep)) = max_total_sleep.as_mut() {
                         sleep.as_mut().await;
                     }
                 }, if max_total_sleep.is_some() => {
-                    let timeout = max_total_timeout.expect("max total timeout exists when max total sleep exists");
-                    self.send_timeout_cancel_notification(Self::REQUEST_MAX_TOTAL_TIMEOUT_REASON).await;
-                    return Err(ServiceError::Timeout { timeout });
+                    if let Some((timeout, _)) = max_total_sleep.as_ref() {
+                        self.send_timeout_cancel_notification(Self::REQUEST_MAX_TOTAL_TIMEOUT_REASON).await;
+                        return Err(ServiceError::Timeout { timeout: *timeout });
+                    }
                 }
                 progress = async {
                     match self.progress_reset_rx.as_mut() {
                         Some(rx) => rx.recv().await,
                         None => None,
                     }
-                }, if reset_timeout_on_progress && timeout.is_some() && self.progress_reset_rx.is_some() => {
+                }, if reset_timeout_on_progress && idle_sleep.is_some() && self.progress_reset_rx.is_some() => {
                     if progress.is_some() {
-                        if let (Some(timeout), Some(sleep)) = (timeout, idle_sleep.as_mut()) {
-                            sleep.as_mut().reset(tokio::time::Instant::now() + timeout);
+                        if let Some((timeout, sleep)) = idle_sleep.as_mut() {
+                            sleep.as_mut().reset(tokio::time::Instant::now() + *timeout);
                         }
                     }
                 }
@@ -463,15 +467,16 @@ impl<R: ServiceRole> RequestHandle<R> {
     /// Cancel this request
     pub async fn cancel(self, reason: Option<String>) -> Result<(), ServiceError> {
         Self::cleanup_progress_timeout_watcher(
-            &self.progress_timeout_watchers,
+            &self.peer.progress_timeout_watchers,
             &self.progress_token,
             self.progress_reset_rx.is_some(),
         )
         .await;
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
-                request_id: self.id,
+                request_id: Some(self.id),
                 reason,
+                meta: None,
             },
             method: crate::model::CancelledNotificationMethod,
             extensions: Default::default(),
@@ -617,12 +622,12 @@ impl<R: ServiceRole> Peer<R> {
     ) -> Result<RequestHandle<R>, ServiceError> {
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
-        request
-            .get_meta_mut()
-            .set_progress_token(progress_token.clone());
         if let Some(meta) = options.meta.clone() {
             request.get_meta_mut().extend(meta);
         }
+        request
+            .get_meta_mut()
+            .set_progress_token(progress_token.clone());
         let (responder, receiver) = tokio::sync::oneshot::channel();
         let progress_reset_rx = if options.reset_timeout_on_progress && options.timeout.is_some() {
             let (sender, receiver) = mpsc::channel(1);
@@ -658,7 +663,6 @@ impl<R: ServiceRole> Peer<R> {
             progress_token,
             options,
             peer: self.clone(),
-            progress_timeout_watchers: self.progress_timeout_watchers.clone(),
             progress_reset_rx,
         })
     }
@@ -1082,11 +1086,13 @@ where
                     };
                     let _ = responder.send(response);
                     if let Some(param) = cancellation_param {
-                        if let Some(responder) = local_responder_pool.remove(&param.request_id) {
-                            tracing::info!(id = %param.request_id, reason = param.reason, "cancelled");
-                            let _response_result = responder.send(Err(ServiceError::Cancelled {
-                                reason: param.reason.clone(),
-                            }));
+                        if let Some(request_id) = &param.request_id {
+                            if let Some(responder) = local_responder_pool.remove(request_id) {
+                                tracing::info!(id = %request_id, reason = param.reason, "cancelled");
+                                let _response_result = responder.send(Err(ServiceError::Cancelled {
+                                    reason: param.reason.clone(),
+                                }));
+                            }
                         }
                     }
                 }
@@ -1199,9 +1205,11 @@ where
                     // catch cancelled notification
                     let mut notification = match notification.try_into() {
                         Ok::<CancelledNotification, _>(cancelled) => {
-                            if let Some(ct) = local_ct_pool.remove(&cancelled.params.request_id) {
-                                tracing::info!(id = %cancelled.params.request_id, reason = cancelled.params.reason, "cancelled");
-                                ct.cancel();
+                            if let Some(request_id) = &cancelled.params.request_id {
+                                if let Some(ct) = local_ct_pool.remove(request_id) {
+                                    tracing::info!(id = %request_id, reason = cancelled.params.reason, "cancelled");
+                                    ct.cancel();
+                                }
                             }
                             cancelled.into()
                         }

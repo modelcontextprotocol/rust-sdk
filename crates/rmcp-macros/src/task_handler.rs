@@ -111,7 +111,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let get_info_fn = quote! {
             async fn get_task_info(
                 &self,
-                request: rmcp::model::GetTaskInfoParams,
+                request: rmcp::model::GetTaskParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::GetTaskResult, McpError> {
                 use rmcp::task_manager::current_timestamp;
@@ -145,7 +145,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                     if let Some(ttl) = completed_result.descriptor.ttl {
                         task = task.with_ttl(ttl);
                     }
-                    return Ok(rmcp::model::GetTaskResult { meta: None, task });
+                    return Ok(rmcp::model::GetTaskResult::new(task));
                 }
 
                 // If not completed, check running
@@ -158,7 +158,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                         timestamp.clone(),
                         timestamp,
                     );
-                    return Ok(rmcp::model::GetTaskResult { meta: None, task });
+                    return Ok(rmcp::model::GetTaskResult::new(task));
                 }
 
                 Err(McpError::resource_not_found(format!("task not found: {}", task_id), None))
@@ -171,7 +171,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let get_result_fn = quote! {
             async fn get_task_result(
                 &self,
-                request: rmcp::model::GetTaskResultParams,
+                request: rmcp::model::GetTaskPayloadParams,
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::GetTaskPayloadResult, McpError> {
                 use std::time::Duration;
@@ -242,7 +242,7 @@ pub fn task_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                         timestamp.clone(),
                         timestamp,
                     );
-                    return Ok(rmcp::model::CancelTaskResult { meta: None, task });
+                    return Ok(rmcp::model::CancelTaskResult::new(task));
                 }
 
                 // If already completed, signal it's not cancellable

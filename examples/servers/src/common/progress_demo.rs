@@ -97,12 +97,12 @@ impl ProgressDemo {
             let chunk_str = String::from_utf8_lossy(&chunk);
             counter += 1;
             // create progress notification param
-            let progress_param = ProgressNotificationParam {
-                progress_token: ProgressToken(progress_token.clone()),
-                progress: counter as f64,
-                total: Some(5.0),
-                message: Some(chunk_str.to_string()),
-            };
+            let progress_param = ProgressNotificationParam::new(
+                ProgressToken(progress_token.clone()),
+                counter as f64,
+            )
+            .with_total(5.0)
+            .with_message(chunk_str.to_string());
 
             match ctx.peer.notify_progress(progress_param).await {
                 Ok(_) => {
@@ -122,7 +122,7 @@ impl ProgressDemo {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Processed {} records successfully",
             counter
         ))]))

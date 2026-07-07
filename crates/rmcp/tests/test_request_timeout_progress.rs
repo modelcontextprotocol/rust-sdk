@@ -10,7 +10,10 @@ use std::{
 
 use rmcp::{
     ClientHandler, Peer, RoleServer, ServiceError, ServiceExt,
-    model::{CallToolRequestParams, ClientRequest, Meta, ProgressNotificationParam, Request},
+    model::{
+        CallToolRequestParams, ClientRequest, Meta, NumberOrString, ProgressNotificationParam,
+        ProgressToken, Request,
+    },
     service::PeerRequestOptions,
     tool, tool_router,
 };
@@ -31,12 +34,6 @@ impl ClientHandler for ProgressCountingClient {
 }
 
 struct ProgressTimeoutServer;
-
-impl ProgressTimeoutServer {
-    fn new() -> Self {
-        Self
-    }
-}
 
 #[tool_router(server_handler)]
 impl ProgressTimeoutServer {
@@ -62,12 +59,11 @@ impl ProgressTimeoutServer {
         for step in 0..4 {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let _ = client
-                .notify_progress(ProgressNotificationParam {
-                    progress_token: progress_token.clone(),
-                    progress: step as f64,
-                    total: Some(4.0),
-                    message: Some("working".into()),
-                })
+                .notify_progress(
+                    ProgressNotificationParam::new(progress_token.clone(), step as f64)
+                        .with_total(4.0)
+                        .with_message("working"),
+                )
                 .await;
         }
 
@@ -82,14 +78,14 @@ impl ProgressTimeoutServer {
         for step in 0..4 {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let _ = client
-                .notify_progress(ProgressNotificationParam {
-                    progress_token: rmcp::model::ProgressToken(
-                        rmcp::model::NumberOrString::Number(999_999),
-                    ),
-                    progress: step as f64,
-                    total: Some(4.0),
-                    message: Some("unrelated".into()),
-                })
+                .notify_progress(
+                    ProgressNotificationParam::new(
+                        ProgressToken(NumberOrString::Number(999_999)),
+                        step as f64,
+                    )
+                    .with_total(4.0)
+                    .with_message("unrelated"),
+                )
                 .await;
         }
 
@@ -99,7 +95,7 @@ impl ProgressTimeoutServer {
 
 async fn start_pair()
 -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ProgressCountingClient>> {
-    let server = ProgressTimeoutServer::new();
+    let server = ProgressTimeoutServer;
     let client = ProgressCountingClient::default();
     let (transport_server, transport_client) = tokio::io::duplex(4096);
 
@@ -169,6 +165,21 @@ async fn matching_progress_resets_timeout_when_enabled() -> anyhow::Result<()> {
 
     assert!(result.is_ok());
     assert!(client.service().progress_count.load(Ordering::SeqCst) > 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn generated_progress_token_overrides_option_meta_token() -> anyhow::Result<()> {
+    let client = start_pair().await?;
+    let mut options =
+        PeerRequestOptions::with_timeout(Duration::from_millis(75)).reset_timeout_on_progress();
+    options.meta = Some(Meta::with_progress_token(ProgressToken(
+        NumberOrString::Number(999_999),
+    )));
+
+    let result = call_tool_with_options(&client, "delayed_with_progress", options).await;
+
+    assert!(result.is_ok());
     Ok(())
 }
 

@@ -12,7 +12,7 @@ use serde_json::json;
 use tokio::sync::{Mutex, Notify};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-pub struct Server {}
+struct Server {}
 
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerInfo {
@@ -38,7 +38,7 @@ impl ServerHandler for Server {
             let _enter = span.enter();
 
             if let Err(e) = peer
-                .notify_resource_updated(ResourceUpdatedNotificationParam { uri: uri.clone() })
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(uri.clone()))
                 .await
             {
                 panic!("Failed to send notification: {}", e);

@@ -49,6 +49,7 @@ impl OperationDescriptor {
         self
     }
 
+    /// Time-to-live in milliseconds, matching `TaskMetadata.ttl` from the MCP spec.
     pub fn with_ttl(mut self, ttl: u64) -> Self {
         self.ttl = Some(ttl);
         self
@@ -75,7 +76,11 @@ pub trait OperationResultTransport: Send + Sync + 'static {
 }
 
 // ===== Operation Processor =====
-pub const DEFAULT_TASK_TIMEOUT_SECS: u64 = 300; // 5 minutes
+#[deprecated(note = "use DEFAULT_TASK_TIMEOUT_MS; ttl values are milliseconds per the MCP spec")]
+pub const DEFAULT_TASK_TIMEOUT_SECS: u64 = 300;
+/// Default execution timeout (5 minutes), in milliseconds, applied when a
+/// descriptor does not specify a `ttl`.
+pub const DEFAULT_TASK_TIMEOUT_MS: u64 = 300_000;
 /// Operation processor that coordinates extractors and handlers
 pub struct OperationProcessor {
     /// Currently running tasks keyed by id
@@ -165,13 +170,13 @@ impl OperationProcessor {
     fn spawn_async_task(&mut self, message: OperationMessage) {
         let OperationMessage { descriptor, future } = message;
         let task_id = descriptor.operation_id.clone();
-        let timeout_secs = descriptor.ttl.or(Some(DEFAULT_TASK_TIMEOUT_SECS));
+        let timeout_ms = descriptor.ttl.or(Some(DEFAULT_TASK_TIMEOUT_MS));
         let sender = self.task_result_sender.clone();
         let descriptor_for_result = descriptor.clone();
 
         let timed_future = async move {
-            if let Some(secs) = timeout_secs {
-                match timeout(Duration::from_secs(secs), future).await {
+            if let Some(ms) = timeout_ms {
+                match timeout(Duration::from_millis(ms), future).await {
                     Ok(result) => result,
                     Err(_) => Err(Error::TaskError("Operation timed out".to_string())),
                 }
@@ -191,7 +196,7 @@ impl OperationProcessor {
         let running_task = RunningTask {
             task_handle: handle,
             started_at: std::time::Instant::now(),
-            timeout: timeout_secs,
+            timeout: timeout_ms,
             descriptor,
         };
         self.running_tasks.insert(task_id, running_task);
@@ -213,7 +218,7 @@ impl OperationProcessor {
 
         for (task_id, task) in &self.running_tasks {
             if let Some(timeout_duration) = task.timeout {
-                if now.duration_since(task.started_at).as_secs() > timeout_duration {
+                if now.duration_since(task.started_at).as_millis() > u128::from(timeout_duration) {
                     task.task_handle.abort();
                     timed_out_tasks.push(task_id.clone());
                 }

@@ -36,15 +36,18 @@ async fn test_elicitation_serialization() {
     );
 }
 
-/// Test CreateElicitationRequestParams structure serialization/deserialization
+/// Test ElicitRequestParams structure serialization/deserialization
 #[tokio::test]
 async fn test_elicitation_request_param_serialization() {
     let schema = ElicitationSchema::builder()
-        .required_property("email", PrimitiveSchema::String(StringSchema::email()))
+        .required_property(
+            "email",
+            PrimitiveSchemaDefinition::String(StringSchema::email()),
+        )
         .build()
         .unwrap();
 
-    let request_param = CreateElicitationRequestParams::FormElicitationParams {
+    let request_param = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Please provide your email address".to_string(),
         requested_schema: schema,
@@ -70,15 +73,15 @@ async fn test_elicitation_request_param_serialization() {
     assert_eq!(json, expected);
 
     // Test deserialization
-    let deserialized: CreateElicitationRequestParams = serde_json::from_value(expected).unwrap();
+    let deserialized: ElicitRequestParams = serde_json::from_value(expected).unwrap();
     match (&deserialized, &request_param) {
         (
-            CreateElicitationRequestParams::FormElicitationParams {
+            ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message: msg1,
                 requested_schema: schema1,
             },
-            CreateElicitationRequestParams::FormElicitationParams {
+            ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message: msg2,
                 requested_schema: schema2,
@@ -91,15 +94,12 @@ async fn test_elicitation_request_param_serialization() {
     }
 }
 
-/// Test CreateElicitationResult structure with different action types
+/// Test ElicitResult structure with different action types
 #[tokio::test]
 async fn test_elicitation_result_serialization() {
     // Test Accept with content
-    let accept_result = CreateElicitationResult {
-        action: ElicitationAction::Accept,
-        content: Some(json!({"email": "user@example.com"})),
-        meta: None,
-    };
+    let accept_result = ElicitResult::new(ElicitationAction::Accept)
+        .with_content(json!({"email": "user@example.com"}));
 
     let json = serde_json::to_value(&accept_result).unwrap();
     let expected = json!({
@@ -109,11 +109,7 @@ async fn test_elicitation_result_serialization() {
     assert_eq!(json, expected);
 
     // Test Decline without content
-    let decline_result = CreateElicitationResult {
-        action: ElicitationAction::Decline,
-        content: None,
-        meta: None,
-    };
+    let decline_result = ElicitResult::new(ElicitationAction::Decline);
 
     let json = serde_json::to_value(&decline_result).unwrap();
     let expected = json!({
@@ -123,16 +119,15 @@ async fn test_elicitation_result_serialization() {
     assert_eq!(json, expected);
 
     // Test deserialization
-    let deserialized: CreateElicitationResult = serde_json::from_value(expected).unwrap();
+    let deserialized: ElicitResult = serde_json::from_value(expected).unwrap();
     assert_eq!(deserialized.action, ElicitationAction::Decline);
     assert_eq!(deserialized.content, None);
     assert_eq!(deserialized.meta, None);
 
     // Test protocol-level metadata round-trips as _meta.
-    let meta_result =
-        CreateElicitationResult::new(ElicitationAction::Accept).with_meta(Meta(object!({
-            "traceId": "elicitation-123"
-        })));
+    let meta_result = ElicitResult::new(ElicitationAction::Accept).with_meta(Meta(object!({
+        "traceId": "elicitation-123"
+    })));
 
     let json = serde_json::to_value(&meta_result).unwrap();
     let expected = json!({
@@ -141,7 +136,7 @@ async fn test_elicitation_result_serialization() {
     });
     assert_eq!(json, expected);
 
-    let deserialized: CreateElicitationResult = serde_json::from_value(expected).unwrap();
+    let deserialized: ElicitResult = serde_json::from_value(expected).unwrap();
     assert_eq!(
         deserialized.meta,
         Some(Meta(object!({ "traceId": "elicitation-123" })))
@@ -154,7 +149,7 @@ async fn test_elicitation_json_rpc_protocol() {
     let schema = ElicitationSchema::builder()
         .required_property(
             "confirmation",
-            PrimitiveSchema::Boolean(BooleanSchema::new()),
+            PrimitiveSchemaDefinition::Boolean(BooleanSchema::new()),
         )
         .build()
         .unwrap();
@@ -163,13 +158,11 @@ async fn test_elicitation_json_rpc_protocol() {
     let request = JsonRpcRequest {
         jsonrpc: JsonRpcVersion2_0,
         id: RequestId::Number(1),
-        request: CreateElicitationRequest::new(
-            CreateElicitationRequestParams::FormElicitationParams {
-                meta: None,
-                message: "Do you want to continue?".to_string(),
-                requested_schema: schema,
-            },
-        ),
+        request: ElicitRequest::new(ElicitRequestParams::FormElicitationParams {
+            meta: None,
+            message: "Do you want to continue?".to_string(),
+            requested_schema: schema,
+        }),
     };
 
     // Test serialization of complete request
@@ -180,11 +173,10 @@ async fn test_elicitation_json_rpc_protocol() {
     assert_eq!(json["params"]["message"], "Do you want to continue?");
 
     // Test deserialization
-    let deserialized: JsonRpcRequest<CreateElicitationRequest> =
-        serde_json::from_value(json).unwrap();
+    let deserialized: JsonRpcRequest<ElicitRequest> = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized.id, RequestId::Number(1));
     match &deserialized.request.params {
-        CreateElicitationRequestParams::FormElicitationParams { message, .. } => {
+        ElicitRequestParams::FormElicitationParams { message, .. } => {
             assert_eq!(message, "Do you want to continue?");
         }
         _ => panic!("Expected FormElicitationParam variant"),
@@ -250,7 +242,7 @@ async fn test_elicitation_spec_compliance() {
 #[tokio::test]
 async fn test_elicitation_error_handling() {
     // Test minimal schema handling (empty properties is technically valid)
-    let minimal_schema_request = CreateElicitationRequestParams::FormElicitationParams {
+    let minimal_schema_request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Test message".to_string(),
         requested_schema: ElicitationSchema::builder().build().unwrap(),
@@ -260,11 +252,14 @@ async fn test_elicitation_error_handling() {
     let _json = serde_json::to_value(&minimal_schema_request).unwrap();
 
     // Test empty message
-    let empty_message_request = CreateElicitationRequestParams::FormElicitationParams {
+    let empty_message_request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "".to_string(),
         requested_schema: ElicitationSchema::builder()
-            .property("value", PrimitiveSchema::String(StringSchema::new()))
+            .property(
+                "value",
+                PrimitiveSchemaDefinition::String(StringSchema::new()),
+            )
             .build()
             .unwrap(),
     };
@@ -282,11 +277,14 @@ async fn test_elicitation_error_handling() {
 #[tokio::test]
 async fn test_elicitation_performance() {
     let schema = ElicitationSchema::builder()
-        .property("data", PrimitiveSchema::String(StringSchema::new()))
+        .property(
+            "data",
+            PrimitiveSchemaDefinition::String(StringSchema::new()),
+        )
         .build()
         .unwrap();
 
-    let request = CreateElicitationRequestParams::FormElicitationParams {
+    let request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Performance test message".to_string(),
         requested_schema: schema,
@@ -297,7 +295,7 @@ async fn test_elicitation_performance() {
     // Serialize/deserialize 1000 times
     for _ in 0..1000 {
         let json = serde_json::to_value(&request).unwrap();
-        let _deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
+        let _deserialized: ElicitRequestParams = serde_json::from_value(json).unwrap();
     }
 
     let duration = start.elapsed();
@@ -326,9 +324,7 @@ async fn test_elicitation_capabilities() {
     assert_eq!(elicitation_cap.url, None);
 
     // Test with schema validation enabled
-    elicitation_cap.form = Some(FormElicitationCapability {
-        schema_validation: Some(true),
-    });
+    elicitation_cap.form = Some(FormElicitationCapability::new().with_schema_validation(true));
 
     // Test serialization
     let json = serde_json::to_value(&elicitation_cap).unwrap();
@@ -423,14 +419,14 @@ async fn test_elicitation_convenience_methods() {
             .contains("Option A")
     );
 
-    // Test that CreateElicitationRequestParam can be created with type-safe schemas
-    let confirmation_request = CreateElicitationRequestParams::FormElicitationParams {
+    // Test that ElicitRequestParams can be created with type-safe schemas
+    let confirmation_request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Test confirmation".to_string(),
         requested_schema: ElicitationSchema::builder()
             .property(
                 "confirmed",
-                PrimitiveSchema::Boolean(
+                PrimitiveSchemaDefinition::Boolean(
                     BooleanSchema::new()
                         .description("User confirmation (true for yes, false for no)"),
                 ),
@@ -467,7 +463,7 @@ async fn test_elicitation_structured_schemas() {
         .build()
         .unwrap();
 
-    let request = CreateElicitationRequestParams::FormElicitationParams {
+    let request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Please provide your user information".to_string(),
         requested_schema: schema,
@@ -475,10 +471,10 @@ async fn test_elicitation_structured_schemas() {
 
     // Test that complex schemas serialize/deserialize correctly
     let json = serde_json::to_value(&request).unwrap();
-    let deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
+    let deserialized: ElicitRequestParams = serde_json::from_value(json).unwrap();
 
     match deserialized {
-        CreateElicitationRequestParams::FormElicitationParams {
+        ElicitRequestParams::FormElicitationParams {
             message,
             requested_schema,
             ..
@@ -699,7 +695,7 @@ async fn test_elicitation_multi_select_enum() {
         .build()
         .unwrap();
 
-    let request = CreateElicitationRequestParams::FormElicitationParams {
+    let request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Please provide your user information".to_string(),
         requested_schema: schema,
@@ -707,10 +703,10 @@ async fn test_elicitation_multi_select_enum() {
 
     // Test that complex schemas serialize/deserialize correctly
     let json = serde_json::to_value(&request).unwrap();
-    let deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
+    let deserialized: ElicitRequestParams = serde_json::from_value(json).unwrap();
 
     match deserialized {
-        CreateElicitationRequestParams::FormElicitationParams {
+        ElicitRequestParams::FormElicitationParams {
             message,
             requested_schema,
             ..
@@ -722,30 +718,20 @@ async fn test_elicitation_multi_select_enum() {
 
             assert!(matches!(
                 requested_schema.properties.get("choices").unwrap(),
-                PrimitiveSchema::Enum(EnumSchema::Multi(_))
+                PrimitiveSchemaDefinition::Enum(EnumSchema::Multi(_))
             ));
 
-            if let Some(PrimitiveSchema::Enum(schema)) = requested_schema.properties.get("choices")
+            if let Some(PrimitiveSchemaDefinition::Enum(schema)) =
+                requested_schema.properties.get("choices")
             {
                 assert_eq!(
                     schema,
                     &EnumSchema::Multi(MultiSelectEnumSchema::Titled(
-                        TitledMultiSelectEnumSchema::new(TitledItems {
-                            any_of: vec![
-                                ConstTitle {
-                                    const_: "A".to_string(),
-                                    title: "A name".to_string()
-                                },
-                                ConstTitle {
-                                    const_: "B".to_string(),
-                                    title: "B name".to_string()
-                                },
-                                ConstTitle {
-                                    const_: "C".to_string(),
-                                    title: "C name".to_string()
-                                },
-                            ],
-                        })
+                        TitledMultiSelectEnumSchema::new(TitledItems::new(vec![
+                            ConstTitle::new("A", "A name"),
+                            ConstTitle::new("B", "B name"),
+                            ConstTitle::new("C", "C name"),
+                        ]))
                         .with_min_items(1)
                         .with_max_items(2)
                     ))
@@ -773,7 +759,7 @@ async fn test_elicitation_single_select_enum() {
         .build()
         .unwrap();
 
-    let request = CreateElicitationRequestParams::FormElicitationParams {
+    let request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Please provide your user information".to_string(),
         requested_schema: schema,
@@ -781,10 +767,10 @@ async fn test_elicitation_single_select_enum() {
 
     // Test that complex schemas serialize/deserialize correctly
     let json = serde_json::to_value(&request).unwrap();
-    let deserialized: CreateElicitationRequestParams = serde_json::from_value(json).unwrap();
+    let deserialized: ElicitRequestParams = serde_json::from_value(json).unwrap();
 
     match deserialized {
-        CreateElicitationRequestParams::FormElicitationParams {
+        ElicitRequestParams::FormElicitationParams {
             message,
             requested_schema,
             ..
@@ -795,27 +781,19 @@ async fn test_elicitation_single_select_enum() {
             assert_eq!(requested_schema.required, Some(vec!["choices".to_string()]));
             assert!(matches!(
                 requested_schema.properties.get("choices").unwrap(),
-                PrimitiveSchema::Enum(EnumSchema::Single(_))
+                PrimitiveSchemaDefinition::Enum(EnumSchema::Single(_))
             ));
 
-            if let Some(PrimitiveSchema::Enum(schema)) = requested_schema.properties.get("choices")
+            if let Some(PrimitiveSchemaDefinition::Enum(schema)) =
+                requested_schema.properties.get("choices")
             {
                 assert_eq!(
                     schema,
                     &EnumSchema::Single(SingleSelectEnumSchema::Titled(
                         TitledSingleSelectEnumSchema::new(vec![
-                            ConstTitle {
-                                const_: "A".to_string(),
-                                title: "A name".to_string()
-                            },
-                            ConstTitle {
-                                const_: "B".to_string(),
-                                title: "B name".to_string()
-                            },
-                            ConstTitle {
-                                const_: "C".to_string(),
-                                title: "C name".to_string()
-                            }
+                            ConstTitle::new("A", "A name"),
+                            ConstTitle::new("B", "B name"),
+                            ConstTitle::new("C", "C name"),
                         ])
                     ))
                 )
@@ -841,12 +819,12 @@ async fn test_elicitation_direction_server_to_client() {
     let schema = ElicitationSchema::builder()
         .property(
             "name",
-            PrimitiveSchema::String(StringSchema::new().description("Enter your name")),
+            PrimitiveSchemaDefinition::String(StringSchema::new().description("Enter your name")),
         )
         .build()
         .unwrap();
 
-    let elicitation_request = CreateElicitationRequestParams::FormElicitationParams {
+    let elicitation_request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Please enter your name".to_string(),
         requested_schema: schema,
@@ -858,23 +836,20 @@ async fn test_elicitation_direction_server_to_client() {
     assert_eq!(serialized["requestedSchema"]["type"], "object");
 
     // Test that elicitation requests are part of ServerRequest
-    let _server_request =
-        ServerRequest::CreateElicitationRequest(CreateElicitationRequest::new(elicitation_request));
+    let _server_request = ServerRequest::ElicitRequest(ElicitRequest::new(elicitation_request));
 
     // Test that client can respond with elicitation results
-    let client_result = ClientResult::CreateElicitationResult(CreateElicitationResult {
-        action: ElicitationAction::Accept,
-        content: Some(json!("John Doe")),
-        meta: None,
-    });
+    let client_result = ClientResult::ElicitResult(
+        ElicitResult::new(ElicitationAction::Accept).with_content(json!("John Doe")),
+    );
 
     // Verify client result can be serialized
     match client_result {
-        ClientResult::CreateElicitationResult(result) => {
+        ClientResult::ElicitResult(result) => {
             assert_eq!(result.action, ElicitationAction::Accept);
             assert_eq!(result.content, Some(json!("John Doe")));
         }
-        _ => panic!("CreateElicitationResult should be part of ClientResult"),
+        _ => panic!("ElicitResult should be part of ClientResult"),
     }
 }
 
@@ -888,15 +863,17 @@ async fn test_elicitation_json_rpc_direction() {
     let schema = ElicitationSchema::builder()
         .property(
             "continue",
-            PrimitiveSchema::Boolean(BooleanSchema::new().description("Do you want to continue?")),
+            PrimitiveSchemaDefinition::Boolean(
+                BooleanSchema::new().description("Do you want to continue?"),
+            ),
         )
         .build()
         .unwrap();
 
     // 1. Server creates elicitation request
     let server_request = ServerJsonRpcMessage::request(
-        ServerRequest::CreateElicitationRequest(CreateElicitationRequest::new(
-            CreateElicitationRequestParams::FormElicitationParams {
+        ServerRequest::ElicitRequest(ElicitRequest::new(
+            ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message: "Do you want to continue?".to_string(),
                 requested_schema: schema,
@@ -913,11 +890,9 @@ async fn test_elicitation_json_rpc_direction() {
 
     // 2. Client responds with elicitation result
     let client_response = ClientJsonRpcMessage::response(
-        ClientResult::CreateElicitationResult(CreateElicitationResult {
-            action: ElicitationAction::Accept,
-            content: Some(json!(true)),
-            meta: None,
-        }),
+        ClientResult::ElicitResult(
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!(true)),
+        ),
         RequestId::Number(1),
     );
 
@@ -946,13 +921,12 @@ async fn test_elicitation_actions_compliance() {
     ];
 
     for action in actions {
-        let result = CreateElicitationResult {
-            action: action.clone(),
-            content: match action {
-                ElicitationAction::Accept => Some(serde_json::json!("some data")),
-                _ => None,
-            },
-            meta: None,
+        let result = {
+            let r = ElicitResult::new(action.clone());
+            match action {
+                ElicitationAction::Accept => r.with_content(serde_json::json!("some data")),
+                _ => r,
+            }
         };
 
         let json = serde_json::to_value(&result).unwrap();
@@ -970,28 +944,25 @@ async fn test_elicitation_actions_compliance() {
                 assert_eq!(json["action"], "cancel");
                 assert!(json.get("content").is_none() || json["content"].is_null());
             }
+            _ => {}
         }
     }
 }
 
-/// Test that CreateElicitationResult IS in ClientResult (response compliance)
+/// Test that ElicitResult IS in ClientResult (response compliance)
 #[tokio::test]
 async fn test_elicitation_result_in_client_result() {
     use rmcp::model::*;
 
     // Test that clients can return elicitation results
-    let result = ClientResult::CreateElicitationResult(CreateElicitationResult {
-        action: ElicitationAction::Decline,
-        content: None,
-        meta: None,
-    });
+    let result = ClientResult::ElicitResult(ElicitResult::new(ElicitationAction::Decline));
 
     match result {
-        ClientResult::CreateElicitationResult(elicit_result) => {
+        ClientResult::ElicitResult(elicit_result) => {
             assert_eq!(elicit_result.action, ElicitationAction::Decline);
             assert_eq!(elicit_result.content, None);
         }
-        _ => panic!("CreateElicitationResult should be part of ClientResult"),
+        _ => panic!("ElicitResult should be part of ClientResult"),
     }
 }
 
@@ -1008,24 +979,16 @@ async fn test_elicitation_capability_structure() {
     assert!(default_cap.url.is_none());
 
     // Test ElicitationCapability with schema validation enabled
-    let cap_with_validation = ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: Some(true),
-        }),
-        url: None,
-    };
+    let cap_with_validation = ElicitationCapability::new()
+        .with_form(FormElicitationCapability::new().with_schema_validation(true));
     assert_eq!(
         cap_with_validation.form.as_ref().unwrap().schema_validation,
         Some(true)
     );
 
     // Test ElicitationCapability with schema validation disabled
-    let cap_without_validation = ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: Some(false),
-        }),
-        url: None,
-    };
+    let cap_without_validation = ElicitationCapability::new()
+        .with_form(FormElicitationCapability::new().with_schema_validation(false));
     assert_eq!(
         cap_without_validation
             .form
@@ -1059,12 +1022,10 @@ async fn test_elicitation_capability_structure() {
 async fn test_client_capabilities_with_elicitation() {
     // Test ClientCapabilities with elicitation capability
     let capabilities = ClientCapabilities::builder()
-        .enable_elicitation_with(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(true),
-            }),
-            url: None,
-        })
+        .enable_elicitation_with(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+        )
         .build();
 
     // Verify elicitation capability is present
@@ -1101,12 +1062,10 @@ async fn test_initialize_request_with_elicitation() {
     // Test InitializeRequestParam with elicitation capability
     let init_param = InitializeRequestParams::new(
         ClientCapabilities::builder()
-            .enable_elicitation_with(ElicitationCapability {
-                form: Some(FormElicitationCapability {
-                    schema_validation: Some(true),
-                }),
-                url: None,
-            })
+            .enable_elicitation_with(
+                ElicitationCapability::new()
+                    .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+            )
             .build(),
         Implementation::new("test-client", "1.0.0"),
     );
@@ -1143,12 +1102,10 @@ async fn test_capability_checking_logic() {
     // Case 1: Client with elicitation capability
     let client_with_capability = InitializeRequestParams::new(
         ClientCapabilities::builder()
-            .enable_elicitation_with(ElicitationCapability {
-                form: Some(FormElicitationCapability {
-                    schema_validation: Some(true),
-                }),
-                url: None,
-            })
+            .enable_elicitation_with(
+                ElicitationCapability::new()
+                    .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+            )
             .build(),
         Implementation::new("test-client", "1.0.0"),
     );
@@ -1257,12 +1214,8 @@ async fn test_elicitation_capability_serialization() {
     assert_eq!(json, serde_json::json!({}));
 
     // Test capability with schema validation enabled
-    let cap_with_validation = ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: Some(true),
-        }),
-        url: None,
-    };
+    let cap_with_validation = ElicitationCapability::new()
+        .with_form(FormElicitationCapability::new().with_schema_validation(true));
     let json = serde_json::to_value(&cap_with_validation).unwrap();
 
     assert_eq!(
@@ -1275,12 +1228,8 @@ async fn test_elicitation_capability_serialization() {
     );
 
     // Test capability with schema validation disabled
-    let cap_without_validation = ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: Some(false),
-        }),
-        url: None,
-    };
+    let cap_without_validation = ElicitationCapability::new()
+        .with_form(FormElicitationCapability::new().with_schema_validation(false));
     let json = serde_json::to_value(&cap_without_validation).unwrap();
 
     assert_eq!(
@@ -1332,12 +1281,8 @@ async fn test_client_capabilities_elicitation_builder() {
     );
 
     // Test enabling elicitation with custom capability
-    let custom_elicitation = ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: Some(false),
-        }),
-        url: None,
-    };
+    let custom_elicitation = ElicitationCapability::new()
+        .with_form(FormElicitationCapability::new().with_schema_validation(false));
 
     let caps_custom = ClientCapabilities::builder()
         .enable_elicitation_with(custom_elicitation.clone())
@@ -1361,12 +1306,18 @@ async fn test_create_elicitation_with_timeout_basic() {
 
     // This test verifies that the method accepts timeout parameter
     let schema = ElicitationSchema::builder()
-        .required_property("name", PrimitiveSchema::String(StringSchema::new()))
-        .required_property("email", PrimitiveSchema::String(StringSchema::new()))
+        .required_property(
+            "name",
+            PrimitiveSchemaDefinition::String(StringSchema::new()),
+        )
+        .required_property(
+            "email",
+            PrimitiveSchemaDefinition::String(StringSchema::new()),
+        )
         .build()
         .unwrap();
 
-    let _params = CreateElicitationRequestParams::FormElicitationParams {
+    let _params = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Enter your details".to_string(),
         requested_schema: schema,
@@ -1547,6 +1498,7 @@ async fn test_elicitation_action_error_mapping() {
                 let error = ElicitationError::UserCancelled;
                 assert!(format!("{}", error).contains("cancelled/dismissed"));
             }
+            _ => {}
         }
     }
 }
@@ -1690,7 +1642,10 @@ async fn test_elicitation_examples_compile() {
 async fn test_build_validation_required_field_not_in_properties() {
     // Try to mark a field as required that doesn't exist in properties
     let result = ElicitationSchema::builder()
-        .property("email", PrimitiveSchema::String(StringSchema::email()))
+        .property(
+            "email",
+            PrimitiveSchemaDefinition::String(StringSchema::email()),
+        )
         .mark_required("nonexistent_field")
         .build();
 
@@ -1706,8 +1661,14 @@ async fn test_build_validation_required_field_not_in_properties() {
 #[tokio::test]
 async fn test_build_validation_required_field_exists() {
     let result = ElicitationSchema::builder()
-        .property("email", PrimitiveSchema::String(StringSchema::email()))
-        .property("name", PrimitiveSchema::String(StringSchema::new()))
+        .property(
+            "email",
+            PrimitiveSchemaDefinition::String(StringSchema::email()),
+        )
+        .property(
+            "name",
+            PrimitiveSchemaDefinition::String(StringSchema::new()),
+        )
         .mark_required("email")
         .mark_required("name")
         .build();
@@ -1728,7 +1689,10 @@ async fn test_build_validation_required_field_exists() {
 async fn test_build_unchecked_panics_on_invalid() {
     // build_unchecked validates but panics instead of returning Result
     let _schema = ElicitationSchema::builder()
-        .property("email", PrimitiveSchema::String(StringSchema::email()))
+        .property(
+            "email",
+            PrimitiveSchemaDefinition::String(StringSchema::email()),
+        )
         .mark_required("nonexistent_field")
         .build_unchecked();
 }
@@ -1776,25 +1740,25 @@ async fn test_typed_property_methods() {
     assert_eq!(schema.properties.len(), 4);
 
     // Verify types are correct
-    if let Some(PrimitiveSchema::String(_)) = schema.properties.get("name") {
+    if let Some(PrimitiveSchemaDefinition::String(_)) = schema.properties.get("name") {
         // Expected
     } else {
         panic!("name should be StringSchema");
     }
 
-    if let Some(PrimitiveSchema::Number(_)) = schema.properties.get("price") {
+    if let Some(PrimitiveSchemaDefinition::Number(_)) = schema.properties.get("price") {
         // Expected
     } else {
         panic!("price should be NumberSchema");
     }
 
-    if let Some(PrimitiveSchema::Integer(_)) = schema.properties.get("quantity") {
+    if let Some(PrimitiveSchemaDefinition::Integer(_)) = schema.properties.get("quantity") {
         // Expected
     } else {
         panic!("quantity should be IntegerSchema");
     }
 
-    if let Some(PrimitiveSchema::Boolean(_)) = schema.properties.get("in_stock") {
+    if let Some(PrimitiveSchemaDefinition::Boolean(_)) = schema.properties.get("in_stock") {
         // Expected
     } else {
         panic!("in_stock should be BooleanSchema");
@@ -1831,7 +1795,7 @@ async fn test_required_typed_property_methods() {
 /// Test URL elicitation request parameter serialization/deserialization
 #[tokio::test]
 async fn test_url_elicitation_request_param_serialization() {
-    let request_param = CreateElicitationRequestParams::UrlElicitationParams {
+    let request_param = ElicitRequestParams::UrlElicitationParams {
         meta: None,
         message: "Please visit the following URL to complete verification".to_string(),
         url: "https://example.com/verify".to_string(),
@@ -1850,9 +1814,9 @@ async fn test_url_elicitation_request_param_serialization() {
     assert_eq!(json, expected);
 
     // Test deserialization
-    let deserialized: CreateElicitationRequestParams = serde_json::from_value(expected).unwrap();
+    let deserialized: ElicitRequestParams = serde_json::from_value(expected).unwrap();
     match deserialized {
-        CreateElicitationRequestParams::UrlElicitationParams {
+        ElicitRequestParams::UrlElicitationParams {
             message,
             url,
             elicitation_id,
@@ -1876,14 +1840,12 @@ async fn test_url_elicitation_json_rpc_protocol() {
     let request = JsonRpcRequest {
         jsonrpc: JsonRpcVersion2_0,
         id: RequestId::Number(1),
-        request: CreateElicitationRequest::new(
-            CreateElicitationRequestParams::UrlElicitationParams {
-                meta: None,
-                message: "Please authorize this action at the following URL".to_string(),
-                url: "https://auth.example.com/authorize/abc123".to_string(),
-                elicitation_id: "auth-request-456".to_string(),
-            },
-        ),
+        request: ElicitRequest::new(ElicitRequestParams::UrlElicitationParams {
+            meta: None,
+            message: "Please authorize this action at the following URL".to_string(),
+            url: "https://auth.example.com/authorize/abc123".to_string(),
+            elicitation_id: "auth-request-456".to_string(),
+        }),
     };
 
     // Test serialization of complete request
@@ -1903,11 +1865,10 @@ async fn test_url_elicitation_json_rpc_protocol() {
     assert_eq!(json["params"]["elicitationId"], "auth-request-456");
 
     // Test deserialization
-    let deserialized: JsonRpcRequest<CreateElicitationRequest> =
-        serde_json::from_value(json).unwrap();
+    let deserialized: JsonRpcRequest<ElicitRequest> = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized.id, RequestId::Number(1));
     match &deserialized.request.params {
-        CreateElicitationRequestParams::UrlElicitationParams {
+        ElicitRequestParams::UrlElicitationParams {
             message,
             url,
             elicitation_id,
@@ -1921,12 +1882,10 @@ async fn test_url_elicitation_json_rpc_protocol() {
     }
 }
 
-/// Test ElicitationCompletionNotification serialization/deserialization
+/// Test ElicitationCompleteNotification serialization/deserialization
 #[tokio::test]
 async fn test_elicitation_completion_notification() {
-    let notification_params = ElicitationResponseNotificationParam {
-        elicitation_id: "elicit-789".to_string(),
-    };
+    let notification_params = ElicitationResponseNotificationParam::new("elicit-789");
 
     // Test serialization
     let json = serde_json::to_value(&notification_params).unwrap();
@@ -1941,7 +1900,7 @@ async fn test_elicitation_completion_notification() {
     assert_eq!(deserialized.elicitation_id, "elicit-789");
 
     // Test complete notification structure
-    let notification = ElicitationCompletionNotification::new(notification_params);
+    let notification = ElicitationCompleteNotification::new(notification_params);
 
     let json = serde_json::to_value(&notification).unwrap();
     assert_eq!(json["method"], "notifications/elicitation/complete");
@@ -1963,10 +1922,7 @@ async fn test_url_elicitation_capability() {
     assert_eq!(deserialized, url_cap);
 
     // Test ElicitationCapability with URL mode enabled
-    let elicitation_cap = ElicitationCapability {
-        form: None,
-        url: Some(UrlElicitationCapability::default()),
-    };
+    let elicitation_cap = ElicitationCapability::new().with_url(UrlElicitationCapability::new());
 
     let json = serde_json::to_value(&elicitation_cap).unwrap();
     assert_eq!(
@@ -1977,12 +1933,9 @@ async fn test_url_elicitation_capability() {
     );
 
     // Test ElicitationCapability with both form and URL modes
-    let both_cap = ElicitationCapability {
-        form: Some(FormElicitationCapability {
-            schema_validation: Some(true),
-        }),
-        url: Some(UrlElicitationCapability::default()),
-    };
+    let both_cap = ElicitationCapability::new()
+        .with_form(FormElicitationCapability::new().with_schema_validation(true))
+        .with_url(UrlElicitationCapability::new());
 
     let json = serde_json::to_value(&both_cap).unwrap();
     assert_eq!(
@@ -1996,7 +1949,7 @@ async fn test_url_elicitation_capability() {
     );
 }
 
-/// Test backward compatibility: CreateElicitationRequestParam without mode tag
+/// Test backward compatibility: ElicitRequestParams without mode tag
 #[tokio::test]
 async fn test_elicitation_backward_compatibility_no_mode() {
     // JSON without "mode" field should deserialize as FormElicitationParam
@@ -2013,11 +1966,10 @@ async fn test_elicitation_backward_compatibility_no_mode() {
         }
     });
 
-    let deserialized: CreateElicitationRequestParams =
-        serde_json::from_value(json_without_mode).unwrap();
+    let deserialized: ElicitRequestParams = serde_json::from_value(json_without_mode).unwrap();
 
     match deserialized {
-        CreateElicitationRequestParams::FormElicitationParams {
+        ElicitRequestParams::FormElicitationParams {
             message,
             requested_schema,
             ..
@@ -2035,11 +1987,14 @@ async fn test_elicitation_backward_compatibility_no_mode() {
 async fn test_elicitation_both_modes() {
     // Form mode
     let form_schema = ElicitationSchema::builder()
-        .required_property("email", PrimitiveSchema::String(StringSchema::email()))
+        .required_property(
+            "email",
+            PrimitiveSchemaDefinition::String(StringSchema::email()),
+        )
         .build()
         .unwrap();
 
-    let form_request = CreateElicitationRequestParams::FormElicitationParams {
+    let form_request = ElicitRequestParams::FormElicitationParams {
         meta: None,
         message: "Enter email".to_string(),
         requested_schema: form_schema,
@@ -2051,7 +2006,7 @@ async fn test_elicitation_both_modes() {
     assert!(form_json.get("url").is_none());
 
     // URL mode
-    let url_request = CreateElicitationRequestParams::UrlElicitationParams {
+    let url_request = ElicitRequestParams::UrlElicitationParams {
         meta: None,
         message: "Visit URL".to_string(),
         url: "https://example.com".to_string(),
@@ -2103,12 +2058,10 @@ async fn test_url_elicitation_required_error_code() {
 async fn test_client_capabilities_elicitation_modes() {
     // Test with form-only capability
     let form_only_caps = ClientCapabilities::builder()
-        .enable_elicitation_with(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(true),
-            }),
-            url: None,
-        })
+        .enable_elicitation_with(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true)),
+        )
         .build();
 
     let json = serde_json::to_value(&form_only_caps).unwrap();
@@ -2120,10 +2073,9 @@ async fn test_client_capabilities_elicitation_modes() {
 
     // Test with URL-only capability
     let url_only_caps = ClientCapabilities::builder()
-        .enable_elicitation_with(ElicitationCapability {
-            form: None,
-            url: Some(UrlElicitationCapability::default()),
-        })
+        .enable_elicitation_with(
+            ElicitationCapability::new().with_url(UrlElicitationCapability::new()),
+        )
         .build();
 
     let json = serde_json::to_value(&url_only_caps).unwrap();
@@ -2138,12 +2090,11 @@ async fn test_client_capabilities_elicitation_modes() {
 
     // Test with both capabilities
     let both_caps = ClientCapabilities::builder()
-        .enable_elicitation_with(ElicitationCapability {
-            form: Some(FormElicitationCapability {
-                schema_validation: Some(false),
-            }),
-            url: Some(UrlElicitationCapability::default()),
-        })
+        .enable_elicitation_with(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(false))
+                .with_url(UrlElicitationCapability::new()),
+        )
         .build();
 
     let json = serde_json::to_value(&both_caps).unwrap();
@@ -2151,19 +2102,16 @@ async fn test_client_capabilities_elicitation_modes() {
     assert!(json["elicitation"]["url"].is_object());
 }
 
-/// Test ElicitationCompletionNotification in ServerNotification enum
+/// Test ElicitationCompleteNotification in ServerNotification enum
 #[tokio::test]
 async fn test_elicitation_completion_in_server_notification() {
-    let notification_param = ElicitationResponseNotificationParam {
-        elicitation_id: "notify-123".to_string(),
-    };
+    let notification_param = ElicitationResponseNotificationParam::new("notify-123");
 
-    let completion_notification =
-        ElicitationCompletionNotification::new(notification_param.clone());
+    let completion_notification = ElicitationCompleteNotification::new(notification_param.clone());
 
     // Test that it's part of ServerNotification
     let server_notification =
-        ServerNotification::ElicitationCompletionNotification(completion_notification);
+        ServerNotification::ElicitationCompleteNotification(completion_notification);
 
     // Test serialization
     let json = serde_json::to_value(&server_notification).unwrap();
@@ -2173,10 +2121,10 @@ async fn test_elicitation_completion_in_server_notification() {
     // Test deserialization
     let deserialized: ServerNotification = serde_json::from_value(json).unwrap();
     match deserialized {
-        ServerNotification::ElicitationCompletionNotification(notif) => {
+        ServerNotification::ElicitationCompleteNotification(notif) => {
             assert_eq!(notif.params.elicitation_id, "notify-123");
         }
-        _ => panic!("Expected ElicitationCompletionNotification variant"),
+        _ => panic!("Expected ElicitationCompleteNotification variant"),
     }
 }
 
@@ -2184,11 +2132,7 @@ async fn test_elicitation_completion_in_server_notification() {
 #[tokio::test]
 async fn test_url_elicitation_action_workflow() {
     // Test Accept action for URL elicitation (user visited URL and confirmed)
-    let accept_result = CreateElicitationResult {
-        action: ElicitationAction::Accept,
-        content: None, // URL elicitation doesn't return content, just confirmation
-        meta: None,
-    };
+    let accept_result = ElicitResult::new(ElicitationAction::Accept);
 
     let json = serde_json::to_value(&accept_result).unwrap();
     assert_eq!(json["action"], "accept");
@@ -2196,21 +2140,13 @@ async fn test_url_elicitation_action_workflow() {
     assert!(json.get("content").is_none() || json["content"].is_null());
 
     // Test Decline action for URL elicitation
-    let decline_result = CreateElicitationResult {
-        action: ElicitationAction::Decline,
-        content: None,
-        meta: None,
-    };
+    let decline_result = ElicitResult::new(ElicitationAction::Decline);
 
     let json = serde_json::to_value(&decline_result).unwrap();
     assert_eq!(json["action"], "decline");
 
     // Test Cancel action for URL elicitation
-    let cancel_result = CreateElicitationResult {
-        action: ElicitationAction::Cancel,
-        content: None,
-        meta: None,
-    };
+    let cancel_result = ElicitResult::new(ElicitationAction::Cancel);
 
     let json = serde_json::to_value(&cancel_result).unwrap();
     assert_eq!(json["action"], "cancel");

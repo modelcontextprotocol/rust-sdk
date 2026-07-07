@@ -5,25 +5,25 @@ use futures::future::BoxFuture;
 use rmcp::{
     ServerHandler,
     handler::server::wrapper::Parameters,
-    model::{GetPromptResult, PromptMessage, PromptMessageRole},
+    model::{GetPromptResult, PromptMessage, Role},
 };
 
 #[derive(Debug, Default)]
-pub struct TestHandler<T: 'static = ()> {
-    pub _marker: std::marker::PhantomData<fn(*const T)>,
+struct TestHandler<T: 'static = ()> {
+    _marker: std::marker::PhantomData<fn(*const T)>,
 }
 
 impl<T: 'static> ServerHandler for TestHandler<T> {}
 
 #[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct Request {
-    pub fields: HashMap<String, String>,
+struct Request {
+    fields: HashMap<String, String>,
 }
 
 #[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct Sum {
-    pub a: i32,
-    pub b: i32,
+struct Sum {
+    a: i32,
+    b: i32,
 }
 
 #[rmcp::prompt_router(router = "test_router")]
@@ -35,7 +35,7 @@ impl<T> TestHandler<T> {
     ) -> Vec<PromptMessage> {
         drop(fields);
         vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Async method response",
         )]
     }
@@ -47,7 +47,7 @@ impl<T> TestHandler<T> {
     ) -> Vec<PromptMessage> {
         drop(fields);
         vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Sync method response",
         )]
     }
@@ -57,7 +57,7 @@ impl<T> TestHandler<T> {
 async fn async_function(Parameters(Request { fields }): Parameters<Request>) -> Vec<PromptMessage> {
     drop(fields);
     vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Async function response",
     )]
 }
@@ -66,7 +66,7 @@ async fn async_function(Parameters(Request { fields }): Parameters<Request>) -> 
 fn async_function2<T>(_callee: &TestHandler<T>) -> BoxFuture<'_, GetPromptResult> {
     Box::pin(async move {
         GetPromptResult::new(vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Async function 2 response",
         )])
         .with_description("Async function 2")

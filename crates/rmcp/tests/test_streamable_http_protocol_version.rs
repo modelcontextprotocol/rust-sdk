@@ -1,5 +1,7 @@
 #![cfg(not(feature = "local"))]
 //! Regression tests for the `MCP-Protocol-Version` header / initialize body consistency check.
+use std::sync::Arc;
+
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -17,9 +19,16 @@ fn init_body(body_version: &str) -> String {
 async fn spawn_server(
     config: StreamableHttpServerConfig,
 ) -> (reqwest::Client, String, CancellationToken) {
+    spawn_server_with_manager(config, Arc::new(LocalSessionManager::default())).await
+}
+
+async fn spawn_server_with_manager(
+    config: StreamableHttpServerConfig,
+    session_manager: Arc<LocalSessionManager>,
+) -> (reqwest::Client, String, CancellationToken) {
     let ct = config.cancellation_token.clone();
     let service: StreamableHttpService<Calculator, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(Calculator::new()), Default::default(), config);
+        StreamableHttpService::new(|| Ok(Calculator::new()), session_manager, config);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -69,6 +78,17 @@ async fn post_init(
         req = req.header("MCP-Protocol-Version", h);
     }
     req.send().await.expect("send initialize request")
+}
+
+async fn post_non_initialize(client: &reqwest::Client, url: &str) -> reqwest::Response {
+    client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
+        .send()
+        .await
+        .expect("send non-initialize request")
 }
 
 #[tokio::test]
@@ -143,6 +163,24 @@ async fn stateful_init_rejects_when_header_mismatches_body() -> anyhow::Result<(
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["error"]["code"], -32600);
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Result<()> {
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let (client, url, ct) =
+        spawn_server_with_manager(stateful_config(), session_manager.clone()).await;
+
+    let response = post_non_initialize(&client, &url).await;
+    assert_eq!(response.status(), 422);
+    assert_eq!(session_manager.sessions.read().await.len(), 0);
+
+    let response = post_init(&client, &url, Some("2024-11-05"), "2025-11-25").await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(session_manager.sessions.read().await.len(), 0);
 
     ct.cancel();
     Ok(())

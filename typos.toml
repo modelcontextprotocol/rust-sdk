@@ -1,0 +1,4 @@
+# W3C `traceparent` example values (SEP-414) embed hex spans like `0ba9` that the
+# spell checker misreads as typos; ignore the canonical traceparent format.
+[default]
+extend-ignore-re = ["00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}"]

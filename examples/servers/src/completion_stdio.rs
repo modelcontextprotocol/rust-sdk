@@ -203,11 +203,11 @@ impl SqlQueryServer {
         let messages = if args.operation.is_empty() {
             vec![
                 PromptMessage::new_text(
-                    PromptMessageRole::User,
+                    Role::User,
                     "I need help building a SQL query. Where should I start?",
                 ),
                 PromptMessage::new_text(
-                    PromptMessageRole::Assistant,
+                    Role::Assistant,
                     "I'll help you build a SQL query step by step. First, what type of operation do you want to perform? \
                      Choose from: SELECT (to read data), INSERT (to add data), UPDATE (to modify data), or DELETE (to remove data).",
                 ),
@@ -215,11 +215,11 @@ impl SqlQueryServer {
         } else if args.table.is_empty() {
             vec![
                 PromptMessage::new_text(
-                    PromptMessageRole::User,
+                    Role::User,
                     format!("I want to {} data. What's next?", args.operation),
                 ),
                 PromptMessage::new_text(
-                    PromptMessageRole::Assistant,
+                    Role::Assistant,
                     format!(
                         "Great! For a {} operation, I need to know which table you want to work with. \
                             What's the name of your database table?",
@@ -277,11 +277,11 @@ impl SqlQueryServer {
 
             vec![
                 PromptMessage::new_text(
-                    PromptMessageRole::User,
+                    Role::User,
                     "Generate the SQL query based on my parameters and explain what it does.",
                 ),
                 PromptMessage::new_text(
-                    PromptMessageRole::Assistant,
+                    Role::Assistant,
                     format!(
                         "Here's your SQL query:\n\n```sql\n{}\n```\n\nThis query will {} the {} table.",
                         query,
@@ -405,11 +405,8 @@ impl ServerHandler for SqlQueryServer {
 
         let suggestions = self.fuzzy_match(&request.argument.value, &candidates);
 
-        let completion = CompletionInfo {
-            values: suggestions,
-            total: None,
-            has_more: Some(false),
-        };
+        let completion = CompletionInfo::with_pagination(suggestions, None, false)
+            .map_err(|e| McpError::internal_error(e, None))?;
 
         Ok(CompleteResult::new(completion))
     }

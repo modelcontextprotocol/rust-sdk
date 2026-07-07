@@ -35,7 +35,7 @@ pub struct ToolCallContext<'s, S> {
     pub service: &'s S,
     pub name: Cow<'static, str>,
     pub arguments: Option<JsonObject>,
-    pub task: Option<JsonObject>,
+    pub task: Option<crate::model::TaskMetadata>,
 }
 
 impl<'s, S> ToolCallContext<'s, S> {

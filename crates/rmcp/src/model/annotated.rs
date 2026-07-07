@@ -1,13 +1,15 @@
-use std::ops::{Deref, DerefMut};
+//! Annotations for content blocks and resources.
+//!
+//! The `Annotations` struct carries optional hints about audience, priority, and freshness.
+//! Individual content/resource types embed `annotations: Option<Annotations>` directly.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    RawAudioContent, RawContent, RawEmbeddedResource, RawImageContent, RawResource,
-    RawResourceTemplate, RawTextContent, Role,
-};
+use super::Role;
 
+/// Optional annotations for the client. The client can use annotations to inform how objects are
+/// used or displayed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -35,192 +37,23 @@ impl Annotations {
             audience: None,
         }
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct Annotated<T: AnnotateAble> {
-    #[serde(flatten)]
-    pub raw: T,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<Annotations>,
-}
+    pub fn with_audience(mut self, audience: Vec<Role>) -> Self {
+        self.audience = Some(audience);
+        self
+    }
 
-impl<T: AnnotateAble> Deref for Annotated<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.raw
+    pub fn with_priority(mut self, priority: f32) -> Self {
+        self.priority = Some(priority);
+        self
     }
-}
 
-impl<T: AnnotateAble> DerefMut for Annotated<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.raw
+    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+        self.last_modified = Some(timestamp);
+        self
     }
-}
 
-impl<T: AnnotateAble> Annotated<T> {
-    pub fn new(raw: T, annotations: Option<Annotations>) -> Self {
-        Self { raw, annotations }
-    }
-    pub fn remove_annotation(&mut self) -> Option<Annotations> {
-        self.annotations.take()
-    }
-    pub fn audience(&self) -> Option<&Vec<Role>> {
-        self.annotations.as_ref().and_then(|a| a.audience.as_ref())
-    }
-    pub fn priority(&self) -> Option<f32> {
-        self.annotations.as_ref().and_then(|a| a.priority)
-    }
-    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
-        self.annotations.as_ref().and_then(|a| a.last_modified)
-    }
-    pub fn with_audience(self, audience: Vec<Role>) -> Annotated<T>
-    where
-        Self: Sized,
-    {
-        if let Some(annotations) = self.annotations {
-            Annotated {
-                raw: self.raw,
-                annotations: Some(Annotations {
-                    audience: Some(audience),
-                    ..annotations
-                }),
-            }
-        } else {
-            Annotated {
-                raw: self.raw,
-                annotations: Some(Annotations {
-                    audience: Some(audience),
-                    priority: None,
-                    last_modified: None,
-                }),
-            }
-        }
-    }
-    pub fn with_priority(self, priority: f32) -> Annotated<T>
-    where
-        Self: Sized,
-    {
-        if let Some(annotations) = self.annotations {
-            Annotated {
-                raw: self.raw,
-                annotations: Some(Annotations {
-                    priority: Some(priority),
-                    ..annotations
-                }),
-            }
-        } else {
-            Annotated {
-                raw: self.raw,
-                annotations: Some(Annotations {
-                    priority: Some(priority),
-                    last_modified: None,
-                    audience: None,
-                }),
-            }
-        }
-    }
-    pub fn with_timestamp(self, timestamp: DateTime<Utc>) -> Annotated<T>
-    where
-        Self: Sized,
-    {
-        if let Some(annotations) = self.annotations {
-            Annotated {
-                raw: self.raw,
-                annotations: Some(Annotations {
-                    last_modified: Some(timestamp),
-                    ..annotations
-                }),
-            }
-        } else {
-            Annotated {
-                raw: self.raw,
-                annotations: Some(Annotations {
-                    last_modified: Some(timestamp),
-                    priority: None,
-                    audience: None,
-                }),
-            }
-        }
-    }
-    pub fn with_timestamp_now(self) -> Annotated<T>
-    where
-        Self: Sized,
-    {
-        self.with_timestamp(Utc::now())
-    }
-}
-
-mod sealed {
-    pub trait Sealed {}
-}
-macro_rules! annotate {
-    ($T: ident) => {
-        impl sealed::Sealed for $T {}
-        impl AnnotateAble for $T {}
-    };
-}
-
-annotate!(RawContent);
-annotate!(RawTextContent);
-annotate!(RawImageContent);
-annotate!(RawAudioContent);
-annotate!(RawEmbeddedResource);
-annotate!(RawResource);
-annotate!(RawResourceTemplate);
-
-pub trait AnnotateAble: sealed::Sealed {
-    fn optional_annotate(self, annotations: Option<Annotations>) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
-        Annotated::new(self, annotations)
-    }
-    fn annotate(self, annotations: Annotations) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
-        Annotated::new(self, Some(annotations))
-    }
-    fn no_annotation(self) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
-        Annotated::new(self, None)
-    }
-    fn with_audience(self, audience: Vec<Role>) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
-        self.annotate(Annotations {
-            audience: Some(audience),
-            ..Default::default()
-        })
-    }
-    fn with_priority(self, priority: f32) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
-        self.annotate(Annotations {
-            priority: Some(priority),
-            ..Default::default()
-        })
-    }
-    fn with_timestamp(self, timestamp: DateTime<Utc>) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
-        self.annotate(Annotations {
-            last_modified: Some(timestamp),
-            ..Default::default()
-        })
-    }
-    fn with_timestamp_now(self) -> Annotated<Self>
-    where
-        Self: Sized,
-    {
+    pub fn with_timestamp_now(self) -> Self {
         self.with_timestamp(Utc::now())
     }
 }

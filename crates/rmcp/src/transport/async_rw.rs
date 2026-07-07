@@ -124,8 +124,19 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<Role>> {
         loop {
-            self.line_buf.clear();
+            // `read_until` is not cancellation-safe on its own, and `receive` is
+            // polled inside a `select!` in the service loop: an in-progress line
+            // read is dropped whenever another branch (e.g. an outgoing response)
+            // becomes ready. We rely on `read_until` appending into `self.line_buf`
+            // and only returning at a delimiter or EOF, so a cancelled read leaves
+            // its partial bytes in `self.line_buf`. Keeping that buffer across
+            // calls lets the next read resume the same line; it is cleared only
+            // after a whole line has been consumed. Clearing at the top of the
+            // loop (the previous behaviour) discarded the partial read and so
+            // dropped incoming requests under concurrent response load.
             match self.read.read_until(b'\n', &mut self.line_buf).await {
+                // EOF. Any bytes still in `line_buf` are an incomplete trailing
+                // message with no delimiter, so there is nothing to deliver.
                 Ok(0) => return None,
                 Ok(_) => {}
                 Err(e) => {
@@ -133,25 +144,48 @@ where
                     return None;
                 }
             }
-            let line = without_carriage_return(
-                self.line_buf.strip_suffix(b"\n").unwrap_or(&self.line_buf),
-            );
-            if line.is_empty() {
-                continue;
-            }
-            match try_parse_with_compatibility::<RxJsonRpcMessage<Role>>(line, "receive") {
+            // A returned `read_until` means a full line is buffered. Parse it
+            // (borrowing `line_buf`), then clear the buffer — retaining its
+            // capacity for the next read — before handling the parse result.
+            let parsed = {
+                let line = without_carriage_return(
+                    self.line_buf.strip_suffix(b"\n").unwrap_or(&self.line_buf),
+                );
+                if line.is_empty() {
+                    self.line_buf.clear();
+                    continue;
+                }
+                try_parse_with_compatibility::<RxJsonRpcMessage<Role>>(line, "receive")
+            };
+            self.line_buf.clear();
+            match parsed {
                 Ok(Some(msg)) => return Some(msg),
                 Ok(None) => continue,
                 Err(JsonRpcMessageCodecError::Serde(e)) => {
-                    tracing::debug!("Parse error on incoming message: {e}");
-                    let mut write = self.write.lock().await;
-                    let framed = write.as_mut()?;
-                    let response = TxJsonRpcMessage::<Role>::error(
-                        ErrorData::parse_error("Parse error", None),
-                        None,
-                    );
-                    if framed.send(response).await.is_err() {
-                        return None;
+                    match e.classify() {
+                        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+                            // The input isn't valid JSON, so there's no message id to correlate a
+                            // response to, and replying to invalid data can trigger an error storm
+                            // if the peer echoes the response back as more invalid data. This
+                            // matches the other official MCP SDKs, which ignore unparsable input.
+                            // See https://github.com/modelcontextprotocol/rust-sdk/issues/938
+                            tracing::debug!("Ignoring unparsable incoming message: {e}");
+                        }
+                        serde_json::error::Category::Data | serde_json::error::Category::Io => {
+                            // Well-formed JSON that doesn't match the expected message shape is a
+                            // real protocol error rather than unparsable input, so surface it with
+                            // an Invalid Request response instead of silently dropping it.
+                            tracing::debug!("Protocol error on incoming message: {e}");
+                            let mut write = self.write.lock().await;
+                            let framed = write.as_mut()?;
+                            let response = TxJsonRpcMessage::<Role>::error(
+                                ErrorData::invalid_request("Invalid request", None),
+                                None,
+                            );
+                            if framed.send(response).await.is_err() {
+                                return None;
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -618,8 +652,8 @@ mod test {
 
     #[cfg(feature = "server")]
     #[tokio::test]
-    async fn receive_recovers_from_parse_error() {
-        use tokio::io::AsyncWriteExt;
+    async fn receive_ignores_parse_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         use crate::{RoleServer, transport::Transport};
 
@@ -638,28 +672,70 @@ mod test {
             .await
             .unwrap();
 
+        // The unparsable line is skipped and the next valid message is still yielded.
         let received = transport
             .receive()
             .await
-            .expect("transport should recover and yield the next valid message");
-
-        // Read one line back from the peer side and parse as JSON.
-        let mut reply_buf = Vec::new();
-        let mut peer = tokio::io::BufReader::new(&mut client_r);
-        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
-        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
-
-        // Per MCP 2025-11-25: id is omitted when the server can't read the request id.
+            .expect("transport should skip the invalid line and yield the next valid message");
         assert_eq!(
-            reply,
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": "Parse error"},
-            })
+            serde_json::to_value(&received).unwrap()["method"],
+            "notifications/initialized",
+        );
+
+        // No response is sent back for the unparsable message (issue #938). Dropping the
+        // transport closes its write side, so the peer reads to EOF and should see no bytes.
+        drop(transport);
+        let mut reply_buf = Vec::new();
+        client_r.read_to_end(&mut reply_buf).await.unwrap();
+        assert!(
+            reply_buf.is_empty(),
+            "expected no response to an unparsable message, got: {}",
+            String::from_utf8_lossy(&reply_buf),
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn receive_responds_to_protocol_error() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        use crate::{RoleServer, transport::Transport};
+
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        let (server_r, server_w) = tokio::io::split(server_io);
+        let (client_r, mut client_w) = tokio::io::split(client_io);
+
+        let mut transport = AsyncRwTransport::<RoleServer, _, _>::new(server_r, server_w);
+
+        // Well-formed JSON that does not match the JSON-RPC message shape, followed by a
+        // valid notification. Unlike unparsable bytes, this is a protocol error: the
+        // transport should reply to it and still yield the next valid message.
+        client_w
+            .write_all(
+                b"{\"foo\":\"bar\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            )
+            .await
+            .unwrap();
+
+        let received = transport.receive().await.expect(
+            "transport should reply to the protocol error and yield the next valid message",
         );
         assert_eq!(
             serde_json::to_value(&received).unwrap()["method"],
             "notifications/initialized",
+        );
+
+        // A protocol error gets an error response back (id omitted since it can't be read).
+        let mut reply_buf = Vec::new();
+        let mut peer = BufReader::new(client_r);
+        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32600, "message": "Invalid request"},
+            }),
         );
     }
 }

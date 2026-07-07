@@ -1,0 +1,77 @@
+name: Conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned for reproducible runs; bump deliberately when the suite updates.
+  CONFORMANCE_VERSION: "0.1.16"
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Build the whole package (server + client bins): the conformance crate is
+      # excluded from the workspace default-members, so this is the only CI job
+      # that catches compile breakage in it.
+      - name: Build conformance binaries
+        run: cargo build -p mcp-conformance
+
+      - name: Start conformance server
+        run: |
+          PORT=8001 ./target/debug/conformance-server &
+          echo $! > server.pid
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8001/mcp; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "conformance server did not become ready" >&2
+          exit 1
+
+      - name: Run server conformance suite
+        run: |
+          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \
+            --url http://127.0.0.1:8001/mcp \
+            --spec-version 2025-11-25 \
+            -o conformance-results
+
+      # These pass today but are excluded from the default "active" suite;
+      # run them explicitly so regressions are still caught.
+      - name: Run pending scenarios
+        run: |
+          for scenario in json-schema-2020-12 server-sse-polling; do
+            npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \
+              --url http://127.0.0.1:8001/mcp \
+              --scenario "$scenario" \
+              -o conformance-results
+          done
+
+      - name: Stop conformance server
+        if: always()
+        run: kill "$(cat server.pid)" 2>/dev/null || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-server-results
+          path: conformance-results

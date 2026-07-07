@@ -1,3 +1,5 @@
+// Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
+#![expect(deprecated)]
 use std::borrow::Cow;
 
 use thiserror::Error;

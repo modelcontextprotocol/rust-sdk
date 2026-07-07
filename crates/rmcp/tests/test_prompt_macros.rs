@@ -7,8 +7,8 @@ use rmcp::{
     ClientHandler, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::prompt::PromptRouter, wrapper::Parameters},
     model::{
-        ClientInfo, GetPromptRequestParams, GetPromptResult, ListPromptsResult,
-        PaginatedRequestParams, PromptMessage, PromptMessageRole,
+        ClientInfo, ContentBlock, GetPromptRequestParams, GetPromptResult, ListPromptsResult,
+        PaginatedRequestParams, PromptMessage, Role,
     },
     prompt, prompt_handler, prompt_router,
     service::RequestContext,
@@ -17,9 +17,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-pub struct CodeReviewRequest {
-    pub file_path: String,
-    pub language: String,
+struct CodeReviewRequest {
+    file_path: String,
+    language: String,
 }
 
 #[prompt_handler(router = self.prompt_router)]
@@ -53,14 +53,14 @@ impl Server {
     pub async fn code_review(&self, params: Parameters<CodeReviewRequest>) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!(
                     "Please review the {} code in: {}",
                     params.0.language, params.0.file_path
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 "I'll review this code for best practices and potential issues.".to_string(),
             ),
         ]
@@ -69,7 +69,7 @@ impl Server {
     #[prompt]
     async fn empty_param(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "This is a prompt with no parameters.".to_string(),
         )]
     }
@@ -110,11 +110,11 @@ impl<DS: DataService> GenericServer<DS> {
         let context = self.data_service.get_context();
         GetPromptResult::new(vec![
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 "I need help with the current context.".to_string(),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "Based on the context '{}', here's how I can help...",
                     context
@@ -141,8 +141,8 @@ async fn test_prompt_macros() {
         }))
         .await;
     assert_eq!(result.len(), 2);
-    assert_eq!(result[0].role, PromptMessageRole::User);
-    assert_eq!(result[1].role, PromptMessageRole::Assistant);
+    assert_eq!(result[0].role, Role::User);
+    assert_eq!(result[1].role, Role::Assistant);
 }
 
 #[tokio::test]
@@ -166,8 +166,8 @@ async fn test_prompt_macros_with_generics() {
     assert!(result.description.is_some());
     assert_eq!(result.messages.len(), 2);
     match &result.messages[1].content {
-        rmcp::model::PromptMessageContent::Text { text } => {
-            assert!(text.contains("mock context data"));
+        ContentBlock::Text(text_content) => {
+            assert!(text_content.text.contains("mock context data"));
         }
         _ => panic!("Expected text content"),
     }
@@ -194,17 +194,17 @@ impl CodeReviewRequest {}
 
 // Struct defined for testing optional field schema generation
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct OptionalFieldTestSchema {
+struct OptionalFieldTestSchema {
     #[schemars(description = "An optional description field")]
-    pub description: Option<String>,
+    description: Option<String>,
 }
 
 // Struct defined for testing optional i64 field schema generation and null handling
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct OptionalI64TestSchema {
+struct OptionalI64TestSchema {
     #[schemars(description = "An optional i64 field")]
-    pub count: Option<i64>,
-    pub mandatory_field: String, // Added to ensure non-empty object schema
+    count: Option<i64>,
+    mandatory_field: String, // Added to ensure non-empty object schema
 }
 
 // Dummy struct to host the test prompt method
@@ -233,7 +233,7 @@ impl OptionalSchemaTester {
     #[prompt(description = "A prompt to test optional schema generation")]
     async fn test_optional(&self, _req: Parameters<OptionalFieldTestSchema>) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Testing optional fields".to_string(),
         )]
     }
@@ -249,11 +249,8 @@ impl OptionalSchemaTester {
             None => "Received null count".to_string(),
         };
 
-        GetPromptResult::new(vec![PromptMessage::new_text(
-            PromptMessageRole::Assistant,
-            message,
-        )])
-        .with_description("Test result for optional i64")
+        GetPromptResult::new(vec![PromptMessage::new_text(Role::Assistant, message)])
+            .with_description("Test result for optional i64")
     }
 }
 
@@ -338,7 +335,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
         .await?;
 
     let result_text = match &result.messages.first().unwrap().content {
-        rmcp::model::PromptMessageContent::Text { text } => text.as_str(),
+        ContentBlock::Text(text_content) => text_content.text.as_str(),
         _ => panic!("Expected text content"),
     };
 
@@ -363,7 +360,7 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
         .await?;
 
     let some_result_text = match &some_result.messages.first().unwrap().content {
-        rmcp::model::PromptMessageContent::Text { text } => text.as_str(),
+        ContentBlock::Text(text_content) => text_content.text.as_str(),
         _ => panic!("Expected text content"),
     };
 

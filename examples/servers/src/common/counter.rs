@@ -94,14 +94,14 @@ impl Counter {
     }
 
     fn _create_resource_text(&self, uri: &str, name: &str) -> Resource {
-        RawResource::new(uri, name.to_string()).no_annotation()
+        Resource::new(uri, name.to_string())
     }
 
     #[tool(description = "Increment the counter by 1")]
     async fn increment(&self) -> Result<CallToolResult, McpError> {
         let mut counter = self.counter.lock().await;
         *counter += 1;
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             counter.to_string(),
         )]))
     }
@@ -110,7 +110,7 @@ impl Counter {
     async fn decrement(&self) -> Result<CallToolResult, McpError> {
         let mut counter = self.counter.lock().await;
         *counter -= 1;
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             counter.to_string(),
         )]))
     }
@@ -118,7 +118,7 @@ impl Counter {
     #[tool(description = "Get the current counter value")]
     async fn get_value(&self) -> Result<CallToolResult, McpError> {
         let counter = self.counter.lock().await;
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             counter.to_string(),
         )]))
     }
@@ -129,19 +129,19 @@ impl Counter {
     )]
     async fn long_task(&self) -> Result<CallToolResult, McpError> {
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             "Long task completed",
         )]))
     }
 
     #[tool(description = "Say hello to the client")]
     fn say_hello(&self) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text("hello")]))
+        Ok(CallToolResult::success(vec![ContentBlock::text("hello")]))
     }
 
     #[tool(description = "Repeat what you say")]
     fn echo(&self, Parameters(object): Parameters<JsonObject>) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::Value::Object(object).to_string(),
         )]))
     }
@@ -151,7 +151,7 @@ impl Counter {
         &self,
         Parameters(StructRequest { a, b }): Parameters<StructRequest>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             (a + b).to_string(),
         )]))
     }
@@ -166,8 +166,8 @@ impl Counter {
             .map(|v| v.to_str().unwrap_or("(non-ascii)").to_owned());
 
         match session_id {
-            Some(id) => Ok(CallToolResult::success(vec![Content::text(id)])),
-            None => Ok(CallToolResult::success(vec![Content::text(
+            Some(id) => Ok(CallToolResult::success(vec![ContentBlock::text(id)])),
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no session (not running over streamable HTTP?)",
             )])),
         }
@@ -190,10 +190,7 @@ impl Counter {
             "This is an example prompt with your message here: '{}'",
             args.message
         );
-        Ok(vec![PromptMessage::new_text(
-            PromptMessageRole::User,
-            prompt,
-        )])
+        Ok(vec![PromptMessage::new_text(Role::User, prompt)])
     }
 
     /// Analyze the current counter value and suggest next steps
@@ -209,11 +206,11 @@ impl Counter {
 
         let messages = vec![
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 "I'll analyze the counter situation and suggest the best approach.",
             ),
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!(
                     "Current counter value: {}\nGoal value: {}\nDifference: {}\nStrategy preference: {}\n\nPlease analyze the situation and suggest the best approach to reach the goal.",
                     current_value, args.goal, difference, strategy
@@ -406,12 +403,7 @@ mod tests {
         });
 
         let client_service = client.serve(client_transport).await?;
-        let mut task_meta = serde_json::Map::new();
-        task_meta.insert(
-            "source".into(),
-            serde_json::Value::String("integration-test".into()),
-        );
-        let params = CallToolRequestParams::new("long_task").with_task(task_meta);
+        let params = CallToolRequestParams::new("long_task").with_task(TaskMetadata::new());
         let response = client_service
             .send_request(ClientRequest::CallToolRequest(Request::new(params.clone())))
             .await?;

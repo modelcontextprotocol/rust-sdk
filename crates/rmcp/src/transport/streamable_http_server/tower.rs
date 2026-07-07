@@ -16,8 +16,9 @@ use super::session::{
 use crate::{
     RoleServer,
     model::{
-        ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData, GetExtensions,
-        InitializeRequest, InitializedNotification, JsonRpcError, ProtocolVersion, RequestId,
+        ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData,
+        GetExtensions, Implementation, InitializeRequest, InitializeRequestParams,
+        InitializedNotification, JsonRpcError, ProtocolVersion, RequestId,
     },
     serve_server,
     service::serve_directly,
@@ -1124,44 +1125,40 @@ where
                     }
                 }
             } else {
+                // Capture init params for external store persistence before
+                // extensions are injected (which would require Clone).
+                let stored_init_params = match &mut message {
+                    ClientJsonRpcMessage::Request(req) => {
+                        let ClientRequest::InitializeRequest(init_req) = &req.request else {
+                            return Err(unexpected_message_response("initialize request"));
+                        };
+                        // Reject mismatched MCP-Protocol-Version header before binding the session to anything.
+                        validate_header_matches_init_body(
+                            &part.headers,
+                            init_req.params.protocol_version.as_str(),
+                            Some(req.id.clone()),
+                        )?;
+                        let stored_init_params = self
+                            .config
+                            .session_store
+                            .as_ref()
+                            .map(|_| init_req.params.clone());
+                        // inject request part to extensions
+                        req.request.extensions_mut().insert(part);
+                        stored_init_params
+                    }
+                    _ => {
+                        return Err(unexpected_message_response("initialize request"));
+                    }
+                };
+                let service = self
+                    .get_service()
+                    .map_err(internal_error_response("get service"))?;
                 let (session_id, transport) = self
                     .session_manager
                     .create_session()
                     .await
                     .map_err(internal_error_response("create session"))?;
-                // Capture init params for external store persistence before
-                // extensions are injected (which would require Clone).
-                let stored_init_params = if self.config.session_store.is_some() {
-                    if let ClientJsonRpcMessage::Request(req) = &message {
-                        if let ClientRequest::InitializeRequest(init_req) = &req.request {
-                            Some(init_req.params.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let ClientJsonRpcMessage::Request(req) = &mut message {
-                    let ClientRequest::InitializeRequest(init_req) = &req.request else {
-                        return Err(unexpected_message_response("initialize request"));
-                    };
-                    // Reject mismatched MCP-Protocol-Version header before binding the session to anything.
-                    validate_header_matches_init_body(
-                        &part.headers,
-                        init_req.params.protocol_version.as_str(),
-                        Some(req.id.clone()),
-                    )?;
-                    // inject request part to extensions
-                    req.request.extensions_mut().insert(part);
-                } else {
-                    return Err(unexpected_message_response("initialize request"));
-                }
-                let service = self
-                    .get_service()
-                    .map_err(internal_error_response("get service"))?;
                 // spawn a task to serve the session
                 Self::spawn_session_worker(
                     self.session_manager.clone(),
@@ -1243,10 +1240,17 @@ where
                 .map_err(internal_error_response("get service"))?;
             match message {
                 ClientJsonRpcMessage::Request(mut request) => {
+                    // Build a peer_info so context.protocol_version() works inside handlers.
+                    // serve_directly skips the handshake and receives None by default, making
+                    // protocol_version() always return None in stateless mode. We reconstruct it:
+                    // - initialize requests: version comes from the request body params
+                    // - all other requests: version comes from the MCP-Protocol-Version header
+                    //   (already validated above; absent header defaults to 2025-03-26)
+                    let peer_info = Self::peer_info_for_stateless_request(&request, &part.headers);
                     request.request.extensions_mut().insert(part);
                     let (transport, mut receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
-                    let service = serve_directly(service, transport, None);
+                    let service = serve_directly(service, transport, peer_info);
                     tokio::spawn(async move {
                         // on service created
                         let _ = service.waiting().await;
@@ -1334,5 +1338,35 @@ where
             });
         }
         Ok(accepted_response())
+    }
+
+    /// Build a `ClientInfo` (peer_info) for a stateless request so that
+    /// `context.protocol_version()` returns the correct value inside handlers.
+    ///
+    /// `serve_directly` skips the MCP handshake and accepts `peer_info = None`,
+    /// which means `context.protocol_version()` is always `None` in stateless mode.
+    /// We reconstruct the protocol version from the available signal per request type:
+    /// - initialize: version is in the request body params (authoritative)
+    /// - all other requests: version is in the MCP-Protocol-Version header
+    ///   (validated before this point; absent header defaults to 2025-03-26)
+    fn peer_info_for_stateless_request(
+        request: &crate::model::JsonRpcRequest<ClientRequest>,
+        headers: &HeaderMap,
+    ) -> Option<InitializeRequestParams> {
+        let version = if let ClientRequest::InitializeRequest(ref init) = request.request {
+            init.params.protocol_version.clone()
+        } else {
+            headers
+                .get(HEADER_MCP_PROTOCOL_VERSION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
+                .unwrap_or(ProtocolVersion::V_2025_03_26)
+        };
+        Some(InitializeRequestParams {
+            meta: None,
+            protocol_version: version,
+            capabilities: ClientCapabilities::default(),
+            client_info: Implementation::default(),
+        })
     }
 }

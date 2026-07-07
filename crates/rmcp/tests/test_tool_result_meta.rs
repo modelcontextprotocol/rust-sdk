@@ -1,9 +1,9 @@
-use rmcp::model::{CallToolResult, Content, Meta};
+use rmcp::model::{CallToolResult, ContentBlock, Meta};
 use serde_json::{Value, json};
 
 #[test]
 fn serialize_tool_result_with_meta() {
-    let content = vec![Content::text("ok")];
+    let content = vec![ContentBlock::text("ok")];
     let mut meta = Meta::new();
     meta.insert("foo".to_string(), json!("bar"));
     let result = CallToolResult::success(content).with_meta(Some(meta));
@@ -33,7 +33,7 @@ fn deserialize_tool_result_with_meta() {
 
 #[test]
 fn serialize_tool_result_without_meta_omits_field() {
-    let result = CallToolResult::success(vec![Content::text("no meta")]);
+    let result = CallToolResult::success(vec![ContentBlock::text("no meta")]);
     let v = serde_json::to_value(&result).unwrap();
     // Ensure _meta is omitted
     assert!(v.get("_meta").is_none());

@@ -26,14 +26,16 @@ async fn test_logging_spec_compliance() -> anyhow::Result<()> {
         // Test server can send messages before level is set
         server
             .peer()
-            .notify_logging_message(LoggingMessageNotificationParam {
-                level: LoggingLevel::Info,
-                data: serde_json::json!({
-                    "message": "Server initiated message",
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                }),
-                logger: Some("test_server".to_string()),
-            })
+            .notify_logging_message(
+                LoggingMessageNotificationParam::new(
+                    LoggingLevel::Info,
+                    serde_json::json!({
+                        "message": "Server initiated message",
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                    }),
+                )
+                .with_logger("test_server"),
+            )
             .await?;
 
         server.waiting().await?;
@@ -277,14 +279,9 @@ async fn test_logging_optional_fields() -> anyhow::Result<()> {
 
         // Test message with and without optional logger field
         for (level, has_logger) in [(LoggingLevel::Info, true), (LoggingLevel::Debug, false)] {
-            server
-                .peer()
-                .notify_logging_message(LoggingMessageNotificationParam {
-                    level,
-                    data: json!({"test": "data"}),
-                    logger: has_logger.then(|| "test_logger".to_string()),
-                })
-                .await?;
+            let mut param = LoggingMessageNotificationParam::new(level, json!({"test": "data"}));
+            param.logger = has_logger.then(|| "test_logger".to_string());
+            server.peer().notify_logging_message(param).await?;
         }
 
         server.waiting().await?;

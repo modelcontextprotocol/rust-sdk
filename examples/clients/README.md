@@ -45,6 +45,7 @@ A client demonstrating how to authenticate with an MCP server using OAuth.
 
 - Starts a local HTTP server to handle OAuth callbacks
 - Initializes the OAuth state machine and begins the authorization flow
+- Shows how to pass a configured reqwest client for OAuth discovery, registration, token exchange, and refresh requests
 - Displays the authorization URL and waits for user authorization
 - Establishes an authorized connection to the MCP server using the acquired access token
 - Demonstrates how to use the authorized connection to retrieve available tools and prompts

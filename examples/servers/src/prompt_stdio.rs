@@ -121,12 +121,9 @@ impl PromptServer {
     )]
     async fn greeting(&self) -> Vec<PromptMessage> {
         vec![
+            PromptMessage::new_text(Role::User, "Hello! I'd like to start our conversation."),
             PromptMessage::new_text(
-                PromptMessageRole::User,
-                "Hello! I'd like to start our conversation.",
-            ),
-            PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 "Hello! I'm here to help. What would you like to discuss today?",
             ),
         ]
@@ -148,14 +145,14 @@ impl PromptServer {
 
         let messages = vec![
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "You are an expert {} code reviewer. The user's expertise level is {}.",
                     args.language, prefs.expertise_level
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!(
                     "Please review the {} code at '{}'. Focus on: {}",
                     args.language,
@@ -164,7 +161,7 @@ impl PromptServer {
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "I'll review your {} code focusing on {}. Let me analyze the code at '{}'...",
                     args.language,
@@ -203,14 +200,14 @@ impl PromptServer {
 
         Ok(vec![
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!(
                     "I have {} data that needs {} analysis. Context: {}",
                     args.data_type, args.analysis_type, context
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "I'll help you analyze your {} data using {} techniques. Based on your context, \
                      I'll focus on providing actionable insights.",
@@ -233,7 +230,7 @@ impl PromptServer {
 
         let mut messages = vec![
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "You are a writing assistant helping create {} content for {}. \
                      Use a {} tone.",
@@ -241,7 +238,7 @@ impl PromptServer {
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!(
                     "I need help writing {} for {}. Key points to cover: {}",
                     args.content_type,
@@ -250,7 +247,7 @@ impl PromptServer {
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 "I'll help you create that content. Let me structure it based on your key points.",
             ),
         ];
@@ -258,11 +255,11 @@ impl PromptServer {
         // Add a message for each key point
         for (i, point) in args.key_points.iter().enumerate() {
             messages.push(PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!("For point {}: {}, what would you suggest?", i + 1, point),
             ));
             messages.push(PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!("For '{}', I recommend...", point),
             ));
         }
@@ -291,14 +288,14 @@ impl PromptServer {
 
         let mut messages = vec![
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "You are a debugging expert for {}. Help diagnose and fix issues.",
                     args.stack.join(", ")
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 format!(
                     "I'm encountering this error: {}\nStack: {}",
                     args.error_message,
@@ -311,18 +308,18 @@ impl PromptServer {
         if let Some(tried) = args.tried_solutions {
             if !tried.is_empty() {
                 messages.push(PromptMessage::new_text(
-                    PromptMessageRole::User,
+                    Role::User,
                     format!("I've already tried: {}", tried.join(", ")),
                 ));
                 messages.push(PromptMessage::new_text(
-                    PromptMessageRole::Assistant,
+                    Role::Assistant,
                     "I see you've already attempted some solutions. Let me suggest different approaches.",
                 ));
             }
         }
 
         messages.push(PromptMessage::new_text(
-            PromptMessageRole::Assistant,
+            Role::Assistant,
             "Let's debug this systematically. First, let me understand the error context better.",
         ));
 
@@ -343,18 +340,18 @@ impl PromptServer {
 
         Ok(vec![
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "Create a learning path for someone at {} level who prefers {} language explanations.",
                     prefs.expertise_level, prefs.preferred_language
                 ),
             ),
             PromptMessage::new_text(
-                PromptMessageRole::User,
+                Role::User,
                 "What should I learn next to improve my programming skills?",
             ),
             PromptMessage::new_text(
-                PromptMessageRole::Assistant,
+                Role::Assistant,
                 format!(
                     "Based on your {} expertise level, I recommend the following learning path...",
                     prefs.expertise_level

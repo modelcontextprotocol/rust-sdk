@@ -1,5 +1,6 @@
 //cargo test --test test_message_protocol --features "client server"
 #![cfg(not(feature = "local"))]
+#![expect(deprecated)] // exercises SEP-2577-deprecated Sampling/Roots/Logging types
 
 mod common;
 use common::handlers::{TestClientHandler, TestServer};

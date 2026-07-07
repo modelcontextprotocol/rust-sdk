@@ -4,7 +4,7 @@
 use rmcp::{
     ServerHandler,
     handler::server::wrapper::Parameters,
-    model::{GetPromptResult, Prompt, PromptMessage, PromptMessageRole},
+    model::{GetPromptResult, Prompt, PromptMessage, Role},
     prompt,
 };
 use schemars::JsonSchema;
@@ -40,26 +40,20 @@ struct ComplexArgs {
 // Test basic prompt attribute generation
 #[prompt]
 async fn basic_prompt(_server: &TestServer) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
-        "Basic response",
-    )]
+    vec![PromptMessage::new_text(Role::Assistant, "Basic response")]
 }
 
 // Test prompt with custom name
 #[prompt(name = "custom_name")]
 async fn named_prompt(_server: &TestServer) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
-        "Named response",
-    )]
+    vec![PromptMessage::new_text(Role::Assistant, "Named response")]
 }
 
 // Test prompt with custom description
 #[prompt(description = "This is a custom description")]
 async fn described_prompt(_server: &TestServer) -> Vec<PromptMessage> {
     vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Described response",
     )]
 }
@@ -68,7 +62,7 @@ async fn described_prompt(_server: &TestServer) -> Vec<PromptMessage> {
 #[prompt(name = "full_custom", description = "Fully customized prompt")]
 async fn fully_custom_prompt(_server: &TestServer) -> Vec<PromptMessage> {
     vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Fully custom response",
     )]
 }
@@ -79,7 +73,7 @@ async fn fully_custom_prompt(_server: &TestServer) -> Vec<PromptMessage> {
 #[prompt]
 async fn doc_comment_prompt(_server: &TestServer) -> Vec<PromptMessage> {
     vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Doc comment response",
     )]
 }
@@ -89,7 +83,7 @@ async fn doc_comment_prompt(_server: &TestServer) -> Vec<PromptMessage> {
 #[prompt(description = "This overrides the doc comment")]
 async fn override_doc_prompt(_server: &TestServer) -> Vec<PromptMessage> {
     vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Override response",
     )]
 }
@@ -97,10 +91,7 @@ async fn override_doc_prompt(_server: &TestServer) -> Vec<PromptMessage> {
 // Test prompt with arguments
 #[prompt]
 async fn args_prompt(_server: &TestServer, _args: Parameters<TestArgs>) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
-        "Args response",
-    )]
+    vec![PromptMessage::new_text(Role::Assistant, "Args response")]
 }
 
 // Test prompt with complex arguments
@@ -110,7 +101,7 @@ async fn complex_args_prompt(
     _args: Parameters<ComplexArgs>,
 ) -> GetPromptResult {
     GetPromptResult::new(vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
+        Role::Assistant,
         "Complex response",
     )])
     .with_description("Complex args result")
@@ -119,10 +110,7 @@ async fn complex_args_prompt(
 // Test sync prompt
 #[prompt]
 fn sync_prompt(_server: &TestServer) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
-        "Sync response",
-    )]
+    vec![PromptMessage::new_text(Role::Assistant, "Sync response")]
 }
 
 #[test]
@@ -275,10 +263,7 @@ impl<T: Send + Sync + 'static> ServerHandler for GenericServer<T> {}
 async fn generic_prompt<T: Send + Sync + 'static>(
     _server: &GenericServer<T>,
 ) -> Vec<PromptMessage> {
-    vec![PromptMessage::new_text(
-        PromptMessageRole::Assistant,
-        "Generic response",
-    )]
+    vec![PromptMessage::new_text(Role::Assistant, "Generic response")]
 }
 
 #[test]

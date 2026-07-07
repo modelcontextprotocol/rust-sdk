@@ -137,7 +137,7 @@ use crate::{
         tool::{CallToolHandler, DynCallToolHandler, ToolCallContext},
         tool_name_validation::validate_and_warn_tool_name,
     },
-    model::{CallToolResult, Content, ErrorCode, Tool, ToolAnnotations},
+    model::{CallToolResult, ContentBlock, ErrorCode, Tool, ToolAnnotations},
     service::{MaybeBoxFuture, MaybeSend},
 };
 
@@ -149,7 +149,9 @@ fn into_tool_argument_error(error: crate::ErrorData) -> Result<CallToolResult, c
             .message
             .starts_with(TOOL_ARGUMENT_DESERIALIZATION_ERROR_PREFIX)
     {
-        return Ok(CallToolResult::error(vec![Content::text(error.message)]));
+        return Ok(CallToolResult::error(vec![ContentBlock::text(
+            error.message,
+        )]));
     }
 
     Err(error)
@@ -680,7 +682,7 @@ mod tests {
         let text = result
             .content
             .first()
-            .and_then(|content| content.raw.as_text())
+            .and_then(|content| content.as_text())
             .map(|text| text.text.as_str())
             .expect("tool error result should include text");
         assert!(text.contains("failed to deserialize parameters"));

@@ -1,4 +1,11 @@
-use std::{borrow::Cow, sync::Arc};
+// Internal references to the SEP-2577-deprecated Roots/Sampling/Logging types
+// defined in this module are expected; the deprecation is advisory for downstream users.
+#![expect(deprecated)]
+use std::{
+    borrow::Cow,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 mod annotated;
 mod capabilities;
 mod content;
@@ -698,10 +705,24 @@ impl CustomResult {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct CancelledNotificationParam {
-    pub request_id: RequestId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<RequestId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+
+impl CancelledNotificationParam {
+    pub fn new(request_id: Option<RequestId>, reason: Option<String>) -> Self {
+        Self {
+            request_id,
+            reason,
+            meta: None,
+        }
+    }
 }
 
 const_string!(CancelledNotificationMethod = "notifications/cancelled");
@@ -864,6 +885,8 @@ pub struct InitializeResult {
     /// Optional human-readable instructions about using this server
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl InitializeResult {
@@ -874,6 +897,7 @@ impl InitializeResult {
             capabilities,
             server_info: Implementation::from_build_env(),
             instructions: None,
+            meta: None,
         }
     }
 
@@ -907,6 +931,7 @@ impl Default for ServerInfo {
             capabilities: ServerCapabilities::default(),
             server_info: Implementation::from_build_env(),
             instructions: None,
+            meta: None,
         }
     }
 }
@@ -1107,7 +1132,7 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
@@ -1118,6 +1143,8 @@ pub struct ProgressNotificationParam {
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ProgressNotificationParam {
@@ -1128,6 +1155,7 @@ impl ProgressNotificationParam {
             progress,
             total: None,
             message: None,
+            meta: None,
         }
     }
 
@@ -1250,12 +1278,17 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 pub struct ReadResourceResult {
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ReadResourceResult {
     /// Create a new ReadResourceResult with the given contents.
     pub fn new(contents: Vec<ResourceContents>) -> Self {
-        Self { contents }
+        Self {
+            contents,
+            meta: None,
+        }
     }
 }
 
@@ -1352,16 +1385,21 @@ const_string!(ResourceUpdatedNotificationMethod = "notifications/resources/updat
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct ResourceUpdatedNotificationParam {
     /// The URI of the resource that was updated
     pub uri: String,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ResourceUpdatedNotificationParam {
     /// Create a new ResourceUpdatedNotificationParam.
     pub fn new(uri: impl Into<String>) -> Self {
-        Self { uri: uri.into() }
+        Self {
+            uri: uri.into(),
+            meta: None,
+        }
     }
 }
 
@@ -1453,6 +1491,10 @@ pub type ToolListChangedNotification = NotificationNoParam<ToolListChangedNotifi
 #[serde(rename_all = "lowercase")] //match spec
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub enum LoggingLevel {
     Debug,
     Info,
@@ -1470,6 +1512,10 @@ const_string!(SetLevelRequestMethod = "logging/setLevel");
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct SetLevelRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1499,6 +1545,10 @@ impl RequestParamsMeta for SetLevelRequestParams {
 pub type SetLevelRequestParam = SetLevelRequestParams;
 
 /// Request to set the logging level
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type SetLevelRequest = Request<SetLevelRequestMethod, SetLevelRequestParams>;
 
 const_string!(LoggingMessageNotificationMethod = "notifications/message");
@@ -1506,7 +1556,11 @@ const_string!(LoggingMessageNotificationMethod = "notifications/message");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct LoggingMessageNotificationParam {
     /// The severity level of this log message
     pub level: LoggingLevel,
@@ -1515,6 +1569,8 @@ pub struct LoggingMessageNotificationParam {
     pub logger: Option<String>,
     /// The actual log data
     pub data: Value,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl LoggingMessageNotificationParam {
@@ -1524,6 +1580,7 @@ impl LoggingMessageNotificationParam {
             level,
             logger: None,
             data,
+            meta: None,
         }
     }
 
@@ -1535,6 +1592,10 @@ impl LoggingMessageNotificationParam {
 }
 
 /// Notification containing a log message
+#[deprecated(
+    since = "2.0.0",
+    note = "Logging is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type LoggingMessageNotification =
     Notification<LoggingMessageNotificationMethod, LoggingMessageNotificationParam>;
 
@@ -1543,6 +1604,10 @@ pub type LoggingMessageNotification =
 // =============================================================================
 
 const_string!(CreateMessageRequestMethod = "sampling/createMessage");
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type CreateMessageRequest = Request<CreateMessageRequestMethod, CreateMessageRequestParams>;
 
 /// Represents the role of a participant in a conversation or message exchange.
@@ -1564,7 +1629,7 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub enum ToolChoiceMode {
     /// Model decides whether to use tools
     #[default]
@@ -1580,6 +1645,10 @@ pub enum ToolChoiceMode {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ToolChoice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<ToolChoiceMode>,
@@ -1666,11 +1735,11 @@ impl<T> SamplingContent<T> {
     }
 }
 
-impl SamplingMessageContent {
+impl SamplingMessageContentBlock {
     /// Get the text content if this is a Text variant
-    pub fn as_text(&self) -> Option<&RawTextContent> {
+    pub fn as_text(&self) -> Option<&TextContent> {
         match self {
-            SamplingMessageContent::Text(text) => Some(text),
+            SamplingMessageContentBlock::Text(text) => Some(text),
             _ => None,
         }
     }
@@ -1678,7 +1747,7 @@ impl SamplingMessageContent {
     /// Get the tool use content if this is a ToolUse variant
     pub fn as_tool_use(&self) -> Option<&ToolUseContent> {
         match self {
-            SamplingMessageContent::ToolUse(tool_use) => Some(tool_use),
+            SamplingMessageContentBlock::ToolUse(tool_use) => Some(tool_use),
             _ => None,
         }
     }
@@ -1686,7 +1755,7 @@ impl SamplingMessageContent {
     /// Get the tool result content if this is a ToolResult variant
     pub fn as_tool_result(&self) -> Option<&ToolResultContent> {
         match self {
-            SamplingMessageContent::ToolResult(tool_result) => Some(tool_result),
+            SamplingMessageContentBlock::ToolResult(tool_result) => Some(tool_result),
             _ => None,
         }
     }
@@ -1712,11 +1781,15 @@ impl<T> From<Vec<T>> for SamplingContent<T> {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct SamplingMessage {
     /// The role of the message sender (User or Assistant)
     pub role: Role,
     /// The actual content of the message (text, image, audio, tool use, or tool result)
-    pub content: SamplingContent<SamplingMessageContent>,
+    pub content: SamplingContent<SamplingMessageContentBlock>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
@@ -1725,37 +1798,41 @@ pub struct SamplingMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
-pub enum SamplingMessageContent {
-    Text(RawTextContent),
-    Image(RawImageContent),
-    Audio(RawAudioContent),
+#[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
+pub enum SamplingMessageContentBlock {
+    Text(TextContent),
+    Image(ImageContent),
+    Audio(AudioContent),
     /// Assistant only
     ToolUse(ToolUseContent),
     /// User only
     ToolResult(ToolResultContent),
 }
 
-impl SamplingMessageContent {
+#[deprecated(since = "2.0.0", note = "Renamed to SamplingMessageContentBlock")]
+pub type SamplingMessageContent = SamplingMessageContentBlock;
+
+impl SamplingMessageContentBlock {
     /// Create a text content
     pub fn text(text: impl Into<String>) -> Self {
-        Self::Text(RawTextContent {
-            text: text.into(),
-            meta: None,
-        })
+        Self::Text(TextContent::new(text))
     }
 
     pub fn tool_use(id: impl Into<String>, name: impl Into<String>, input: JsonObject) -> Self {
         Self::ToolUse(ToolUseContent::new(id, name, input))
     }
 
-    pub fn tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+    pub fn tool_result(tool_use_id: impl Into<String>, content: Vec<ContentBlock>) -> Self {
         Self::ToolResult(ToolResultContent::new(tool_use_id, content))
     }
 }
 
 impl SamplingMessage {
-    pub fn new(role: Role, content: impl Into<SamplingMessageContent>) -> Self {
+    pub fn new(role: Role, content: impl Into<SamplingMessageContentBlock>) -> Self {
         Self {
             role,
             content: SamplingContent::Single(content.into()),
@@ -1763,7 +1840,7 @@ impl SamplingMessage {
         }
     }
 
-    pub fn new_multiple(role: Role, contents: Vec<SamplingMessageContent>) -> Self {
+    pub fn new_multiple(role: Role, contents: Vec<SamplingMessageContentBlock>) -> Self {
         Self {
             role,
             content: SamplingContent::Multiple(contents),
@@ -1772,17 +1849,17 @@ impl SamplingMessage {
     }
 
     pub fn user_text(text: impl Into<String>) -> Self {
-        Self::new(Role::User, SamplingMessageContent::text(text))
+        Self::new(Role::User, SamplingMessageContentBlock::text(text))
     }
 
     pub fn assistant_text(text: impl Into<String>) -> Self {
-        Self::new(Role::Assistant, SamplingMessageContent::text(text))
+        Self::new(Role::Assistant, SamplingMessageContentBlock::text(text))
     }
 
-    pub fn user_tool_result(tool_use_id: impl Into<String>, content: Vec<Content>) -> Self {
+    pub fn user_tool_result(tool_use_id: impl Into<String>, content: Vec<ContentBlock>) -> Self {
         Self::new(
             Role::User,
-            SamplingMessageContent::tool_result(tool_use_id, content),
+            SamplingMessageContentBlock::tool_result(tool_use_id, content),
         )
     }
 
@@ -1793,56 +1870,52 @@ impl SamplingMessage {
     ) -> Self {
         Self::new(
             Role::Assistant,
-            SamplingMessageContent::tool_use(id, name, input),
+            SamplingMessageContentBlock::tool_use(id, name, input),
         )
     }
 }
 
-// Conversion from RawTextContent to SamplingMessageContent
-impl From<RawTextContent> for SamplingMessageContent {
-    fn from(text: RawTextContent) -> Self {
-        SamplingMessageContent::Text(text)
+impl From<TextContent> for SamplingMessageContentBlock {
+    fn from(text: TextContent) -> Self {
+        SamplingMessageContentBlock::Text(text)
     }
 }
 
-// Conversion from String to SamplingMessageContent (as text)
-impl From<String> for SamplingMessageContent {
+// Conversion from String to SamplingMessageContentBlock (as text)
+impl From<String> for SamplingMessageContentBlock {
     fn from(text: String) -> Self {
-        SamplingMessageContent::text(text)
+        SamplingMessageContentBlock::text(text)
     }
 }
 
-impl From<&str> for SamplingMessageContent {
+impl From<&str> for SamplingMessageContentBlock {
     fn from(text: &str) -> Self {
-        SamplingMessageContent::text(text)
+        SamplingMessageContentBlock::text(text)
     }
 }
 
-// Backward compatibility: Convert Content to SamplingMessageContent
-// Note: Resource and ResourceLink variants are not supported in sampling messages
-impl TryFrom<Content> for SamplingMessageContent {
+impl TryFrom<ContentBlock> for SamplingMessageContentBlock {
     type Error = &'static str;
 
-    fn try_from(content: Content) -> Result<Self, Self::Error> {
-        match content.raw {
-            RawContent::Text(text) => Ok(SamplingMessageContent::Text(text)),
-            RawContent::Image(image) => Ok(SamplingMessageContent::Image(image)),
-            RawContent::Audio(audio) => Ok(SamplingMessageContent::Audio(audio)),
-            RawContent::Resource(_) => {
+    fn try_from(content: ContentBlock) -> Result<Self, Self::Error> {
+        match content {
+            ContentBlock::Text(text) => Ok(SamplingMessageContentBlock::Text(text)),
+            ContentBlock::Image(image) => Ok(SamplingMessageContentBlock::Image(image)),
+            ContentBlock::Audio(audio) => Ok(SamplingMessageContentBlock::Audio(audio)),
+            ContentBlock::Resource(_) => {
                 Err("Resource content is not supported in sampling messages")
             }
-            RawContent::ResourceLink(_) => {
+            ContentBlock::ResourceLink(_) => {
                 Err("ResourceLink content is not supported in sampling messages")
             }
         }
     }
 }
 
-// Backward compatibility: Convert Content to SamplingContent<SamplingMessageContent>
-impl TryFrom<Content> for SamplingContent<SamplingMessageContent> {
+impl TryFrom<ContentBlock> for SamplingContent<SamplingMessageContentBlock> {
     type Error = &'static str;
 
-    fn try_from(content: Content) -> Result<Self, Self::Error> {
+    fn try_from(content: ContentBlock) -> Result<Self, Self::Error> {
         Ok(SamplingContent::Single(content.try_into()?))
     }
 }
@@ -1853,7 +1926,7 @@ impl TryFrom<Content> for SamplingContent<SamplingMessageContent> {
 /// should be provided to the LLM when processing sampling requests.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub enum ContextInclusion {
     /// Include context from all connected MCP servers
     #[serde(rename = "allServers")]
@@ -1878,13 +1951,17 @@ pub enum ContextInclusion {
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct CreateMessageRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<JsonObject>,
+    pub task: Option<TaskMetadata>,
     /// The conversation history and current messages
     pub messages: Vec<SamplingMessage>,
     /// Preferences for model selection and behavior
@@ -1925,10 +2002,10 @@ impl RequestParamsMeta for CreateMessageRequestParams {
 }
 
 impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
-    fn task(&self) -> Option<&JsonObject> {
+    fn task(&self) -> Option<&TaskMetadata> {
         self.task.as_ref()
     }
-    fn task_mut(&mut self) -> &mut Option<JsonObject> {
+    fn task_mut(&mut self) -> &mut Option<TaskMetadata> {
         &mut self.task
     }
 }
@@ -2012,10 +2089,10 @@ impl CreateMessageRequestParams {
             for content in msg.content.iter() {
                 // ToolUse only in assistant messages, ToolResult only in user messages
                 match content {
-                    SamplingMessageContent::ToolUse(_) if msg.role != Role::Assistant => {
+                    SamplingMessageContentBlock::ToolUse(_) if msg.role != Role::Assistant => {
                         return Err("ToolUse content is only allowed in assistant messages".into());
                     }
-                    SamplingMessageContent::ToolResult(_) if msg.role != Role::User => {
+                    SamplingMessageContentBlock::ToolResult(_) if msg.role != Role::User => {
                         return Err("ToolResult content is only allowed in user messages".into());
                     }
                     _ => {}
@@ -2026,11 +2103,11 @@ impl CreateMessageRequestParams {
             let contents: Vec<_> = msg.content.iter().collect();
             let has_tool_result = contents
                 .iter()
-                .any(|c| matches!(c, SamplingMessageContent::ToolResult(_)));
+                .any(|c| matches!(c, SamplingMessageContentBlock::ToolResult(_)));
             if has_tool_result
                 && contents
                     .iter()
-                    .any(|c| !matches!(c, SamplingMessageContent::ToolResult(_)))
+                    .any(|c| !matches!(c, SamplingMessageContentBlock::ToolResult(_)))
             {
                 return Err(
                     "SamplingMessage with tool result content MUST NOT contain other content types"
@@ -2050,13 +2127,13 @@ impl CreateMessageRequestParams {
         for msg in &self.messages {
             if msg.role == Role::Assistant {
                 for content in msg.content.iter() {
-                    if let SamplingMessageContent::ToolUse(tu) = content {
+                    if let SamplingMessageContentBlock::ToolUse(tu) = content {
                         pending_tool_use_ids.push(tu.id.clone());
                     }
                 }
             } else if msg.role == Role::User {
                 for content in msg.content.iter() {
-                    if let SamplingMessageContent::ToolResult(tr) = content {
+                    if let SamplingMessageContentBlock::ToolResult(tr) = content {
                         if !pending_tool_use_ids.contains(&tr.tool_use_id) {
                             return Err(format!(
                                 "ToolResult with toolUseId '{}' has no matching ToolUse",
@@ -2091,6 +2168,10 @@ pub type CreateMessageRequestParam = CreateMessageRequestParams;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ModelPreferences {
     /// Specific model names or families to prefer (e.g., "claude", "gpt")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2155,6 +2236,10 @@ impl Default for ModelPreferences {
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ModelHint {
     /// The suggested model name or family identifier
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2181,7 +2266,7 @@ impl ModelHint {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct CompletionContext {
     /// Previously resolved argument values that can inform completion suggestions
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2272,7 +2357,7 @@ pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParams>
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct CompletionInfo {
     pub values: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2354,22 +2439,27 @@ impl CompletionInfo {
 #[non_exhaustive]
 pub struct CompleteResult {
     pub completion: CompletionInfo,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl CompleteResult {
     /// Create a new CompleteResult with the given completion info.
     pub fn new(completion: CompletionInfo) -> Self {
-        Self { completion }
+        Self {
+            completion,
+            meta: None,
+        }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub enum Reference {
     #[serde(rename = "ref/resource")]
-    Resource(ResourceReference),
+    Resource(ResourceTemplateReference),
     #[serde(rename = "ref/prompt")]
     Prompt(PromptReference),
 }
@@ -2388,7 +2478,7 @@ impl Reference {
 
     /// Create a resource reference
     pub fn for_resource(uri: impl Into<String>) -> Self {
-        Self::Resource(ResourceReference { uri: uri.into() })
+        Self::Resource(ResourceTemplateReference { uri: uri.into() })
     }
 
     /// Get the reference type as a string
@@ -2418,10 +2508,19 @@ impl Reference {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct ResourceReference {
+#[non_exhaustive]
+pub struct ResourceTemplateReference {
     pub uri: String,
 }
+
+impl ResourceTemplateReference {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self { uri: uri.into() }
+    }
+}
+
+#[deprecated(since = "2.0.0", note = "Renamed to ResourceTemplateReference")]
+pub type ResourceReference = ResourceTemplateReference;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -2452,10 +2551,19 @@ const_string!(CompleteRequestMethod = "completion/complete");
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct ArgumentInfo {
     pub name: String,
     pub value: String,
+}
+
+impl ArgumentInfo {
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
 }
 
 // =============================================================================
@@ -2465,10 +2573,16 @@ pub struct ArgumentInfo {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct Root {
     pub uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl Root {
@@ -2477,6 +2591,7 @@ impl Root {
         Self {
             uri: uri.into(),
             name: None,
+            meta: None,
         }
     }
 
@@ -2485,23 +2600,45 @@ impl Root {
         self.name = Some(name.into());
         self
     }
+
+    /// Sets the protocol-level metadata for this root.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 }
 
 const_string!(ListRootsRequestMethod = "roots/list");
+#[deprecated(
+    since = "2.0.0",
+    note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ListRootsResult {
     /// Creates a new `ListRootsResult` with the given roots.
     pub fn new(roots: Vec<Root>) -> Self {
-        Self { roots }
+        Self { roots, meta: None }
+    }
+
+    /// Sets the protocol-level metadata for this result.
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
     }
 }
 
@@ -2527,7 +2664,7 @@ const_string!(ElicitationCompletionNotificationMethod = "notifications/elicitati
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub enum ElicitationAction {
     /// User accepts the request and provides the requested information
     Accept,
@@ -2567,7 +2704,7 @@ enum CreateElicitationRequestParamDeserializeHelper {
     },
 }
 
-impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitationRequestParams {
+impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for ElicitRequestParams {
     type Error = serde_json::Error;
 
     fn try_from(
@@ -2583,7 +2720,7 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitati
                 meta,
                 message,
                 requested_schema,
-            } => Ok(CreateElicitationRequestParams::FormElicitationParams {
+            } => Ok(ElicitRequestParams::FormElicitationParams {
                 meta,
                 message,
                 requested_schema,
@@ -2593,7 +2730,7 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitati
                 message,
                 url,
                 elicitation_id,
-            } => Ok(CreateElicitationRequestParams::UrlElicitationParams {
+            } => Ok(ElicitRequestParams::UrlElicitationParams {
                 meta,
                 message,
                 url,
@@ -2614,7 +2751,7 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitati
 /// ```rust
 /// use rmcp::model::*;
 ///
-/// let params = CreateElicitationRequestParams::FormElicitationParams {
+/// let params = ElicitRequestParams::FormElicitationParams {
 ///    meta: None,
 ///     message: "Please provide your email".to_string(),
 ///     requested_schema: ElicitationSchema::builder()
@@ -2626,7 +2763,7 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitati
 /// 2. URL-based elicitation request
 /// ```rust
 /// use rmcp::model::*;
-/// let params = CreateElicitationRequestParams::UrlElicitationParams {
+/// let params = ElicitRequestParams::UrlElicitationParams {
 ///     meta: None,
 ///     message: "Please provide your feedback at the following URL".to_string(),
 ///     url: "https://example.com/feedback".to_string(),
@@ -2639,8 +2776,8 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for CreateElicitati
     try_from = "CreateElicitationRequestParamDeserializeHelper"
 )]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
-pub enum CreateElicitationRequestParams {
+#[non_exhaustive]
+pub enum ElicitRequestParams {
     #[serde(rename = "form", rename_all = "camelCase")]
     FormElicitationParams {
         /// Protocol-level metadata for this request (SEP-1319)
@@ -2674,24 +2811,27 @@ pub enum CreateElicitationRequestParams {
     },
 }
 
-impl RequestParamsMeta for CreateElicitationRequestParams {
+impl RequestParamsMeta for ElicitRequestParams {
     fn meta(&self) -> Option<&Meta> {
         match self {
-            CreateElicitationRequestParams::FormElicitationParams { meta, .. } => meta.as_ref(),
-            CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta.as_ref(),
+            ElicitRequestParams::FormElicitationParams { meta, .. } => meta.as_ref(),
+            ElicitRequestParams::UrlElicitationParams { meta, .. } => meta.as_ref(),
         }
     }
     fn meta_mut(&mut self) -> &mut Option<Meta> {
         match self {
-            CreateElicitationRequestParams::FormElicitationParams { meta, .. } => meta,
-            CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta,
+            ElicitRequestParams::FormElicitationParams { meta, .. } => meta,
+            ElicitRequestParams::UrlElicitationParams { meta, .. } => meta,
         }
     }
 }
 
-/// Deprecated: Use [`CreateElicitationRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CreateElicitationRequestParams instead")]
-pub type CreateElicitationRequestParam = CreateElicitationRequestParams;
+/// Deprecated: Use [`ElicitRequestParams`] instead (SEP-1319 compliance).
+#[deprecated(since = "0.13.0", note = "Use ElicitRequestParams instead")]
+pub type CreateElicitationRequestParam = ElicitRequestParams;
+
+#[deprecated(since = "2.0.0", note = "Renamed to ElicitRequestParams")]
+pub type CreateElicitationRequestParams = ElicitRequestParams;
 
 /// The result returned by a client in response to an elicitation request.
 ///
@@ -2700,8 +2840,8 @@ pub type CreateElicitationRequestParam = CreateElicitationRequestParams;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct CreateElicitationResult {
+#[non_exhaustive]
+pub struct ElicitResult {
     /// The user's decision on how to handle the elicitation request
     pub action: ElicitationAction,
 
@@ -2716,8 +2856,8 @@ pub struct CreateElicitationResult {
     pub meta: Option<Meta>,
 }
 
-impl CreateElicitationResult {
-    /// Create a new CreateElicitationResult.
+impl ElicitResult {
+    /// Create a new ElicitResult.
     pub fn new(action: ElicitationAction) -> Self {
         Self {
             action,
@@ -2739,17 +2879,24 @@ impl CreateElicitationResult {
     }
 }
 
+#[deprecated(since = "2.0.0", note = "Renamed to ElicitResult")]
+pub type CreateElicitationResult = ElicitResult;
+
 /// Request type for creating an elicitation to gather user input
-pub type CreateElicitationRequest =
-    Request<ElicitationCreateRequestMethod, CreateElicitationRequestParams>;
+pub type ElicitRequest = Request<ElicitationCreateRequestMethod, ElicitRequestParams>;
+
+#[deprecated(since = "2.0.0", note = "Renamed to ElicitRequest")]
+pub type CreateElicitationRequest = ElicitRequest;
 
 /// Notification parameters for an url elicitation completion notification.
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct ElicitationResponseNotificationParam {
     pub elicitation_id: String,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ElicitationResponseNotificationParam {
@@ -2757,13 +2904,17 @@ impl ElicitationResponseNotificationParam {
     pub fn new(elicitation_id: impl Into<String>) -> Self {
         Self {
             elicitation_id: elicitation_id.into(),
+            meta: None,
         }
     }
 }
 
 /// Notification sent when an url elicitation process is completed.
-pub type ElicitationCompletionNotification =
+pub type ElicitationCompleteNotification =
     Notification<ElicitationCompletionNotificationMethod, ElicitationResponseNotificationParam>;
+
+#[deprecated(since = "2.0.0", note = "Renamed to ElicitationCompleteNotification")]
+pub type ElicitationCompletionNotification = ElicitationCompleteNotification;
 
 // =============================================================================
 // TOOL EXECUTION RESULTS
@@ -2780,7 +2931,7 @@ pub type ElicitationCompletionNotification =
 pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
-    pub content: Vec<Content>,
+    pub content: Vec<ContentBlock>,
     /// An optional JSON object that represents the structured result of the tool call
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
@@ -2805,7 +2956,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Helper {
-            content: Option<Vec<Content>>,
+            content: Option<Vec<ContentBlock>>,
             structured_content: Option<Value>,
             is_error: Option<bool>,
             #[serde(rename = "_meta")]
@@ -2836,7 +2987,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
 
 impl CallToolResult {
     /// Create a successful tool result with unstructured content
-    pub fn success(content: Vec<Content>) -> Self {
+    pub fn success(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
             content,
             structured_content: None,
@@ -2883,17 +3034,17 @@ impl CallToolResult {
     ///     // Tool ran, no result. Caller should see the explanation:
     ///     let rows = run_query(query).await;
     ///     if rows.is_empty() {
-    ///         return Ok(CallToolResult::error(vec![Content::text(
+    ///         return Ok(CallToolResult::error(vec![ContentBlock::text(
     ///             format!("no rows matched '{query}'"),
     ///         )]));
     ///     }
     ///
-    ///     Ok(CallToolResult::success(vec![Content::text(format_rows(&rows))]))
+    ///     Ok(CallToolResult::success(vec![ContentBlock::text(format_rows(&rows))]))
     /// }
     /// # async fn run_query(_: &str) -> Vec<&'static str> { vec![] }
     /// # fn format_rows(_: &[&str]) -> String { String::new() }
     /// ```
-    pub fn error(content: Vec<Content>) -> Self {
+    pub fn error(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
             content,
             structured_content: None,
@@ -2917,7 +3068,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
-            content: vec![Content::text(value.to_string())],
+            content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
             meta: None,
@@ -2943,7 +3094,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
-            content: vec![Content::text(value.to_string())],
+            content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
             meta: None,
@@ -3018,7 +3169,7 @@ pub struct CallToolRequestParams {
     pub arguments: Option<JsonObject>,
     /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<JsonObject>,
+    pub task: Option<TaskMetadata>,
 }
 
 impl CallToolRequestParams {
@@ -3039,7 +3190,7 @@ impl CallToolRequestParams {
     }
 
     /// Sets the task metadata for this tool call.
-    pub fn with_task(mut self, task: JsonObject) -> Self {
+    pub fn with_task(mut self, task: TaskMetadata) -> Self {
         self.task = Some(task);
         self
     }
@@ -3055,10 +3206,10 @@ impl RequestParamsMeta for CallToolRequestParams {
 }
 
 impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
-    fn task(&self) -> Option<&JsonObject> {
+    fn task(&self) -> Option<&TaskMetadata> {
         self.task.as_ref()
     }
-    fn task_mut(&mut self) -> &mut Option<JsonObject> {
+    fn task_mut(&mut self) -> &mut Option<TaskMetadata> {
         &mut self.task
     }
 }
@@ -3079,6 +3230,10 @@ pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[deprecated(
+    since = "2.0.0",
+    note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
+)]
 pub struct CreateMessageResult {
     /// The identifier of the model that generated the response
     pub model: String,
@@ -3134,6 +3289,8 @@ pub struct GetPromptResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl GetPromptResult {
@@ -3142,6 +3299,7 @@ impl GetPromptResult {
         Self {
             description: None,
             messages,
+            meta: None,
         }
     }
 
@@ -3156,21 +3314,35 @@ impl GetPromptResult {
 // TASK MANAGEMENT
 // =============================================================================
 
-const_string!(GetTaskInfoMethod = "tasks/get");
-pub type GetTaskInfoRequest = Request<GetTaskInfoMethod, GetTaskInfoParams>;
+const_string!(GetTaskMethod = "tasks/get");
+pub type GetTaskRequest = Request<GetTaskMethod, GetTaskParams>;
+
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskMethod")]
+pub type GetTaskInfoMethod = GetTaskMethod;
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskRequest")]
+pub type GetTaskInfoRequest = GetTaskRequest;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct GetTaskInfoParams {
+#[non_exhaustive]
+pub struct GetTaskParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     pub task_id: String,
 }
 
-impl RequestParamsMeta for GetTaskInfoParams {
+impl GetTaskParams {
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            task_id: task_id.into(),
+        }
+    }
+}
+
+impl RequestParamsMeta for GetTaskParams {
     fn meta(&self) -> Option<&Meta> {
         self.meta.as_ref()
     }
@@ -3179,28 +3351,44 @@ impl RequestParamsMeta for GetTaskInfoParams {
     }
 }
 
-/// Deprecated: Use [`GetTaskInfoParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use GetTaskInfoParams instead")]
-pub type GetTaskInfoParam = GetTaskInfoParams;
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskParams")]
+pub type GetTaskInfoParams = GetTaskParams;
+
+#[deprecated(since = "0.13.0", note = "Use GetTaskParams instead")]
+pub type GetTaskInfoParam = GetTaskParams;
 
 const_string!(ListTasksMethod = "tasks/list");
 pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParams>;
 
-const_string!(GetTaskResultMethod = "tasks/result");
-pub type GetTaskResultRequest = Request<GetTaskResultMethod, GetTaskResultParams>;
+const_string!(GetTaskPayloadMethod = "tasks/result");
+pub type GetTaskPayloadRequest = Request<GetTaskPayloadMethod, GetTaskPayloadParams>;
+
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadMethod")]
+pub type GetTaskResultMethod = GetTaskPayloadMethod;
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadRequest")]
+pub type GetTaskResultRequest = GetTaskPayloadRequest;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
-pub struct GetTaskResultParams {
+#[non_exhaustive]
+pub struct GetTaskPayloadParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     pub task_id: String,
 }
 
-impl RequestParamsMeta for GetTaskResultParams {
+impl GetTaskPayloadParams {
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            task_id: task_id.into(),
+        }
+    }
+}
+
+impl RequestParamsMeta for GetTaskPayloadParams {
     fn meta(&self) -> Option<&Meta> {
         self.meta.as_ref()
     }
@@ -3209,9 +3397,10 @@ impl RequestParamsMeta for GetTaskResultParams {
     }
 }
 
-/// Deprecated: Use [`GetTaskResultParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use GetTaskResultParams instead")]
-pub type GetTaskResultParam = GetTaskResultParams;
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadParams")]
+pub type GetTaskResultParams = GetTaskPayloadParams;
+#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadParams")]
+pub type GetTaskResultParam = GetTaskPayloadParams;
 
 const_string!(CancelTaskMethod = "tasks/cancel");
 pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
@@ -3219,12 +3408,21 @@ pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+#[non_exhaustive]
 pub struct CancelTaskParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
     pub task_id: String,
+}
+
+impl CancelTaskParams {
+    pub fn new(task_id: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            task_id: task_id.into(),
+        }
+    }
 }
 
 impl RequestParamsMeta for CancelTaskParams {
@@ -3239,6 +3437,59 @@ impl RequestParamsMeta for CancelTaskParams {
 /// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
 #[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
 pub type CancelTaskParam = CancelTaskParams;
+
+// ---------------------------------------------------------------------------
+// Task status notification (spec `notifications/tasks/status`)
+// ---------------------------------------------------------------------------
+const_string!(TaskStatusNotificationMethod = "notifications/tasks/status");
+
+/// Parameters for a task status notification (spec `TaskStatusNotificationParams`).
+///
+/// The task fields are flattened at the top level: `NotificationParams & Task`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TaskStatusNotificationParam {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+    #[serde(flatten)]
+    pub task: crate::model::Task,
+}
+
+impl TaskStatusNotificationParam {
+    pub fn new(task: crate::model::Task) -> Self {
+        Self { meta: None, task }
+    }
+
+    pub fn with_meta(mut self, meta: Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+impl From<crate::model::Task> for TaskStatusNotificationParam {
+    fn from(task: crate::model::Task) -> Self {
+        Self::new(task)
+    }
+}
+
+impl Deref for TaskStatusNotificationParam {
+    type Target = crate::model::Task;
+
+    fn deref(&self) -> &Self::Target {
+        &self.task
+    }
+}
+
+impl DerefMut for TaskStatusNotificationParam {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.task
+    }
+}
+
+pub type TaskStatusNotification =
+    Notification<TaskStatusNotificationMethod, TaskStatusNotificationParam>;
 /// Deprecated: Use [`GetTaskResult`] instead (spec alignment).
 #[deprecated(since = "0.15.0", note = "Use GetTaskResult instead")]
 pub type GetTaskInfoResult = GetTaskResult;
@@ -3251,17 +3502,16 @@ pub struct ListTasksResult {
     pub tasks: Vec<crate::model::Task>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl ListTasksResult {
-    /// Create a new ListTasksResult.
     pub fn new(tasks: Vec<crate::model::Task>) -> Self {
         Self {
             tasks,
             next_cursor: None,
-            total: None,
+            meta: None,
         }
     }
 }
@@ -3335,9 +3585,9 @@ ts_union!(
     | UnsubscribeRequest
     | CallToolRequest
     | ListToolsRequest
-    | GetTaskInfoRequest
+    | GetTaskRequest
     | ListTasksRequest
-    | GetTaskResultRequest
+    | GetTaskPayloadRequest
     | CancelTaskRequest
     | CustomRequest;
 );
@@ -3358,9 +3608,9 @@ impl ClientRequest {
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
-            ClientRequest::GetTaskInfoRequest(r) => r.method.as_str(),
+            ClientRequest::GetTaskRequest(r) => r.method.as_str(),
             ClientRequest::ListTasksRequest(r) => r.method.as_str(),
-            ClientRequest::GetTaskResultRequest(r) => r.method.as_str(),
+            ClientRequest::GetTaskPayloadRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
@@ -3373,6 +3623,7 @@ ts_union!(
     | ProgressNotification
     | InitializedNotification
     | RootsListChangedNotification
+    | TaskStatusNotification
     | CustomNotification;
 );
 
@@ -3380,7 +3631,7 @@ ts_union!(
     export type ClientResult =
     box CreateMessageResult
     | ListRootsResult
-    | CreateElicitationResult
+    | ElicitResult
     | EmptyResult
     | CustomResult;
 );
@@ -3398,7 +3649,7 @@ ts_union!(
     | PingRequest
     | CreateMessageRequest
     | ListRootsRequest
-    | CreateElicitationRequest
+    | ElicitRequest
     | CustomRequest;
 );
 
@@ -3411,7 +3662,8 @@ ts_union!(
     | ResourceListChangedNotification
     | ToolListChangedNotification
     | PromptListChangedNotification
-    | ElicitationCompletionNotification
+    | ElicitationCompleteNotification
+    | TaskStatusNotification
     | CustomNotification;
 );
 
@@ -3425,7 +3677,7 @@ ts_union!(
     | ListResourceTemplatesResult
     | ReadResourceResult
     | ListToolsResult
-    | CreateElicitationResult
+    | ElicitResult
     | CreateTaskResult
     | ListTasksResult
     | GetTaskResult
@@ -3476,6 +3728,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_aliases_still_resolve() {
+        // 하위호환: 구 이름이 새 타입으로 여전히 resolve되는지 확인.
+        let _: CreateElicitationResult = ElicitResult::new(ElicitationAction::Accept);
+        let _: GetTaskResultParams = GetTaskPayloadParams::new("task-1");
+        let _: ResourceReference = ResourceTemplateReference::new("res://x");
+    }
+
+    #[test]
+    fn cancelled_notification_request_id_is_optional_on_wire() {
+        // None → requestId 생략
+        let p = CancelledNotificationParam::new(None, Some("user cancelled".into()));
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v.get("requestId").is_none());
+
+        // Some → requestId 방출 + 라운드트립
+        let p = CancelledNotificationParam::new(Some(RequestId::Number(1)), None);
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["requestId"], json!(1));
+        let back: CancelledNotificationParam = serde_json::from_value(v).unwrap();
+        assert_eq!(back.request_id, Some(RequestId::Number(1)));
+    }
 
     #[test]
     fn test_notification_serde() {
@@ -3704,6 +3980,7 @@ mod tests {
                 capabilities,
                 server_info,
                 instructions,
+                ..
             }) => {
                 assert_eq!(capabilities.logging.unwrap().len(), 0);
                 assert_eq!(capabilities.prompts.unwrap().list_changed, Some(true));
@@ -3924,6 +4201,7 @@ mod tests {
                 website_url: Some("https://docs.example.com".to_string()),
             },
             instructions: None,
+            meta: None,
         };
 
         let json = serde_json::to_value(&init_result).unwrap();
@@ -3952,9 +4230,9 @@ mod tests {
                 "required": ["name", "age"]
             }
         });
-        let elicitation: CreateElicitationRequestParams =
+        let elicitation: ElicitRequestParams =
             serde_json::from_value(json_data_without_tag).expect("Deserialization failed");
-        if let CreateElicitationRequestParams::FormElicitationParams {
+        if let ElicitRequestParams::FormElicitationParams {
             meta,
             message,
             requested_schema,
@@ -3985,9 +4263,9 @@ mod tests {
                 "required": ["name", "age"]
             }
         });
-        let elicitation_form: CreateElicitationRequestParams =
+        let elicitation_form: ElicitRequestParams =
             serde_json::from_value(json_data_form).expect("Deserialization failed");
-        if let CreateElicitationRequestParams::FormElicitationParams {
+        if let ElicitRequestParams::FormElicitationParams {
             meta,
             message,
             requested_schema,
@@ -4011,9 +4289,9 @@ mod tests {
             "url": "https://example.com/form",
             "elicitationId": "elicitation-123"
         });
-        let elicitation_url: CreateElicitationRequestParams =
+        let elicitation_url: ElicitRequestParams =
             serde_json::from_value(json_data_url).expect("Deserialization failed");
-        if let CreateElicitationRequestParams::UrlElicitationParams {
+        if let ElicitRequestParams::UrlElicitationParams {
             meta,
             message,
             url,
@@ -4034,7 +4312,7 @@ mod tests {
 
     #[test]
     fn test_elicitation_serialization() {
-        let form_elicitation = CreateElicitationRequestParams::FormElicitationParams {
+        let form_elicitation = ElicitRequestParams::FormElicitationParams {
             meta: Some(Meta(object!({ "meta_form_key_1": "meta form value 1" }))),
             message: "Please provide more details.".to_string(),
             requested_schema: ElicitationSchema::builder()
@@ -4058,7 +4336,7 @@ mod tests {
         });
         assert_eq!(json_form, expected_form_json);
 
-        let url_elicitation = CreateElicitationRequestParams::UrlElicitationParams {
+        let url_elicitation = ElicitRequestParams::UrlElicitationParams {
             meta: Some(Meta(object!({ "meta_url_key_1": "meta url value 1" }))),
             message: "Please fill out the form at the following URL.".to_string(),
             url: "https://example.com/form".to_string(),

@@ -45,33 +45,26 @@ impl ServerHandler for TestToolServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, rmcp::ErrorData>> + MaybeSendFuture + '_
-    {
-        async move {
-            let router = self.router.read().await;
-            let tcc = ToolCallContext::new(self, request, context);
-            router.call(tcc).await
-        }
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let router = self.router.read().await;
+        let tcc = ToolCallContext::new(self, request, context);
+        router.call(tcc).await
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>>
-    + MaybeSendFuture
-    + '_ {
-        async move {
-            let router = self.router.read().await;
-            Ok(rmcp::model::ListToolsResult {
-                tools: router.list_all(),
-                ..Default::default()
-            })
-        }
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let router = self.router.read().await;
+        Ok(rmcp::model::ListToolsResult {
+            tools: router.list_all(),
+            ..Default::default()
+        })
     }
 
     fn on_initialized(

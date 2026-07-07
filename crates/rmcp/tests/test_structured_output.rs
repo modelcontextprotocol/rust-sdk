@@ -3,7 +3,7 @@
 use rmcp::{
     Json, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
-    model::{CallToolResult, Content, ServerResult, Tool},
+    model::{CallToolResult, ContentBlock, ServerResult, Tool},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -192,7 +192,8 @@ async fn test_mutual_exclusivity_validation() {
         message: "Hello".into(),
     };
     // Test that content and structured_content can both be passed separately
-    let content_result = CallToolResult::success(vec![Content::json(response.clone()).unwrap()]);
+    let content_result =
+        CallToolResult::success(vec![ContentBlock::json(response.clone()).unwrap()]);
     let structured_result = CallToolResult::structured(json!({"message": "Hello"}));
 
     // Verify the validation

@@ -1,3 +1,5 @@
+// Sampling/Roots/Logging are SEP-2577-deprecated; this test handler exercises them.
+#![expect(deprecated)]
 use std::{
     future::Future,
     sync::{Arc, Mutex},
@@ -171,10 +173,12 @@ impl ServerHandler for TestServer {
             };
 
             if let Err(e) = peer
-                .notify_logging_message(LoggingMessageNotificationParam {
-                    level: request.level,
-                    data,
-                    logger,
+                .notify_logging_message({
+                    let mut param = LoggingMessageNotificationParam::new(request.level, data);
+                    if let Some(l) = logger {
+                        param = param.with_logger(l);
+                    }
+                    param
                 })
                 .await
             {

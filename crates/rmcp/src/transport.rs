@@ -101,8 +101,9 @@ pub use auth::JwtSigningAlgorithm;
 pub use auth::{
     AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
     ClientCredentialsConfig, CredentialStore, EXTENSION_OAUTH_CLIENT_CREDENTIALS,
-    InMemoryCredentialStore, InMemoryStateStore, ScopeUpgradeConfig, StateStore,
-    StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
+    InMemoryCredentialStore, InMemoryStateStore, OAuthHttpClient, OAuthHttpClientError,
+    OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
+    StateStore, StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
 };
 
 // #[cfg(feature = "transport-ws")]
