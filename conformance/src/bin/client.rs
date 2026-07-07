@@ -658,7 +658,7 @@ fn openssl_free_ec_sign(pem: &str, client_id: &str, audience: &str) -> anyhow::R
     let signing_input = format!("{}.{}", header, payload);
 
     // Sign with p256
-    let secret_key = p256::ecdsa::SigningKey::from_bytes(raw_key.as_slice().into())
+    let secret_key = p256::ecdsa::SigningKey::from_slice(raw_key.as_slice())
         .map_err(|e| anyhow::anyhow!("Invalid EC key: {}", e))?;
     use p256::ecdsa::signature::Signer;
     let sig: p256::ecdsa::Signature = secret_key.sign(signing_input.as_bytes());
