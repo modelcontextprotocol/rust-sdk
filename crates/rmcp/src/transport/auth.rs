@@ -13,7 +13,8 @@ use oauth2::{
     AsyncHttpClient, AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
     EmptyExtraTokenFields, ExtraTokenFields, HttpRequest, HttpResponse, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, Scope, StandardTokenResponse,
-    TokenResponse, TokenUrl, basic::BasicTokenType,
+    TokenResponse, TokenUrl,
+    basic::{BasicErrorResponseType, BasicTokenType},
 };
 use reqwest::{
     Client as ReqwestClient, IntoUrl, StatusCode, Url,
@@ -483,8 +484,15 @@ pub enum AuthError {
     #[error("OAuth token exchange failed: {0}")]
     TokenExchangeFailed(String),
 
+    /// The refresh attempt failed without a definitive refresh-token rejection.
+    ///
+    /// Callers may retry this error because it includes transient request and provider failures.
     #[error("OAuth token refresh failed: {0}")]
     TokenRefreshFailed(String),
+
+    /// The authorization server definitively rejected the refresh token.
+    #[error("OAuth refresh token was rejected: {0}")]
+    TokenRefreshRejected(String),
 
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),
@@ -1757,7 +1765,7 @@ impl AuthorizationManager {
                 tracing::info!("Refreshed access token.");
                 Ok(new_creds.access_token().secret().to_string())
             }
-            Err(e @ (AuthError::AuthorizationRequired | AuthError::TokenRefreshFailed(_))) => {
+            Err(e @ (AuthError::AuthorizationRequired | AuthError::TokenRefreshRejected(_))) => {
                 tracing::warn!(error = %e, "Token refresh not possible, re-authorization required.");
                 Err(AuthError::AuthorizationRequired)
             }
@@ -1778,9 +1786,9 @@ impl AuthorizationManager {
             .token_response
             .ok_or(AuthError::AuthorizationRequired)?;
 
-        let refresh_token = current_credentials.refresh_token().ok_or_else(|| {
-            AuthError::TokenRefreshFailed("No refresh token available".to_string())
-        })?;
+        let refresh_token = current_credentials
+            .refresh_token()
+            .ok_or(AuthError::AuthorizationRequired)?;
         debug!("refresh token present, attempting refresh");
 
         let refresh_token_value = RefreshToken::new(refresh_token.secret().to_string());
@@ -1799,7 +1807,14 @@ impl AuthorizationManager {
                 redirect_policy: self.refresh_redirect_policy,
             })
             .await
-            .map_err(|e| AuthError::TokenRefreshFailed(e.to_string()))?;
+            .map_err(|error| match &error {
+                RequestTokenError::ServerResponse(response)
+                    if response.error() == &BasicErrorResponseType::InvalidGrant =>
+                {
+                    AuthError::TokenRefreshRejected(error.to_string())
+                }
+                _ => AuthError::TokenRefreshFailed(error.to_string()),
+            })?;
 
         // RFC 6749 section 6: issuing a new refresh token on refresh is optional.
         // When the response omits one, keep the existing refresh token rather than
@@ -5908,6 +5923,52 @@ mod tests {
         resp
     }
 
+    async fn manager_with_refresh_error(error: &'static str) -> AuthorizationManager {
+        use axum::{Router, body::Body, http::Response, routing::post};
+
+        let app = Router::new().route(
+            "/token",
+            post(move || async move {
+                Response::builder()
+                    .status(400)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "error": error,
+                            "error_description": "refresh failed",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: "my-client".to_string(),
+                token_response: Some(make_token_response_with_refresh(
+                    "old-token",
+                    "my-refresh-token",
+                )),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            })
+            .await
+            .unwrap();
+        manager
+    }
+
     #[tokio::test]
     async fn refresh_token_returns_error_when_no_stored_credentials() {
         let mut manager = manager_with_metadata(None).await;
@@ -5955,8 +6016,32 @@ mod tests {
 
         let err = manager.refresh_token().await.unwrap_err();
         assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "expected AuthorizationRequired when no refresh token, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_grant_refresh_requires_reauthorization() {
+        let manager = manager_with_refresh_error("invalid_grant").await;
+
+        let err = manager.try_refresh_or_reauth().await.unwrap_err();
+
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "expected AuthorizationRequired when the refresh token is rejected, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn temporary_refresh_failure_does_not_require_reauthorization() {
+        let manager = manager_with_refresh_error("temporarily_unavailable").await;
+
+        let err = manager.try_refresh_or_reauth().await.unwrap_err();
+
+        assert!(
             matches!(err, AuthError::TokenRefreshFailed(_)),
-            "expected TokenRefreshFailed when no refresh token, got: {err:?}"
+            "expected TokenRefreshFailed for a temporary provider failure, got: {err:?}"
         );
     }
 
