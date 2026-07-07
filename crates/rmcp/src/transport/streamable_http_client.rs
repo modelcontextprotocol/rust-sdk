@@ -407,6 +407,65 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         })
     }
 
+    /// Convert an SSE stream into JSON-RPC messages with reconnect semantics.
+    ///
+    /// This is used for request-scoped SSE responses as well as the standalone
+    /// GET stream. A request-scoped stream can close before its response arrives,
+    /// and SEP-1699 requires the client to honor `retry` and resume with
+    /// `Last-Event-ID` in that case.
+    fn reconnecting_sse_to_jsonrpc(
+        stream: BoxedSseStream,
+        client: C,
+        session_id: Arc<str>,
+        uri: Arc<str>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        retry_config: Arc<dyn SseRetryPolicy>,
+    ) -> impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> + Send + 'static
+    {
+        SseAutoReconnectStream::new(
+            stream,
+            StreamableHttpClientReconnect {
+                client,
+                session_id,
+                uri,
+                auth_header,
+                custom_headers,
+            },
+            retry_config,
+        )
+    }
+
+    /// Convert a POST response SSE stream into JSON-RPC messages.
+    ///
+    /// Stateful sessions can resume via GET when the response stream closes
+    /// before the server sends the matching JSON-RPC response. Stateless
+    /// transports do not have enough state to resume, so they keep the raw
+    /// SSE-to-JSON-RPC mapping.
+    fn response_sse_to_jsonrpc(
+        stream: BoxedSseStream,
+        session_id: Option<Arc<str>>,
+        client: C,
+        uri: Arc<str>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        retry_config: Arc<dyn SseRetryPolicy>,
+    ) -> BoxStream<'static, Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> {
+        match session_id {
+            Some(session_id) => Self::reconnecting_sse_to_jsonrpc(
+                stream,
+                client,
+                session_id,
+                uri,
+                auth_header,
+                custom_headers,
+                retry_config,
+            )
+            .boxed(),
+            None => Self::raw_sse_to_jsonrpc(stream).boxed(),
+        }
+    }
+
     async fn execute_sse_stream(
         sse_stream: impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>>
         + Send
@@ -880,8 +939,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                     &mut pending_stream_response_ids,
                                                     request_id,
                                                 );
+                                                let sse_stream = Self::response_sse_to_jsonrpc(
+                                                    stream,
+                                                    session_id.clone(),
+                                                    self.client.clone(),
+                                                    config.uri.clone(),
+                                                    config.auth_header.clone(),
+                                                    protocol_headers.clone(),
+                                                    self.config.retry_config.clone(),
+                                                );
                                                 streams.spawn(Self::execute_sse_stream(
-                                                    Self::raw_sse_to_jsonrpc(stream),
+                                                    sse_stream,
                                                     sse_worker_tx.clone(),
                                                     true,
                                                     transport_task_ct.child_token(),
@@ -913,8 +981,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 &mut pending_stream_response_ids,
                                 request_id,
                             );
+                            let sse_stream = Self::response_sse_to_jsonrpc(
+                                stream,
+                                session_id.clone(),
+                                self.client.clone(),
+                                config.uri.clone(),
+                                config.auth_header.clone(),
+                                protocol_headers.clone(),
+                                self.config.retry_config.clone(),
+                            );
                             streams.spawn(Self::execute_sse_stream(
-                                Self::raw_sse_to_jsonrpc(stream),
+                                sse_stream,
                                 sse_worker_tx.clone(),
                                 true,
                                 transport_task_ct.child_token(),
