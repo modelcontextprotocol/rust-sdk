@@ -29,8 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Build the whole package (server + client bins): the conformance crate is
-      # excluded from the workspace default-members, so this is the only CI job
-      # that catches compile breakage in it.
+      # excluded from the workspace default-members.
       - name: Build conformance binaries
         run: cargo build -p mcp-conformance
 
@@ -75,3 +74,40 @@ jobs:
         with:
           name: conformance-server-results
           path: conformance-results
+
+  client:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build conformance binaries
+        run: cargo build -p mcp-conformance
+
+      - name: Run client metadata conformance suite
+        run: |
+          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" client \
+            --command "$(pwd)/target/debug/conformance-client" \
+            --suite metadata \
+            --spec-version 2025-11-25 \
+            -o conformance-client-results/metadata
+
+      - name: Run client legacy auth fallback scenario
+        run: |
+          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" client \
+            --command "$(pwd)/target/debug/conformance-client" \
+            --scenario auth/2025-03-26-oauth-endpoint-fallback \
+            -o conformance-client-results/auth-2025-03-26-oauth-endpoint-fallback
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-client-results
+          path: conformance-client-results
