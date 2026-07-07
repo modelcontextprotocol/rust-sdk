@@ -361,7 +361,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             return Ok(());
         }
 
-        let pending_ids = pending_stream_response_ids.drain().collect::<Vec<_>>();
+        let pending_ids = std::mem::take(pending_stream_response_ids);
         for id in pending_ids {
             context
                 .send_to_handler(ServerJsonRpcMessage::error(
