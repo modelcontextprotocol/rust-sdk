@@ -90,20 +90,13 @@ jobs:
       - name: Build conformance binaries
         run: cargo build -p mcp-conformance
 
-      - name: Run client metadata conformance suite
+      - name: Run full client conformance suite
         run: |
           npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" client \
             --command "$(pwd)/target/debug/conformance-client" \
-            --suite metadata \
+            --suite all \
             --spec-version 2025-11-25 \
-            -o conformance-client-results/metadata
-
-      - name: Run client legacy auth fallback scenario
-        run: |
-          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" client \
-            --command "$(pwd)/target/debug/conformance-client" \
-            --scenario auth/2025-03-26-oauth-endpoint-fallback \
-            -o conformance-client-results/auth-2025-03-26-oauth-endpoint-fallback
+            -o conformance-client-results/full
 
       - name: Upload results
         if: always()
