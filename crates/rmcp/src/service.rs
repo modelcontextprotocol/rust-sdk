@@ -1103,10 +1103,6 @@ where
                         JsonRpcMessage::Error(error) => error.id.as_ref(),
                         _ => None,
                     } {
-                        // A response whose request is no longer tracked means the
-                        // request was cancelled (the cancelled-notification handler
-                        // removed it from the pool). Per the spec, a receiver SHOULD
-                        // NOT send a response for a cancelled request, so drop it.
                         let Some(ct) = local_ct_pool.remove(id) else {
                             tracing::debug!(%id, "dropping response for cancelled request");
                             continue;
