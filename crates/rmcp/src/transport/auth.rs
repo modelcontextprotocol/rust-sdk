@@ -200,6 +200,8 @@ pub struct StoredCredentials {
     pub granted_scopes: Vec<String>,
     #[serde(default)]
     pub token_received_at: Option<u64>,
+    #[serde(default)]
+    pub issuer: Option<String>,
 }
 
 impl std::fmt::Debug for StoredCredentials {
@@ -212,6 +214,7 @@ impl std::fmt::Debug for StoredCredentials {
             )
             .field("granted_scopes", &self.granted_scopes)
             .field("token_received_at", &self.token_received_at)
+            .field("issuer", &self.issuer)
             .finish()
     }
 }
@@ -229,7 +232,13 @@ impl StoredCredentials {
             token_response,
             granted_scopes,
             token_received_at,
+            issuer: None,
         }
+    }
+
+    pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
+        self.issuer = Some(issuer.into());
+        self
     }
 }
 
@@ -526,6 +535,12 @@ pub enum AuthError {
 
     #[error("Client credentials error: {0}")]
     ClientCredentialsError(String),
+
+    #[error(
+        "Authorization server mismatch: stored credentials were issued by {stored}, \
+         but the active authorization server is {active}"
+    )]
+    AuthorizationServerBindingMismatch { stored: String, active: String },
 
     #[cfg(feature = "auth-client-credentials-jwt")]
     #[error("JWT signing error: {0}")]
@@ -1641,12 +1656,7 @@ impl AuthorizationManager {
         *self.scope_upgrade_attempts.write().await = 0;
 
         let client_id = oauth_client.client_id().to_string();
-        let stored = StoredCredentials {
-            client_id,
-            token_response: Some(token_result.clone()),
-            granted_scopes,
-            token_received_at: Some(Self::now_epoch_secs()),
-        };
+        let stored = self.stored_credentials(client_id, Some(token_result.clone()), granted_scopes);
         self.credential_store.save(stored).await?;
 
         Ok(token_result)
@@ -1663,6 +1673,42 @@ impl AuthorizationManager {
     /// to avoid races between token retrieval and the actual HTTP request.
     const REFRESH_BUFFER_SECS: u64 = 30;
 
+    fn current_issuer(&self) -> Option<&str> {
+        self.metadata.as_ref().and_then(|m| m.issuer.as_deref())
+    }
+
+    fn stored_credentials(
+        &self,
+        client_id: String,
+        token_response: Option<OAuthTokenResponse>,
+        granted_scopes: Vec<String>,
+    ) -> StoredCredentials {
+        StoredCredentials {
+            client_id,
+            token_response,
+            granted_scopes,
+            token_received_at: Some(Self::now_epoch_secs()),
+            issuer: self.current_issuer().map(str::to_string),
+        }
+    }
+
+    fn check_issuer_binding(&self, stored: &StoredCredentials) -> Result<(), AuthError> {
+        if is_https_url(&stored.client_id) {
+            return Ok(());
+        }
+        if let (Some(stored_issuer), Some(active_issuer)) =
+            (stored.issuer.as_deref(), self.current_issuer())
+        {
+            if stored_issuer != active_issuer {
+                return Err(AuthError::AuthorizationServerBindingMismatch {
+                    stored: stored_issuer.to_string(),
+                    active: active_issuer.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Get access token from local credential store.
     /// If expired, refresh it automatically when a refresh token is available.
     /// When the access token has expired and no refresh token is available (or
@@ -1673,6 +1719,12 @@ impl AuthorizationManager {
         let Some(stored_creds) = stored else {
             return Err(AuthError::AuthorizationRequired);
         };
+
+        if let Err(e) = self.check_issuer_binding(&stored_creds) {
+            self.credential_store.clear().await?;
+            return Err(e);
+        }
+
         let Some(creds) = stored_creds.token_response.as_ref() else {
             return Err(AuthError::AuthorizationRequired);
         };
@@ -1767,12 +1819,7 @@ impl AuthorizationManager {
         *self.current_scopes.write().await = granted_scopes.clone();
 
         let client_id = oauth_client.client_id().to_string();
-        let stored = StoredCredentials {
-            client_id,
-            token_response: Some(token_result.clone()),
-            granted_scopes,
-            token_received_at: Some(Self::now_epoch_secs()),
-        };
+        let stored = self.stored_credentials(client_id, Some(token_result.clone()), granted_scopes);
         self.credential_store.save(stored).await?;
 
         Ok(token_result)
@@ -2512,12 +2559,7 @@ impl AuthorizationManager {
         *self.current_scopes.write().await = granted_scopes.clone();
 
         let client_id = config.client_id().to_string();
-        let stored = StoredCredentials {
-            client_id,
-            token_response: Some(token_result.clone()),
-            granted_scopes,
-            token_received_at: Some(Self::now_epoch_secs()),
-        };
+        let stored = self.stored_credentials(client_id, Some(token_result.clone()), granted_scopes);
         self.credential_store.save(stored).await?;
 
         Ok(token_result)
@@ -2634,12 +2676,11 @@ impl AuthorizationManager {
 
         *self.current_scopes.write().await = granted_scopes.clone();
 
-        let stored = StoredCredentials {
-            client_id: client_id.clone(),
-            token_response: Some(token_result.clone()),
+        let stored = self.stored_credentials(
+            client_id.clone(),
+            Some(token_result.clone()),
             granted_scopes,
-            token_received_at: Some(Self::now_epoch_secs()),
-        };
+        );
         self.credential_store.save(stored).await?;
 
         Ok(token_result)
@@ -3001,16 +3042,15 @@ impl OAuthState {
 
             *manager.current_scopes.write().await = granted_scopes.clone();
 
-            let stored = StoredCredentials {
-                client_id: client_id.to_string(),
-                token_response: Some(credentials),
-                granted_scopes,
-                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
-            };
-            manager.credential_store.save(stored).await?;
-
             let metadata = manager.discover_metadata().await?;
             manager.metadata = Some(metadata);
+
+            let stored = manager.stored_credentials(
+                client_id.to_string(),
+                Some(credentials),
+                granted_scopes,
+            );
+            manager.credential_store.save(stored).await?;
 
             manager.configure_client_id(client_id)?;
 
@@ -4345,6 +4385,7 @@ mod tests {
             token_response: Some(token_response),
             granted_scopes: vec![],
             token_received_at: None,
+            issuer: None,
         };
         let debug_output = format!("{:?}", creds);
 
@@ -5224,6 +5265,7 @@ mod tests {
             token_response: Some(make_token_response("my-access-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5241,6 +5283,7 @@ mod tests {
             token_response: Some(make_token_response("stale-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 7200),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5259,6 +5302,7 @@ mod tests {
             token_response: Some(make_token_response("no-expiry-token", None)),
             granted_scopes: vec![],
             token_received_at: None,
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5276,6 +5320,7 @@ mod tests {
             token_response: Some(make_token_response("almost-expired", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 3590),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5294,6 +5339,7 @@ mod tests {
             token_response: Some(make_token_response("stale-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 7200),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5577,6 +5623,7 @@ mod tests {
             token_response: None,
             granted_scopes: vec![],
             token_received_at: None,
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5597,6 +5644,7 @@ mod tests {
             token_response: Some(make_token_response("old-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5663,6 +5711,7 @@ mod tests {
                 )),
                 granted_scopes: vec![],
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+                issuer: None,
             })
             .await
             .unwrap();
@@ -5868,6 +5917,7 @@ mod tests {
             )),
             granted_scopes: vec!["read".to_string(), "write".to_string()],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5905,6 +5955,7 @@ mod tests {
             )),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5942,6 +5993,7 @@ mod tests {
             )),
             granted_scopes: vec!["read".to_string()],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -5979,6 +6031,7 @@ mod tests {
             )),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -6017,6 +6070,7 @@ mod tests {
             )),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -6080,6 +6134,7 @@ mod tests {
             )),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -6089,5 +6144,156 @@ mod tests {
             Some("rotated-refresh-token"),
             "a rotated refresh token from the response should replace the old one"
         );
+    }
+
+    fn metadata_with_issuer(issuer: &str) -> AuthorizationMetadata {
+        AuthorizationMetadata {
+            authorization_endpoint: format!("{issuer}/authorize"),
+            token_endpoint: format!("{issuer}/token"),
+            issuer: Some(issuer.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn get_access_token_rejected_when_issuer_mismatches_active_server() {
+        let manager =
+            manager_with_metadata(Some(metadata_with_issuer("https://as-b.example.com"))).await;
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("token-from-as-a", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: Some("https://as-a.example.com".to_string()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let err = manager.get_access_token().await.unwrap_err();
+        match err {
+            AuthError::AuthorizationServerBindingMismatch { stored, active } => {
+                assert_eq!(stored, "https://as-a.example.com");
+                assert_eq!(active, "https://as-b.example.com");
+            }
+            other => panic!("expected AuthorizationServerBindingMismatch, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_access_token_clears_stale_credentials_on_mismatch() {
+        let manager =
+            manager_with_metadata(Some(metadata_with_issuer("https://as-b.example.com"))).await;
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("token-from-as-a", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: Some("https://as-a.example.com".to_string()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.get_access_token().await.unwrap_err();
+        assert!(manager.credential_store.load().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_access_token_allows_portable_cimd_client_id_across_servers() {
+        let manager =
+            manager_with_metadata(Some(metadata_with_issuer("https://as-b.example.com"))).await;
+
+        let stored = StoredCredentials {
+            client_id: "https://client.example.com/id".to_string(),
+            token_response: Some(make_token_response("cimd-token", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: Some("https://as-a.example.com".to_string()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let token = manager.get_access_token().await.unwrap();
+        assert_eq!(token, "cimd-token");
+    }
+
+    #[tokio::test]
+    async fn get_access_token_allowed_when_issuer_matches_active_server() {
+        let manager =
+            manager_with_metadata(Some(metadata_with_issuer("https://as-a.example.com"))).await;
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("token-from-as-a", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: Some("https://as-a.example.com".to_string()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let token = manager.get_access_token().await.unwrap();
+        assert_eq!(token, "token-from-as-a");
+    }
+
+    #[tokio::test]
+    async fn get_access_token_allows_legacy_credentials_without_issuer() {
+        let manager =
+            manager_with_metadata(Some(metadata_with_issuer("https://as-b.example.com"))).await;
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("legacy-token", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let token = manager.get_access_token().await.unwrap();
+        assert_eq!(token, "legacy-token");
+    }
+
+    #[tokio::test]
+    async fn get_access_token_allows_when_active_issuer_unknown() {
+        let manager = manager_with_metadata(None).await;
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("token", Some(3600))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: Some("https://as-a.example.com".to_string()),
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        let token = manager.get_access_token().await.unwrap();
+        assert_eq!(token, "token");
+    }
+
+    #[tokio::test]
+    async fn stored_credentials_are_bound_to_active_issuer() {
+        let manager =
+            manager_with_metadata(Some(metadata_with_issuer("https://as-a.example.com"))).await;
+
+        let stored =
+            manager.stored_credentials("my-client".to_string(), None, vec!["read".to_string()]);
+
+        assert_eq!(stored.issuer.as_deref(), Some("https://as-a.example.com"));
+        assert_eq!(stored.client_id, "my-client");
+        assert_eq!(stored.granted_scopes, vec!["read".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn stored_credentials_have_no_issuer_when_metadata_absent() {
+        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+
+        let stored = manager.stored_credentials("my-client".to_string(), None, vec![]);
+
+        assert_eq!(stored.issuer, None);
+    }
+
+    #[test]
+    fn stored_credentials_with_issuer_builder_sets_issuer() {
+        let creds = StoredCredentials::new("my-client".to_string(), None, vec![], None)
+            .with_issuer("https://as-a.example.com");
+        assert_eq!(creds.issuer.as_deref(), Some("https://as-a.example.com"));
     }
 }
