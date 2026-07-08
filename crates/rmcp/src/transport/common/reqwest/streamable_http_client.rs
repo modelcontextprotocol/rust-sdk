@@ -84,7 +84,7 @@ impl StreamableHttpClient for reqwest::Client {
                 return Err(StreamableHttpError::UnexpectedContentType(None));
             }
         }
-        let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+        let event_stream = SseStream::from_bytes_stream(response.bytes_stream()).boxed();
         Ok(event_stream)
     }
 
@@ -223,7 +223,7 @@ impl StreamableHttpClient for reqwest::Client {
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let event_stream = SseStream::from_byte_stream(response.bytes_stream()).boxed();
+                let event_stream = SseStream::from_bytes_stream(response.bytes_stream()).boxed();
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
