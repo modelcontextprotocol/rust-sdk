@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v2.1.0...rmcp-v2.2.0) - 2026-07-08
+
+### Added
+
+- reject auth servers lacking S256 PKCE support ([#955](https://github.com/modelcontextprotocol/rust-sdk/pull/955))
+
+### Fixed
+
+- pass client conformance suite ([#960](https://github.com/modelcontextprotocol/rust-sdk/pull/960))
+- don't respond to cancelled requests ([#957](https://github.com/modelcontextprotocol/rust-sdk/pull/957))
+- fail orphaned streamable HTTP responses on reinit ([#914](https://github.com/modelcontextprotocol/rust-sdk/pull/914))
+- address 2025-11-25 conformance audit findings ([#951](https://github.com/modelcontextprotocol/rust-sdk/pull/951))
+
 ## [2.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v2.0.0...rmcp-v2.1.0) - 2026-07-02
 
 ### Added
