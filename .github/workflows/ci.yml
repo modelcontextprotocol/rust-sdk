@@ -170,10 +170,24 @@ jobs:
 
       - name: Check rmcp (all features except local)
         run: |
-          FEATURES=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
-                      | select(startswith("__") | not)
-                      | select(. != "local")] | join(",")')
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+          # `cargo public-api diff` builds both revisions with the same feature
+          # set, so a feature that exists on only one side (e.g. a feature added
+          # or removed by this PR) would fail to build the other revision. Diff
+          # only the features present in BOTH the base and the head; features
+          # unique to one side are necessarily pure additions/removals, which the
+          # release-type deny flags already govern.
+          list_features() {
+            cargo metadata --no-deps --format-version 1 --manifest-path "$1/Cargo.toml" \
+              | jq -r '.packages[] | select(.name == "rmcp") | .features | keys[]
+                       | select(startswith("__") | not)
+                       | select(. != "local")'
+          }
+          list_features "." | sort -u > "$RUNNER_TEMP/head_features"
+          git worktree add --detach "$RUNNER_TEMP/rmcp-base" "$BASE_SHA"
+          list_features "$RUNNER_TEMP/rmcp-base" | sort -u > "$RUNNER_TEMP/base_features"
+          git worktree remove --force "$RUNNER_TEMP/rmcp-base"
+          FEATURES=$(comm -12 "$RUNNER_TEMP/head_features" "$RUNNER_TEMP/base_features" | paste -sd, -)
           cargo public-api \
             --package rmcp \
             --features "$FEATURES" \
@@ -181,7 +195,7 @@ jobs:
             diff \
             $DENY \
             --force \
-            ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
+            "$BASE_SHA"..${{ github.sha }}
 
   spelling:
     name: spell check with typos
