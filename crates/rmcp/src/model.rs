@@ -57,7 +57,7 @@ macro_rules! object {
 /// without returning any specific data.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy, Eq)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "server", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct EmptyObject {}
 

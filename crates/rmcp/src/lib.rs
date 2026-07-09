@@ -34,7 +34,7 @@ pub mod transport;
 pub use pastey::paste;
 #[cfg(all(feature = "macros", feature = "server"))]
 pub use rmcp_macros::*;
-#[cfg(any(feature = "server", feature = "schemars"))]
+#[cfg(feature = "schemars")]
 pub use schemars;
 #[cfg(feature = "macros")]
 pub use serde;
