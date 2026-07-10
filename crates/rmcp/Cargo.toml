@@ -75,7 +75,7 @@ reqwest = { version = "0.13.2", default-features = false, features = [
   "stream",
 ], optional = true }
 
-sse-stream = { version = "0.2", optional = true }
+sse-stream = { version = "0.2.4", optional = true }
 
 http = { version = "1", optional = true }
 url = { version = "2.4", optional = true }
@@ -376,10 +376,10 @@ path = "tests/test_unix_socket_transport.rs"
 [[test]]
 name = "test_streamable_http_stale_session"
 required-features = [
-  "server", 
-  "client", 
-  "transport-streamable-http-server", 
-  "transport-streamable-http-client", 
+  "server",
+  "client",
+  "transport-streamable-http-server",
+  "transport-streamable-http-client",
   "transport-streamable-http-client-reqwest"
 ]
 path = "tests/test_streamable_http_stale_session.rs"
