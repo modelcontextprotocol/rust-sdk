@@ -170,31 +170,61 @@ pub(crate) fn unexpected_message_response(expect: &str) -> Response<BoxBody<Byte
 
 pub(crate) async fn expect_json<B>(
     body: B,
+    max_bytes: usize,
 ) -> Result<ClientJsonRpcMessage, Response<BoxBody<Bytes, Infallible>>>
 where
     B: Body + Send + 'static,
     B::Error: Display,
 {
-    match body.collect().await {
-        Ok(bytes) => {
-            match serde_json::from_reader::<_, ClientJsonRpcMessage>(bytes.aggregate().reader()) {
-                Ok(message) => Ok(message),
-                Err(e) => {
+    let mut collected = bytes::BytesMut::new();
+    let mut body = std::pin::pin!(body);
+    loop {
+        let frame = futures::future::poll_fn(|cx| body.as_mut().poll_frame(cx)).await;
+        match frame {
+            None => break,
+            Some(Ok(frame)) => {
+                let Ok(mut data) = frame.into_data() else {
+                    continue;
+                };
+                if data.remaining() > max_bytes.saturating_sub(collected.len()) {
                     let response = Response::builder()
-                        .status(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
+                        .status(http::StatusCode::PAYLOAD_TOO_LARGE)
                         .body(
-                            Full::new(Bytes::from(format!("fail to deserialize request body {e}")))
-                                .boxed(),
+                            Full::new(Bytes::from(format!(
+                                "Payload Too Large: request body exceeds {max_bytes} bytes"
+                            )))
+                            .boxed(),
                         )
                         .expect("valid response");
-                    Err(response)
+                    return Err(response);
+                }
+                while data.has_remaining() {
+                    let chunk = data.chunk();
+                    let chunk_len = chunk.len();
+                    collected.extend_from_slice(chunk);
+                    data.advance(chunk_len);
                 }
             }
+            Some(Err(e)) => {
+                let response = Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(
+                        Full::new(Bytes::from(format!("Failed to read request body: {e}"))).boxed(),
+                    )
+                    .expect("valid response");
+                return Err(response);
+            }
         }
+    }
+
+    match serde_json::from_slice::<ClientJsonRpcMessage>(&collected) {
+        Ok(message) => Ok(message),
         Err(e) => {
             let response = Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Full::new(Bytes::from(format!("Failed to read request body: {e}"))).boxed())
+                .status(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
+                .body(
+                    Full::new(Bytes::from(format!("fail to deserialize request body {e}"))).boxed(),
+                )
                 .expect("valid response");
             Err(response)
         }
@@ -203,8 +233,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
+    use futures::stream;
+    use http_body::Frame;
+    use http_body_util::StreamBody;
+
     use super::*;
     use crate::model::{EmptyResult, JsonRpcResponse, JsonRpcVersion2_0, RequestId, ServerResult};
+
+    const INITIALIZE_REQUEST: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}"#;
 
     fn dummy_message() -> ServerJsonRpcMessage {
         ServerJsonRpcMessage::Response(JsonRpcResponse {
@@ -244,5 +282,63 @@ mod tests {
         assert_eq!(msg.event_id.as_deref(), Some("0"));
         assert!(msg.message.is_none());
         assert_eq!(msg.retry, Some(Duration::from_secs(5)));
+    }
+
+    #[tokio::test]
+    async fn expect_json_accepts_body_under_limit() {
+        let body = Full::new(Bytes::from_static(INITIALIZE_REQUEST.as_bytes()));
+        let result = expect_json(body, 4 * 1024 * 1024).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn expect_json_accepts_non_contiguous_body_data() {
+        let split = INITIALIZE_REQUEST.len() / 2;
+        let data = Bytes::copy_from_slice(&INITIALIZE_REQUEST.as_bytes()[..split]).chain(
+            Bytes::copy_from_slice(&INITIALIZE_REQUEST.as_bytes()[split..]),
+        );
+        let result = expect_json(Full::new(data), 4 * 1024 * 1024).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn expect_json_accepts_multi_frame_body() {
+        let split = INITIALIZE_REQUEST.len() / 2;
+        let body = StreamBody::new(stream::iter([
+            Ok::<_, Infallible>(Frame::data(Bytes::copy_from_slice(
+                &INITIALIZE_REQUEST.as_bytes()[..split],
+            ))),
+            Ok(Frame::data(Bytes::copy_from_slice(
+                &INITIALIZE_REQUEST.as_bytes()[split..],
+            ))),
+        ]));
+        let result = expect_json(body, 4 * 1024 * 1024).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn expect_json_rejects_oversized_body() {
+        let big_body = Full::new(Bytes::from(vec![b'x'; 128]));
+        let result = expect_json(big_body, 64).await;
+        let response = result.unwrap_err();
+        assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn expect_json_rejects_oversized_multi_frame_body() {
+        let body = StreamBody::new(stream::iter([
+            Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"12345678"))),
+            Ok(Frame::data(Bytes::from_static(b"9"))),
+        ]));
+        let response = expect_json(body, 8).await.unwrap_err();
+        assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn expect_json_returns_415_for_invalid_json_under_limit() {
+        let body = Full::new(Bytes::from("not valid json"));
+        let result = expect_json(body, 4 * 1024 * 1024).await;
+        let response = result.unwrap_err();
+        assert_eq!(response.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
 }

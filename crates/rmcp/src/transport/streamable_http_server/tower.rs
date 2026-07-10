@@ -38,6 +38,9 @@ use crate::{
     },
 };
 
+/// Default maximum POST request body size (4 MiB).
+pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct StreamableHttpServerConfig {
@@ -99,6 +102,12 @@ pub struct StreamableHttpServerConfig {
     /// };
     /// ```
     pub session_store: Option<Arc<dyn SessionStore>>,
+    /// Maximum POST request body size in bytes.
+    ///
+    /// Enforced while streaming the body, independent of `Content-Length`,
+    /// chunked transfer encoding, or HTTP version. Oversized payloads receive
+    /// a `413 Payload Too Large` response.
+    pub max_request_body_bytes: usize,
 }
 
 impl std::fmt::Debug for dyn SessionStore {
@@ -118,6 +127,7 @@ impl Default for StreamableHttpServerConfig {
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
             allowed_origins: vec![],
             session_store: None,
+            max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
         }
     }
 }
@@ -169,6 +179,12 @@ impl StreamableHttpServerConfig {
 
     pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
         self.cancellation_token = token;
+        self
+    }
+
+    /// Set the maximum POST request body size in bytes.
+    pub fn with_max_request_body_bytes(mut self, bytes: usize) -> Self {
+        self.max_request_body_bytes = bytes;
         self
     }
 }
@@ -1140,7 +1156,7 @@ where
 
         // json deserialize request body
         let (part, body) = request.into_parts();
-        let mut message = match expect_json(body).await {
+        let mut message = match expect_json(body, self.config.max_request_body_bytes).await {
             Ok(message) => message,
             Err(response) => return Ok(response),
         };

@@ -1,20 +1,23 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use futures::{StreamExt, stream::BoxStream};
+use futures::stream::BoxStream;
 use http::{HeaderName, HeaderValue, Method, Request, StatusCode, header::WWW_AUTHENTICATE};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
-use sse_stream::{Sse, SseStream};
+use sse_stream::Sse;
 use tokio::net::UnixStream;
 
 use crate::{
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
-        common::http_header::{
-            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
-            extract_scope_from_header, validate_custom_header,
+        common::{
+            client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
+            http_header::{
+                EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
+                extract_scope_from_header, validate_custom_header,
+            },
         },
         streamable_http_client::*,
     },
@@ -169,6 +172,26 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        self.post_message_with_max_sse_event_size(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            DEFAULT_MAX_SSE_EVENT_SIZE,
+        )
+        .await
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let json_body = serde_json::to_string(&message)
             .map_err(|e| StreamableHttpError::Client(UnixSocketError::Json(e)))?;
 
@@ -282,7 +305,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         match content_type {
             Some(ref ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let sse_stream = SseStream::new(response.into_body()).boxed();
+                let sse_stream =
+                    bounded_sse_stream(response.into_body().into_data_stream(), max_sse_event_size);
                 Ok(StreamableHttpPostResponse::Sse(sse_stream, session_id))
             }
             Some(ref ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
@@ -356,6 +380,27 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         last_event_id: Option<String>,
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<BoxStream<'static, Result<Sse, sse_stream::Error>>, StreamableHttpError<Self::Error>>
+    {
+        self.get_stream_with_max_sse_event_size(
+            uri,
+            session_id,
+            last_event_id,
+            auth_token,
+            custom_headers,
+            DEFAULT_MAX_SSE_EVENT_SIZE,
+        )
+        .await
+    }
+
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        last_event_id: Option<String>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
     ) -> Result<BoxStream<'static, Result<Sse, sse_stream::Error>>, StreamableHttpError<Self::Error>>
     {
         let mut builder = Request::builder()
@@ -444,7 +489,10 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             }
         }
 
-        Ok(SseStream::new(response.into_body()).boxed())
+        Ok(bounded_sse_stream(
+            response.into_body().into_data_stream(),
+            max_sse_event_size,
+        ))
     }
 }
 

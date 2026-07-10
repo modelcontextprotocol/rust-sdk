@@ -13,7 +13,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::common::client_side_sse::{ExponentialBackoff, SseRetryPolicy, SseStreamReconnect};
+use super::common::client_side_sse::{
+    DEFAULT_MAX_SSE_EVENT_SIZE, ExponentialBackoff, SseRetryPolicy, SseStreamReconnect,
+};
 use crate::{
     RoleClient,
     model::{
@@ -266,6 +268,12 @@ impl StreamableHttpPostResponse {
     }
 }
 
+/// HTTP backend used by [`StreamableHttpClientTransport`].
+///
+/// Custom implementations that parse SSE responses must override
+/// [`Self::post_message_with_max_sse_event_size`] and
+/// [`Self::get_stream_with_max_sse_event_size`] to enforce the transport's
+/// configured event-size limit.
 pub trait StreamableHttpClient: Clone + Send + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
     fn post_message(
@@ -278,6 +286,23 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     ) -> impl Future<Output = Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>>>
     + Send
     + '_;
+    /// Send a message while enforcing a maximum raw SSE event size.
+    ///
+    /// Custom clients that parse SSE responses should override this method.
+    /// The default implementation delegates to [`Self::post_message`].
+    fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        _max_sse_event_size: usize,
+    ) -> impl Future<Output = Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>>>
+    + Send
+    + '_ {
+        self.post_message(uri, message, session_id, auth_header, custom_headers)
+    }
     fn delete_session(
         &self,
         uri: Arc<str>,
@@ -299,6 +324,27 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
         >,
     > + Send
     + '_;
+    /// Open an SSE stream while enforcing a maximum raw event size.
+    ///
+    /// Custom clients that parse SSE responses should override this method.
+    /// The default implementation delegates to [`Self::get_stream`].
+    fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        _max_sse_event_size: usize,
+    ) -> impl Future<
+        Output = Result<
+            BoxStream<'static, Result<Sse, SseError>>,
+            StreamableHttpError<Self::Error>,
+        >,
+    > + Send
+    + '_ {
+        self.get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
+    }
 }
 
 #[non_exhaustive]
@@ -313,6 +359,7 @@ struct StreamableHttpClientReconnect<C> {
     pub uri: Arc<str>,
     pub auth_header: Option<String>,
     pub custom_headers: HashMap<HeaderName, HeaderValue>,
+    pub max_sse_event_size: usize,
 }
 
 impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconnect<C> {
@@ -324,12 +371,24 @@ impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconne
         let session_id = self.session_id.clone();
         let auth_header = self.auth_header.clone();
         let custom_headers = self.custom_headers.clone();
+        let max_sse_event_size = self.max_sse_event_size;
         let last_event_id = last_event_id.map(|s| s.to_owned());
         Box::pin(async move {
             client
-                .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
+                .get_stream_with_max_sse_event_size(
+                    uri,
+                    session_id,
+                    last_event_id,
+                    auth_header,
+                    custom_headers,
+                    max_sse_event_size,
+                )
                 .await
         })
+    }
+
+    fn map_fatal_stream_error(&mut self, error: SseError) -> Option<Self::Error> {
+        Some(StreamableHttpError::Sse(error))
     }
 }
 
@@ -485,6 +544,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         uri: Arc<str>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
         retry_config: Arc<dyn SseRetryPolicy>,
     ) -> impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> + Send + 'static
     {
@@ -496,6 +556,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                 uri,
                 auth_header,
                 custom_headers,
+                max_sse_event_size,
             },
             retry_config,
         )
@@ -514,6 +575,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         uri: Arc<str>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
         retry_config: Arc<dyn SseRetryPolicy>,
     ) -> BoxStream<'static, Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> {
         match session_id {
@@ -524,6 +586,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                 uri,
                 auth_header,
                 custom_headers,
+                max_sse_event_size,
                 retry_config,
             )
             .boxed(),
@@ -591,15 +654,17 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         uri: Arc<str>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
     ) -> Result<(Option<Arc<str>>, HashMap<HeaderName, HeaderValue>), StreamableHttpError<C::Error>>
     {
         let (init_msg, new_session_id_str) = client
-            .post_message(
+            .post_message_with_max_sse_event_size(
                 uri.clone(),
                 saved_init_request,
                 None,
                 auth_header.clone(),
                 custom_headers.clone(),
+                max_sse_event_size,
             )
             .await?
             .expect_initialized::<C::Error>()
@@ -624,12 +689,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             &negotiated_version,
         );
         client
-            .post_message(
+            .post_message_with_max_sse_event_size(
                 uri,
                 initialized_notification,
                 new_session_id.clone(),
                 auth_header,
                 initialized_headers,
+                max_sse_event_size,
             )
             .await?
             .expect_accepted_or_json::<C::Error>()?;
@@ -670,12 +736,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let saved_init_request = initialize_request.clone();
         let (message, session_id) = match self
             .client
-            .post_message(
+            .post_message_with_max_sse_event_size(
                 config.uri.clone(),
                 initialize_request,
                 None,
                 config.auth_header.clone(),
                 config.custom_headers.clone(),
+                config.max_sse_event_size,
             )
             .await
         {
@@ -730,12 +797,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             &negotiated_version,
         );
         self.client
-            .post_message(
+            .post_message_with_max_sse_event_size(
                 config.uri.clone(),
                 initialized_notification.message,
                 session_id.clone(),
                 config.auth_header.clone(),
                 initialized_headers,
+                config.max_sse_event_size,
             )
             .await
             .map_err(WorkerQuitReason::fatal_context(
@@ -765,15 +833,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             let config_uri = config.uri.clone();
             let config_auth_header = config.auth_header.clone();
             let spawn_headers = protocol_headers.clone();
+            let max_sse_event_size = config.max_sse_event_size;
 
             streams.spawn(async move {
                 match client
-                    .get_stream(
+                    .get_stream_with_max_sse_event_size(
                         uri.clone(),
                         session_id.clone(),
                         None,
                         auth_header.clone(),
                         spawn_headers.clone(),
+                        max_sse_event_size,
                     )
                     .await
                 {
@@ -786,6 +856,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 uri: config_uri,
                                 auth_header: config_auth_header,
                                 custom_headers: spawn_headers,
+                                max_sse_event_size,
                             },
                             retry_config,
                         );
@@ -855,12 +926,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     );
                     let response = self
                         .client
-                        .post_message(
+                        .post_message_with_max_sse_event_size(
                             config.uri.clone(),
                             message.clone(),
                             session_id.clone(),
                             config.auth_header.clone(),
                             request_headers,
+                            config.max_sse_event_size,
                         )
                         .await;
                     let send_result = match response {
@@ -879,6 +951,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                     config.uri.clone(),
                                     config.auth_header.clone(),
                                     config.custom_headers.clone(),
+                                    config.max_sse_event_size,
                                 )
                                 .await
                                 {
@@ -926,14 +999,16 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                             let config_uri = config.uri.clone();
                                             let config_auth = config.auth_header.clone();
                                             let spawn_headers = protocol_headers.clone();
+                                            let max_sse_event_size = config.max_sse_event_size;
                                             streams.spawn(async move {
                                             match client
-                                                .get_stream(
+                                                .get_stream_with_max_sse_event_size(
                                                     uri,
                                                     new_sid.clone(),
                                                     None,
                                                     auth_header.clone(),
                                                     spawn_headers.clone(),
+                                                    max_sse_event_size,
                                                 )
                                                 .await
                                             {
@@ -946,6 +1021,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                             uri: config_uri,
                                                             auth_header: config_auth,
                                                             custom_headers: spawn_headers,
+                                                            max_sse_event_size,
                                                         },
                                                         retry_config,
                                                     );
@@ -981,12 +1057,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                         );
                                         let retry_response = self
                                             .client
-                                            .post_message(
+                                            .post_message_with_max_sse_event_size(
                                                 config.uri.clone(),
                                                 message,
                                                 session_id.clone(),
                                                 config.auth_header.clone(),
                                                 retry_headers,
+                                                config.max_sse_event_size,
                                             )
                                             .await;
                                         match retry_response {
@@ -1021,6 +1098,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                     config.uri.clone(),
                                                     config.auth_header.clone(),
                                                     protocol_headers.clone(),
+                                                    config.max_sse_event_size,
                                                     self.config.retry_config.clone(),
                                                 );
                                                 streams.spawn(Self::execute_sse_stream(
@@ -1064,6 +1142,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 config.uri.clone(),
                                 config.auth_header.clone(),
                                 protocol_headers.clone(),
+                                config.max_sse_event_size,
                                 self.config.retry_config.clone(),
                             );
                             streams.spawn(Self::execute_sse_stream(
@@ -1339,6 +1418,12 @@ pub struct StreamableHttpClientTransportConfig {
     pub auth_header: Option<String>,
     /// Custom HTTP headers to include with every request
     pub custom_headers: HashMap<HeaderName, HeaderValue>,
+    /// Maximum raw size of one SSE event accepted from the server.
+    ///
+    /// The built-in reqwest and Unix socket clients enforce this value. Custom
+    /// [`StreamableHttpClient`] implementations must override the corresponding
+    /// `*_with_max_sse_event_size` methods to enforce it.
+    pub max_sse_event_size: usize,
     /// Enables transparent recovery when the server reports an expired session (`HTTP 404`).
     ///
     /// When enabled, the transport performs one automatic recovery attempt:
@@ -1397,6 +1482,12 @@ impl StreamableHttpClientTransportConfig {
         self
     }
 
+    /// Set the maximum raw size of one SSE event accepted from the server.
+    pub fn max_sse_event_size(mut self, bytes: usize) -> Self {
+        self.max_sse_event_size = bytes;
+        self
+    }
+
     /// Set whether the transport should attempt transparent re-initialization on session expiration
     /// See [`Self::reinit_on_expired_session`] for details.
     /// # Example
@@ -1420,6 +1511,7 @@ impl Default for StreamableHttpClientTransportConfig {
             allow_stateless: true,
             auth_header: None,
             custom_headers: HashMap::new(),
+            max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
             reinit_on_expired_session: true,
         }
     }

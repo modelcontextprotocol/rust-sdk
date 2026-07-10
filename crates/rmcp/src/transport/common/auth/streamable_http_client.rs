@@ -47,6 +47,33 @@ where
             .await
     }
 
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: std::sync::Arc<str>,
+        session_id: std::sync::Arc<str>,
+        last_event_id: Option<String>,
+        mut auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
+        crate::transport::streamable_http_client::StreamableHttpError<Self::Error>,
+    > {
+        if auth_token.is_none() {
+            auth_token = Some(self.get_access_token().await?);
+        }
+        self.http_client
+            .get_stream_with_max_sse_event_size(
+                uri,
+                session_id,
+                last_event_id,
+                auth_token,
+                custom_headers,
+                max_sse_event_size,
+            )
+            .await
+    }
+
     async fn post_message(
         &self,
         uri: std::sync::Arc<str>,
@@ -63,6 +90,33 @@ where
         }
         self.http_client
             .post_message(uri, message, session_id, auth_token, custom_headers)
+            .await
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: std::sync::Arc<str>,
+        message: crate::model::ClientJsonRpcMessage,
+        session_id: Option<std::sync::Arc<str>>,
+        mut auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<
+        crate::transport::streamable_http_client::StreamableHttpPostResponse,
+        StreamableHttpError<Self::Error>,
+    > {
+        if auth_token.is_none() {
+            auth_token = Some(self.get_access_token().await?);
+        }
+        self.http_client
+            .post_message_with_max_sse_event_size(
+                uri,
+                message,
+                session_id,
+                auth_token,
+                custom_headers,
+                max_sse_event_size,
+            )
             .await
     }
 }

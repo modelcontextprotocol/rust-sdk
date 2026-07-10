@@ -1,16 +1,19 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
-use futures::{StreamExt, stream::BoxStream};
+use futures::stream::BoxStream;
 use http::{HeaderName, HeaderValue, header::WWW_AUTHENTICATE};
 use reqwest::header::ACCEPT;
-use sse_stream::{Sse, SseStream};
+use sse_stream::Sse;
 
 use crate::{
     model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
     transport::{
-        common::http_header::{
-            EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
-            extract_scope_from_header, validate_custom_header,
+        common::{
+            client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
+            http_header::{
+                EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
+                extract_scope_from_header, validate_custom_header,
+            },
         },
         streamable_http_client::*,
     },
@@ -54,6 +57,26 @@ impl StreamableHttpClient for reqwest::Client {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
+        self.get_stream_with_max_sse_event_size(
+            uri,
+            session_id,
+            last_event_id,
+            auth_token,
+            custom_headers,
+            DEFAULT_MAX_SSE_EVENT_SIZE,
+        )
+        .await
+    }
+
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        last_event_id: Option<String>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
         let mut request_builder = self
             .get(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "))
@@ -84,7 +107,7 @@ impl StreamableHttpClient for reqwest::Client {
                 return Err(StreamableHttpError::UnexpectedContentType(None));
             }
         }
-        let event_stream = SseStream::from_bytes_stream(response.bytes_stream()).boxed();
+        let event_stream = bounded_sse_stream(response.bytes_stream(), max_sse_event_size);
         Ok(event_stream)
     }
 
@@ -119,6 +142,26 @@ impl StreamableHttpClient for reqwest::Client {
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        self.post_message_with_max_sse_event_size(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            DEFAULT_MAX_SSE_EVENT_SIZE,
+        )
+        .await
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .post(uri.as_ref())
@@ -223,7 +266,7 @@ impl StreamableHttpClient for reqwest::Client {
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let event_stream = SseStream::from_bytes_stream(response.bytes_stream()).boxed();
+                let event_stream = bounded_sse_stream(response.bytes_stream(), max_sse_event_size);
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
@@ -362,6 +405,57 @@ mod tests {
     #[case::truncated_json(r#"{"broken":"#)]
     fn parse_json_rpc_error_rejects_non_error_bodies(#[case] body: &str) {
         assert!(parse_json_rpc_error(body).is_none());
+    }
+
+    #[tokio::test]
+    async fn post_sse_response_honors_configured_event_limit() -> anyhow::Result<()> {
+        use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+
+        use axum::{Router, routing::post};
+        use futures::StreamExt;
+
+        use crate::transport::streamable_http_client::{
+            StreamableHttpClient, StreamableHttpPostResponse,
+        };
+
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/mcp",
+                post(|| async {
+                    (
+                        [(http::header::CONTENT_TYPE, "text/event-stream")],
+                        "data: this event is too large\n",
+                    )
+                }),
+            );
+            axum::serve(listener, app).await
+        });
+        let message = ClientJsonRpcMessage::request(
+            ClientRequest::PingRequest(PingRequest::default()),
+            RequestId::Number(1),
+        );
+        let client = reqwest::Client::new();
+
+        let response = client
+            .post_message_with_max_sse_event_size(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                message,
+                None,
+                None,
+                HashMap::new(),
+                16,
+            )
+            .await?;
+        let StreamableHttpPostResponse::Sse(mut stream, _) = response else {
+            anyhow::bail!("expected SSE response");
+        };
+        let error = stream.next().await.unwrap().unwrap_err();
+
+        server.abort();
+        assert!(error.to_string().contains("maximum size of 16 bytes"));
+        Ok(())
     }
 
     #[tokio::test]

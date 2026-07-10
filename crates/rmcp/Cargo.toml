@@ -153,7 +153,7 @@ server-side-http = [
 transport-worker = ["dep:tokio-stream"]
 
 # SSE stream parsing utilities (used by streamable HTTP client for SSE-formatted responses)
-client-side-sse = ["dep:sse-stream", "dep:http", "base64"]
+client-side-sse = ["dep:sse-stream", "dep:http", "dep:bytes", "base64"]
 
 # Streamable HTTP client
 transport-streamable-http-client = ["client-side-sse", "transport-worker"]
