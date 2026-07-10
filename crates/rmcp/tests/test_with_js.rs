@@ -17,6 +17,23 @@ use common::calculator::Calculator;
 
 const STREAMABLE_HTTP_BIND_ADDRESS: &str = "127.0.0.1:8001";
 const STREAMABLE_HTTP_JS_BIND_ADDRESS: &str = "127.0.0.1:8002";
+// These tests run concurrently, while npm mutates their shared node_modules directory.
+static JS_DEPENDENCIES_INSTALLED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+async fn install_js_dependencies() -> anyhow::Result<()> {
+    JS_DEPENDENCIES_INSTALLED
+        .get_or_try_init(|| async {
+            let status = tokio::process::Command::new("npm")
+                .arg("install")
+                .current_dir("tests/test_with_js")
+                .status()
+                .await?;
+            anyhow::ensure!(status.success(), "npm install failed with {status}");
+            Ok(())
+        })
+        .await?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_with_js_stdio_server() -> anyhow::Result<()> {
@@ -27,12 +44,7 @@ async fn test_with_js_stdio_server() -> anyhow::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .try_init();
-    tokio::process::Command::new("npm")
-        .arg("install")
-        .current_dir("tests/test_with_js")
-        .spawn()?
-        .wait()
-        .await?;
+    install_js_dependencies().await?;
     let transport =
         TokioChildProcess::new(tokio::process::Command::new("node").configure(|cmd| {
             cmd.arg("tests/test_with_js/server.js");
@@ -57,12 +69,7 @@ async fn test_with_js_streamable_http_client() -> anyhow::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .try_init();
-    tokio::process::Command::new("npm")
-        .arg("install")
-        .current_dir("tests/test_with_js")
-        .spawn()?
-        .wait()
-        .await?;
+    install_js_dependencies().await?;
 
     let ct = CancellationToken::new();
     let service: StreamableHttpService<Calculator, LocalSessionManager> =
@@ -104,12 +111,7 @@ async fn test_with_js_streamable_http_server() -> anyhow::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .try_init();
-    tokio::process::Command::new("npm")
-        .arg("install")
-        .current_dir("tests/test_with_js")
-        .spawn()?
-        .wait()
-        .await?;
+    install_js_dependencies().await?;
 
     let transport = StreamableHttpClientTransport::from_uri(format!(
         "http://{STREAMABLE_HTTP_JS_BIND_ADDRESS}/mcp"
