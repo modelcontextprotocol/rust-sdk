@@ -18,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 const TEST_IMAGE_DATA: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
 // Small base64-encoded WAV (silence)
 const TEST_AUDIO_DATA: &str = "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+const CACHE_TTL_MS: u64 = 60_000;
 
 /// Helper to convert a serde_json::Value (must be an object) into a JsonObject
 fn json_object(v: Value) -> JsonObject {
@@ -45,7 +46,7 @@ impl ConformanceServer {
 impl ServerHandler for ConformanceServer {
     async fn initialize(
         &self,
-        _request: InitializeRequestParams,
+        request: InitializeRequestParams,
         _cx: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
         Ok(InitializeResult::new(
@@ -56,6 +57,7 @@ impl ServerHandler for ConformanceServer {
                 .enable_logging()
                 .build(),
         )
+        .with_protocol_version(request.protocol_version)
         .with_server_info(Implementation::new("rust-conformance-server", "0.1.0"))
         .with_instructions("Rust MCP conformance test server"))
     }
@@ -206,7 +208,9 @@ impl ServerHandler for ConformanceServer {
         Ok(ListToolsResult {
             tools,
             ..Default::default()
-        })
+        }
+        .with_ttl_ms(CACHE_TTL_MS)
+        .with_cache_scope(CacheScope::Public))
     }
 
     async fn call_tool(
@@ -549,7 +553,9 @@ impl ServerHandler for ConformanceServer {
                     .with_mime_type("image/png"),
             ],
             ..Default::default()
-        })
+        }
+        .with_ttl_ms(CACHE_TTL_MS)
+        .with_cache_scope(CacheScope::Public))
     }
 
     async fn read_resource(
@@ -600,7 +606,13 @@ impl ServerHandler for ConformanceServer {
                 }
             }
         };
-        result.map(Into::into)
+        result
+            .map(|result| {
+                result
+                    .with_ttl_ms(CACHE_TTL_MS)
+                    .with_cache_scope(CacheScope::Public)
+            })
+            .map(Into::into)
     }
 
     async fn list_resource_templates(
@@ -615,7 +627,9 @@ impl ServerHandler for ConformanceServer {
                     .with_mime_type("application/json"),
             ],
             ..Default::default()
-        })
+        }
+        .with_ttl_ms(CACHE_TTL_MS)
+        .with_cache_scope(CacheScope::Public))
     }
 
     async fn subscribe(
@@ -674,7 +688,9 @@ impl ServerHandler for ConformanceServer {
                 ),
             ],
             ..Default::default()
-        })
+        }
+        .with_ttl_ms(CACHE_TTL_MS)
+        .with_cache_scope(CacheScope::Public))
     }
 
     async fn get_prompt(
@@ -782,7 +798,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting conformance server on {}", bind_addr);
 
     let server = ConformanceServer::new();
-    let config = StreamableHttpServerConfig::default();
+    let stateless = std::env::var_os("STATELESS").is_some();
+    let config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(!stateless)
+        .with_json_response(stateless);
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),

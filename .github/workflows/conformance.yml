@@ -14,6 +14,7 @@ concurrency:
 env:
   # Pinned for reproducible runs; bump deliberately when the suite updates.
   CONFORMANCE_VERSION: "0.1.16"
+  DRAFT_CONFORMANCE_VERSION: "0.2.0-alpha.9"
 
 jobs:
   server:
@@ -63,6 +64,33 @@ jobs:
               --scenario "$scenario" \
               -o conformance-results
           done
+
+      - name: Start draft conformance server
+        run: |
+          STATELESS=1 PORT=8002 ./target/debug/conformance-server &
+          echo $! > draft-server.pid
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8002/mcp; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "draft conformance server did not become ready" >&2
+          exit 1
+
+      - name: Run draft SEP scenarios
+        run: |
+          for scenario in sep-2164-resource-not-found caching http-header-validation; do
+            npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
+              --url http://127.0.0.1:8002/mcp \
+              --scenario "$scenario" \
+              --spec-version draft \
+              -o conformance-results
+          done
+
+      - name: Stop draft conformance server
+        if: always()
+        run: kill "$(cat draft-server.pid)" 2>/dev/null || true
 
       - name: Stop conformance server
         if: always()
