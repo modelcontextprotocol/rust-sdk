@@ -890,12 +890,14 @@ impl rmcp::transport::Transport<RoleClient> for StatelessHttpTransport {
     }
 }
 
-/// SEP-2322 MRTR client scenario: the mock server has no `initialize` handler
-/// (stateless lifecycle), so skip the handshake with `serve_directly` and let
-/// the high-level `call_tool` helper drive the `input_required` retry rounds.
-/// The mock server verifies requestState echo, fresh JSON-RPC ids on retry,
-/// state omission, isolation between tools, and the `resultType` default.
-async fn run_mrtr_client(server_url: &str) -> anyhow::Result<()> {
+/// A stateless-lifecycle client: the scenario's server has no `initialize`
+/// handler, so skip the handshake with `serve_directly`, list the tools, and
+/// call each one via the high-level `call_tool` helper (which drives SEP-2322
+/// `input_required` retry rounds when the server requests them). Used by the
+/// `sep-2322-client-request-state` scenario, whose mock server verifies
+/// requestState echo, fresh JSON-RPC ids on retry, state omission, isolation
+/// between tools, and the `resultType` default.
+async fn run_stateless_client(server_url: &str) -> anyhow::Result<()> {
     let transport = StatelessHttpTransport::new(server_url);
     let peer_info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
         .with_protocol_version(ProtocolVersion::V_2026_07_28);
@@ -958,7 +960,7 @@ async fn main() -> anyhow::Result<()> {
             run_elicitation_defaults_client(&server_url).await?
         }
         "sse-retry" => run_sse_retry_client(&server_url).await?,
-        "sep-2322-client-request-state" => run_mrtr_client(&server_url).await?,
+        "sep-2322-client-request-state" => run_stateless_client(&server_url).await?,
 
         // Auth scenarios - standard OAuth flow
         "auth/metadata-default"
