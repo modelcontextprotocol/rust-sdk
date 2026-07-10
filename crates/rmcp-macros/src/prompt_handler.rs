@@ -65,6 +65,8 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
                 prompts,
                 meta: #meta,
                 next_cursor: None,
+                ttl_ms: None,
+                cache_scope: None,
             })
         }
     };
