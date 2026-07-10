@@ -28,8 +28,9 @@ enum BoundedSseStreamError {
 #[derive(Debug)]
 struct SseEventSizeLimiter {
     max_size: usize,
-    event_size: usize,
+    retained_size: usize,
     line_size: usize,
+    line_is_comment: bool,
     previous_was_cr: bool,
 }
 
@@ -37,8 +38,9 @@ impl SseEventSizeLimiter {
     fn new(max_size: usize) -> Self {
         Self {
             max_size,
-            event_size: 0,
+            retained_size: 0,
             line_size: 0,
+            line_is_comment: false,
             previous_was_cr: false,
         }
     }
@@ -59,8 +61,10 @@ impl SseEventSizeLimiter {
                 }
                 b'\n' => self.finish_line()?,
                 _ => {
+                    if self.line_size == 0 {
+                        self.line_is_comment = byte == b':';
+                    }
                     self.line_size = self.line_size.saturating_add(1);
-                    self.event_size = self.event_size.saturating_add(1);
                     self.check_limit()?;
                 }
             }
@@ -70,18 +74,21 @@ impl SseEventSizeLimiter {
 
     fn finish_line(&mut self) -> Result<(), ()> {
         if self.line_size == 0 {
-            self.event_size = 0;
-        } else {
+            self.retained_size = 0;
+        } else if !self.line_is_comment {
             // The SSE parser inserts a newline when joining multiple data fields.
-            self.event_size = self.event_size.saturating_add(1);
-            self.check_limit()?;
-            self.line_size = 0;
+            self.retained_size = self
+                .retained_size
+                .saturating_add(self.line_size)
+                .saturating_add(1);
         }
-        Ok(())
+        self.line_size = 0;
+        self.line_is_comment = false;
+        self.check_limit()
     }
 
     fn check_limit(&self) -> Result<(), ()> {
-        if self.event_size > self.max_size {
+        if self.retained_size.saturating_add(self.line_size) > self.max_size {
             Err(())
         } else {
             Ok(())
@@ -270,7 +277,8 @@ pub(crate) trait SseStreamReconnect {
             tracing::warn!("sse stream error: {error}");
         }
     }
-    fn map_fatal_stream_error(&mut self, _error: SseError) -> Option<Self::Error> {
+    fn map_fatal_stream_error(&mut self, error: SseError) -> Option<Self::Error> {
+        tracing::warn!("fatal sse stream error: {error}");
         None
     }
 }
@@ -587,6 +595,26 @@ mod tests {
 
         assert_eq!(first.data.as_deref(), Some("hello"));
         assert_eq!(second.data.as_deref(), Some("world"));
+    }
+
+    #[tokio::test]
+    async fn bounded_sse_stream_discards_completed_comment_lines_from_limit() {
+        let source = futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(
+            b": ping\n: ping\n: ping\n",
+        ))]);
+        let mut stream = bounded_sse_stream(source, 6);
+
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn bounded_sse_stream_comments_do_not_reset_accumulated_data() {
+        let source = futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(
+            b"data: a\n: ping\ndata: b\n",
+        ))]);
+        let mut stream = bounded_sse_stream(source, 14);
+
+        assert!(stream.next().await.unwrap().is_err());
     }
 
     #[tokio::test]
