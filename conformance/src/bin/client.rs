@@ -1,7 +1,7 @@
 use rmcp::{
     ClientHandler, ErrorData, RoleClient, ServiceExt,
     model::*,
-    service::RequestContext,
+    service::{RequestContext, serve_directly},
     transport::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
         auth::{AuthorizationCallback, OAuthState},
@@ -824,6 +824,95 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
     Ok(())
 }
 
+/// A minimal stateless client transport: every outgoing message is one HTTP
+/// POST and the JSON response body (if any) is queued for `receive()`.
+///
+/// The SEP-2322 client scenario's mock server speaks the stateless lifecycle
+/// (no `initialize` handshake, plain JSON responses), which the session-based
+/// `StreamableHttpClientTransport` cannot do. The transport is harness
+/// plumbing; the behavior under test — the SDK's MRTR retry driver — runs
+/// unchanged on top of it.
+struct StatelessHttpTransport {
+    http: reqwest::Client,
+    uri: std::sync::Arc<str>,
+    tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
+    rx: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
+}
+
+impl StatelessHttpTransport {
+    fn new(uri: &str) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        Self {
+            http: reqwest::Client::new(),
+            uri: uri.into(),
+            tx,
+            rx,
+        }
+    }
+}
+
+impl rmcp::transport::Transport<RoleClient> for StatelessHttpTransport {
+    type Error = std::io::Error;
+
+    fn send(
+        &mut self,
+        item: rmcp::model::ClientJsonRpcMessage,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let http = self.http.clone();
+        let uri = self.uri.clone();
+        let tx = self.tx.clone();
+        async move {
+            let response = http
+                .post(uri.as_ref())
+                .header("MCP-Protocol-Version", "2026-07-28")
+                .json(&item)
+                .send()
+                .await
+                .map_err(std::io::Error::other)?;
+            match response.json::<ServerJsonRpcMessage>().await {
+                Ok(message) => {
+                    let _ = tx.send(message).await;
+                }
+                Err(_) => {
+                    // No JSON-RPC body (e.g. 202/204 for notifications).
+                }
+            }
+            Ok(())
+        }
+    }
+
+    async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
+        self.rx.recv().await
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// SEP-2322 MRTR client scenario: the mock server has no `initialize` handler
+/// (stateless lifecycle), so skip the handshake with `serve_directly` and let
+/// the high-level `call_tool` helper drive the `input_required` retry rounds.
+/// The mock server verifies requestState echo, fresh JSON-RPC ids on retry,
+/// state omission, isolation between tools, and the `resultType` default.
+async fn run_mrtr_client(server_url: &str) -> anyhow::Result<()> {
+    let transport = StatelessHttpTransport::new(server_url);
+    let peer_info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+        .with_protocol_version(ProtocolVersion::V_2026_07_28);
+    let client = serve_directly(FullClientHandler, transport, Some(peer_info));
+
+    let tools = client.list_tools(Default::default()).await?;
+    tracing::debug!("Listed {} tools", tools.tools.len());
+    for tool in &tools.tools {
+        let result = client
+            .call_tool(CallToolRequestParams::new(tool.name.clone()))
+            .await;
+        tracing::debug!("Called {}: {:?}", tool.name, result.is_ok());
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 async fn run_sse_retry_client(server_url: &str) -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_uri(server_url);
     let client = BasicClientHandler.serve(transport).await?;
@@ -869,6 +958,7 @@ async fn main() -> anyhow::Result<()> {
             run_elicitation_defaults_client(&server_url).await?
         }
         "sse-retry" => run_sse_retry_client(&server_url).await?,
+        "sep-2322-client-request-state" => run_mrtr_client(&server_url).await?,
 
         // Auth scenarios - standard OAuth flow
         "auth/metadata-default"

@@ -18,6 +18,7 @@ rmcp = { path = "../crates/rmcp", features = [
     "client",
     "elicitation",
     "auth",
+    "request-state",
     "transport-streamable-http-server",
     "transport-streamable-http-client-reqwest",
 ] }

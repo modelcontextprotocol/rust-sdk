@@ -88,9 +88,37 @@ jobs:
               -o conformance-results
           done
 
+      # SEP-2322 MRTR scenarios (spec 2026-07-28). They speak the stateless
+      # lifecycle (bare JSON-RPC POSTs, no initialize handshake), so they run
+      # against the stateless draft server.
+      - name: Run SEP-2322 MRTR scenarios
+        run: |
+          for scenario in \
+            input-required-result-basic-elicitation \
+            input-required-result-basic-sampling \
+            input-required-result-basic-list-roots \
+            input-required-result-request-state \
+            input-required-result-multiple-input-requests \
+            input-required-result-multi-round \
+            input-required-result-missing-input-response \
+            input-required-result-non-tool-request \
+            input-required-result-result-type \
+            input-required-result-unsupported-methods \
+            input-required-result-tampered-state \
+            input-required-result-capability-check \
+            input-required-result-ignore-extra-params \
+            input-required-result-validate-input \
+          ; do
+            npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
+              --url http://127.0.0.1:8002/mcp \
+              --scenario "$scenario" \
+              -o conformance-results
+          done
+
       - name: Stop draft conformance server
         if: always()
         run: kill "$(cat draft-server.pid)" 2>/dev/null || true
+
 
       - name: Stop conformance server
         if: always()
@@ -125,6 +153,14 @@ jobs:
             --suite all \
             --spec-version 2025-11-25 \
             -o conformance-client-results/full
+
+      # SEP-2322 MRTR client scenario (spec 2026-07-28).
+      - name: Run SEP-2322 MRTR client scenario
+        run: |
+          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
+            --command "$(pwd)/target/debug/conformance-client" \
+            --scenario sep-2322-client-request-state \
+            -o conformance-client-results/mrtr
 
       - name: Upload results
         if: always()

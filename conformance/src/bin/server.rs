@@ -28,10 +28,15 @@ fn json_object(v: Value) -> JsonObject {
     }
 }
 
+/// Signing key for SEP-2322 `requestState` sealing. A fixed key is fine for a
+/// conformance harness; real servers must load a secret out of clients' reach.
+const REQUEST_STATE_KEY: &[u8] = b"rust-sdk-conformance-request-state-key!!";
+
 #[derive(Clone)]
 struct ConformanceServer {
     subscriptions: Arc<Mutex<HashSet<String>>>,
     log_level: Arc<Mutex<LoggingLevel>>,
+    request_state_codec: RequestStateCodec,
 }
 
 impl ConformanceServer {
@@ -39,6 +44,318 @@ impl ConformanceServer {
         Self {
             subscriptions: Arc::new(Mutex::new(HashSet::new())),
             log_level: Arc::new(Mutex::new(LoggingLevel::Debug)),
+            request_state_codec: RequestStateCodec::new(REQUEST_STATE_KEY),
+        }
+    }
+}
+
+// ─── SEP-2322 MRTR (InputRequiredResult) helpers ────────────────────────────
+
+fn mrtr_elicitation_request(message: &str, properties: Value, required: Value) -> InputRequest {
+    InputRequest::Elicitation(ElicitRequest::new(
+        ElicitRequestParams::FormElicitationParams {
+            meta: None,
+            message: message.into(),
+            requested_schema: serde_json::from_value(json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            }))
+            .expect("valid elicitation schema"),
+        },
+    ))
+}
+
+fn mrtr_sampling_request(prompt: &str) -> InputRequest {
+    InputRequest::CreateMessage(CreateMessageRequest::new(CreateMessageRequestParams::new(
+        vec![SamplingMessage::user_text(prompt)],
+        100,
+    )))
+}
+
+fn mrtr_list_roots_request() -> InputRequest {
+    InputRequest::ListRoots(ListRootsRequest::default())
+}
+
+/// An input response is usable when it is a JSON object (an `ElicitResult`,
+/// `CreateMessageResult`, or `ListRootsResult` shape). Anything else (e.g. a
+/// bare number) is treated as missing so the server re-requests it.
+fn mrtr_response<'a>(
+    responses: Option<&'a InputResponses>,
+    key: &str,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    responses
+        .and_then(|r| r.get(key))
+        .and_then(Value::as_object)
+}
+
+impl ConformanceServer {
+    fn mrtr_tampered_state_error() -> ErrorData {
+        ErrorData::invalid_params("requestState failed integrity verification", None)
+    }
+
+    /// SEP-2322 test tools. Each returns an `InputRequiredResult` until the
+    /// client retries with the expected `inputResponses` (and, where used, the
+    /// echoed `requestState`).
+    ///
+    /// `meta` is the request's `_meta`, which the service loop moves out of the
+    /// params and into the `RequestContext`.
+    async fn call_mrtr_tool(
+        &self,
+        request: CallToolRequestParams,
+        meta: &Meta,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let responses = request.input_responses.as_ref();
+        match request.name.as_ref() {
+            "test_input_required_result_elicitation" => {
+                match mrtr_response(responses, "user_name") {
+                    Some(response) => {
+                        let name = response
+                            .get("content")
+                            .and_then(|c| c.get("name"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("friend");
+                        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                            "Hello, {name}!"
+                        ))])
+                        .into())
+                    }
+                    // Initial call, or a retry with missing/invalid responses:
+                    // (re-)request the input per the SEP's recommendation.
+                    None => {
+                        let mut requests = InputRequests::new();
+                        requests.insert(
+                            "user_name".into(),
+                            mrtr_elicitation_request(
+                                "What is your name?",
+                                json!({ "name": { "type": "string" } }),
+                                json!(["name"]),
+                            ),
+                        );
+                        Ok(InputRequiredResult::from_input_requests(requests).into())
+                    }
+                }
+            }
+
+            "test_input_required_result_sampling" => {
+                match mrtr_response(responses, "capital_question") {
+                    Some(response) => {
+                        let text = response
+                            .get("content")
+                            .and_then(|c| c.get("text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("(no sampling text)");
+                        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                            "Sampling response: {text}"
+                        ))])
+                        .into())
+                    }
+                    None => {
+                        let mut requests = InputRequests::new();
+                        requests.insert(
+                            "capital_question".into(),
+                            mrtr_sampling_request("What is the capital of France?"),
+                        );
+                        Ok(InputRequiredResult::from_input_requests(requests).into())
+                    }
+                }
+            }
+
+            "test_input_required_result_list_roots" => {
+                match mrtr_response(responses, "client_roots") {
+                    Some(response) => {
+                        let roots = response
+                            .get("roots")
+                            .and_then(Value::as_array)
+                            .map(|roots| {
+                                roots
+                                    .iter()
+                                    .filter_map(|r| r.get("uri").and_then(Value::as_str))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                            "Client roots: [{roots}]"
+                        ))])
+                        .into())
+                    }
+                    None => {
+                        let mut requests = InputRequests::new();
+                        requests.insert("client_roots".into(), mrtr_list_roots_request());
+                        Ok(InputRequiredResult::from_input_requests(requests).into())
+                    }
+                }
+            }
+
+            "test_input_required_result_request_state"
+            | "test_input_required_result_tampered_state" => {
+                match request.request_state.as_deref() {
+                    // Initial call: request confirmation and seal our progress.
+                    None => {
+                        let sealed = self
+                            .request_state_codec
+                            .seal_json(&json!({ "stage": "confirm" }))
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                        let mut requests = InputRequests::new();
+                        requests.insert(
+                            "confirm".into(),
+                            mrtr_elicitation_request(
+                                "Please confirm",
+                                json!({ "ok": { "type": "boolean" } }),
+                                json!(["ok"]),
+                            ),
+                        );
+                        Ok(InputRequiredResult::new(Some(requests), Some(sealed)).into())
+                    }
+                    // Retry: the echoed state is untrusted input and MUST pass
+                    // integrity verification before we act on it.
+                    Some(sealed) => {
+                        self.request_state_codec
+                            .open(sealed)
+                            .map_err(|_| Self::mrtr_tampered_state_error())?;
+                        Ok(
+                            CallToolResult::success(vec![ContentBlock::text(
+                                "Confirmed: state-ok",
+                            )])
+                            .into(),
+                        )
+                    }
+                }
+            }
+
+            "test_input_required_result_multiple_inputs" => {
+                if let Some(sealed) = request.request_state.as_deref() {
+                    self.request_state_codec
+                        .open(sealed)
+                        .map_err(|_| Self::mrtr_tampered_state_error())?;
+                }
+                let all_present = mrtr_response(responses, "user_name").is_some()
+                    && mrtr_response(responses, "greeting").is_some()
+                    && mrtr_response(responses, "client_roots").is_some();
+                if all_present && request.request_state.is_some() {
+                    Ok(
+                        CallToolResult::success(vec![ContentBlock::text("All inputs received")])
+                            .into(),
+                    )
+                } else {
+                    let sealed = self
+                        .request_state_codec
+                        .seal_json(&json!({ "stage": "gather" }))
+                        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                    let mut requests = InputRequests::new();
+                    requests.insert(
+                        "user_name".into(),
+                        mrtr_elicitation_request(
+                            "What is your name?",
+                            json!({ "name": { "type": "string" } }),
+                            json!(["name"]),
+                        ),
+                    );
+                    requests.insert(
+                        "greeting".into(),
+                        mrtr_sampling_request("Generate a greeting"),
+                    );
+                    requests.insert("client_roots".into(), mrtr_list_roots_request());
+                    Ok(InputRequiredResult::new(Some(requests), Some(sealed)).into())
+                }
+            }
+
+            "test_input_required_result_multi_round" => {
+                let round = match request.request_state.as_deref() {
+                    None => 0,
+                    Some(sealed) => {
+                        let state: Value = self
+                            .request_state_codec
+                            .open_json(sealed)
+                            .map_err(|_| Self::mrtr_tampered_state_error())?;
+                        state.get("round").and_then(Value::as_i64).unwrap_or(0)
+                    }
+                };
+                match round {
+                    0 => {
+                        let sealed = self
+                            .request_state_codec
+                            .seal_json(&json!({ "round": 1 }))
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                        let mut requests = InputRequests::new();
+                        requests.insert(
+                            "step1".into(),
+                            mrtr_elicitation_request(
+                                "Step 1: What is your name?",
+                                json!({ "name": { "type": "string" } }),
+                                json!(["name"]),
+                            ),
+                        );
+                        Ok(InputRequiredResult::new(Some(requests), Some(sealed)).into())
+                    }
+                    1 => {
+                        let sealed = self
+                            .request_state_codec
+                            .seal_json(&json!({ "round": 2 }))
+                            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                        let mut requests = InputRequests::new();
+                        requests.insert(
+                            "step2".into(),
+                            mrtr_elicitation_request(
+                                "Step 2: What is your favorite color?",
+                                json!({ "color": { "type": "string" } }),
+                                json!(["color"]),
+                            ),
+                        );
+                        Ok(InputRequiredResult::new(Some(requests), Some(sealed)).into())
+                    }
+                    _ => Ok(CallToolResult::success(vec![ContentBlock::text(
+                        "Multi-round flow complete",
+                    )])
+                    .into()),
+                }
+            }
+
+            "test_input_required_result_capabilities" => {
+                if responses.is_some() {
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
+                        "Capability-aware flow complete",
+                    )])
+                    .into());
+                }
+                // Per SEP-2322, only request inputs the client declared support
+                // for in `_meta['io.modelcontextprotocol/clientCapabilities']`.
+                let capabilities = meta.client_capabilities().unwrap_or_default();
+                let mut requests = InputRequests::new();
+                if capabilities.elicitation.is_some() {
+                    requests.insert(
+                        "user_name".into(),
+                        mrtr_elicitation_request(
+                            "What is your name?",
+                            json!({ "name": { "type": "string" } }),
+                            json!(["name"]),
+                        ),
+                    );
+                }
+                if capabilities.sampling.is_some() {
+                    requests.insert(
+                        "greeting".into(),
+                        mrtr_sampling_request("Generate a greeting"),
+                    );
+                }
+                if capabilities.roots.is_some() {
+                    requests.insert("client_roots".into(), mrtr_list_roots_request());
+                }
+                if requests.is_empty() {
+                    Ok(CallToolResult::success(vec![ContentBlock::text(
+                        "Client declared no MRTR-capable capabilities",
+                    )])
+                    .into())
+                } else {
+                    Ok(InputRequiredResult::from_input_requests(requests).into())
+                }
+            }
+
+            _ => Err(ErrorData::invalid_params(
+                format!("Unknown tool: {}", request.name),
+                None,
+            )),
         }
     }
 }
@@ -205,6 +522,51 @@ impl ServerHandler for ConformanceServer {
                 })),
             ),
         ];
+        // SEP-2322 MRTR test tools; all take no arguments.
+        let mrtr_tools = [
+            (
+                "test_input_required_result_elicitation",
+                "Requires an elicitation input via InputRequiredResult (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_sampling",
+                "Requires a sampling input via InputRequiredResult (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_list_roots",
+                "Requires a roots/list input via InputRequiredResult (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_request_state",
+                "Round-trips integrity-protected requestState (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_multiple_inputs",
+                "Requires elicitation + sampling + roots inputs in one round (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_multi_round",
+                "Drives multiple input_required rounds with evolving requestState (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_tampered_state",
+                "Rejects tampered requestState with a JSON-RPC error (SEP-2322)",
+            ),
+            (
+                "test_input_required_result_capabilities",
+                "Only requests inputs for declared client capabilities (SEP-2322)",
+            ),
+        ];
+        let tools = tools
+            .into_iter()
+            .chain(mrtr_tools.into_iter().map(|(name, description)| {
+                Tool::new(
+                    name,
+                    description,
+                    json_object(json!({ "type": "object", "properties": {} })),
+                )
+            }))
+            .collect();
         Ok(ListToolsResult {
             tools,
             ..Default::default()
@@ -218,6 +580,9 @@ impl ServerHandler for ConformanceServer {
         request: CallToolRequestParams,
         cx: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        if request.name.starts_with("test_input_required_result_") {
+            return self.call_mrtr_tool(request, &cx.meta).await;
+        }
         let args = request.arguments.unwrap_or_default();
         let result = match request.name.as_ref() {
             "test_simple_text" => Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -686,6 +1051,13 @@ impl ServerHandler for ConformanceServer {
                     Some("A test prompt that includes an image"),
                     None,
                 ),
+                Prompt::new(
+                    "test_input_required_result_prompt",
+                    Some(
+                        "A prompt that requires elicitation input via InputRequiredResult (SEP-2322)",
+                    ),
+                    None,
+                ),
             ],
             ..Default::default()
         }
@@ -698,6 +1070,36 @@ impl ServerHandler for ConformanceServer {
         request: GetPromptRequestParams,
         _cx: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
+        // SEP-2322: InputRequiredResult on a non-tool request (prompts/get).
+        if request.name == "test_input_required_result_prompt" {
+            return match mrtr_response(request.input_responses.as_ref(), "user_context") {
+                Some(response) => {
+                    let context = response
+                        .get("content")
+                        .and_then(|c| c.get("context"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no context)");
+                    Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                        Role::User,
+                        format!("Prompt with elicited context: {context}"),
+                    )])
+                    .with_description("A prompt built from elicited context")
+                    .into())
+                }
+                None => {
+                    let mut requests = InputRequests::new();
+                    requests.insert(
+                        "user_context".into(),
+                        mrtr_elicitation_request(
+                            "What context should the prompt use?",
+                            json!({ "context": { "type": "string" } }),
+                            json!(["context"]),
+                        ),
+                    );
+                    Ok(InputRequiredResult::from_input_requests(requests).into())
+                }
+            };
+        }
         let result = match request.name.as_str() {
             "test_simple_prompt" => Ok(GetPromptResult::new(vec![PromptMessage::new_text(
                 Role::User,
