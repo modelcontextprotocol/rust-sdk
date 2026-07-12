@@ -1,0 +1,129 @@
+name: Verify issue 974 on isolated branch v2
+
+on:
+  push:
+    branches:
+      - tmp/issue-974-clean-final
+    paths:
+      - .github/workflows/verify-issue-974-isolated-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: tmp/issue-974-clean-final
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: |
+          uv python install
+          uv venv
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks,cargo-public-api,cargo-llvm-cov,typos-cli
+
+      - name: Apply source and run verification
+        id: matrix
+        shell: bash
+        run: |
+          set +e
+          report=.issue-974-isolated-result.txt
+          : > "$report"
+          failed=0
+          check() {
+            name="$1"; shift
+            "$@"
+            code=$?
+            if [ "$code" -eq 0 ]; then
+              echo "$name=success" | tee -a "$report"
+            else
+              echo "$name=failed($code)" | tee -a "$report"
+              failed=1
+            fi
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          check fetch_source git fetch origin 4c5975d19a4a1798051f1dd0def19bb8eff9403e
+          if [ "$failed" -eq 0 ]; then
+            check cherry_pick git cherry-pick 4c5975d19a4a1798051f1dd0def19bb8eff9403e
+          fi
+
+          check fetch_upstream git fetch https://github.com/modelcontextprotocol/rust-sdk.git main:refs/remotes/upstream/main
+
+          if [ "$failed" -eq 0 ]; then
+            check upstream_alignment test "$(git rev-parse origin/main)" = "$(git rev-parse upstream/main)"
+            check nightly_format cargo +nightly fmt --all -- --check
+            check whitespace git diff --check upstream/main...HEAD
+            check clippy cargo clippy --all-targets --all-features -- -D warnings
+            check all_feature_tests cargo test --all-features
+
+            FEATURES=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
+                        | select(startswith("__") | not)
+                        | select(. != "local")] | join(",")')
+            check no_local_tests cargo test -p rmcp --features "$FEATURES"
+
+            check focused_cache_tests cargo test -p rmcp --all-features service::client::tests -- --nocapture
+            check notification_integration cargo test -p rmcp --all-features --test test_tool_disable_notification -- --nocapture
+            check cache_hint_tests cargo test -p rmcp --all-features --test test_cache_hints -- --nocapture
+            check doctests cargo test -p rmcp --doc --all-features
+            check rustdoc env RUSTDOCFLAGS=-Dwarnings cargo doc -p rmcp --all-features --no-deps
+            check conformance cargo test --manifest-path conformance/Cargo.toml --all-features
+            check semver_default cargo semver-checks \
+              --package rmcp --baseline-rev upstream/main --release-type minor \
+              --only-explicit-features --features default
+            check semver_non_local cargo semver-checks \
+              --package rmcp --baseline-rev upstream/main --release-type minor \
+              --only-explicit-features --features "$FEATURES"
+            check public_api_default cargo public-api --package rmcp -ss diff \
+              --deny changed --deny removed --force upstream/main..HEAD
+            check public_api_non_local cargo public-api --package rmcp \
+              --features "$FEATURES" -ss diff --deny changed --deny removed \
+              --force upstream/main..HEAD
+            check coverage cargo llvm-cov -p rmcp --all-features --no-report
+            check spelling typos
+          fi
+
+          echo "tested_sha=$(git rev-parse HEAD)" >> "$report"
+          echo "upstream_main=$(git rev-parse upstream/main 2>/dev/null || echo unavailable)" >> "$report"
+          if [ "$failed" -eq 0 ]; then
+            echo "status=success" >> "$report"
+          else
+            echo "status=failed" >> "$report"
+          fi
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish isolated result
+        if: always()
+        run: |
+          rm -f .github/workflows/verify-issue-974-isolated.yml
+          rm -f .github/workflows/verify-issue-974-isolated-v2.yml
+          git add -A
+          git commit -m "ci: record isolated issue 974 verification" || true
+          git push origin HEAD:tmp/issue-974-clean-final
+
+      - name: Fail when a check failed
+        if: steps.matrix.outputs.failed != '0'
+        run: exit 1
