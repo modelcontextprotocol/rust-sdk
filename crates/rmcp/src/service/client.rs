@@ -285,22 +285,26 @@ const RESOURCE_TEMPLATE_LIST_CACHE_PREFIX: &str = "resources/templates/list:";
 const RESOURCE_READ_CACHE_PREFIX: &str = "resources/read:";
 
 fn list_response_cache_key(prefix: &str, params: &Option<PaginatedRequestParams>) -> String {
-    let cursor = params.as_ref().and_then(|params| params.cursor.as_deref());
-    let cursor = serde_json::to_string(&cursor)
-        .expect("serializing an optional pagination cursor cannot fail");
-    format!("{prefix}{cursor}")
+    let params = serde_json::to_string(params)
+        .expect("serializing pagination request parameters cannot fail");
+    format!("{prefix}{params}")
 }
 
 fn resource_read_cache_key(params: &ReadResourceRequestParams) -> Option<String> {
     if params.input_responses.is_some() || params.request_state.is_some() {
         return None;
     }
-    Some(resource_read_cache_key_for_uri(&params.uri))
+    let serialized =
+        serde_json::to_string(params).expect("serializing resource request parameters cannot fail");
+    Some(format!(
+        "{}{serialized}",
+        resource_read_cache_prefix_for_uri(&params.uri)
+    ))
 }
 
-fn resource_read_cache_key_for_uri(uri: &str) -> String {
+fn resource_read_cache_prefix_for_uri(uri: &str) -> String {
     let uri = serde_json::to_string(uri).expect("serializing a resource URI cannot fail");
-    format!("{RESOURCE_READ_CACHE_PREFIX}{uri}")
+    format!("{RESOURCE_READ_CACHE_PREFIX}{uri}:")
 }
 
 fn request_uses_cursor(params: &Option<PaginatedRequestParams>) -> bool {
@@ -433,7 +437,7 @@ impl Peer<RoleClient> {
     }
 
     pub(crate) async fn invalidate_resource_read_cache(&self, uri: &str) {
-        self.invalidate_cached_response(&resource_read_cache_key_for_uri(uri))
+        self.invalidate_cached_responses(&resource_read_cache_prefix_for_uri(uri))
             .await;
     }
 
@@ -1293,6 +1297,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changing_ttl_policy_invalidates_existing_entries() {
+        let peer = disconnected_peer();
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result(Some(60_000), Some(CacheScope::Public))),
+            Some(60_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+        assert!(peer.cached_response(&key).await.is_some());
+
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_max_ttl(Duration::from_millis(1)),
+        )
+        .await;
+
+        assert!(peer.cached_response(&key).await.is_none());
+    }
+
+    #[tokio::test]
     async fn private_entries_are_isolated_between_client_peers() {
         let first = disconnected_peer();
         let second = disconnected_peer();
@@ -1381,6 +1406,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn result_affecting_metadata_is_part_of_cache_keys() {
+        let mut first_meta = crate::model::Meta::new();
+        first_meta.insert("variant".into(), serde_json::json!("a"));
+        let mut second_meta = crate::model::Meta::new();
+        second_meta.insert("variant".into(), serde_json::json!("b"));
+
+        let first_page = Some(PaginatedRequestParams {
+            meta: Some(first_meta.clone()),
+            cursor: Some("page".into()),
+        });
+        let second_page = Some(PaginatedRequestParams {
+            meta: Some(second_meta.clone()),
+            cursor: Some("page".into()),
+        });
+        assert_ne!(
+            list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &first_page),
+            list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &second_page)
+        );
+
+        let first_resource =
+            ReadResourceRequestParams::new("file:///example").with_meta(first_meta);
+        let second_resource =
+            ReadResourceRequestParams::new("file:///example").with_meta(second_meta);
+        assert_ne!(
+            resource_read_cache_key(&first_resource),
+            resource_read_cache_key(&second_resource)
+        );
+    }
+
     #[tokio::test]
     async fn list_invalidation_discards_every_cached_page() {
         let peer = disconnected_peer();
@@ -1408,11 +1463,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resource_update_invalidates_only_the_matching_uri() {
+    async fn resource_update_invalidates_every_metadata_variant_for_the_matching_uri() {
         let peer = disconnected_peer();
-        let first_key = resource_read_cache_key_for_uri("file:///first");
-        let second_key = resource_read_cache_key_for_uri("file:///second");
-        for key in [&first_key, &second_key] {
+        let first_plain = ReadResourceRequestParams::new("file:///first");
+        let mut meta = crate::model::Meta::new();
+        meta.insert("variant".into(), serde_json::json!("a"));
+        let first_with_meta = ReadResourceRequestParams::new("file:///first").with_meta(meta);
+        let second = ReadResourceRequestParams::new("file:///second");
+        let first_plain_key = resource_read_cache_key(&first_plain).unwrap();
+        let first_meta_key = resource_read_cache_key(&first_with_meta).unwrap();
+        let second_key = resource_read_cache_key(&second).unwrap();
+        for key in [&first_plain_key, &first_meta_key, &second_key] {
             peer.cache_response(
                 key.clone(),
                 ServerResult::ReadResourceResult(
@@ -1428,7 +1489,8 @@ mod tests {
 
         peer.invalidate_resource_read_cache("file:///first").await;
 
-        assert!(peer.cached_response(&first_key).await.is_none());
+        assert!(peer.cached_response(&first_plain_key).await.is_none());
+        assert!(peer.cached_response(&first_meta_key).await.is_none());
         assert!(peer.cached_response(&second_key).await.is_some());
     }
 
@@ -1485,8 +1547,10 @@ mod tests {
         let peer = disconnected_peer();
         peer.set_response_cache_config(ClientCacheConfig::default().with_max_entries(1))
             .await;
-        let first = resource_read_cache_key_for_uri("file:///first");
-        let second = resource_read_cache_key_for_uri("file:///second");
+        let first =
+            resource_read_cache_key(&ReadResourceRequestParams::new("file:///first")).unwrap();
+        let second =
+            resource_read_cache_key(&ReadResourceRequestParams::new("file:///second")).unwrap();
         peer.cache_response(
             first.clone(),
             ServerResult::ReadResourceResult(ReadResourceResult::new(Vec::new())),

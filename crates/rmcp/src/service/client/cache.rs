@@ -319,11 +319,13 @@ impl Peer<RoleClient> {
         let mut cache = self.response_cache.write().await;
         let config_changed = cache.config != config;
         let partition_changed = cache.config.private_partition != config.private_partition;
+        let ttl_policy_changed = cache.config.default_ttl != config.default_ttl
+            || cache.config.max_ttl != config.max_ttl;
         cache.config = config;
         if config_changed {
             cache.generation = cache.generation.wrapping_add(1);
         }
-        if !cache.config.enabled {
+        if !cache.config.enabled || ttl_policy_changed {
             cache.entries.clear();
         } else if partition_changed {
             cache

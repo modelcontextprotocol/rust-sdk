@@ -34,9 +34,10 @@ Use `ClientCacheConfig::disabled()` to disable cache reads and writes, or
 `with_max_entries()` bounds the in-memory store; the default is 512 entries and
 a value of zero removes the limit.
 
-Cache keys include the method and result-affecting parameters: the cursor for
-paginated list methods and the URI for resource reads. MRTR retries containing
-`inputResponses` or `requestState` are never cached. List-change notifications
+Cache keys include the method and all currently result-affecting parameters: the
+cursor and `_meta` for paginated list methods, and the URI plus `_meta` for resource
+reads. MRTR retries containing `inputResponses` or `requestState` are never cached.
+A response that omits `cacheScope` is treated as private rather than made shareable. List-change notifications
 invalidate every cached page for the corresponding method, while resource
 update notifications invalidate only the matching URI. When a cursor request
 fails, all cached pages for that list method are discarded so the next walk can
