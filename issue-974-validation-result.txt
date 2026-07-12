@@ -4,209 +4,8 @@ status=0
 ===== whitespace =====
 status=0
 
-===== workspace_check =====
-status=101
---- last 200 log lines ---
-    [1m[94m|[0m
-[1m[94m230[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^[0m [1m[91m`dyn Fn(PromptContext<'a, Counter>) -> Pin<Box<...>>` cannot be sent between threads safely[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mhelp[0m: the trait `std::marker::Send` is not implemented for `dyn Fn(PromptContext<'a, Counter>) -> Pin<Box<...>>`
-    [1m[94m= [0m[1mnote[0m: required for `Arc<dyn Fn(PromptContext<'a, Counter>) -> Pin<Box<...>>>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `PromptRoute<Counter>`
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/prompt.rs:10:12
-    [1m[94m|[0m
-[1m[94m 10[0m [1m[94m|[0m pub struct PromptRoute<S> {
-    [1m[94m|[0m            [1m[92m^^^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required because it appears within the type `(Cow<'static, str>, PromptRoute<Counter>)`
-    [1m[94m= [0m[1mnote[0m: required for `hashbrown::raw::RawTable<(Cow<'static, str>, PromptRoute<Counter>)>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `hashbrown::map::HashMap<Cow<'static, str>, PromptRoute<Counter>, RandomState>`
-   [1m[94m--> [0m/rust/deps/hashbrown-0.16.1/src/map.rs:185:11
-[1m[92mnote[0m: required because it appears within the type `HashMap<Cow<'static, str>, PromptRoute<Counter>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/std/src/collections/hash/map.rs:247:11
-[1m[92mnote[0m: required because it appears within the type `PromptRouter<Counter>`
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/prompt.rs:110:12
-    [1m[94m|[0m
-[1m[94m110[0m [1m[94m|[0m pub struct PromptRouter<S> {
-    [1m[94m|[0m            [1m[92m^^^^^^^^^^^^[0m
-[1m[92mnote[0m: required because it appears within the type `Counter`
-   [1m[94m--> [0mexamples/servers/src/common/counter.rs:77:12
-    [1m[94m|[0m
-[1m[94m 77[0m [1m[94m|[0m pub struct Counter {
-    [1m[94m|[0m            [1m[92m^^^^^^^[0m
-[1m[92mnote[0m: required because it's used within this `async` block
-   [1m[94m--> [0mexamples/servers/src/common/counter.rs:230:1
-    [1m[94m|[0m
-[1m[94m230[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required for the cast from `Pin<Box<{async block@examples/servers/src/common/counter.rs:230:1: 230:16}>>` to `Pin<Box<dyn Future<Output = Result<Box<...>, ...>> + Send>>`
-    [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/rust-sdk/rust-sdk/target/debug/examples/servers_complex_auth_streamhttp-744dd7581caaaab8.long-type-13449520427118935295.txt'
-    [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
-    [1m[94m= [0m[1mnote[0m: this error originates in the attribute macro `task_handler` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-[1m[91merror[E0277][0m[1m: `dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>` cannot be sent between threads safely[0m
-   [1m[94m--> [0mexamples/servers/src/common/counter.rs:230:1
-    [1m[94m|[0m
-[1m[94m230[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^[0m [1m[91m`dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>` cannot be sent between threads safely[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mhelp[0m: the trait `std::marker::Send` is not implemented for `dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>`
-    [1m[94m= [0m[1mnote[0m: required for `std::ptr::Unique<dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `Box<dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/alloc/src/boxed.rs:234:11
-[1m[92mnote[0m: required because it appears within the type `Pin<Box<dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/pin.rs:1092:11
-[1m[92mnote[0m: required because it's used within this `async` fn body
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/tool.rs:563:67
-    [1m[94m|[0m
-[1m[94m563[0m [1m[94m|[0m       ) -> Result<crate::model::CallToolResponse, crate::ErrorData> {
-    [1m[94m|[0m [1m[92m ___________________________________________________________________^[0m
-[1m[94m564[0m [1m[94m|[0m [1m[92m|[0m         let name = context.name();
-[1m[94m565[0m [1m[94m|[0m [1m[92m|[0m         if self.disabled.contains(name) {
-[1m[94m566[0m [1m[94m|[0m [1m[92m|[0m             return Err(crate::ErrorData::invalid_params("tool not found", None));
-[1m[94m...[0m   [1m[92m|[0m
-[1m[94m578[0m [1m[94m|[0m [1m[92m|[0m         Ok(result)
-[1m[94m579[0m [1m[94m|[0m [1m[92m|[0m     }
-    [1m[94m|[0m [1m[92m|_____^[0m
-[1m[92mnote[0m: required because it's used within this `async` fn body
-   [1m[94m--> [0mexamples/servers/src/common/counter.rs:228:1
-    [1m[94m|[0m
-[1m[94m228[0m [1m[94m|[0m #[tool_handler(meta = Meta(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
-[1m[92mnote[0m: required because it's used within this `async` block
-   [1m[94m--> [0mexamples/servers/src/common/counter.rs:230:1
-    [1m[94m|[0m
-[1m[94m230[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required for the cast from `Pin<Box<{async block@examples/servers/src/common/counter.rs:230:1: 230:16}>>` to `Pin<Box<dyn Future<Output = Result<Box<...>, ...>> + Send>>`
-    [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/rust-sdk/rust-sdk/target/debug/examples/servers_complex_auth_streamhttp-744dd7581caaaab8.long-type-6481740063410040282.txt'
-    [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
-    [1m[94m= [0m[1mnote[0m: this error originates in the attribute macro `task_handler` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-[1m[91merror[E0277][0m[1m: `dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>` cannot be shared between threads safely[0m
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:92:1
-    [1m[94m|[0m
-[1m[94m 92[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^[0m [1m[91m`dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>` cannot be shared between threads safely[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mhelp[0m: the trait `Sync` is not implemented for `dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>`
-    [1m[94m= [0m[1mnote[0m: required for `Arc<dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `ToolRoute<TaskDemo>`
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/tool.rs:159:12
-    [1m[94m|[0m
-[1m[94m159[0m [1m[94m|[0m pub struct ToolRoute<S> {
-    [1m[94m|[0m            [1m[92m^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required because it appears within the type `(Cow<'static, str>, ToolRoute<TaskDemo>)`
-    [1m[94m= [0m[1mnote[0m: required for `hashbrown::raw::RawTable<(Cow<'static, str>, ToolRoute<TaskDemo>)>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `hashbrown::map::HashMap<Cow<'static, str>, ToolRoute<TaskDemo>, RandomState>`
-   [1m[94m--> [0m/rust/deps/hashbrown-0.16.1/src/map.rs:185:11
-[1m[92mnote[0m: required because it appears within the type `HashMap<Cow<'static, str>, ToolRoute<TaskDemo>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/std/src/collections/hash/map.rs:247:11
-[1m[92mnote[0m: required because it appears within the type `ToolRouter<TaskDemo>`
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/tool.rs:325:12
-    [1m[94m|[0m
-[1m[94m325[0m [1m[94m|[0m pub struct ToolRouter<S> {
-    [1m[94m|[0m            [1m[92m^^^^^^^^^^[0m
-[1m[92mnote[0m: required because it appears within the type `TaskDemo`
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:41:12
-    [1m[94m|[0m
-[1m[94m 41[0m [1m[94m|[0m pub struct TaskDemo {
-    [1m[94m|[0m            [1m[92m^^^^^^^^[0m
-[1m[92mnote[0m: required because it's used within this `async` block
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:92:1
-    [1m[94m|[0m
-[1m[94m 92[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required for the cast from `Pin<Box<{async block@examples/servers/src/common/task_demo.rs:92:1: 92:16}>>` to `Pin<Box<dyn Future<Output = Result<Box<...>, ...>> + Send>>`
-    [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/rust-sdk/rust-sdk/target/debug/examples/servers_complex_auth_streamhttp-744dd7581caaaab8.long-type-4286591992877008387.txt'
-    [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
-    [1m[94m= [0m[1mnote[0m: this error originates in the attribute macro `task_handler` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-[1m[91merror[E0277][0m[1m: `dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>` cannot be sent between threads safely[0m
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:92:1
-    [1m[94m|[0m
-[1m[94m 92[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^[0m [1m[91m`dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>` cannot be sent between threads safely[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mhelp[0m: the trait `std::marker::Send` is not implemented for `dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>`
-    [1m[94m= [0m[1mnote[0m: required for `Arc<dyn Fn(ToolCallContext<'s, TaskDemo>) -> Pin<Box<...>>>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `ToolRoute<TaskDemo>`
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/tool.rs:159:12
-    [1m[94m|[0m
-[1m[94m159[0m [1m[94m|[0m pub struct ToolRoute<S> {
-    [1m[94m|[0m            [1m[92m^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required because it appears within the type `(Cow<'static, str>, ToolRoute<TaskDemo>)`
-    [1m[94m= [0m[1mnote[0m: required for `hashbrown::raw::RawTable<(Cow<'static, str>, ToolRoute<TaskDemo>)>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `hashbrown::map::HashMap<Cow<'static, str>, ToolRoute<TaskDemo>, RandomState>`
-   [1m[94m--> [0m/rust/deps/hashbrown-0.16.1/src/map.rs:185:11
-[1m[92mnote[0m: required because it appears within the type `HashMap<Cow<'static, str>, ToolRoute<TaskDemo>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/std/src/collections/hash/map.rs:247:11
-[1m[92mnote[0m: required because it appears within the type `ToolRouter<TaskDemo>`
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/tool.rs:325:12
-    [1m[94m|[0m
-[1m[94m325[0m [1m[94m|[0m pub struct ToolRouter<S> {
-    [1m[94m|[0m            [1m[92m^^^^^^^^^^[0m
-[1m[92mnote[0m: required because it appears within the type `TaskDemo`
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:41:12
-    [1m[94m|[0m
-[1m[94m 41[0m [1m[94m|[0m pub struct TaskDemo {
-    [1m[94m|[0m            [1m[92m^^^^^^^^[0m
-[1m[92mnote[0m: required because it's used within this `async` block
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:92:1
-    [1m[94m|[0m
-[1m[94m 92[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required for the cast from `Pin<Box<{async block@examples/servers/src/common/task_demo.rs:92:1: 92:16}>>` to `Pin<Box<dyn Future<Output = Result<Box<...>, ...>> + Send>>`
-    [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/rust-sdk/rust-sdk/target/debug/examples/servers_complex_auth_streamhttp-744dd7581caaaab8.long-type-4286591992877008387.txt'
-    [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
-    [1m[94m= [0m[1mnote[0m: this error originates in the attribute macro `task_handler` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-[1m[91merror[E0277][0m[1m: `dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>` cannot be sent between threads safely[0m
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:92:1
-    [1m[94m|[0m
-[1m[94m 92[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^[0m [1m[91m`dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>` cannot be sent between threads safely[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mhelp[0m: the trait `std::marker::Send` is not implemented for `dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>`
-    [1m[94m= [0m[1mnote[0m: required for `std::ptr::Unique<dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>>` to implement `std::marker::Send`
-[1m[92mnote[0m: required because it appears within the type `Box<dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/alloc/src/boxed.rs:234:11
-[1m[92mnote[0m: required because it appears within the type `Pin<Box<dyn futures::Future<Output = Result<CallToolResponse, ErrorData>>>>`
-   [1m[94m--> [0m/rustc/31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd/library/core/src/pin.rs:1092:11
-[1m[92mnote[0m: required because it's used within this `async` fn body
-   [1m[94m--> [0mcrates/rmcp/src/handler/server/router/tool.rs:563:67
-    [1m[94m|[0m
-[1m[94m563[0m [1m[94m|[0m       ) -> Result<crate::model::CallToolResponse, crate::ErrorData> {
-    [1m[94m|[0m [1m[92m ___________________________________________________________________^[0m
-[1m[94m564[0m [1m[94m|[0m [1m[92m|[0m         let name = context.name();
-[1m[94m565[0m [1m[94m|[0m [1m[92m|[0m         if self.disabled.contains(name) {
-[1m[94m566[0m [1m[94m|[0m [1m[92m|[0m             return Err(crate::ErrorData::invalid_params("tool not found", None));
-[1m[94m...[0m   [1m[92m|[0m
-[1m[94m578[0m [1m[94m|[0m [1m[92m|[0m         Ok(result)
-[1m[94m579[0m [1m[94m|[0m [1m[92m|[0m     }
-    [1m[94m|[0m [1m[92m|_____^[0m
-[1m[92mnote[0m: required because it's used within this `async` fn body
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:91:1
-    [1m[94m|[0m
-[1m[94m 91[0m [1m[94m|[0m #[tool_handler]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^[0m
-[1m[92mnote[0m: required because it's used within this `async` block
-   [1m[94m--> [0mexamples/servers/src/common/task_demo.rs:92:1
-    [1m[94m|[0m
-[1m[94m 92[0m [1m[94m|[0m #[task_handler]
-    [1m[94m|[0m [1m[92m^^^^^^^^^^^^^^^[0m
-    [1m[94m= [0m[1mnote[0m: required for the cast from `Pin<Box<{async block@examples/servers/src/common/task_demo.rs:92:1: 92:16}>>` to `Pin<Box<dyn Future<Output = Result<Box<...>, ...>> + Send>>`
-    [1m[94m= [0m[1mnote[0m: the full name for the type has been written to '/home/runner/work/rust-sdk/rust-sdk/target/debug/examples/servers_complex_auth_streamhttp-744dd7581caaaab8.long-type-6481740063410040282.txt'
-    [1m[94m= [0m[1mnote[0m: consider using `--verbose` to print the full type name to the console
-    [1m[94m= [0m[1mnote[0m: this error originates in the attribute macro `task_handler` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-[1mFor more information about this error, try `rustc --explain E0277`.[0m
-[1m[91merror[0m: could not compile `mcp-server-examples` (example "servers_calculator_stdio") due to 8 previous errors
-[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
-[1m[33mwarning[0m: `mcp-conformance` (bin "conformance-client" test) generated 7 warnings
-[1mSome errors have detailed explanations: E0277, E0432.[0m
-[1mFor more information about an error, try `rustc --explain E0277`.[0m
-[1m[91merror[0m: could not compile `mcp-server-examples` (example "servers_complex_auth_streamhttp") due to 9 previous errors
+===== rmcp_check =====
+status=0
 
 ===== workspace_clippy =====
 status=0
@@ -214,67 +13,59 @@ status=0
 ===== all_feature_tests =====
 status=0
 
+FEATURES=
 ===== rmcp_no_local_tests =====
 status=101
---- last 200 log lines ---
-[1m[92m   Compiling[0m libc v0.2.186
-[1m[92m   Compiling[0m num-traits v0.2.19
-[1m[92m   Compiling[0m sync_wrapper v1.0.2
-[1m[92m   Compiling[0m rmcp v2.2.0 (/home/runner/work/rust-sdk/rust-sdk/crates/rmcp)
-[1m[92m   Compiling[0m rstest_macros v0.26.1
-[1m[92m   Compiling[0m axum-core v0.5.6
-[1m[92m   Compiling[0m chrono v0.4.45
-[1m[92m   Compiling[0m errno v0.3.14
-[1m[92m   Compiling[0m parking_lot_core v0.9.12
-[1m[92m   Compiling[0m parking_lot v0.12.5
-[1m[92m   Compiling[0m signal-hook-registry v1.4.8
-[1m[92m   Compiling[0m socket2 v0.6.4
-[1m[92m   Compiling[0m mio v1.2.1
-[1m[92m   Compiling[0m tokio v1.52.3
-[1m[92m   Compiling[0m schemars v1.2.1
-[1m[92m   Compiling[0m rmcp-macros v2.2.0 (/home/runner/work/rust-sdk/rust-sdk/crates/rmcp-macros)
-[1m[92m   Compiling[0m rstest v0.26.1
-[1m[92m   Compiling[0m url v2.5.8
-[1m[92m   Compiling[0m hyper v1.10.1
-[1m[92m   Compiling[0m tokio-util v0.7.18
-[1m[92m   Compiling[0m tower v0.5.3
-[1m[92m   Compiling[0m hyper-util v0.1.20
-[1m[92m   Compiling[0m axum v0.8.9
-[1m[33mwarning[0m[1m: struct `Sum` is never constructed[0m
-  [1m[94m--> [0mcrates/rmcp/tests/test_prompt_routers.rs:24:8
-   [1m[94m|[0m
-[1m[94m24[0m [1m[94m|[0m struct Sum {
-   [1m[94m|[0m        [1m[33m^^^[0m
-   [1m[94m|[0m
-   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+--- last 300 log lines ---
+   Compiling libc v0.2.186
+   Compiling num-traits v0.2.19
+   Compiling sync_wrapper v1.0.2
+   Compiling rmcp v2.2.0 (/home/runner/work/rust-sdk/rust-sdk/crates/rmcp)
+   Compiling axum-core v0.5.6
+   Compiling rstest_macros v0.26.1
+   Compiling chrono v0.4.45
+   Compiling parking_lot_core v0.9.12
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling mio v1.2.1
+   Compiling socket2 v0.6.4
+   Compiling schemars v1.2.1
+   Compiling tokio v1.52.3
+   Compiling rmcp-macros v2.2.0 (/home/runner/work/rust-sdk/rust-sdk/crates/rmcp-macros)
+   Compiling rstest v0.26.1
+   Compiling url v2.5.8
+   Compiling hyper v1.10.1
+   Compiling tokio-util v0.7.18
+   Compiling tower v0.5.3
+   Compiling hyper-util v0.1.20
+   Compiling axum v0.8.9
+warning: struct `Sum` is never constructed
+  --> crates/rmcp/tests/test_prompt_routers.rs:24:8
+   |
+24 | struct Sum {
+   |        ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
-[1m[33mwarning[0m: `rmcp` (test "test_prompt_routers") generated 1 warning
-[1m[33mwarning[0m[1m: struct `Sum` is never constructed[0m
-  [1m[94m--> [0mcrates/rmcp/tests/test_tool_routers.rs:25:8
-   [1m[94m|[0m
-[1m[94m25[0m [1m[94m|[0m struct Sum {
-   [1m[94m|[0m        [1m[33m^^^[0m
-   [1m[94m|[0m
-   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+warning: `rmcp` (test "test_prompt_routers") generated 1 warning
+error[E0425]: cannot find function `stdio` in module `rmcp::transport`
+   --> crates/rmcp/tests/test_cancelled_response.rs:130:61
+    |
+130 |     let server = WaitForCancelServer.serve(rmcp::transport::stdio()).await?;
+    |                                                             ^^^^^ not found in `rmcp::transport`
+    |
+note: found an item that was configured out
+   --> crates/rmcp/src/transport.rs:94:13
+    |
+ 93 | #[cfg(feature = "transport-io")]
+    |       ------------------------ the item is gated behind the `transport-io` feature
+ 94 | pub use io::stdio;
+    |             ^^^^^
 
-[1m[33mwarning[0m: `rmcp` (test "test_tool_routers") generated 1 warning
-[1m[91merror[E0425][0m[1m: cannot find function `stdio` in module `rmcp::transport`[0m
-   [1m[94m--> [0mcrates/rmcp/tests/test_stdio_response_concurrency.rs:106:61
-    [1m[94m|[0m
-[1m[94m106[0m [1m[94m|[0m     let server = LargeResponseServer.serve(rmcp::transport::stdio()).await?;
-    [1m[94m|[0m                                                             [1m[91m^^^^^[0m [1m[91mnot found in `rmcp::transport`[0m
-    [1m[94m|[0m
-[1m[92mnote[0m: found an item that was configured out
-   [1m[94m--> [0mcrates/rmcp/src/transport.rs:94:13
-    [1m[94m|[0m
-[1m[94m 93[0m [1m[94m|[0m #[cfg(feature = "transport-io")]
-    [1m[94m|[0m       [1m[94m------------------------[0m [1m[94mthe item is gated behind the `transport-io` feature[0m
-[1m[94m 94[0m [1m[94m|[0m pub use io::stdio;
-    [1m[94m|[0m             [1m[92m^^^^^[0m
-
-[1mFor more information about this error, try `rustc --explain E0425`.[0m
-[1m[91merror[0m: could not compile `rmcp` (test "test_stdio_response_concurrency") due to 1 previous error
-[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `rmcp` (test "test_cancelled_response") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
 
 ===== docs =====
 status=0
