@@ -1,0 +1,172 @@
+name: Final verification for issue 974
+
+on:
+  push:
+    branches:
+      - feat/issue-974-client-response-cache
+    paths:
+      - .github/workflows/final-verify-issue-974.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/issue-974-client-response-cache
+          fetch-depth: 0
+
+      - name: Fetch current upstream main
+        run: |
+          git remote add upstream https://github.com/modelcontextprotocol/rust-sdk.git
+          git fetch upstream main
+          test "$(git rev-parse origin/main)" = "$(git rev-parse upstream/main)"
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: |
+          uv python install
+          uv venv
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+
+      - name: Install cargo-public-api
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install commitlint
+        run: |
+          npm install --global @commitlint/cli @commitlint/config-conventional
+          echo "module.exports = {extends: ['@commitlint/config-conventional']}" > /tmp/commitlint.config.js
+
+      - name: Run repository and acceptance checks
+        id: validation
+        shell: bash
+        run: |
+          set +e
+          : > /tmp/issue-974-validation.txt
+          failed=0
+
+          run_check() {
+            name="$1"
+            shift
+            echo "==> $name"
+            "$@"
+            status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "$name=success" | tee -a /tmp/issue-974-validation.txt
+            else
+              echo "$name=failed($status)" | tee -a /tmp/issue-974-validation.txt
+              failed=1
+            fi
+          }
+
+          run_check nightly_format cargo +nightly fmt --all
+          run_check nightly_format_check cargo +nightly fmt --all -- --check
+          run_check whitespace git diff --check
+          run_check workspace_check cargo check --workspace --all-targets --all-features
+          run_check clippy cargo clippy --all-targets --all-features -- -D warnings
+          run_check default_member_tests cargo test --all-features
+
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[] \
+                      | select(startswith("__") | not) \
+                      | select(. != "local")] | join(",")')
+          run_check no_local_tests cargo test -p rmcp --features "$FEATURES"
+          run_check focused_cache_tests cargo test -p rmcp --all-features service::client::tests -- --nocapture
+          run_check cache_hint_tests cargo test -p rmcp --all-features --test test_cache_hints -- --nocapture
+          run_check doctests cargo test -p rmcp --doc --all-features
+          run_check rustdoc env RUSTDOCFLAGS=-Dwarnings cargo doc -p rmcp --all-features --no-deps
+          run_check conformance_tests cargo test --manifest-path conformance/Cargo.toml --all-features
+
+          for dir in examples/*/; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              if [[ "$dir" == *"wasi"* ]]; then
+                rustup target add wasm32-wasip2
+                run_check "example_build_${dir//\//_}" cargo build --manifest-path "$dir/Cargo.toml" --target wasm32-wasip2
+              else
+                run_check "example_build_${dir//\//_}" cargo build --manifest-path "$dir/Cargo.toml" --all-features --tests
+                run_check "example_test_${dir//\//_}" cargo test --manifest-path "$dir/Cargo.toml" --all-features --all-targets
+              fi
+            fi
+          done
+
+          run_check semver_default cargo semver-checks \
+            --package rmcp \
+            --baseline-rev upstream/main \
+            --release-type minor \
+            --only-explicit-features \
+            --features default
+          run_check semver_non_local cargo semver-checks \
+            --package rmcp \
+            --baseline-rev upstream/main \
+            --release-type minor \
+            --only-explicit-features \
+            --features "$FEATURES"
+          run_check public_api_default cargo public-api \
+            --package rmcp -ss diff --deny changed --deny removed --force \
+            upstream/main..HEAD
+          run_check public_api_non_local cargo public-api \
+            --package rmcp --features "$FEATURES" -ss diff \
+            --deny changed --deny removed --force upstream/main..HEAD
+          run_check coverage cargo llvm-cov -p rmcp --all-features --no-report
+
+          if [ "$failed" -ne 0 ]; then
+            cp /tmp/issue-974-validation.txt .issue-974-validation-result.txt
+            git config user.name "starsaintf"
+            git config user.email "52841317+starsaintf@users.noreply.github.com"
+            git add .issue-974-validation-result.txt
+            git commit -m "ci: record issue 974 validation failure" || true
+            git push origin HEAD:feat/issue-974-client-response-cache || true
+            exit 1
+          fi
+
+      - name: Check spelling
+        uses: crate-ci/typos@master
+
+      - name: Squash to one reviewable commit
+        run: |
+          rm .github/workflows/final-verify-issue-974.yml
+          rm -f .issue-974-validation-result.txt
+          git reset --soft upstream/main
+          git add -A
+          git config user.name "starsaintf"
+          git config user.email "52841317+starsaintf@users.noreply.github.com"
+          git commit \
+            -m "feat(client): honor SEP-2549 cache hints" \
+            -m "Add configurable TTL-aware caching for cacheable client responses, authorization-context partitioning for private entries, pagination and notification invalidation, documentation, and regression coverage."
+          npx commitlint --config /tmp/commitlint.config.js --from upstream/main --to HEAD --verbose
+          git push --force-with-lease origin HEAD:feat/issue-974-client-response-cache
