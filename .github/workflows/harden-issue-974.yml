@@ -16,21 +16,14 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Check out issue branch
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: feat/issue-974-client-response-cache
           fetch-depth: 0
 
-      - name: Install stable Rust with Clippy
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Install nightly rustfmt
-        run: rustup toolchain install nightly --component rustfmt
-
-      - name: Run and record repository checks
+      - name: Run repository checks and capture logs
         shell: bash
+        continue-on-error: true
         run: |
           set +e
           : > issue-974-validation-result.txt
@@ -46,23 +39,39 @@ jobs:
             echo "status=${status}" >> issue-974-validation-result.txt
             if [ "$status" -ne 0 ]; then
               failed=1
-              echo "--- last 200 log lines ---" >> issue-974-validation-result.txt
-              tail -n 200 "$log" >> issue-974-validation-result.txt
+              echo "--- last 300 log lines ---" >> issue-974-validation-result.txt
+              tail -n 300 "$log" >> issue-974-validation-result.txt
             fi
             echo >> issue-974-validation-result.txt
           }
 
+          run_check install_stable rustup toolchain install stable --component clippy
+          run_check install_nightly rustup toolchain install nightly --component rustfmt
           run_check nightly_fmt cargo +nightly fmt --all -- --check
           run_check whitespace git diff --check
-          run_check workspace_check cargo check --workspace --all-targets --all-features
-          run_check workspace_clippy cargo clippy --all-targets --all-features -- -D warnings
-          run_check all_feature_tests cargo test --all-features
+          run_check rmcp_check cargo check -p rmcp --all-targets --all-features
+          run_check rmcp_clippy cargo clippy -p rmcp --all-targets --all-features -- -D warnings
+          run_check rmcp_tests cargo test -p rmcp --all-features
 
-          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+          FEATURES=$(cargo metadata --no-deps --format-version 1 2>/tmp/metadata.log \
             | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[] \
                       | select(startswith("__") | not) \
                       | select(. != "local")] | join(",")')
-          run_check rmcp_no_local_tests cargo test -p rmcp --features "$FEATURES"
+          metadata_status=$?
+          echo "===== metadata =====" >> issue-974-validation-result.txt
+          echo "status=${metadata_status}" >> issue-974-validation-result.txt
+          if [ "$metadata_status" -ne 0 ]; then
+            failed=1
+            cat /tmp/metadata.log >> issue-974-validation-result.txt
+          fi
+          echo >> issue-974-validation-result.txt
+          if [ "$metadata_status" -eq 0 ]; then
+            run_check rmcp_no_local_tests cargo test -p rmcp --features "$FEATURES"
+          fi
+
+          run_check workspace_check cargo check --workspace --all-targets --all-features
+          run_check workspace_clippy cargo clippy --all-targets --all-features -- -D warnings
+          run_check all_feature_tests cargo test --all-features
           run_check docs env RUSTDOCFLAGS=-Dwarnings cargo doc -p rmcp --all-features --no-deps
           run_check conformance_build cargo build -p mcp-conformance
 
@@ -70,9 +79,13 @@ jobs:
 
       - name: Commit diagnostic report
         if: always()
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ ! -f issue-974-validation-result.txt ]; then
+            printf 'validation step did not create a report\n' > issue-974-validation-result.txt
+          fi
           git add issue-974-validation-result.txt
           git commit -m "test: record issue 974 validation diagnostics" || true
           git push origin HEAD:feat/issue-974-client-response-cache
