@@ -4,6 +4,7 @@
 pub(super) mod cache;
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
+use cache::CacheGeneration;
 pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
 use thiserror::Error;
 
@@ -404,12 +405,13 @@ impl Peer<RoleClient> {
         cache_key: Option<String>,
         ttl_ms: Option<u64>,
         cache_scope: Option<CacheScope>,
+        generation: CacheGeneration,
         result: ServerResult,
     ) {
         let Some(cache_key) = cache_key else {
             return;
         };
-        self.cache_response(cache_key, result, ttl_ms, cache_scope)
+        self.cache_response_with_generation(cache_key, result, ttl_ms, cache_scope, generation)
             .await;
     }
 
@@ -492,6 +494,7 @@ impl Peer<RoleClient> {
             return Ok(ReadResourceResponse::Complete(result));
         }
 
+        let generation = self.capture_response_cache_generation().await;
         let result = self
             .send_request(ClientRequest::ReadResourceRequest(ReadResourceRequest {
                 method: Default::default(),
@@ -505,6 +508,7 @@ impl Peer<RoleClient> {
                     cache_key,
                     result.ttl_ms,
                     result.cache_scope,
+                    generation,
                     ServerResult::ReadResourceResult(result.clone()),
                 )
                 .await;
@@ -540,6 +544,7 @@ impl Peer<RoleClient> {
         {
             return Ok(result);
         }
+        let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListPromptsRequest(ListPromptsRequest {
@@ -557,6 +562,7 @@ impl Peer<RoleClient> {
                     Some(cache_key),
                     result.ttl_ms,
                     result.cache_scope,
+                    generation,
                     ServerResult::ListPromptsResult(result.clone()),
                 )
                 .await;
@@ -576,6 +582,7 @@ impl Peer<RoleClient> {
         {
             return Ok(result);
         }
+        let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListResourcesRequest(ListResourcesRequest {
@@ -594,6 +601,7 @@ impl Peer<RoleClient> {
                     Some(cache_key),
                     result.ttl_ms,
                     result.cache_scope,
+                    generation,
                     ServerResult::ListResourcesResult(result.clone()),
                 )
                 .await;
@@ -613,6 +621,7 @@ impl Peer<RoleClient> {
         {
             return Ok(result);
         }
+        let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListResourceTemplatesRequest(
@@ -633,6 +642,7 @@ impl Peer<RoleClient> {
                     Some(cache_key),
                     result.ttl_ms,
                     result.cache_scope,
+                    generation,
                     ServerResult::ListResourceTemplatesResult(result.clone()),
                 )
                 .await;
@@ -661,6 +671,7 @@ impl Peer<RoleClient> {
         {
             return Ok(result);
         }
+        let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListToolsRequest(ListToolsRequest {
@@ -678,6 +689,7 @@ impl Peer<RoleClient> {
                     Some(cache_key),
                     result.ttl_ms,
                     result.cache_scope,
+                    generation,
                     ServerResult::ListToolsResult(result.clone()),
                 )
                 .await;
@@ -1448,6 +1460,51 @@ mod tests {
 
         assert!(peer.cached_response(&tool_key).await.is_none());
         assert!(peer.cached_response(&prompt_key).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn invalidation_suppresses_an_in_flight_cache_write() {
+        let peer = disconnected_peer();
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        let generation = peer.capture_response_cache_generation().await;
+        peer.invalidate_tool_cache().await;
+        peer.cache_response_with_generation(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Private))),
+            Some(5_000),
+            Some(CacheScope::Private),
+            generation,
+        )
+        .await;
+
+        assert!(peer.cached_response(&key).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn entry_limit_evicts_the_oldest_response() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(ClientCacheConfig::default().with_max_entries(1))
+            .await;
+        let first = resource_read_cache_key_for_uri("file:///first");
+        let second = resource_read_cache_key_for_uri("file:///second");
+        peer.cache_response(
+            first.clone(),
+            ServerResult::ReadResourceResult(ReadResourceResult::new(Vec::new())),
+            Some(5_000),
+            Some(CacheScope::Private),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        peer.cache_response(
+            second.clone(),
+            ServerResult::ReadResourceResult(ReadResourceResult::new(Vec::new())),
+            Some(5_000),
+            Some(CacheScope::Private),
+        )
+        .await;
+
+        assert!(peer.cached_response(&first).await.is_none());
+        assert!(peer.cached_response(&second).await.is_some());
     }
 
     #[test]

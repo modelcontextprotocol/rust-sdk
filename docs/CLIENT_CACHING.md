@@ -31,6 +31,8 @@ private entries while preserving public entries.
 
 Use `ClientCacheConfig::disabled()` to disable cache reads and writes, or
 `clear_response_cache()` to clear held responses without changing the policy.
+`with_max_entries()` bounds the in-memory store; the default is 512 entries and
+a value of zero removes the limit.
 
 Cache keys include the method and result-affecting parameters: the cursor for
 paginated list methods and the URI for resource reads. MRTR retries containing
@@ -39,3 +41,7 @@ invalidate every cached page for the corresponding method, while resource
 update notifications invalidate only the matching URI. When a cursor request
 fails, all cached pages for that list method are discarded so the next walk can
 restart from the beginning.
+
+Cache invalidation advances an internal generation. Responses from requests that
+were already in flight before an invalidation or authorization-context change are
+not written back into the cache.

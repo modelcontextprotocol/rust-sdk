@@ -218,7 +218,7 @@ impl<R: ServiceRole> Peer<R> {
     /// Missing `cacheScope` is treated as private. This is deliberately more
     /// conservative than the model's backwards-compatible wire default and
     /// prevents an older or malformed server response from becoming shareable.
-    pub(crate) async fn cache_response(
+    pub(crate) async fn cache_response_with_generation(
         &self,
         logical_key: String,
         value: R::PeerResp,
@@ -276,6 +276,19 @@ impl<R: ServiceRole> Peer<R> {
                 scope,
             },
         );
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn cache_response(
+        &self,
+        logical_key: String,
+        value: R::PeerResp,
+        ttl_ms: Option<u64>,
+        cache_scope: Option<CacheScope>,
+    ) {
+        let generation = self.capture_response_cache_generation().await;
+        self.cache_response_with_generation(logical_key, value, ttl_ms, cache_scope, generation)
+            .await;
     }
 
     pub(crate) async fn invalidate_cached_responses(&self, prefix: &str) {
