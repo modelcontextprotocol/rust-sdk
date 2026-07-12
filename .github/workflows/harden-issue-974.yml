@@ -1,4 +1,4 @@
-name: Finalize issue 974 validation
+name: Complete validation for issue 974
 
 on:
   push:
@@ -11,41 +11,38 @@ permissions:
   contents: write
 
 jobs:
-  finalize-and-validate:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Check out issue branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: feat/issue-974-client-response-cache
           fetch-depth: 0
 
-      - name: Install toolchains
-        run: |
-          rustup toolchain install stable --component clippy
-          rustup toolchain install nightly --component rustfmt
+      - name: Install stable Rust with Clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
-      - name: Apply final hardening edits
-        run: |
-          python scripts/finalize_issue_974.py
-          cargo +nightly fmt --all
-          git diff --check
+      - name: Install nightly Rust for formatting and public API checks
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
 
-      - name: Commit hardened implementation
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            crates/rmcp/src/service/client.rs \
-            crates/rmcp/src/service/client/cache.rs \
-            docs/CLIENT_CACHING.md
-          git commit -m "fix(client): prevent stale cache writes" || true
-          git push origin HEAD:feat/issue-974-client-response-cache
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
 
-      - name: Run repository checks and capture logs
+      - name: Install cargo-public-api
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api
+
+      - name: Run and record repository checks
         shell: bash
-        continue-on-error: true
         run: |
           set +e
           : > issue-974-validation-result.txt
@@ -61,39 +58,91 @@ jobs:
             echo "status=${status}" >> issue-974-validation-result.txt
             if [ "$status" -ne 0 ]; then
               failed=1
-              echo "--- last 300 log lines ---" >> issue-974-validation-result.txt
-              tail -n 300 "$log" >> issue-974-validation-result.txt
+              echo "--- last 250 log lines ---" >> issue-974-validation-result.txt
+              tail -n 250 "$log" >> issue-974-validation-result.txt
             fi
             echo >> issue-974-validation-result.txt
           }
+
+          FEATURES=$(python - <<'PY'
+          import json
+          import subprocess
+
+          metadata = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+              text=True,
+          ))
+          package = next(package for package in metadata["packages"] if package["name"] == "rmcp")
+          features = sorted(
+              name for name in package["features"]
+              if not name.startswith("__") and name != "local"
+          )
+          print(",".join(features))
+          PY
+          )
+          echo "FEATURES=${FEATURES}" >> issue-974-validation-result.txt
+          case ",${FEATURES}," in
+            *,transport-io,*) ;;
+            *) echo "required feature transport-io missing" >> issue-974-validation-result.txt; failed=1 ;;
+          esac
 
           run_check nightly_fmt cargo +nightly fmt --all -- --check
           run_check whitespace git diff --check
           run_check rmcp_check cargo check -p rmcp --all-targets --all-features
           run_check workspace_clippy cargo clippy --all-targets --all-features -- -D warnings
           run_check all_feature_tests cargo test --all-features
-
-          FEATURES=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[] \
-                      | select(startswith("__") | not) \
-                      | select(. != "local")] | join(",")')
-          echo "FEATURES=${FEATURES}" >> issue-974-validation-result.txt
           run_check rmcp_no_local_tests cargo test -p rmcp --features "$FEATURES"
-
           run_check docs env RUSTDOCFLAGS=-Dwarnings cargo doc -p rmcp --all-features --no-deps
           run_check conformance_build cargo build -p mcp-conformance
+          run_check semver_default cargo semver-checks --package rmcp --baseline-rev main --release-type minor --only-explicit-features --features default
+          run_check semver_no_local cargo semver-checks --package rmcp --baseline-rev main --release-type minor --only-explicit-features --features "$FEATURES"
+          run_check public_api_default cargo public-api --package rmcp -ss diff --deny changed --deny removed --force main..HEAD
+          run_check public_api_no_local cargo public-api --package rmcp --features "$FEATURES" -ss diff --deny changed --deny removed --force main..HEAD
 
+          echo "===== examples =====" >> issue-974-validation-result.txt
+          examples_failed=0
+          : > /tmp/examples.log
+          for dir in examples/*/; do
+            if [ ! -f "$dir/Cargo.toml" ]; then
+              continue
+            fi
+            if [[ "$dir" == *"wasi"* ]]; then
+              rustup target add wasm32-wasip2 >> /tmp/examples.log 2>&1
+              cargo build --manifest-path "$dir/Cargo.toml" --target wasm32-wasip2 >> /tmp/examples.log 2>&1 || examples_failed=1
+            else
+              cargo build --manifest-path "$dir/Cargo.toml" --all-features --tests >> /tmp/examples.log 2>&1 || examples_failed=1
+              cargo test --manifest-path "$dir/Cargo.toml" --all-features --all-targets >> /tmp/examples.log 2>&1 || examples_failed=1
+            fi
+          done
+          echo "status=${examples_failed}" >> issue-974-validation-result.txt
+          if [ "$examples_failed" -ne 0 ]; then
+            failed=1
+            tail -n 250 /tmp/examples.log >> issue-974-validation-result.txt
+          fi
+          echo >> issue-974-validation-result.txt
           echo "overall_failed=${failed}" >> issue-974-validation-result.txt
 
-      - name: Commit validation report
+      - name: Run spelling check
+        id: typos
+        continue-on-error: true
+        uses: crate-ci/typos@master
+
+      - name: Append spelling result
         if: always()
         shell: bash
         run: |
+          if [ "${{ steps.typos.outcome }}" = "success" ]; then
+            printf '\n===== typos =====\nstatus=0\n' >> issue-974-validation-result.txt
+          else
+            printf '\n===== typos =====\nstatus=1\n' >> issue-974-validation-result.txt
+            sed -i 's/overall_failed=0/overall_failed=1/' issue-974-validation-result.txt
+          fi
+
+      - name: Commit validation report
+        if: always()
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ ! -f issue-974-validation-result.txt ]; then
-            printf 'validation step did not create a report\n' > issue-974-validation-result.txt
-          fi
           git add issue-974-validation-result.txt
-          git commit -m "test: record issue 974 validation diagnostics" || true
+          git commit -m "test: record complete issue 974 validation" || true
           git push origin HEAD:feat/issue-974-client-response-cache
