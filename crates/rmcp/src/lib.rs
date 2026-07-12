@@ -19,7 +19,9 @@ pub use handler::server::wrapper::Json;
 #[cfg(any(feature = "client", feature = "server"))]
 pub use service::{Peer, Service, ServiceError, ServiceExt};
 #[cfg(feature = "client")]
-pub use service::{RoleClient, serve_client};
+pub use service::{
+    ClientCacheConfig, MAX_CLIENT_CACHE_TTL, RoleClient, serve_client,
+};
 #[cfg(feature = "server")]
 pub use service::{RoleServer, serve_server};
 
