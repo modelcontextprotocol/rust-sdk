@@ -1507,6 +1507,35 @@ mod tests {
         assert!(peer.cached_response(&second).await.is_some());
     }
 
+    #[tokio::test]
+    async fn cursor_transport_error_discards_all_cached_pages() {
+        let peer = disconnected_peer();
+        let mut cached_keys = Vec::new();
+        for cursor in [None::<String>, Some("page-a".into())] {
+            let params =
+                cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
+            let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+            peer.cache_response(
+                key.clone(),
+                ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Public))),
+                Some(5_000),
+                Some(CacheScope::Public),
+            )
+            .await;
+            cached_keys.push(key);
+        }
+
+        let missing_page =
+            Some(PaginatedRequestParams::default().with_cursor(Some("missing-page".into())));
+        assert!(matches!(
+            peer.list_tools(missing_page).await,
+            Err(ServiceError::TransportClosed)
+        ));
+        for key in cached_keys {
+            assert!(peer.cached_response(&key).await.is_none());
+        }
+    }
+
     #[test]
     fn mrtr_retry_parameters_are_not_cacheable() {
         let params = ReadResourceRequestParams::new("file:///example.txt")

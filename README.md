@@ -74,6 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 </details>
 
+For client-side TTL caching, configuration, and authorization partitioning, see [Client response caching](docs/CLIENT_CACHING.md).
+
 ### Build a Server
 
 <details>
