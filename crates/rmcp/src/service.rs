@@ -266,6 +266,8 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
 }
 
+#[cfg(feature = "client")]
+use std::time::Instant;
 use std::{
     collections::{HashMap, VecDeque},
     ops::Deref,
@@ -337,6 +339,17 @@ impl ProgressNotificationToken for ServerNotification {
 
 type Responder<T> = tokio::sync::oneshot::Sender<T>;
 type ProgressTimeoutWatchers = Arc<tokio::sync::RwLock<HashMap<ProgressToken, mpsc::Sender<()>>>>;
+
+#[cfg(feature = "client")]
+#[derive(Debug, Clone)]
+struct CachedPeerResponse<T> {
+    value: T,
+    expires_at: Instant,
+}
+
+#[cfg(feature = "client")]
+type PeerResponseCache<R> =
+    Arc<tokio::sync::RwLock<HashMap<String, CachedPeerResponse<<R as ServiceRole>::PeerResp>>>>;
 
 /// A handle to a remote request
 ///
@@ -527,6 +540,8 @@ pub struct Peer<R: ServiceRole> {
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
     progress_timeout_watchers: ProgressTimeoutWatchers,
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
+    #[cfg(feature = "client")]
+    response_cache: PeerResponseCache<R>,
 }
 
 impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
@@ -588,6 +603,8 @@ impl<R: ServiceRole> Peer<R> {
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 progress_timeout_watchers: Default::default(),
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
+                #[cfg(feature = "client")]
+                response_cache: Default::default(),
             },
             rx,
         )
@@ -705,6 +722,47 @@ impl<R: ServiceRole> Peer<R> {
 
     pub fn is_transport_closed(&self) -> bool {
         self.tx.is_closed()
+    }
+
+    /// Return a fresh cached peer response and remove an expired entry on access.
+    ///
+    /// The cache belongs to one `Peer`, so cloned handles share it while separate
+    /// client connections and authorization contexts remain isolated.
+    #[cfg(feature = "client")]
+    pub(crate) async fn cached_response(&self, key: &str) -> Option<R::PeerResp> {
+        let now = Instant::now();
+        let mut cache = self.response_cache.write().await;
+        if let Some(entry) = cache.get(key)
+            && entry.expires_at > now
+        {
+            return Some(entry.value.clone());
+        }
+        cache.remove(key);
+        None
+    }
+
+    /// Store a response for a positive TTL. Expired entries are opportunistically
+    /// removed so a client that sees many one-off keys does not retain stale pages.
+    #[cfg(feature = "client")]
+    pub(crate) async fn cache_response(&self, key: String, value: R::PeerResp, ttl: Duration) {
+        if ttl.is_zero() {
+            return;
+        }
+        let now = Instant::now();
+        let Some(expires_at) = now.checked_add(ttl) else {
+            return;
+        };
+        let mut cache = self.response_cache.write().await;
+        cache.retain(|_, entry| entry.expires_at > now);
+        cache.insert(key, CachedPeerResponse { value, expires_at });
+    }
+
+    #[cfg(feature = "client")]
+    pub(crate) async fn invalidate_cached_responses(&self, prefix: &str) {
+        self.response_cache
+            .write()
+            .await
+            .retain(|key, _| !key.starts_with(prefix));
     }
 }
 

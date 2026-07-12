@@ -273,6 +273,32 @@ where
     Ok(serve_inner(service, transport, peer, peer_rx, ct))
 }
 
+const TOOL_LIST_CACHE_PREFIX: &str = "tools/list:";
+const PROMPT_LIST_CACHE_PREFIX: &str = "prompts/list:";
+const RESOURCE_LIST_CACHE_PREFIX: &str = "resources/list:";
+const RESOURCE_TEMPLATE_LIST_CACHE_PREFIX: &str = "resources/templates/list:";
+const RESOURCE_READ_CACHE_PREFIX: &str = "resources/read:";
+
+fn response_cache_key<T: serde::Serialize>(prefix: &str, params: &T) -> Option<String> {
+    let value = serde_json::to_value(params).ok()?;
+
+    // SEP-2322 retry rounds may contain user-specific input and request state.
+    // Never cache those rounds, even when a server attaches a TTL to the final result.
+    let is_mrtr_retry = value
+        .get("inputResponses")
+        .is_some_and(|value| !value.is_null())
+        || value
+            .get("requestState")
+            .is_some_and(|value| !value.is_null());
+    if is_mrtr_retry {
+        return None;
+    }
+
+    serde_json::to_string(&value)
+        .ok()
+        .map(|params| format!("{prefix}{params}"))
+}
+
 macro_rules! method {
     ($(#[$meta:meta])* peer_req $method:ident $Req:ident() => $Resp: ident ) => {
         $(#[$meta])*
@@ -363,6 +389,36 @@ macro_rules! method {
 }
 
 impl Peer<RoleClient> {
+    async fn cache_result(&self, key: Option<String>, ttl_ms: Option<u64>, result: ServerResult) {
+        let (Some(key), Some(ttl_ms)) = (key, ttl_ms.filter(|ttl_ms| *ttl_ms > 0)) else {
+            return;
+        };
+        self.cache_response(key, result, Duration::from_millis(ttl_ms))
+            .await;
+    }
+
+    pub(crate) async fn invalidate_tool_cache(&self) {
+        self.invalidate_cached_responses(TOOL_LIST_CACHE_PREFIX)
+            .await;
+    }
+
+    pub(crate) async fn invalidate_prompt_cache(&self) {
+        self.invalidate_cached_responses(PROMPT_LIST_CACHE_PREFIX)
+            .await;
+    }
+
+    pub(crate) async fn invalidate_resource_list_cache(&self) {
+        self.invalidate_cached_responses(RESOURCE_LIST_CACHE_PREFIX)
+            .await;
+        self.invalidate_cached_responses(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX)
+            .await;
+    }
+
+    pub(crate) async fn invalidate_resource_read_cache(&self) {
+        self.invalidate_cached_responses(RESOURCE_READ_CACHE_PREFIX)
+            .await;
+    }
+
     /// Send one `tools/call` request and return either a final result or an MRTR
     /// `InputRequiredResult` without driving any follow-up rounds.
     pub async fn call_tool_once(
@@ -413,6 +469,13 @@ impl Peer<RoleClient> {
         &self,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResponse, ServiceError> {
+        let cache_key = response_cache_key(RESOURCE_READ_CACHE_PREFIX, &params);
+        if let Some(key) = cache_key.as_deref()
+            && let Some(ServerResult::ReadResourceResult(result)) = self.cached_response(key).await
+        {
+            return Ok(ReadResourceResponse::Complete(result));
+        }
+
         let result = self
             .send_request(ClientRequest::ReadResourceRequest(ReadResourceRequest {
                 method: Default::default(),
@@ -421,7 +484,15 @@ impl Peer<RoleClient> {
             }))
             .await?;
         match result {
-            ServerResult::ReadResourceResult(result) => Ok(ReadResourceResponse::Complete(result)),
+            ServerResult::ReadResourceResult(result) => {
+                self.cache_result(
+                    cache_key,
+                    result.ttl_ms,
+                    ServerResult::ReadResourceResult(result.clone()),
+                )
+                .await;
+                Ok(ReadResourceResponse::Complete(result))
+            }
             ServerResult::InputRequiredResult(result) => {
                 Ok(ReadResourceResponse::InputRequired(result))
             }
@@ -438,14 +509,146 @@ impl Peer<RoleClient> {
         peer_req set_level SetLevelRequest(SetLevelRequestParams)
     );
     method!(peer_req get_prompt GetPromptRequest(GetPromptRequestParams) => GetPromptResult);
-    method!(peer_req list_prompts ListPromptsRequest(PaginatedRequestParams)? => ListPromptsResult);
-    method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParams)? => ListResourcesResult);
-    method!(peer_req list_resource_templates ListResourceTemplatesRequest(PaginatedRequestParams)? => ListResourceTemplatesResult);
-    method!(peer_req read_resource ReadResourceRequest(ReadResourceRequestParams) => ReadResourceResult);
     method!(peer_req subscribe SubscribeRequest(SubscribeRequestParams) );
     method!(peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParams));
     method!(peer_req call_tool CallToolRequest(CallToolRequestParams) => CallToolResult);
-    method!(peer_req list_tools ListToolsRequest(PaginatedRequestParams)? => ListToolsResult);
+
+    pub async fn list_prompts(
+        &self,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListPromptsResult, ServiceError> {
+        let cache_key = response_cache_key(PROMPT_LIST_CACHE_PREFIX, &params);
+        if let Some(key) = cache_key.as_deref()
+            && let Some(ServerResult::ListPromptsResult(result)) = self.cached_response(key).await
+        {
+            return Ok(result);
+        }
+        let result = self
+            .send_request(ClientRequest::ListPromptsRequest(ListPromptsRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::ListPromptsResult(result) => {
+                self.cache_result(
+                    cache_key,
+                    result.ttl_ms,
+                    ServerResult::ListPromptsResult(result.clone()),
+                )
+                .await;
+                Ok(result)
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    pub async fn list_resources(
+        &self,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListResourcesResult, ServiceError> {
+        let cache_key = response_cache_key(RESOURCE_LIST_CACHE_PREFIX, &params);
+        if let Some(key) = cache_key.as_deref()
+            && let Some(ServerResult::ListResourcesResult(result)) = self.cached_response(key).await
+        {
+            return Ok(result);
+        }
+        let result = self
+            .send_request(ClientRequest::ListResourcesRequest(ListResourcesRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::ListResourcesResult(result) => {
+                self.cache_result(
+                    cache_key,
+                    result.ttl_ms,
+                    ServerResult::ListResourcesResult(result.clone()),
+                )
+                .await;
+                Ok(result)
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListResourceTemplatesResult, ServiceError> {
+        let cache_key = response_cache_key(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX, &params);
+        if let Some(key) = cache_key.as_deref()
+            && let Some(ServerResult::ListResourceTemplatesResult(result)) =
+                self.cached_response(key).await
+        {
+            return Ok(result);
+        }
+        let result = self
+            .send_request(ClientRequest::ListResourceTemplatesRequest(
+                ListResourceTemplatesRequest {
+                    method: Default::default(),
+                    params,
+                    extensions: Default::default(),
+                },
+            ))
+            .await?;
+        match result {
+            ServerResult::ListResourceTemplatesResult(result) => {
+                self.cache_result(
+                    cache_key,
+                    result.ttl_ms,
+                    ServerResult::ListResourceTemplatesResult(result.clone()),
+                )
+                .await;
+                Ok(result)
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    pub async fn read_resource(
+        &self,
+        params: ReadResourceRequestParams,
+    ) -> Result<ReadResourceResult, ServiceError> {
+        match self.read_resource_once(params).await? {
+            ReadResourceResponse::Complete(result) => Ok(result),
+            ReadResourceResponse::InputRequired(_) => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    pub async fn list_tools(
+        &self,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListToolsResult, ServiceError> {
+        let cache_key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        if let Some(key) = cache_key.as_deref()
+            && let Some(ServerResult::ListToolsResult(result)) = self.cached_response(key).await
+        {
+            return Ok(result);
+        }
+        let result = self
+            .send_request(ClientRequest::ListToolsRequest(ListToolsRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::ListToolsResult(result) => {
+                self.cache_result(
+                    cache_key,
+                    result.ttl_ms,
+                    ServerResult::ListToolsResult(result.clone()),
+                )
+                .await;
+                Ok(result)
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -915,5 +1118,87 @@ where
             format!("failed to serialize MRTR input response: {error}"),
             None,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn disconnected_peer() -> Peer<RoleClient> {
+        let (peer, receiver) =
+            Peer::<RoleClient>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
+        drop(receiver);
+        peer
+    }
+
+    #[tokio::test]
+    async fn list_tools_returns_a_fresh_cached_page_without_transport_io() {
+        let peer = disconnected_peer();
+        let params = None::<PaginatedRequestParams>;
+        let key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params).unwrap();
+        let expected = ListToolsResult::with_all_items(Vec::new()).with_ttl_ms(5_000);
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(expected.clone()),
+            Duration::from_secs(5),
+        )
+        .await;
+
+        assert_eq!(peer.list_tools(params).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn expired_entries_fall_through_to_the_transport() {
+        let peer = disconnected_peer();
+        let params = None::<PaginatedRequestParams>;
+        let key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params).unwrap();
+        let result = ListToolsResult::with_all_items(Vec::new()).with_ttl_ms(1);
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(result),
+            Duration::from_millis(1),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        assert!(matches!(
+            peer.list_tools(params).await,
+            Err(ServiceError::TransportClosed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn tool_invalidation_does_not_remove_prompt_pages() {
+        let peer = disconnected_peer();
+        let params = None::<PaginatedRequestParams>;
+        let tool_key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params).unwrap();
+        let prompt_key = response_cache_key(PROMPT_LIST_CACHE_PREFIX, &params).unwrap();
+        peer.cache_response(
+            tool_key.clone(),
+            ServerResult::ListToolsResult(ListToolsResult::with_all_items(Vec::new())),
+            Duration::from_secs(5),
+        )
+        .await;
+        peer.cache_response(
+            prompt_key.clone(),
+            ServerResult::ListPromptsResult(ListPromptsResult::with_all_items(Vec::new())),
+            Duration::from_secs(5),
+        )
+        .await;
+
+        peer.invalidate_tool_cache().await;
+
+        assert!(peer.cached_response(&tool_key).await.is_none());
+        assert!(peer.cached_response(&prompt_key).await.is_some());
+    }
+
+    #[test]
+    fn mrtr_retry_parameters_are_not_cacheable() {
+        let params = serde_json::json!({
+            "uri": "file:///example.txt",
+            "inputResponses": { "approval": true }
+        });
+        assert!(response_cache_key(RESOURCE_READ_CACHE_PREFIX, &params).is_none());
     }
 }
