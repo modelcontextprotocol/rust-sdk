@@ -1,4 +1,4 @@
-name: Apply final issue 974 refinements
+name: Verify and apply Rust SDK issue 974 refinements
 
 on:
   push:
@@ -11,35 +11,34 @@ permissions:
   contents: write
 
 jobs:
-  apply:
+  verify-and-apply:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
         with:
           ref: feat/issue-974-client-response-cache
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
-      - run: rustup toolchain install nightly --component rustfmt
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt
 
-      - name: Apply deterministic patch
-        run: |
-          curl --fail --silent --show-error --location \
-            https://raw.githubusercontent.com/starsaintf/codex-skills-pack/ci/rust-sdk-issue-974-validation/ci/issue_974_final_patch.py \
-            --output /tmp/issue_974_final_patch.py
-          python3 /tmp/issue_974_final_patch.py
+      - name: Apply repository-local deterministic patch
+        run: python3 ci/issue_974_final_patch.py
 
-      - name: Format and verify
+      - name: Format and verify whitespace
         run: |
           cargo +nightly fmt --all
           cargo +nightly fmt --all -- --check
           git diff --check
 
-      - name: Run focused and repository checks
+      - name: Run issue-specific and repository checks
         run: |
           cargo test -p rmcp --all-features service::client::tests -- --nocapture
           cargo test -p rmcp --all-features --test test_tool_disable_notification -- --nocapture
@@ -52,11 +51,18 @@ jobs:
                       | select(. != "local")] | join(",")')
           cargo test -p rmcp --features "$FEATURES"
 
-      - name: Commit verified refinements
+      - name: Commit verified Rust SDK changes
         run: |
-          rm .github/workflows/apply-issue-974-final.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix(client): complete response cache semantics"
-          git push origin HEAD:feat/issue-974-client-response-cache
+          git add \
+            crates/rmcp/src/service/client.rs \
+            crates/rmcp/src/service/client/cache.rs \
+            crates/rmcp/tests/test_tool_disable_notification.rs \
+            docs/CLIENT_CACHING.md
+          if git diff --cached --quiet; then
+            echo "No code changes to commit"
+          else
+            git commit -m "fix(client): complete response cache semantics"
+            git push origin HEAD:feat/issue-974-client-response-cache
+          fi
