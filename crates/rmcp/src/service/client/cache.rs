@@ -37,6 +37,10 @@ pub struct ClientCacheConfig {
     /// existing connection should set this value and update it whenever the
     /// authorization context changes.
     pub private_partition: Option<String>,
+    /// Maximum number of responses retained by the in-memory cache.
+    ///
+    /// A value of zero disables the size limit.
+    pub max_entries: usize,
 }
 
 impl Default for ClientCacheConfig {
@@ -46,6 +50,7 @@ impl Default for ClientCacheConfig {
             default_ttl: Duration::ZERO,
             max_ttl: MAX_CLIENT_CACHE_TTL,
             private_partition: None,
+            max_entries: 512,
         }
     }
 }
@@ -76,6 +81,12 @@ impl ClientCacheConfig {
         self.private_partition = Some(partition.into());
         self
     }
+
+    /// Sets the maximum number of retained responses.
+    pub fn with_max_entries(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -94,13 +105,18 @@ struct CacheKey {
 struct CachedPeerResponse<T> {
     value: T,
     expires_at: Instant,
+    inserted_at: Instant,
     scope: CacheScope,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CacheGeneration(u64);
 
 #[derive(Debug)]
 pub(crate) struct PeerResponseCacheState<R: ServiceRole> {
     entries: HashMap<CacheKey, CachedPeerResponse<R::PeerResp>>,
     config: ClientCacheConfig,
+    generation: u64,
 }
 
 impl<R: ServiceRole> Default for PeerResponseCacheState<R> {
@@ -108,6 +124,23 @@ impl<R: ServiceRole> Default for PeerResponseCacheState<R> {
         Self {
             entries: HashMap::new(),
             config: ClientCacheConfig::default(),
+            generation: 0,
+        }
+    }
+}
+
+impl<R: ServiceRole> PeerResponseCacheState<R> {
+    fn trim_to_limit(&mut self) {
+        while self.config.max_entries > 0 && self.entries.len() > self.config.max_entries {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.inserted_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest_key);
         }
     }
 }
@@ -138,6 +171,16 @@ impl<R: ServiceRole> Peer<R> {
         Self::cache_key(logical_key, partition)
     }
 
+    /// Captures the cache generation before a request crosses the transport.
+    ///
+    /// Any configuration change, explicit clear, or notification invalidation
+    /// advances the generation. A response from an older generation is not
+    /// written back, preventing an in-flight stale response from undoing an
+    /// invalidation.
+    pub(crate) async fn capture_response_cache_generation(&self) -> CacheGeneration {
+        CacheGeneration(self.response_cache.read().await.generation)
+    }
+
     /// Returns a fresh cached response, preferring the current private partition
     /// before the public partition. Expired entries are removed on access.
     pub(crate) async fn cached_response(&self, logical_key: &str) -> Option<R::PeerResp> {
@@ -151,18 +194,20 @@ impl<R: ServiceRole> Peer<R> {
             logical_key,
             CachePartition::Private(Self::private_partition(&cache.config)),
         );
-        if let Some(entry) = cache.entries.get(&private_key) {
-            if entry.expires_at > now && entry.scope == CacheScope::Private {
-                return Some(entry.value.clone());
-            }
+        if let Some(entry) = cache.entries.get(&private_key)
+            && entry.expires_at > now
+            && entry.scope == CacheScope::Private
+        {
+            return Some(entry.value.clone());
         }
         cache.entries.remove(&private_key);
 
         let public_key = Self::cache_key(logical_key, CachePartition::Public);
-        if let Some(entry) = cache.entries.get(&public_key) {
-            if entry.expires_at > now && entry.scope == CacheScope::Public {
-                return Some(entry.value.clone());
-            }
+        if let Some(entry) = cache.entries.get(&public_key)
+            && entry.expires_at > now
+            && entry.scope == CacheScope::Public
+        {
+            return Some(entry.value.clone());
         }
         cache.entries.remove(&public_key);
         None
@@ -179,10 +224,11 @@ impl<R: ServiceRole> Peer<R> {
         value: R::PeerResp,
         ttl_ms: Option<u64>,
         cache_scope: Option<CacheScope>,
+        generation: CacheGeneration,
     ) {
         let now = Instant::now();
         let mut cache = self.response_cache.write().await;
-        if !cache.config.enabled {
+        if !cache.config.enabled || generation.0 != cache.generation {
             return;
         }
 
@@ -208,28 +254,42 @@ impl<R: ServiceRole> Peer<R> {
 
         cache.entries.retain(|_, entry| entry.expires_at > now);
         cache.entries.remove(&opposite_key);
+
+        if cache.config.max_entries > 0
+            && !cache.entries.contains_key(&target_key)
+            && cache.entries.len() >= cache.config.max_entries
+            && let Some(oldest_key) = cache
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.inserted_at)
+                .map(|(key, _)| key.clone())
+        {
+            cache.entries.remove(&oldest_key);
+        }
+
         cache.entries.insert(
             target_key,
             CachedPeerResponse {
                 value,
                 expires_at,
+                inserted_at: now,
                 scope,
             },
         );
     }
 
     pub(crate) async fn invalidate_cached_responses(&self, prefix: &str) {
-        self.response_cache
-            .write()
-            .await
+        let mut cache = self.response_cache.write().await;
+        cache.generation = cache.generation.wrapping_add(1);
+        cache
             .entries
             .retain(|key, _| !key.logical_key.starts_with(prefix));
     }
 
     pub(crate) async fn invalidate_cached_response(&self, logical_key: &str) {
-        self.response_cache
-            .write()
-            .await
+        let mut cache = self.response_cache.write().await;
+        cache.generation = cache.generation.wrapping_add(1);
+        cache
             .entries
             .retain(|key, _| key.logical_key != logical_key);
     }
@@ -239,11 +299,17 @@ impl Peer<RoleClient> {
     /// Replaces the response-cache configuration.
     ///
     /// Changing the private partition invalidates private entries from the old
-    /// authorization context. Disabling the cache clears every entry.
+    /// authorization context. Disabling the cache clears every entry. Any
+    /// configuration change also suppresses writes from requests that were
+    /// already in flight under the previous configuration.
     pub async fn set_response_cache_config(&self, config: ClientCacheConfig) {
         let mut cache = self.response_cache.write().await;
+        let config_changed = cache.config != config;
         let partition_changed = cache.config.private_partition != config.private_partition;
         cache.config = config;
+        if config_changed {
+            cache.generation = cache.generation.wrapping_add(1);
+        }
         if !cache.config.enabled {
             cache.entries.clear();
         } else if partition_changed {
@@ -251,6 +317,7 @@ impl Peer<RoleClient> {
                 .entries
                 .retain(|_, entry| entry.scope == CacheScope::Public);
         }
+        cache.trim_to_limit();
     }
 
     /// Returns a snapshot of the active response-cache configuration.
@@ -260,6 +327,8 @@ impl Peer<RoleClient> {
 
     /// Clears every cached client response without changing the configuration.
     pub async fn clear_response_cache(&self) {
-        self.response_cache.write().await.entries.clear();
+        let mut cache = self.response_cache.write().await;
+        cache.generation = cache.generation.wrapping_add(1);
+        cache.entries.clear();
     }
 }
