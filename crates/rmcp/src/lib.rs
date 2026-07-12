@@ -16,12 +16,10 @@ pub use handler::client::ClientHandler;
 pub use handler::server::ServerHandler;
 #[cfg(feature = "server")]
 pub use handler::server::wrapper::Json;
+#[cfg(feature = "client")]
+pub use service::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL, RoleClient, serve_client};
 #[cfg(any(feature = "client", feature = "server"))]
 pub use service::{Peer, Service, ServiceError, ServiceExt};
-#[cfg(feature = "client")]
-pub use service::{
-    ClientCacheConfig, MAX_CLIENT_CACHE_TTL, RoleClient, serve_client,
-};
 #[cfg(feature = "server")]
 pub use service::{RoleServer, serve_server};
 
