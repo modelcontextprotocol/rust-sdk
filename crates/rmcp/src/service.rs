@@ -527,6 +527,8 @@ pub struct Peer<R: ServiceRole> {
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
     progress_timeout_watchers: ProgressTimeoutWatchers,
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
+    #[cfg(feature = "client")]
+    response_cache: client::cache::PeerResponseCache<R>,
 }
 
 impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
@@ -588,6 +590,8 @@ impl<R: ServiceRole> Peer<R> {
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 progress_timeout_watchers: Default::default(),
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
+                #[cfg(feature = "client")]
+                response_cache: Default::default(),
             },
             rx,
         )

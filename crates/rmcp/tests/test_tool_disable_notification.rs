@@ -9,7 +9,7 @@ use std::sync::{
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRoute, tool::ToolCallContext},
-    model::{CallToolResponse, CallToolResult, ServerCapabilities, ServerInfo, Tool},
+    model::{CacheScope, CallToolResponse, CallToolResult, ServerCapabilities, ServerInfo, Tool},
     service::{MaybeSendFuture, NotificationContext},
 };
 use tokio::sync::{Notify, RwLock};
@@ -19,6 +19,7 @@ struct TestToolServer {
     router: Arc<RwLock<rmcp::handler::server::router::tool::ToolRouter<Self>>>,
     trigger_disable: Arc<Notify>,
     trigger_enable: Arc<Notify>,
+    list_count: Arc<AtomicUsize>,
 }
 
 impl TestToolServer {
@@ -36,6 +37,7 @@ impl TestToolServer {
             router: Arc::new(RwLock::new(tool_router)),
             trigger_disable: Arc::new(Notify::new()),
             trigger_enable: Arc::new(Notify::new()),
+            list_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -60,11 +62,14 @@ impl ServerHandler for TestToolServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        self.list_count.fetch_add(1, Ordering::SeqCst);
         let router = self.router.read().await;
         Ok(rmcp::model::ListToolsResult {
             tools: router.list_all(),
             ..Default::default()
-        })
+        }
+        .with_ttl_ms(60_000)
+        .with_cache_scope(CacheScope::Public))
     }
 
     fn on_initialized(
@@ -128,6 +133,7 @@ async fn test_disable_enable_sends_tool_list_changed() {
     let server = TestToolServer::new();
     let trigger_disable = server.trigger_disable.clone();
     let trigger_enable = server.trigger_enable.clone();
+    let list_count = server.list_count.clone();
 
     let client = TestToolClient::new();
     let notification_count = client.notification_count.clone();
@@ -140,6 +146,11 @@ async fn test_disable_enable_sends_tool_list_changed() {
 
     let tools = client_service.peer().list_tools(None).await.unwrap();
     assert_eq!(tools.tools.len(), 2);
+    assert_eq!(list_count.load(Ordering::SeqCst), 1);
+
+    let cached_tools = client_service.peer().list_tools(None).await.unwrap();
+    assert_eq!(cached_tools.tools.len(), 2);
+    assert_eq!(list_count.load(Ordering::SeqCst), 1);
 
     trigger_disable.notify_one();
     tokio::time::timeout(std::time::Duration::from_secs(5), client_notify.notified())
@@ -150,6 +161,7 @@ async fn test_disable_enable_sends_tool_list_changed() {
     let tools = client_service.peer().list_tools(None).await.unwrap();
     assert_eq!(tools.tools.len(), 1);
     assert_eq!(tools.tools[0].name, "tool_b");
+    assert_eq!(list_count.load(Ordering::SeqCst), 2);
 
     trigger_enable.notify_one();
     tokio::time::timeout(std::time::Duration::from_secs(5), client_notify.notified())
@@ -159,6 +171,7 @@ async fn test_disable_enable_sends_tool_list_changed() {
 
     let tools = client_service.peer().list_tools(None).await.unwrap();
     assert_eq!(tools.tools.len(), 2);
+    assert_eq!(list_count.load(Ordering::SeqCst), 3);
 
     client_service.cancel().await.unwrap();
     server_handle.abort();
