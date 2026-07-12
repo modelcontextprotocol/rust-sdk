@@ -7,6 +7,10 @@ on:
     paths:
       - .github/workflows/harden-issue-974.yml
 
+concurrency:
+  group: issue-974-branch-validation
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -30,6 +34,83 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
+
+      - name: Add final regression coverage and documentation link
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          readme = Path("README.md")
+          readme_text = readme.read_text()
+          link = "For client-side TTL caching, configuration, and authorization partitioning, see [Client response caching](docs/CLIENT_CACHING.md)."
+          marker = "</details>\n\n### Build a Server"
+          if link not in readme_text:
+              if marker not in readme_text:
+                  raise RuntimeError("README client-section marker not found")
+              readme_text = readme_text.replace(
+                  marker,
+                  f"</details>\n\n{link}\n\n### Build a Server",
+                  1,
+              )
+              readme.write_text(readme_text)
+
+          client = Path("crates/rmcp/src/service/client.rs")
+          client_text = client.read_text()
+          test_name = "cursor_transport_error_discards_all_cached_pages"
+          if test_name not in client_text:
+              marker = "    #[test]\n    fn mrtr_retry_parameters_are_not_cacheable() {"
+              if marker not in client_text:
+                  raise RuntimeError("client test insertion marker not found")
+              test = '''    #[tokio::test]
+              async fn cursor_transport_error_discards_all_cached_pages() {
+                  let peer = disconnected_peer();
+                  let mut cached_keys = Vec::new();
+                  for cursor in [None::<String>, Some("page-a".into())] {
+                      let params = cursor.map(|cursor| {
+                          PaginatedRequestParams::default().with_cursor(Some(cursor))
+                      });
+                      let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+                      peer.cache_response(
+                          key.clone(),
+                          ServerResult::ListToolsResult(tools_result(
+                              Some(5_000),
+                              Some(CacheScope::Public),
+                          )),
+                          Some(5_000),
+                          Some(CacheScope::Public),
+                      )
+                      .await;
+                      cached_keys.push(key);
+                  }
+
+                  let missing_page = Some(
+                      PaginatedRequestParams::default()
+                          .with_cursor(Some("missing-page".into())),
+                  );
+                  assert!(matches!(
+                      peer.list_tools(missing_page).await,
+                      Err(ServiceError::TransportClosed)
+                  ));
+                  for key in cached_keys {
+                      assert!(peer.cached_response(&key).await.is_none());
+                  }
+              }
+
+          '''
+              client_text = client_text.replace(marker, test + marker, 1)
+              client.write_text(client_text)
+          PY
+          cargo +nightly fmt --all
+          git diff --check
+
+      - name: Commit final source edits
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md crates/rmcp/src/service/client.rs
+          git commit -m "test(client): cover invalid cursor cache eviction" || true
+          git push origin HEAD:feat/issue-974-client-response-cache
 
       - name: Install cargo-semver-checks
         uses: taiki-e/install-action@v2
