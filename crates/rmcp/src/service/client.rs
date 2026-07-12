@@ -1,26 +1,30 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
+
+pub(super) mod cache;
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
+pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
 use thiserror::Error;
 
 use super::*;
 use crate::{
     model::{
-        ArgumentInfo, CallToolRequest, CallToolRequestParams, CallToolResponse, CallToolResult,
-        CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
-        ClientNotification, ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams,
-        CompleteResult, CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, ErrorData,
-        GetExtensions, GetMeta, GetPromptRequest, GetPromptRequestParams, GetPromptResponse,
-        GetPromptResult, InitializeRequest, InitializedNotification, InputRequest,
-        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
-        ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
-        ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
-        NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
-        ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-        Reference, RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage,
-        ServerNotification, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams,
-        SubscribeRequest, SubscribeRequestParams, UnsubscribeRequest, UnsubscribeRequestParams,
+        ArgumentInfo, CacheScope, CallToolRequest, CallToolRequestParams, CallToolResponse,
+        CallToolResult, CancelledNotification, CancelledNotificationParam, ClientInfo,
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, ClientResult, CompleteRequest,
+        CompleteRequestParams, CompleteResult, CompletionContext, CompletionInfo,
+        DEFAULT_MRTR_MAX_ROUNDS, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
+        GetPromptRequestParams, GetPromptResponse, GetPromptResult, InitializeRequest,
+        InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
+        JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+        ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
+        ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotification,
+        ProgressNotificationParam, ReadResourceRequest, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Reference, RequestId,
+        RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
+        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SubscribeRequest,
+        SubscribeRequestParams, UnsubscribeRequest, UnsubscribeRequestParams,
     },
     transport::DynamicTransportError,
 };
@@ -279,24 +283,30 @@ const RESOURCE_LIST_CACHE_PREFIX: &str = "resources/list:";
 const RESOURCE_TEMPLATE_LIST_CACHE_PREFIX: &str = "resources/templates/list:";
 const RESOURCE_READ_CACHE_PREFIX: &str = "resources/read:";
 
-fn response_cache_key<T: serde::Serialize>(prefix: &str, params: &T) -> Option<String> {
-    let value = serde_json::to_value(params).ok()?;
+fn list_response_cache_key(prefix: &str, params: &Option<PaginatedRequestParams>) -> String {
+    let cursor = params.as_ref().and_then(|params| params.cursor.as_deref());
+    let cursor = serde_json::to_string(&cursor)
+        .expect("serializing an optional pagination cursor cannot fail");
+    format!("{prefix}{cursor}")
+}
 
-    // SEP-2322 retry rounds may contain user-specific input and request state.
-    // Never cache those rounds, even when a server attaches a TTL to the final result.
-    let is_mrtr_retry = value
-        .get("inputResponses")
-        .is_some_and(|value| !value.is_null())
-        || value
-            .get("requestState")
-            .is_some_and(|value| !value.is_null());
-    if is_mrtr_retry {
+fn resource_read_cache_key(params: &ReadResourceRequestParams) -> Option<String> {
+    if params.input_responses.is_some() || params.request_state.is_some() {
         return None;
     }
+    Some(resource_read_cache_key_for_uri(&params.uri))
+}
 
-    serde_json::to_string(&value)
-        .ok()
-        .map(|params| format!("{prefix}{params}"))
+fn resource_read_cache_key_for_uri(uri: &str) -> String {
+    let uri = serde_json::to_string(uri).expect("serializing a resource URI cannot fail");
+    format!("{RESOURCE_READ_CACHE_PREFIX}{uri}")
+}
+
+fn request_uses_cursor(params: &Option<PaginatedRequestParams>) -> bool {
+    params
+        .as_ref()
+        .and_then(|params| params.cursor.as_ref())
+        .is_some()
 }
 
 macro_rules! method {
@@ -389,11 +399,17 @@ macro_rules! method {
 }
 
 impl Peer<RoleClient> {
-    async fn cache_result(&self, key: Option<String>, ttl_ms: Option<u64>, result: ServerResult) {
-        let (Some(key), Some(ttl_ms)) = (key, ttl_ms.filter(|ttl_ms| *ttl_ms > 0)) else {
+    async fn cache_result(
+        &self,
+        cache_key: Option<String>,
+        ttl_ms: Option<u64>,
+        cache_scope: Option<CacheScope>,
+        result: ServerResult,
+    ) {
+        let Some(cache_key) = cache_key else {
             return;
         };
-        self.cache_response(key, result, Duration::from_millis(ttl_ms))
+        self.cache_response(cache_key, result, ttl_ms, cache_scope)
             .await;
     }
 
@@ -414,8 +430,8 @@ impl Peer<RoleClient> {
             .await;
     }
 
-    pub(crate) async fn invalidate_resource_read_cache(&self) {
-        self.invalidate_cached_responses(RESOURCE_READ_CACHE_PREFIX)
+    pub(crate) async fn invalidate_resource_read_cache(&self, uri: &str) {
+        self.invalidate_cached_response(&resource_read_cache_key_for_uri(uri))
             .await;
     }
 
@@ -469,7 +485,7 @@ impl Peer<RoleClient> {
         &self,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResponse, ServiceError> {
-        let cache_key = response_cache_key(RESOURCE_READ_CACHE_PREFIX, &params);
+        let cache_key = resource_read_cache_key(&params);
         if let Some(key) = cache_key.as_deref()
             && let Some(ServerResult::ReadResourceResult(result)) = self.cached_response(key).await
         {
@@ -488,6 +504,7 @@ impl Peer<RoleClient> {
                 self.cache_result(
                     cache_key,
                     result.ttl_ms,
+                    result.cache_scope,
                     ServerResult::ReadResourceResult(result.clone()),
                 )
                 .await;
@@ -517,24 +534,29 @@ impl Peer<RoleClient> {
         &self,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListPromptsResult, ServiceError> {
-        let cache_key = response_cache_key(PROMPT_LIST_CACHE_PREFIX, &params);
-        if let Some(key) = cache_key.as_deref()
-            && let Some(ServerResult::ListPromptsResult(result)) = self.cached_response(key).await
+        let cache_key = list_response_cache_key(PROMPT_LIST_CACHE_PREFIX, &params);
+        if let Some(ServerResult::ListPromptsResult(result)) =
+            self.cached_response(&cache_key).await
         {
             return Ok(result);
         }
+        let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListPromptsRequest(ListPromptsRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),
             }))
-            .await?;
-        match result {
+            .await;
+        if result.is_err() && uses_cursor {
+            self.invalidate_prompt_cache().await;
+        }
+        match result? {
             ServerResult::ListPromptsResult(result) => {
                 self.cache_result(
-                    cache_key,
+                    Some(cache_key),
                     result.ttl_ms,
+                    result.cache_scope,
                     ServerResult::ListPromptsResult(result.clone()),
                 )
                 .await;
@@ -548,24 +570,30 @@ impl Peer<RoleClient> {
         &self,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult, ServiceError> {
-        let cache_key = response_cache_key(RESOURCE_LIST_CACHE_PREFIX, &params);
-        if let Some(key) = cache_key.as_deref()
-            && let Some(ServerResult::ListResourcesResult(result)) = self.cached_response(key).await
+        let cache_key = list_response_cache_key(RESOURCE_LIST_CACHE_PREFIX, &params);
+        if let Some(ServerResult::ListResourcesResult(result)) =
+            self.cached_response(&cache_key).await
         {
             return Ok(result);
         }
+        let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListResourcesRequest(ListResourcesRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),
             }))
-            .await?;
-        match result {
+            .await;
+        if result.is_err() && uses_cursor {
+            self.invalidate_cached_responses(RESOURCE_LIST_CACHE_PREFIX)
+                .await;
+        }
+        match result? {
             ServerResult::ListResourcesResult(result) => {
                 self.cache_result(
-                    cache_key,
+                    Some(cache_key),
                     result.ttl_ms,
+                    result.cache_scope,
                     ServerResult::ListResourcesResult(result.clone()),
                 )
                 .await;
@@ -579,13 +607,13 @@ impl Peer<RoleClient> {
         &self,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult, ServiceError> {
-        let cache_key = response_cache_key(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX, &params);
-        if let Some(key) = cache_key.as_deref()
-            && let Some(ServerResult::ListResourceTemplatesResult(result)) =
-                self.cached_response(key).await
+        let cache_key = list_response_cache_key(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX, &params);
+        if let Some(ServerResult::ListResourceTemplatesResult(result)) =
+            self.cached_response(&cache_key).await
         {
             return Ok(result);
         }
+        let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListResourceTemplatesRequest(
                 ListResourceTemplatesRequest {
@@ -594,12 +622,17 @@ impl Peer<RoleClient> {
                     extensions: Default::default(),
                 },
             ))
-            .await?;
-        match result {
+            .await;
+        if result.is_err() && uses_cursor {
+            self.invalidate_cached_responses(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX)
+                .await;
+        }
+        match result? {
             ServerResult::ListResourceTemplatesResult(result) => {
                 self.cache_result(
-                    cache_key,
+                    Some(cache_key),
                     result.ttl_ms,
+                    result.cache_scope,
                     ServerResult::ListResourceTemplatesResult(result.clone()),
                 )
                 .await;
@@ -623,24 +656,28 @@ impl Peer<RoleClient> {
         &self,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListToolsResult, ServiceError> {
-        let cache_key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
-        if let Some(key) = cache_key.as_deref()
-            && let Some(ServerResult::ListToolsResult(result)) = self.cached_response(key).await
+        let cache_key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        if let Some(ServerResult::ListToolsResult(result)) = self.cached_response(&cache_key).await
         {
             return Ok(result);
         }
+        let uses_cursor = request_uses_cursor(&params);
         let result = self
             .send_request(ClientRequest::ListToolsRequest(ListToolsRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),
             }))
-            .await?;
-        match result {
+            .await;
+        if result.is_err() && uses_cursor {
+            self.invalidate_tool_cache().await;
+        }
+        match result? {
             ServerResult::ListToolsResult(result) => {
                 self.cache_result(
-                    cache_key,
+                    Some(cache_key),
                     result.ttl_ms,
+                    result.cache_scope,
                     ServerResult::ListToolsResult(result.clone()),
                 )
                 .await;
@@ -1132,16 +1169,24 @@ mod tests {
         peer
     }
 
+    fn tools_result(ttl_ms: Option<u64>, cache_scope: Option<CacheScope>) -> ListToolsResult {
+        let mut result = ListToolsResult::with_all_items(Vec::new());
+        result.ttl_ms = ttl_ms;
+        result.cache_scope = cache_scope;
+        result
+    }
+
     #[tokio::test]
     async fn list_tools_returns_a_fresh_cached_page_without_transport_io() {
         let peer = disconnected_peer();
         let params = None::<PaginatedRequestParams>;
-        let key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params).unwrap();
-        let expected = ListToolsResult::with_all_items(Vec::new()).with_ttl_ms(5_000);
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        let expected = tools_result(Some(5_000), Some(CacheScope::Public));
         peer.cache_response(
             key,
             ServerResult::ListToolsResult(expected.clone()),
-            Duration::from_secs(5),
+            expected.ttl_ms,
+            expected.cache_scope,
         )
         .await;
 
@@ -1152,12 +1197,13 @@ mod tests {
     async fn expired_entries_fall_through_to_the_transport() {
         let peer = disconnected_peer();
         let params = None::<PaginatedRequestParams>;
-        let key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params).unwrap();
-        let result = ListToolsResult::with_all_items(Vec::new()).with_ttl_ms(1);
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        let result = tools_result(Some(1), Some(CacheScope::Public));
         peer.cache_response(
             key,
             ServerResult::ListToolsResult(result),
-            Duration::from_millis(1),
+            Some(1),
+            Some(CacheScope::Public),
         )
         .await;
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1169,21 +1215,232 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_cache_does_not_store_entries() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(ClientCacheConfig::disabled())
+            .await;
+        let params = None::<PaginatedRequestParams>;
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Public))),
+            Some(5_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+
+        assert!(matches!(
+            peer.list_tools(params).await,
+            Err(ServiceError::TransportClosed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn default_ttl_caches_results_without_server_ttl() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_default_ttl(Duration::from_secs(5)),
+        )
+        .await;
+        let params = None::<PaginatedRequestParams>;
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        let expected = tools_result(None, Some(CacheScope::Public));
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(expected.clone()),
+            None,
+            expected.cache_scope,
+        )
+        .await;
+
+        assert_eq!(peer.list_tools(params).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn max_ttl_caps_server_hint() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_max_ttl(Duration::from_millis(1)),
+        )
+        .await;
+        let params = None::<PaginatedRequestParams>;
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(tools_result(Some(60_000), Some(CacheScope::Public))),
+            Some(60_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        assert!(matches!(
+            peer.list_tools(params).await,
+            Err(ServiceError::TransportClosed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn private_entries_are_isolated_between_client_peers() {
+        let first = disconnected_peer();
+        let second = disconnected_peer();
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        first
+            .cache_response(
+                key.clone(),
+                ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Private))),
+                Some(5_000),
+                Some(CacheScope::Private),
+            )
+            .await;
+
+        assert!(first.cached_response(&key).await.is_some());
+        assert!(second.cached_response(&key).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn changing_private_partition_drops_private_entries_but_keeps_public_entries() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_private_partition("principal-a"),
+        )
+        .await;
+        let private_key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        let public_key = list_response_cache_key(PROMPT_LIST_CACHE_PREFIX, &None);
+        peer.cache_response(
+            private_key.clone(),
+            ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Private))),
+            Some(5_000),
+            Some(CacheScope::Private),
+        )
+        .await;
+        peer.cache_response(
+            public_key.clone(),
+            ServerResult::ListPromptsResult(
+                ListPromptsResult::with_all_items(Vec::new())
+                    .with_ttl_ms(5_000)
+                    .with_cache_scope(CacheScope::Public),
+            ),
+            Some(5_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_private_partition("principal-b"),
+        )
+        .await;
+
+        assert!(peer.cached_response(&private_key).await.is_none());
+        assert!(peer.cached_response(&public_key).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn missing_scope_is_cached_in_the_private_partition() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_private_partition("principal-a"),
+        )
+        .await;
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result(Some(5_000), None)),
+            Some(5_000),
+            None,
+        )
+        .await;
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_private_partition("principal-b"),
+        )
+        .await;
+
+        assert!(peer.cached_response(&key).await.is_none());
+    }
+
+    #[test]
+    fn paginated_pages_have_independent_cache_keys() {
+        let first = Some(PaginatedRequestParams::default().with_cursor(Some("page-a".into())));
+        let second = Some(PaginatedRequestParams::default().with_cursor(Some("page-b".into())));
+
+        assert_ne!(
+            list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &first),
+            list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &second)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_invalidation_discards_every_cached_page() {
+        let peer = disconnected_peer();
+        for cursor in [None, Some("page-a".into()), Some("page-b".into())] {
+            let params =
+                cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
+            let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+            peer.cache_response(
+                key,
+                ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Public))),
+                Some(5_000),
+                Some(CacheScope::Public),
+            )
+            .await;
+        }
+
+        peer.invalidate_tool_cache().await;
+
+        for cursor in [None, Some("page-a".into()), Some("page-b".into())] {
+            let params =
+                cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)));
+            let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+            assert!(peer.cached_response(&key).await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn resource_update_invalidates_only_the_matching_uri() {
+        let peer = disconnected_peer();
+        let first_key = resource_read_cache_key_for_uri("file:///first");
+        let second_key = resource_read_cache_key_for_uri("file:///second");
+        for key in [&first_key, &second_key] {
+            peer.cache_response(
+                key.clone(),
+                ServerResult::ReadResourceResult(
+                    ReadResourceResult::new(Vec::new())
+                        .with_ttl_ms(5_000)
+                        .with_cache_scope(CacheScope::Private),
+                ),
+                Some(5_000),
+                Some(CacheScope::Private),
+            )
+            .await;
+        }
+
+        peer.invalidate_resource_read_cache("file:///first").await;
+
+        assert!(peer.cached_response(&first_key).await.is_none());
+        assert!(peer.cached_response(&second_key).await.is_some());
+    }
+
+    #[tokio::test]
     async fn tool_invalidation_does_not_remove_prompt_pages() {
         let peer = disconnected_peer();
-        let params = None::<PaginatedRequestParams>;
-        let tool_key = response_cache_key(TOOL_LIST_CACHE_PREFIX, &params).unwrap();
-        let prompt_key = response_cache_key(PROMPT_LIST_CACHE_PREFIX, &params).unwrap();
+        let tool_key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        let prompt_key = list_response_cache_key(PROMPT_LIST_CACHE_PREFIX, &None);
         peer.cache_response(
             tool_key.clone(),
-            ServerResult::ListToolsResult(ListToolsResult::with_all_items(Vec::new())),
-            Duration::from_secs(5),
+            ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Public))),
+            Some(5_000),
+            Some(CacheScope::Public),
         )
         .await;
         peer.cache_response(
             prompt_key.clone(),
-            ServerResult::ListPromptsResult(ListPromptsResult::with_all_items(Vec::new())),
-            Duration::from_secs(5),
+            ServerResult::ListPromptsResult(
+                ListPromptsResult::with_all_items(Vec::new())
+                    .with_ttl_ms(5_000)
+                    .with_cache_scope(CacheScope::Public),
+            ),
+            Some(5_000),
+            Some(CacheScope::Public),
         )
         .await;
 
@@ -1195,10 +1452,8 @@ mod tests {
 
     #[test]
     fn mrtr_retry_parameters_are_not_cacheable() {
-        let params = serde_json::json!({
-            "uri": "file:///example.txt",
-            "inputResponses": { "approval": true }
-        });
-        assert!(response_cache_key(RESOURCE_READ_CACHE_PREFIX, &params).is_none());
+        let params = ReadResourceRequestParams::new("file:///example.txt")
+            .with_request_state("opaque-state");
+        assert!(resource_read_cache_key(&params).is_none());
     }
 }

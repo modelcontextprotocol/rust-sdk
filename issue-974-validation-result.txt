@@ -1,0 +1,2 @@
+validation=failed
+Inspect the GitHub Actions job logs for the first failing step.

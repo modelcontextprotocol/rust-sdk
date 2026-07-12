@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add a configurable SEP-2549 client response cache with TTL, scope, pagination, and notification invalidation support
+
 ## [2.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v2.1.0...rmcp-v2.2.0) - 2026-07-08
 
 ### Added

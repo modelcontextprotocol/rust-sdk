@@ -55,7 +55,10 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 self.on_logging_message(notification.params, context).await
             }
             ServerNotification::ResourceUpdatedNotification(notification) => {
-                context.peer.invalidate_resource_read_cache().await;
+                context
+                    .peer
+                    .invalidate_resource_read_cache(&notification.params.uri)
+                    .await;
                 self.on_resource_updated(notification.params, context).await
             }
             ServerNotification::ResourceListChangedNotification(_notification_no_param) => {
