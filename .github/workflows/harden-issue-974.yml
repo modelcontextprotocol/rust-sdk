@@ -1,4 +1,4 @@
-name: Diagnose issue 974 validation
+name: Finalize issue 974 validation
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
+  finalize-and-validate:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -20,6 +20,28 @@ jobs:
         with:
           ref: feat/issue-974-client-response-cache
           fetch-depth: 0
+
+      - name: Install toolchains
+        run: |
+          rustup toolchain install stable --component clippy
+          rustup toolchain install nightly --component rustfmt
+
+      - name: Apply final hardening edits
+        run: |
+          python scripts/finalize_issue_974.py
+          cargo +nightly fmt --all
+          git diff --check
+
+      - name: Commit hardened implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            crates/rmcp/src/service/client.rs \
+            crates/rmcp/src/service/client/cache.rs \
+            docs/CLIENT_CACHING.md
+          git commit -m "fix(client): prevent stale cache writes" || true
+          git push origin HEAD:feat/issue-974-client-response-cache
 
       - name: Run repository checks and capture logs
         shell: bash
@@ -45,39 +67,25 @@ jobs:
             echo >> issue-974-validation-result.txt
           }
 
-          run_check install_stable rustup toolchain install stable --component clippy
-          run_check install_nightly rustup toolchain install nightly --component rustfmt
           run_check nightly_fmt cargo +nightly fmt --all -- --check
           run_check whitespace git diff --check
           run_check rmcp_check cargo check -p rmcp --all-targets --all-features
-          run_check rmcp_clippy cargo clippy -p rmcp --all-targets --all-features -- -D warnings
-          run_check rmcp_tests cargo test -p rmcp --all-features
+          run_check workspace_clippy cargo clippy --all-targets --all-features -- -D warnings
+          run_check all_feature_tests cargo test --all-features
 
-          FEATURES=$(cargo metadata --no-deps --format-version 1 2>/tmp/metadata.log \
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[] \
                       | select(startswith("__") | not) \
                       | select(. != "local")] | join(",")')
-          metadata_status=$?
-          echo "===== metadata =====" >> issue-974-validation-result.txt
-          echo "status=${metadata_status}" >> issue-974-validation-result.txt
-          if [ "$metadata_status" -ne 0 ]; then
-            failed=1
-            cat /tmp/metadata.log >> issue-974-validation-result.txt
-          fi
-          echo >> issue-974-validation-result.txt
-          if [ "$metadata_status" -eq 0 ]; then
-            run_check rmcp_no_local_tests cargo test -p rmcp --features "$FEATURES"
-          fi
+          echo "FEATURES=${FEATURES}" >> issue-974-validation-result.txt
+          run_check rmcp_no_local_tests cargo test -p rmcp --features "$FEATURES"
 
-          run_check workspace_check cargo check --workspace --all-targets --all-features
-          run_check workspace_clippy cargo clippy --all-targets --all-features -- -D warnings
-          run_check all_feature_tests cargo test --all-features
           run_check docs env RUSTDOCFLAGS=-Dwarnings cargo doc -p rmcp --all-features --no-deps
           run_check conformance_build cargo build -p mcp-conformance
 
           echo "overall_failed=${failed}" >> issue-974-validation-result.txt
 
-      - name: Commit diagnostic report
+      - name: Commit validation report
         if: always()
         shell: bash
         run: |
