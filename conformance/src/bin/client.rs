@@ -14,7 +14,16 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 // ─── Context parsed from MCP_CONFORMANCE_CONTEXT ────────────────────────────
 
 #[derive(Debug, Default, serde::Deserialize)]
+struct ConformanceToolCall {
+    name: String,
+    #[serde(default)]
+    arguments: Option<serde_json::Map<String, Value>>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
 struct ConformanceContext {
+    #[serde(default)]
+    tool_calls: Vec<ConformanceToolCall>,
     #[serde(default)]
     client_id: Option<String>,
     #[serde(default)]
@@ -793,16 +802,29 @@ async fn run_basic_client(server_url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_tools_call_client(server_url: &str) -> anyhow::Result<()> {
+async fn run_tools_call_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_uri(server_url);
     let client = FullClientHandler.serve(transport).await?;
     let tools = client.list_tools(Default::default()).await?;
-    for tool in &tools.tools {
-        let args = build_tool_arguments(tool);
-        let _ = client
-            .call_tool(call_tool_params(tool.name.clone(), args))
-            .await?;
+
+    if ctx.tool_calls.is_empty() {
+        for tool in &tools.tools {
+            let args = build_tool_arguments(tool);
+            client
+                .call_tool(call_tool_params(tool.name.clone(), args))
+                .await?;
+        }
+    } else {
+        for tool_call in &ctx.tool_calls {
+            client
+                .call_tool(call_tool_params(
+                    tool_call.name.clone().into(),
+                    tool_call.arguments.clone(),
+                ))
+                .await?;
+        }
     }
+
     client.cancel().await?;
     Ok(())
 }
@@ -851,6 +873,13 @@ impl StatelessHttpTransport {
     }
 }
 
+fn conformance_protocol_version() -> ProtocolVersion {
+    std::env::var("MCP_CONFORMANCE_PROTOCOL_VERSION")
+        .ok()
+        .and_then(|version| serde_json::from_value(Value::String(version)).ok())
+        .unwrap_or(ProtocolVersion::V_2026_07_28)
+}
+
 impl rmcp::transport::Transport<RoleClient> for StatelessHttpTransport {
     type Error = std::io::Error;
 
@@ -864,7 +893,10 @@ impl rmcp::transport::Transport<RoleClient> for StatelessHttpTransport {
         async move {
             let response = http
                 .post(uri.as_ref())
-                .header("MCP-Protocol-Version", "2026-07-28")
+                .header(
+                    "MCP-Protocol-Version",
+                    conformance_protocol_version().as_str(),
+                )
                 .json(&item)
                 .send()
                 .await
@@ -890,17 +922,19 @@ impl rmcp::transport::Transport<RoleClient> for StatelessHttpTransport {
     }
 }
 
-/// A stateless-lifecycle client: the scenario's server has no `initialize`
-/// handler, so skip the handshake with `serve_directly`, list the tools, and
-/// call each one via the high-level `call_tool` helper (which drives SEP-2322
-/// `input_required` retry rounds when the server requests them). Used by the
-/// `sep-2322-client-request-state` scenario, whose mock server verifies
-/// requestState echo, fresh JSON-RPC ids on retry, state omission, isolation
-/// between tools, and the `resultType` default.
+/// Runs a client using the draft stateless lifecycle.
+///
+/// Stateless servers do not implement the `initialize` handshake, so this
+/// uses `serve_directly`. The protocol version comes from
+/// `MCP_CONFORMANCE_PROTOCOL_VERSION` (defaulting to `2026-07-28`) and is
+/// used for both peer configuration and outgoing HTTP request headers.
+///
+/// Lists available tools and calls each one, allowing the SDK's high-level
+/// tool-call handling to process any request retries.
 async fn run_stateless_client(server_url: &str) -> anyhow::Result<()> {
     let transport = StatelessHttpTransport::new(server_url);
     let peer_info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-        .with_protocol_version(ProtocolVersion::V_2026_07_28);
+        .with_protocol_version(conformance_protocol_version());
     let client = serve_directly(FullClientHandler, transport, Some(peer_info));
 
     let tools = client.list_tools(Default::default()).await?;
@@ -955,12 +989,18 @@ async fn main() -> anyhow::Result<()> {
     match scenario.as_str() {
         // Non-auth scenarios
         "initialize" => run_basic_client(&server_url).await?,
-        "tools_call" => run_tools_call_client(&server_url).await?,
+        "json-schema-ref-no-deref" => run_stateless_client(&server_url).await?,
+        "tools_call" => run_tools_call_client(&server_url, &ctx).await?,
         "elicitation-sep1034-client-defaults" => {
             run_elicitation_defaults_client(&server_url).await?
         }
         "sse-retry" => run_sse_retry_client(&server_url).await?,
-        "sep-2322-client-request-state" => run_stateless_client(&server_url).await?,
+        "request-metadata" | "sep-2322-client-request-state" => {
+            run_stateless_client(&server_url).await?
+        }
+        "http-standard-headers" | "http-custom-headers" | "http-invalid-tool-headers" => {
+            run_tools_call_client(&server_url, &ctx).await?
+        }
 
         // Auth scenarios - standard OAuth flow
         "auth/metadata-default"
@@ -1008,16 +1048,7 @@ async fn main() -> anyhow::Result<()> {
             run_cross_app_access_client(&server_url, &ctx).await?
         }
 
-        _ => {
-            tracing::warn!("Unknown scenario '{}', trying auth flow", scenario);
-            match run_auth_client(&server_url, &ctx).await {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::debug!("Auth flow failed for unknown scenario: {e}");
-                    run_basic_client(&server_url).await?
-                }
-            }
-        }
+        unknown => anyhow::bail!("Unsupported conformance scenario: {unknown}"),
     }
 
     Ok(())
