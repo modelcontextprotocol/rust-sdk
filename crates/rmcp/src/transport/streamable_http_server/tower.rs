@@ -19,6 +19,7 @@ use crate::{
         ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData,
         GetExtensions, Implementation, InitializeRequest, InitializeRequestParams,
         InitializedNotification, JsonObject, JsonRpcError, ProtocolVersion, RequestId,
+        ServerJsonRpcMessage,
     },
     serve_server,
     service::serve_directly,
@@ -48,10 +49,10 @@ pub struct StreamableHttpServerConfig {
     /// If true, the server will create a session for each request and keep it alive.
     /// When enabled, SSE priming events are sent to enable client reconnection.
     pub stateful_mode: bool,
-    /// When true and `stateful_mode` is false, the server returns
-    /// `Content-Type: application/json` directly instead of `text/event-stream`.
-    /// This eliminates SSE framing overhead for simple request-response tools,
-    /// allowed by the MCP Streamable HTTP spec (2025-06-18).
+    /// When true and `stateful_mode` is false, the server prefers
+    /// `Content-Type: application/json` for simple request-response tools.
+    /// If the handler emits a notification or request before the final response,
+    /// the server falls back to `text/event-stream` so no message is lost.
     pub json_response: bool,
     /// Cancellation token for the Streamable HTTP server.
     ///
@@ -1352,31 +1353,47 @@ where
                         let _ = service.waiting().await;
                     });
                     if self.config.json_response {
-                        // JSON-direct mode: await the single response and return as
-                        // application/json, eliminating SSE framing overhead.
-                        // Allowed by MCP Streamable HTTP spec (2025-06-18).
+                        // Prefer JSON for a terminal first message. If the handler
+                        // emits an intermediate notification or request, preserve
+                        // the complete message sequence by falling back to SSE.
                         let cancel = self.config.cancellation_token.child_token();
-                        match tokio::select! {
+                        let Some(message) = (tokio::select! {
                             res = receiver.recv() => res,
                             _ = cancel.cancelled() => None,
-                        } {
-                            Some(message) => {
-                                tracing::trace!(?message);
-                                let body = serde_json::to_vec(&message).map_err(|e| {
-                                    internal_error_response("serialize json response")(e)
-                                })?;
-                                Ok(Response::builder()
-                                    .status(http::StatusCode::OK)
-                                    .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
-                                    .body(Full::new(Bytes::from(body)).boxed())
-                                    .expect("valid response"))
-                            }
-                            None => Err(internal_error_response("empty response")(
+                        }) else {
+                            return Err(internal_error_response("empty response")(
                                 std::io::Error::new(
                                     std::io::ErrorKind::UnexpectedEof,
                                     "no response message received from handler",
                                 ),
-                            )),
+                            ));
+                        };
+                        tracing::trace!(?message);
+                        if matches!(
+                            message,
+                            ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
+                        ) {
+                            let body = serde_json::to_vec(&message).map_err(|e| {
+                                internal_error_response("serialize json response")(e)
+                            })?;
+                            Ok(Response::builder()
+                                .status(http::StatusCode::OK)
+                                .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+                                .body(Full::new(Bytes::from(body)).boxed())
+                                .expect("valid response"))
+                        } else {
+                            let first = futures::stream::once(async move {
+                                ServerSseMessage::from_message(message)
+                            });
+                            let remaining = ReceiverStream::new(receiver).map(|message| {
+                                tracing::trace!(?message);
+                                ServerSseMessage::from_message(message)
+                            });
+                            Ok(sse_stream_response(
+                                first.chain(remaining),
+                                self.config.sse_keep_alive,
+                                self.config.cancellation_token.child_token(),
+                            ))
                         }
                     } else {
                         // SSE mode (default): original behaviour preserved unchanged
