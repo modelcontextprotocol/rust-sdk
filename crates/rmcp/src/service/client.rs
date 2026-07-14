@@ -115,11 +115,11 @@ where
 
                 let mut context = NotificationContext {
                     peer: peer.clone(),
-                    meta: Meta::default(),
+                    meta: NotificationMetaObject::default(),
                     extensions: Extensions::default(),
                 };
 
-                if let Some(meta) = logging.extensions.get_mut::<Meta>() {
+                if let Some(meta) = logging.extensions.get_mut::<NotificationMetaObject>() {
                     std::mem::swap(&mut context.meta, meta);
                 }
                 std::mem::swap(&mut context.extensions, &mut logging.extensions);
@@ -890,7 +890,7 @@ where
 
     fn input_request_context<T>(&self, key: &str, request: &mut T) -> RequestContext<RoleClient>
     where
-        T: GetMeta + GetExtensions,
+        T: GetMeta<Metadata = crate::model::RequestMetaObject> + GetExtensions,
     {
         let mut meta = Default::default();
         let mut extensions = Default::default();

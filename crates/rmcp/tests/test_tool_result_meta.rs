@@ -1,10 +1,10 @@
-use rmcp::model::{CallToolResult, ContentBlock, Meta};
+use rmcp::model::{CallToolResult, ContentBlock, MetaObject};
 use serde_json::{Value, json};
 
 #[test]
 fn serialize_tool_result_with_meta() {
     let content = vec![ContentBlock::text("ok")];
-    let mut meta = Meta::new();
+    let mut meta = MetaObject::new();
     meta.insert("foo".to_string(), json!("bar"));
     let result = CallToolResult::success(content).with_meta(Some(meta));
     let v = serde_json::to_value(&result).unwrap();

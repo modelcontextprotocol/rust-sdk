@@ -86,11 +86,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -128,11 +131,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "arguments": {
           "description": "Arguments to pass to the tool (must match the tool's input schema)",
@@ -187,11 +193,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "taskId": {
           "type": "string"
@@ -210,11 +219,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "reason": {
           "type": [
@@ -334,11 +346,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "argument": {
           "$ref": "#/definitions/ArgumentInfo"
@@ -474,11 +489,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "content": {
           "description": "The actual content of the message (text, image, audio, tool use, or tool result)",
@@ -550,11 +568,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this result.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "action": {
           "description": "The user's decision on how to handle the elicitation request",
@@ -638,11 +659,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -727,11 +751,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "arguments": {
           "type": [
@@ -773,11 +800,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "taskId": {
           "type": "string"
@@ -797,11 +827,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "taskId": {
           "type": "string"
@@ -873,11 +906,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -952,11 +988,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "capabilities": {
           "description": "The capabilities this client supports (sampling, roots, etc.)",
@@ -1169,11 +1208,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "roots": {
           "type": "array",
@@ -1211,6 +1253,11 @@
         "alert",
         "emergency"
       ]
+    },
+    "MetaObject": {
+      "description": "See [specification/draft/basic/index#general-fields] for notes on _meta usage.",
+      "type": "object",
+      "additionalProperties": true
     },
     "Notification": {
       "type": "object",
@@ -1257,6 +1304,16 @@
         "params"
       ]
     },
+    "NotificationMetaObject": {
+      "description": "Metadata reserved by MCP on notifications. Extension keys are also allowed.",
+      "type": "object",
+      "properties": {
+        "io.modelcontextprotocol/subscriptionId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      },
+      "additionalProperties": true
+    },
     "NotificationNoParam": {
       "type": "object",
       "properties": {
@@ -1294,11 +1351,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cursor": {
           "type": [
@@ -1322,11 +1382,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "message": {
           "description": "An optional message describing the current progress.",
@@ -1397,11 +1460,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "inputResponses": {
           "description": "Client responses to server-initiated input requests from a previous\n[`InputRequiredResult`].",
@@ -1641,6 +1707,28 @@
         "params"
       ]
     },
+    "RequestMetaObject": {
+      "description": "Metadata reserved by MCP on requests. Extension keys are also allowed.",
+      "type": "object",
+      "properties": {
+        "io.modelcontextprotocol/clientCapabilities": {
+          "$ref": "#/definitions/ClientCapabilities"
+        },
+        "io.modelcontextprotocol/clientInfo": {
+          "$ref": "#/definitions/Implementation"
+        },
+        "io.modelcontextprotocol/logLevel": {
+          "$ref": "#/definitions/LoggingLevel"
+        },
+        "io.modelcontextprotocol/protocolVersion": {
+          "type": "string"
+        },
+        "progressToken": {
+          "$ref": "#/definitions/ProgressToken"
+        }
+      },
+      "additionalProperties": true
+    },
     "RequestNoParam": {
       "type": "object",
       "properties": {
@@ -1763,11 +1851,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this resource.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this resource.",
@@ -1841,11 +1932,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "mimeType": {
               "type": [
@@ -1869,11 +1963,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "blob": {
               "type": "string"
@@ -1925,11 +2022,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "name": {
           "type": [
@@ -2116,11 +2216,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "level": {
           "description": "The desired logging level",
@@ -2147,11 +2250,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "uri": {
           "description": "The URI of the resource to subscribe to",
@@ -2252,11 +2358,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "createdAt": {
           "description": "ISO-8601 creation timestamp.",
@@ -2347,11 +2456,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -2378,11 +2490,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "content": {
           "type": "array",
@@ -2412,11 +2527,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "type": "string"
@@ -2459,11 +2577,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "uri": {
           "description": "The URI of the resource to unsubscribe from",

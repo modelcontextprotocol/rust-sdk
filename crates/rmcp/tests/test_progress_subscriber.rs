@@ -3,7 +3,9 @@ use futures::StreamExt;
 use rmcp::{
     ClientHandler, Peer, RoleServer, ServerHandler, ServiceExt,
     handler::{client::progress::ProgressDispatcher, server::tool::ToolRouter},
-    model::{CallToolRequestParams, ClientRequest, Meta, ProgressNotificationParam, Request},
+    model::{
+        CallToolRequestParams, ClientRequest, ProgressNotificationParam, Request, RequestMetaObject,
+    },
     service::PeerRequestOptions,
     tool, tool_handler, tool_router,
 };
@@ -61,7 +63,7 @@ impl Default for MyServer {
 impl MyServer {
     #[tool]
     pub async fn some_progress(
-        meta: Meta,
+        meta: RequestMetaObject,
         client: Peer<RoleServer>,
     ) -> Result<(), rmcp::ErrorData> {
         let progress_token = meta

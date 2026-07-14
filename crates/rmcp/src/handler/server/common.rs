@@ -209,13 +209,13 @@ where
     }
 }
 
-impl<C> FromContextPart<C> for crate::model::Meta
+impl<C> FromContextPart<C> for crate::model::RequestMetaObject
 where
     C: AsRequestContext,
 {
     fn from_context_part(context: &mut C) -> Result<Self, crate::ErrorData> {
         let request_context = context.as_request_context_mut();
-        let mut meta = crate::model::Meta::default();
+        let mut meta = crate::model::RequestMetaObject::default();
         std::mem::swap(&mut meta, &mut request_context.meta);
         Ok(meta)
     }

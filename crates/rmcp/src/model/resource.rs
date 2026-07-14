@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Annotations, Icon, Meta};
+use super::{Annotations, Icon, MetaObject};
 
 /// A known resource that the server is capable of reading (spec `Resource`).
 ///
@@ -31,7 +31,7 @@ pub struct Resource {
     pub icons: Option<Vec<Icon>>,
     /// Optional protocol-level metadata for this resource.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     /// Optional annotations describing how the client should use this resource.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -77,7 +77,7 @@ impl Resource {
         self
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -112,7 +112,7 @@ pub struct ResourceTemplate {
     pub icons: Option<Vec<Icon>>,
     /// Optional protocol-level metadata for this resource template.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     /// Optional annotations describing how the client should use this template.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -152,7 +152,7 @@ impl ResourceTemplate {
         self
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -176,7 +176,7 @@ pub enum ResourceContents {
         mime_type: Option<String>,
         text: String,
         #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<MetaObject>,
     },
     #[serde(rename_all = "camelCase")]
     BlobResourceContents {
@@ -185,7 +185,7 @@ pub enum ResourceContents {
         mime_type: Option<String>,
         blob: String,
         #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<MetaObject>,
     },
 }
 
@@ -216,7 +216,7 @@ impl ResourceContents {
         self
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         match &mut self {
             Self::TextResourceContents { meta: m, .. } => *m = Some(meta),
             Self::BlobResourceContents { meta: m, .. } => *m = Some(meta),
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_resource_template_with_meta() {
         let resource_template =
-            ResourceTemplate::new("file:///{path}", "template").with_meta(Meta::default());
+            ResourceTemplate::new("file:///{path}", "template").with_meta(MetaObject::default());
         let json = serde_json::to_value(&resource_template).unwrap();
         assert!(json.get("_meta").is_some());
     }

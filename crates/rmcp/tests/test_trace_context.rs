@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
-    model::{ClientRequest, CustomRequest, CustomResult, Meta},
+    model::{ClientRequest, CustomRequest, CustomResult, RequestMetaObject},
     service::{PeerRequestOptions, RequestContext},
 };
 use serde_json::json;
@@ -17,7 +17,7 @@ const BAGGAGE: &str = "userId=alice,region=us-east-1";
 /// Records the `_meta` it receives on the incoming request so the test can assert passthrough.
 struct TraceCapturingServer {
     receive_signal: Arc<Notify>,
-    seen: Arc<Mutex<Option<Meta>>>,
+    seen: Arc<Mutex<Option<RequestMetaObject>>>,
 }
 
 impl ServerHandler for TraceCapturingServer {
@@ -56,7 +56,7 @@ async fn trace_context_meta_survives_round_trip() -> anyhow::Result<()> {
     let client = ().serve(client_transport).await?;
 
     // Client attaches trace context to the outgoing request's `_meta`.
-    let mut meta = Meta::new();
+    let mut meta = RequestMetaObject::new();
     meta.set_traceparent(TRACEPARENT);
     meta.set_tracestate(TRACESTATE);
     meta.set_baggage(BAGGAGE);

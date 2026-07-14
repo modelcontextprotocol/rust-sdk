@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Icon, JsonObject, Meta};
+use super::{Icon, JsonObject, MetaObject};
 
 /// A tool that can be used by a model.
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct Tool {
     pub icons: Option<Vec<Icon>>,
     /// Optional additional metadata for this tool
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 /// Per-tool task support mode as defined in the MCP specification.
@@ -286,7 +286,7 @@ impl Tool {
     }
 
     /// Set the metadata
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }

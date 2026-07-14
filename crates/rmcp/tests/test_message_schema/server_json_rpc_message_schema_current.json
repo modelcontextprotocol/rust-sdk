@@ -76,11 +76,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -171,11 +174,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this result",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
@@ -211,11 +217,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "createdAt": {
           "description": "ISO-8601 creation timestamp.",
@@ -279,11 +288,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "reason": {
           "type": [
@@ -303,15 +315,89 @@
         }
       }
     },
-    "CompleteResult": {
+    "ClientCapabilities": {
+      "title": "Builder",
+      "description": "```rust\n# use rmcp::model::ClientCapabilities;\nlet cap = ClientCapabilities::builder()\n    .enable_experimental()\n    .build();\n```",
       "type": "object",
       "properties": {
-        "_meta": {
+        "elicitation": {
+          "description": "Capability to handle elicitation requests from servers for interactive user input",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "experimental": {
           "type": [
             "object",
             "null"
           ],
-          "additionalProperties": true
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "extensions": {
+          "description": "Optional MCP extensions that the client supports (SEP-1724).\nKeys are extension identifiers (e.g., `\"io.modelcontextprotocol/ui\"`),\nvalues are per-extension settings objects. An empty object indicates\nsupport with no settings.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "roots": {
+          "description": "Capability for filesystem roots (deprecated by SEP-2577).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RootsCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling": {
+          "description": "Capability for LLM sampling requests (SEP-1577, deprecated by SEP-2577).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SamplingCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tasks": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TasksCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "CompleteResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "completion": {
           "$ref": "#/definitions/CompletionInfo"
@@ -495,11 +581,14 @@
       "properties": {
         "_meta": {
           "description": "Protocol-level metadata for this request (SEP-1319)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "includeContext": {
           "description": "How much context to include from MCP servers",
@@ -608,11 +697,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "task": {
           "$ref": "#/definitions/Task"
@@ -658,11 +750,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RequestMetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "message": {
               "type": "string"
@@ -685,11 +780,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RequestMetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "elicitationId": {
               "type": "string"
@@ -716,11 +814,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/RequestMetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "message": {
               "type": "string"
@@ -742,11 +843,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this result.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "action": {
           "description": "The user's decision on how to handle the elicitation request",
@@ -783,6 +887,34 @@
           "const": "cancel"
         }
       ]
+    },
+    "ElicitationCapability": {
+      "description": "Elicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.",
+      "type": "object",
+      "properties": {
+        "form": {
+          "description": "Whether client supports form-based elicitation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FormElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "description": "Whether client supports URL-based elicitation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UrlElicitationCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "ElicitationCreateRequestMethod": {
       "type": "string",
@@ -856,11 +988,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -935,15 +1070,31 @@
         "message"
       ]
     },
+    "FormElicitationCapability": {
+      "description": "Capability for handling elicitation requests from servers.\nElicitation allows servers to request interactive input from users during tool execution.\nThis capability indicates that a client can handle elicitation requests and present\nappropriate UI to users for collecting the requested information.\n\nCapability for form mode elicitation.",
+      "type": "object",
+      "properties": {
+        "schemaValidation": {
+          "description": "Whether the client supports JSON Schema validation for elicitation responses.\nWhen true, the client will validate user input against the requested_schema\nbefore sending the response back to the server.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "GetPromptResult": {
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "description": {
           "type": [
@@ -979,11 +1130,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "createdAt": {
           "description": "ISO-8601 creation timestamp.",
@@ -1100,11 +1254,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -1178,11 +1335,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "capabilities": {
           "description": "The capabilities this server provides (tools, resources, prompts, etc.)",
@@ -1257,11 +1417,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "inputRequests": {
           "description": "Server-initiated requests that the client must fulfill before retrying.",
@@ -1524,11 +1687,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cacheScope": {
           "description": "Scope describing who may cache this result (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1580,11 +1746,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cacheScope": {
           "description": "Scope describing who may cache this result (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1636,11 +1805,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cacheScope": {
           "description": "Scope describing who may cache this result (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1697,11 +1869,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "nextCursor": {
           "type": [
@@ -1724,11 +1899,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cacheScope": {
           "description": "Scope describing who may cache this result (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1801,11 +1979,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "data": {
           "description": "The actual log data"
@@ -1831,6 +2012,11 @@
         "level",
         "data"
       ]
+    },
+    "MetaObject": {
+      "description": "See [specification/draft/basic/index#general-fields] for notes on _meta usage.",
+      "type": "object",
+      "additionalProperties": true
     },
     "ModelHint": {
       "description": "A hint suggesting a preferred model name or family.\n\nModel hints are advisory suggestions that help clients choose appropriate\nmodels. They can be specific model names or general families like \"claude\" or \"gpt\".",
@@ -1972,6 +2158,16 @@
         "method",
         "params"
       ]
+    },
+    "NotificationMetaObject": {
+      "description": "Metadata reserved by MCP on notifications. Extension keys are also allowed.",
+      "type": "object",
+      "properties": {
+        "io.modelcontextprotocol/subscriptionId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      },
+      "additionalProperties": true
     },
     "NotificationNoParam": {
       "type": "object",
@@ -2140,11 +2336,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "message": {
           "description": "An optional message describing the current progress.",
@@ -2188,11 +2387,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "arguments": {
           "type": [
@@ -2303,11 +2505,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cacheScope": {
           "description": "Scope describing who may cache this result (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -2382,6 +2587,28 @@
         "params"
       ]
     },
+    "RequestMetaObject": {
+      "description": "Metadata reserved by MCP on requests. Extension keys are also allowed.",
+      "type": "object",
+      "properties": {
+        "io.modelcontextprotocol/clientCapabilities": {
+          "$ref": "#/definitions/ClientCapabilities"
+        },
+        "io.modelcontextprotocol/clientInfo": {
+          "$ref": "#/definitions/Implementation"
+        },
+        "io.modelcontextprotocol/logLevel": {
+          "$ref": "#/definitions/LoggingLevel"
+        },
+        "io.modelcontextprotocol/protocolVersion": {
+          "type": "string"
+        },
+        "progressToken": {
+          "$ref": "#/definitions/ProgressToken"
+        }
+      },
+      "additionalProperties": true
+    },
     "RequestNoParam": {
       "type": "object",
       "properties": {
@@ -2410,11 +2637,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this resource.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this resource.",
@@ -2488,11 +2718,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "mimeType": {
               "type": [
@@ -2516,11 +2749,14 @@
           "type": "object",
           "properties": {
             "_meta": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "additionalProperties": true
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MetaObject"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "blob": {
               "type": "string"
@@ -2553,11 +2789,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this resource template.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this template.",
@@ -2625,11 +2864,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "uri": {
           "description": "The URI of the resource that was updated",
@@ -2676,6 +2918,40 @@
         }
       ]
     },
+    "RootsCapabilities": {
+      "description": "Roots capability. Deprecated by SEP-2577; remains functional and will be\nremoved in a future release.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "SamplingCapability": {
+      "description": "Sampling capability with optional sub-capabilities (SEP-1577).\n\nDeprecated by SEP-2577; remains functional and will be removed in a future\nrelease.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "description": "Support for `includeContext` (soft-deprecated)",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "tools": {
+          "description": "Support for `tools` and `toolChoice` parameters",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      }
+    },
     "SamplingContent": {
       "description": "Single or array content wrapper (SEP-1577).",
       "anyOf": [
@@ -2695,11 +2971,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "content": {
           "description": "The actual content of the message (text, image, audio, tool use, or tool result)",
@@ -3226,11 +3505,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NotificationMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "createdAt": {
           "description": "ISO-8601 creation timestamp.",
@@ -3341,11 +3623,14 @@
       "properties": {
         "_meta": {
           "description": "Optional protocol-level metadata for this content block.",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional annotations describing how the client should use this content.",
@@ -3478,11 +3763,14 @@
       "properties": {
         "_meta": {
           "description": "Optional additional metadata for this tool",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "annotations": {
           "description": "Optional additional tool information.",
@@ -3658,11 +3946,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "content": {
           "type": "array",
@@ -3692,11 +3983,14 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "type": "string"
@@ -3848,6 +4142,10 @@
         "type",
         "enum"
       ]
+    },
+    "UrlElicitationCapability": {
+      "description": "Capability for URL mode elicitation.",
+      "type": "object"
     }
   }
 }

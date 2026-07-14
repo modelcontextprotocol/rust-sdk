@@ -103,7 +103,7 @@ impl ConformanceServer {
     async fn call_mrtr_tool(
         &self,
         request: CallToolRequestParams,
-        meta: &Meta,
+        meta: &RequestMetaObject,
     ) -> Result<CallToolResponse, ErrorData> {
         let responses = request.input_responses.as_ref();
         match request.name.as_ref() {

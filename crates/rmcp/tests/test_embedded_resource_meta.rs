@@ -1,12 +1,12 @@
-use rmcp::model::{ContentBlock, EmbeddedResource, Meta, ResourceContents};
+use rmcp::model::{ContentBlock, EmbeddedResource, MetaObject, ResourceContents};
 use serde_json::json;
 
 #[test]
 fn serialize_embedded_text_resource_with_meta() {
-    let mut resource_content_meta = Meta::new();
+    let mut resource_content_meta = MetaObject::new();
     resource_content_meta.insert("inner".to_string(), json!(2));
 
-    let mut resource_meta = Meta::new();
+    let mut resource_meta = MetaObject::new();
     resource_meta.insert("top".to_string(), json!(1));
 
     let content = ContentBlock::Resource(
@@ -90,10 +90,10 @@ fn deserialize_embedded_text_resource_with_meta() {
 
 #[test]
 fn serialize_embedded_blob_resource_with_meta() {
-    let mut resource_content_meta = Meta::new();
+    let mut resource_content_meta = MetaObject::new();
     resource_content_meta.insert("blob_inner".to_string(), json!(true));
 
-    let mut resource_meta = Meta::new();
+    let mut resource_meta = MetaObject::new();
     resource_meta.insert("blob_top".to_string(), json!("t"));
 
     let content = ContentBlock::Resource(

@@ -179,7 +179,7 @@ impl Counter {
     /// This is an example prompt that takes one required argument, message
     #[prompt(
         name = "example_prompt",
-        meta = Meta(rmcp::object!({"meta_key": "meta_value"}))
+        meta = MetaObject(rmcp::object!({"meta_key": "meta_value"}))
     )]
     async fn example_prompt(
         &self,
@@ -225,8 +225,8 @@ impl Counter {
     }
 }
 
-#[tool_handler(meta = Meta(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
-#[prompt_handler(meta = Meta(rmcp::object!({"router_meta_key": "router_meta_value"})))]
+#[tool_handler(meta = MetaObject(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
+#[prompt_handler(meta = MetaObject(rmcp::object!({"router_meta_key": "router_meta_value"})))]
 #[task_handler]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {

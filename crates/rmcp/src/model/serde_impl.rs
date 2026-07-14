@@ -3,12 +3,19 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CustomNotification, CustomRequest, Extensions, Meta, Notification, NotificationNoParam,
-    Request, RequestNoParam, RequestOptionalParam,
+    CustomNotification, CustomRequest, Extensions, JsonObject, MetaObject, Notification,
+    NotificationMetaObject, NotificationNoParam, Request, RequestMetaObject, RequestNoParam,
+    RequestOptionalParam,
 };
+
+/// Wire-side view of `params`: the `_meta` map plus the remaining fields.
+///
+/// All metadata types are transparent wrappers over [`JsonObject`], so the
+/// serde plumbing works on the raw map; call sites wrap/unwrap the typed
+/// metadata ([`RequestMetaObject`] / [`NotificationMetaObject`]).
 #[derive(Deserialize)]
 struct WithMeta<'a, P> {
-    _meta: Option<Cow<'a, Meta>>,
+    _meta: Option<Cow<'a, JsonObject>>,
     #[serde(flatten)]
     _rest: P,
 }
@@ -25,7 +32,7 @@ impl<P: Serialize> Serialize for WithMeta<'_, P> {
             serde_json::to_value(&self._rest).map_err(serde::ser::Error::custom)?;
 
         // Extract _meta from the serialized params (if it's an object containing one)
-        let params_meta: Option<Meta> = rest_value
+        let params_meta: Option<JsonObject> = rest_value
             .as_object_mut()
             .and_then(|obj| obj.remove("_meta"))
             .and_then(|v| serde_json::from_value(v).ok());
@@ -78,6 +85,53 @@ struct ProxyNoParam<M> {
     method: M,
 }
 
+/// Combine the message-specific `_meta` map with a legacy [`MetaObject`]
+/// extension (inserted through the deprecated `Meta` name), so pre-3.x code
+/// does not silently lose metadata on the wire. On key conflicts the
+/// message-specific map wins.
+fn merge_legacy_meta<'a>(
+    typed: Option<&'a JsonObject>,
+    extensions: &'a Extensions,
+) -> Option<Cow<'a, JsonObject>> {
+    let legacy = extensions.get::<MetaObject>().map(|meta| &meta.0);
+    match (typed, legacy) {
+        (Some(typed), None) => Some(Cow::Borrowed(typed)),
+        (None, Some(legacy)) => Some(Cow::Borrowed(legacy)),
+        (Some(typed), Some(legacy)) => {
+            let mut merged = legacy.clone();
+            merged.extend(typed.clone());
+            Some(Cow::Owned(merged))
+        }
+        (None, None) => None,
+    }
+}
+
+/// Borrow the request `_meta` map from extensions, if any.
+fn request_meta(extensions: &Extensions) -> Option<Cow<'_, JsonObject>> {
+    let typed = extensions.get::<RequestMetaObject>().map(|meta| &meta.0.0);
+    merge_legacy_meta(typed, extensions)
+}
+
+/// Borrow the notification `_meta` map from extensions, if any.
+fn notification_meta(extensions: &Extensions) -> Option<Cow<'_, JsonObject>> {
+    let typed = extensions
+        .get::<NotificationMetaObject>()
+        .map(|meta| &meta.0.0);
+    merge_legacy_meta(typed, extensions)
+}
+
+/// Build extensions holding a typed metadata map deserialized from `params._meta`.
+fn extensions_with_meta<T>(meta: Option<Cow<'_, JsonObject>>) -> Extensions
+where
+    T: From<JsonObject> + Clone + Send + Sync + 'static,
+{
+    let mut extensions = Extensions::new();
+    if let Some(meta) = meta {
+        extensions.insert(T::from(meta.into_owned()));
+    }
+    extensions
+}
+
 impl<M, R> Serialize for Request<M, R>
 where
     M: Serialize,
@@ -87,14 +141,12 @@ where
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
         Proxy::serialize(
             &Proxy {
                 method: &self.method,
                 params: WithMeta {
                     _rest: &self.params,
-                    _meta,
+                    _meta: request_meta(&self.extensions),
                 },
             },
             serializer,
@@ -112,13 +164,8 @@ where
         D: serde::Deserializer<'de>,
     {
         let body = Proxy::deserialize(deserializer)?;
-        let _meta = body.params._meta.map(|m| m.into_owned());
-        let mut extensions = Extensions::new();
-        if let Some(meta) = _meta {
-            extensions.insert(meta);
-        }
         Ok(Request {
-            extensions,
+            extensions: extensions_with_meta::<RequestMetaObject>(body.params._meta),
             method: body.method,
             params: body.params._rest,
         })
@@ -134,14 +181,12 @@ where
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
         Proxy::serialize(
             &Proxy {
                 method: &self.method,
                 params: WithMeta {
                     _rest: &self.params,
-                    _meta,
+                    _meta: request_meta(&self.extensions),
                 },
             },
             serializer,
@@ -163,14 +208,10 @@ where
         let mut _meta = None;
         if let Some(body_params) = body.params {
             params = body_params._rest;
-            _meta = body_params._meta.map(|m| m.into_owned());
-        }
-        let mut extensions = Extensions::new();
-        if let Some(meta) = _meta {
-            extensions.insert(meta);
+            _meta = body_params._meta;
         }
         Ok(RequestOptionalParam {
-            extensions,
+            extensions: extensions_with_meta::<RequestMetaObject>(_meta),
             method: body.method,
             params,
         })
@@ -185,14 +226,26 @@ where
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
-        ProxyNoParam::serialize(
-            &ProxyNoParam {
-                method: &self.method,
-            },
-            serializer,
-        )
+        // Emit `params` only when metadata is present, so the wire shape of
+        // meta-less requests stays `{"method": ...}`.
+        match request_meta(&self.extensions) {
+            Some(_meta) => Proxy::serialize(
+                &Proxy {
+                    method: &self.method,
+                    params: WithMeta {
+                        _meta: Some(_meta),
+                        _rest: (),
+                    },
+                },
+                serializer,
+            ),
+            None => ProxyNoParam::serialize(
+                &ProxyNoParam {
+                    method: &self.method,
+                },
+                serializer,
+            ),
+        }
     }
 }
 
@@ -204,10 +257,10 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let body = ProxyNoParam::<_>::deserialize(deserializer)?;
-        let extensions = Extensions::new();
+        let body = ProxyOptionalParam::<'_, _, Option<JsonObject>>::deserialize(deserializer)?;
+        let _meta = body.params.and_then(|params| params._meta);
         Ok(RequestNoParam {
-            extensions,
+            extensions: extensions_with_meta::<RequestMetaObject>(_meta),
             method: body.method,
         })
     }
@@ -222,14 +275,12 @@ where
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
         Proxy::serialize(
             &Proxy {
                 method: &self.method,
                 params: WithMeta {
                     _rest: &self.params,
-                    _meta,
+                    _meta: notification_meta(&self.extensions),
                 },
             },
             serializer,
@@ -248,10 +299,7 @@ where
     {
         let body = ProxyOptionalParam::<'_, _, R>::deserialize(deserializer)?;
         let (_meta, params) = match body.params {
-            Some(with_meta) => {
-                let meta = with_meta._meta.map(|m| m.into_owned());
-                (meta, with_meta._rest)
-            }
+            Some(with_meta) => (with_meta._meta, with_meta._rest),
             None => {
                 // JSON-RPC 2.0: params is optional. Treat absent params as {}.
                 let empty = serde_json::Value::Object(serde_json::Map::new());
@@ -259,12 +307,8 @@ where
                 (None, r)
             }
         };
-        let mut extensions = Extensions::new();
-        if let Some(meta) = _meta {
-            extensions.insert(meta);
-        }
         Ok(Notification {
-            extensions,
+            extensions: extensions_with_meta::<NotificationMetaObject>(_meta),
             method: body.method,
             params,
         })
@@ -279,14 +323,26 @@ where
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
-        ProxyNoParam::serialize(
-            &ProxyNoParam {
-                method: &self.method,
-            },
-            serializer,
-        )
+        // Emit `params` only when metadata is present, so the wire shape of
+        // meta-less notifications stays `{"method": ...}`.
+        match notification_meta(&self.extensions) {
+            Some(_meta) => Proxy::serialize(
+                &Proxy {
+                    method: &self.method,
+                    params: WithMeta {
+                        _meta: Some(_meta),
+                        _rest: (),
+                    },
+                },
+                serializer,
+            ),
+            None => ProxyNoParam::serialize(
+                &ProxyNoParam {
+                    method: &self.method,
+                },
+                serializer,
+            ),
+        }
     }
 }
 
@@ -298,10 +354,10 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let body = ProxyNoParam::<_>::deserialize(deserializer)?;
-        let extensions = Extensions::new();
+        let body = ProxyOptionalParam::<'_, _, Option<JsonObject>>::deserialize(deserializer)?;
+        let _meta = body.params.and_then(|params| params._meta);
         Ok(NotificationNoParam {
-            extensions,
+            extensions: extensions_with_meta::<NotificationMetaObject>(_meta),
             method: body.method,
         })
     }
@@ -312,8 +368,7 @@ impl Serialize for CustomRequest {
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
+        let _meta = request_meta(&self.extensions);
         let params = self.params.as_ref();
 
         let params = if _meta.is_some() || params.is_some() {
@@ -346,14 +401,10 @@ impl<'de> Deserialize<'de> for CustomRequest {
         let mut _meta = None;
         if let Some(body_params) = body.params {
             params = body_params._rest;
-            _meta = body_params._meta.map(|m| m.into_owned());
-        }
-        let mut extensions = Extensions::new();
-        if let Some(meta) = _meta {
-            extensions.insert(meta);
+            _meta = body_params._meta;
         }
         Ok(CustomRequest {
-            extensions,
+            extensions: extensions_with_meta::<RequestMetaObject>(_meta),
             method: body.method,
             params,
         })
@@ -365,8 +416,7 @@ impl Serialize for CustomNotification {
     where
         S: serde::Serializer,
     {
-        let extensions = &self.extensions;
-        let _meta = extensions.get::<Meta>().map(Cow::Borrowed);
+        let _meta = notification_meta(&self.extensions);
         let params = self.params.as_ref();
 
         let params = if _meta.is_some() || params.is_some() {
@@ -399,14 +449,10 @@ impl<'de> Deserialize<'de> for CustomNotification {
         let mut _meta = None;
         if let Some(body_params) = body.params {
             params = body_params._rest;
-            _meta = body_params._meta.map(|m| m.into_owned());
-        }
-        let mut extensions = Extensions::new();
-        if let Some(meta) = _meta {
-            extensions.insert(meta);
+            _meta = body_params._meta;
         }
         Ok(CustomNotification {
-            extensions,
+            extensions: extensions_with_meta::<NotificationMetaObject>(_meta),
             method: body.method,
             params,
         })
@@ -418,7 +464,8 @@ mod test {
     use serde_json::json;
 
     use crate::model::{
-        CallToolRequest, CallToolRequestParams, CustomRequest, Extensions, ListToolsRequest, Meta,
+        CallToolRequest, CallToolRequestParams, CustomRequest, Extensions, InitializedNotification,
+        ListToolsRequest, NotificationMetaObject, PingRequest, RequestMetaObject,
     };
 
     #[test]
@@ -436,12 +483,12 @@ mod test {
         // When both extensions and params contain _meta, the output should have
         // a single merged _meta key (not two separate ones).
         let mut extensions = Extensions::new();
-        let mut ext_meta = Meta::new();
-        ext_meta.0.insert("traceId".to_string(), json!("abc"));
+        let mut ext_meta = RequestMetaObject::new();
+        ext_meta.insert("traceId".to_string(), json!("abc"));
         extensions.insert(ext_meta);
 
-        let mut params_meta = Meta::new();
-        params_meta.0.insert("progressToken".to_string(), json!(1));
+        let mut params_meta = RequestMetaObject::new();
+        params_meta.insert("progressToken".to_string(), json!(1));
 
         let req = CallToolRequest {
             extensions,
@@ -479,8 +526,8 @@ mod test {
     #[test]
     fn test_meta_only_from_extensions() {
         let mut extensions = Extensions::new();
-        let mut ext_meta = Meta::new();
-        ext_meta.0.insert("traceId".to_string(), json!("ext-only"));
+        let mut ext_meta = RequestMetaObject::new();
+        ext_meta.insert("traceId".to_string(), json!("ext-only"));
         extensions.insert(ext_meta);
 
         let req = CallToolRequest {
@@ -503,8 +550,8 @@ mod test {
 
     #[test]
     fn test_meta_only_from_params() {
-        let mut params_meta = Meta::new();
-        params_meta.0.insert("progressToken".to_string(), json!(42));
+        let mut params_meta = RequestMetaObject::new();
+        params_meta.insert("progressToken".to_string(), json!(42));
 
         let req = CallToolRequest {
             extensions: Extensions::new(),
@@ -550,19 +597,13 @@ mod test {
     fn test_extensions_meta_takes_priority_on_conflict() {
         // When both sources have the same key, extensions should win.
         let mut extensions = Extensions::new();
-        let mut ext_meta = Meta::new();
-        ext_meta
-            .0
-            .insert("shared_key".to_string(), json!("from_extensions"));
+        let mut ext_meta = RequestMetaObject::new();
+        ext_meta.insert("shared_key".to_string(), json!("from_extensions"));
         extensions.insert(ext_meta);
 
-        let mut params_meta = Meta::new();
-        params_meta
-            .0
-            .insert("shared_key".to_string(), json!("from_params"));
-        params_meta
-            .0
-            .insert("params_only".to_string(), json!("kept"));
+        let mut params_meta = RequestMetaObject::new();
+        params_meta.insert("shared_key".to_string(), json!("from_params"));
+        params_meta.insert("params_only".to_string(), json!("kept"));
 
         let req = CallToolRequest {
             extensions,
@@ -586,10 +627,8 @@ mod test {
     #[test]
     fn test_round_trip_preserves_meta() {
         let mut extensions = Extensions::new();
-        let mut ext_meta = Meta::new();
-        ext_meta
-            .0
-            .insert("traceId".to_string(), json!("round-trip"));
+        let mut ext_meta = RequestMetaObject::new();
+        ext_meta.insert("traceId".to_string(), json!("round-trip"));
         extensions.insert(ext_meta);
 
         let req = CallToolRequest {
@@ -609,8 +648,8 @@ mod test {
         let deserialized: CallToolRequest = serde_json::from_str(&serialized).unwrap();
 
         // Extensions should have the meta after round-trip
-        let meta = deserialized.extensions.get::<Meta>().unwrap();
-        assert_eq!(meta.0.get("traceId").unwrap(), "round-trip");
+        let meta = deserialized.extensions.get::<RequestMetaObject>().unwrap();
+        assert_eq!(meta.get("traceId").unwrap(), "round-trip");
 
         // Params should be preserved
         assert_eq!(deserialized.params.name, "my_tool");
@@ -630,10 +669,8 @@ mod test {
     fn test_custom_request_no_duplicate_meta() {
         // CustomRequest uses Option<Value> as params — verify no duplicate _meta.
         let mut extensions = Extensions::new();
-        let mut ext_meta = Meta::new();
-        ext_meta
-            .0
-            .insert("traceId".to_string(), json!("custom-ext"));
+        let mut ext_meta = RequestMetaObject::new();
+        ext_meta.insert("traceId".to_string(), json!("custom-ext"));
         extensions.insert(ext_meta);
 
         let params = Some(json!({
@@ -659,5 +696,163 @@ mod test {
         let meta = value["params"]["_meta"].as_object().unwrap();
         assert_eq!(meta.get("traceId").unwrap(), "custom-ext");
         assert_eq!(meta.get("progressToken").unwrap(), 99);
+    }
+
+    #[test]
+    fn test_request_no_param_meta_round_trip() {
+        // Ping-shaped requests must carry `params._meta` on the wire.
+        let mut extensions = Extensions::new();
+        let mut meta = RequestMetaObject::new();
+        meta.insert("traceId".to_string(), json!("ping-trace"));
+        extensions.insert(meta);
+
+        let req = PingRequest {
+            method: Default::default(),
+            extensions,
+        };
+
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["params"]["_meta"]["traceId"], json!("ping-trace"));
+
+        let deserialized: PingRequest = serde_json::from_value(value).unwrap();
+        let meta = deserialized
+            .extensions
+            .get::<RequestMetaObject>()
+            .expect("meta should survive the round-trip");
+        assert_eq!(meta.get("traceId").unwrap(), &json!("ping-trace"));
+    }
+
+    #[test]
+    fn test_request_no_param_without_meta_has_no_params_key() {
+        let req = PingRequest {
+            method: Default::default(),
+            extensions: Extensions::new(),
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert!(
+            value.get("params").is_none(),
+            "meta-less no-param requests must keep the historical wire shape: {value}"
+        );
+    }
+
+    #[test]
+    fn test_notification_no_param_meta_round_trip() {
+        // Initialized-shaped notifications must carry `params._meta` on the wire.
+        let mut extensions = Extensions::new();
+        let mut meta = NotificationMetaObject::new();
+        meta.insert("traceId".to_string(), json!("init-trace"));
+        extensions.insert(meta);
+
+        let notification = InitializedNotification {
+            method: Default::default(),
+            extensions,
+        };
+
+        let value = serde_json::to_value(&notification).unwrap();
+        assert_eq!(value["params"]["_meta"]["traceId"], json!("init-trace"));
+
+        let deserialized: InitializedNotification = serde_json::from_value(value).unwrap();
+        let meta = deserialized
+            .extensions
+            .get::<NotificationMetaObject>()
+            .expect("meta should survive the round-trip");
+        assert_eq!(meta.get("traceId").unwrap(), &json!("init-trace"));
+    }
+
+    #[test]
+    fn test_notification_no_param_without_meta_has_no_params_key() {
+        let notification = InitializedNotification {
+            method: Default::default(),
+            extensions: Extensions::new(),
+        };
+        let value = serde_json::to_value(&notification).unwrap();
+        assert!(
+            value.get("params").is_none(),
+            "meta-less no-param notifications must keep the historical wire shape: {value}"
+        );
+    }
+
+    #[test]
+    fn test_no_param_ignores_unknown_params_fields() {
+        // Old/foreign peers may send params without _meta; both shapes must parse.
+        let _req: PingRequest =
+            serde_json::from_value(json!({"method": "ping", "params": {}})).unwrap();
+        let _req: PingRequest =
+            serde_json::from_value(json!({"method": "ping", "params": {"unknown": 1}})).unwrap();
+        let _req: PingRequest = serde_json::from_value(json!({"method": "ping"})).unwrap();
+    }
+
+    #[test]
+    fn test_legacy_meta_extension_still_serializes() {
+        // Pre-3.x code inserts `MetaObject` into extensions through the
+        // deprecated `Meta` name; its metadata must not be silently dropped.
+        let mut extensions = Extensions::new();
+        let mut legacy = crate::model::MetaObject::new();
+        legacy.insert("traceId".to_string(), json!("legacy"));
+        extensions.insert(legacy);
+
+        let req = CallToolRequest {
+            extensions,
+            method: Default::default(),
+            params: CallToolRequestParams {
+                meta: None,
+                name: "my_tool".into(),
+                arguments: None,
+                task: None,
+                input_responses: None,
+                request_state: None,
+            },
+        };
+
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["params"]["_meta"]["traceId"], json!("legacy"));
+    }
+
+    #[test]
+    fn test_typed_meta_wins_over_legacy_extension_on_conflict() {
+        let mut extensions = Extensions::new();
+        let mut legacy = crate::model::MetaObject::new();
+        legacy.insert("shared".to_string(), json!("legacy"));
+        legacy.insert("legacy_only".to_string(), json!("kept"));
+        extensions.insert(legacy);
+        let mut typed = RequestMetaObject::new();
+        typed.insert("shared".to_string(), json!("typed"));
+        extensions.insert(typed);
+
+        let req = CallToolRequest {
+            extensions,
+            method: Default::default(),
+            params: CallToolRequestParams {
+                meta: None,
+                name: "my_tool".into(),
+                arguments: None,
+                task: None,
+                input_responses: None,
+                request_state: None,
+            },
+        };
+
+        let value = serde_json::to_value(&req).unwrap();
+        let meta = value["params"]["_meta"].as_object().unwrap();
+        assert_eq!(meta.get("shared").unwrap(), "typed");
+        assert_eq!(meta.get("legacy_only").unwrap(), "kept");
+    }
+
+    #[test]
+    fn test_arbitrary_meta_keys_round_trip_unchanged() {
+        let input = json!({
+            "method": "tools/call",
+            "params": {
+                "_meta": {
+                    "progressToken": 5,
+                    "vendor.example/custom": {"nested": ["a", 1, null]},
+                    "another-key": true
+                },
+                "name": "my_tool"
+            }
+        });
+        let req: CallToolRequest = serde_json::from_value(input.clone()).unwrap();
+        let output = serde_json::to_value(&req).unwrap();
+        assert_eq!(input, output);
     }
 }

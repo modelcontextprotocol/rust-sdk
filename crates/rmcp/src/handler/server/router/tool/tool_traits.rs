@@ -9,7 +9,7 @@ use crate::{
         tool::schema_for_output,
         wrapper::{Json, Parameters},
     },
-    model::{Icon, JsonObject, Meta, ToolAnnotations, ToolExecution},
+    model::{Icon, JsonObject, MetaObject, ToolAnnotations, ToolExecution},
     schemars::JsonSchema,
     service::{MaybeSend, MaybeSendFuture},
 };
@@ -77,7 +77,7 @@ pub trait ToolBase {
     fn icons() -> Option<Vec<Icon>> {
         None
     }
-    fn meta() -> Option<Meta> {
+    fn meta() -> Option<MetaObject> {
         None
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::Meta;
+use super::MetaObject;
 
 /// Metadata for augmenting a request with task execution (spec `TaskMetadata`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -139,7 +139,7 @@ impl Task {
 pub struct CreateTaskResult {
     pub task: Task,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl CreateTaskResult {
@@ -149,7 +149,7 @@ impl CreateTaskResult {
     }
 
     /// Sets the protocol-level metadata for this result.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -165,7 +165,7 @@ impl CreateTaskResult {
 #[non_exhaustive]
 pub struct GetTaskResult {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     #[serde(flatten)]
     pub task: Task,
 }
@@ -222,7 +222,7 @@ impl<'de> serde::Deserialize<'de> for GetTaskPayloadResult {
 #[non_exhaustive]
 pub struct CancelTaskResult {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     #[serde(flatten)]
     pub task: Task,
 }

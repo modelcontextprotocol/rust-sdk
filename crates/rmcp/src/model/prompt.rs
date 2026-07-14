@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Annotations, ContentBlock, Icon, Meta, Role,
+    Annotations, ContentBlock, Icon, MetaObject, Role,
     content::{AudioContent, EmbeddedResource, ImageContent, TextContent},
     resource::ResourceContents,
 };
@@ -22,7 +22,7 @@ pub struct Prompt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl Prompt {
@@ -70,7 +70,7 @@ impl Prompt {
         self
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -144,7 +144,7 @@ impl PromptMessage {
         role: Role,
         data: &[u8],
         mime_type: &str,
-        meta: Option<Meta>,
+        meta: Option<MetaObject>,
         annotations: Option<Annotations>,
     ) -> Self {
         use base64::{Engine, prelude::BASE64_STANDARD};
@@ -166,7 +166,7 @@ impl PromptMessage {
         role: Role,
         data: &[u8],
         mime_type: &str,
-        meta: Option<Meta>,
+        meta: Option<MetaObject>,
         annotations: Option<Annotations>,
     ) -> Self {
         use base64::{Engine, prelude::BASE64_STANDARD};
@@ -188,8 +188,8 @@ impl PromptMessage {
         uri: String,
         mime_type: Option<String>,
         text: Option<String>,
-        resource_meta: Option<Meta>,
-        resource_content_meta: Option<Meta>,
+        resource_meta: Option<MetaObject>,
+        resource_content_meta: Option<MetaObject>,
         annotations: Option<Annotations>,
     ) -> Self {
         let resource_contents = match text {
@@ -216,7 +216,11 @@ impl PromptMessage {
         }
     }
 
-    pub fn new_text_with_meta<S: Into<String>>(role: Role, text: S, meta: Option<Meta>) -> Self {
+    pub fn new_text_with_meta<S: Into<String>>(
+        role: Role,
+        text: S,
+        meta: Option<MetaObject>,
+    ) -> Self {
         Self {
             role,
             content: ContentBlock::Text(TextContent {

@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Annotations, Meta, resource::ResourceContents};
+use super::{Annotations, MetaObject, resource::ResourceContents};
 
 // ---------------------------------------------------------------------------
 // Flat content structs
@@ -28,7 +28,7 @@ pub struct TextContent {
     pub text: String,
     /// Optional protocol-level metadata for this content block.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     /// Optional annotations describing how the client should use this content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -43,7 +43,7 @@ impl TextContent {
         }
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -66,7 +66,7 @@ pub struct ImageContent {
     pub mime_type: String,
     /// Optional protocol-level metadata for this content block.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     /// Optional annotations describing how the client should use this content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -82,7 +82,7 @@ impl ImageContent {
         }
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -105,7 +105,7 @@ pub struct AudioContent {
     pub mime_type: String,
     /// Optional protocol-level metadata for this content block.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     /// Optional annotations describing how the client should use this content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -121,7 +121,7 @@ impl AudioContent {
         }
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -142,7 +142,7 @@ pub struct EmbeddedResource {
     pub resource: ResourceContents,
     /// Optional protocol-level metadata for this content block.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     /// Optional annotations describing how the client should use this content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -164,7 +164,7 @@ impl EmbeddedResource {
         }
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -189,7 +189,7 @@ pub struct ToolUseContent {
     pub name: String,
     pub input: super::JsonObject,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 /// Tool execution result in user message (SEP-1577).
@@ -203,7 +203,7 @@ pub struct ToolUseContent {
 )]
 pub struct ToolResultContent {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
     pub tool_use_id: String,
     pub content: Vec<ContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_audio_content_has_meta() {
-        let audio = AudioContent::new("data", "audio/wav").with_meta(Meta::default());
+        let audio = AudioContent::new("data", "audio/wav").with_meta(MetaObject::default());
         let json = serde_json::to_value(&audio).unwrap();
         assert!(json.get("_meta").is_some());
     }

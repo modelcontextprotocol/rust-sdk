@@ -11,8 +11,8 @@ use std::{
 use rmcp::{
     ClientHandler, Peer, RoleServer, ServiceError, ServiceExt,
     model::{
-        CallToolRequestParams, ClientRequest, Meta, NumberOrString, ProgressNotificationParam,
-        ProgressToken, Request,
+        CallToolRequestParams, ClientRequest, NumberOrString, ProgressNotificationParam,
+        ProgressToken, Request, RequestMetaObject,
     },
     service::PeerRequestOptions,
     tool, tool_router,
@@ -46,7 +46,7 @@ impl ProgressTimeoutServer {
     #[tool]
     async fn delayed_with_progress(
         &self,
-        meta: Meta,
+        meta: RequestMetaObject,
         client: Peer<RoleServer>,
     ) -> Result<(), rmcp::ErrorData> {
         let progress_token = meta
@@ -173,7 +173,7 @@ async fn generated_progress_token_overrides_option_meta_token() -> anyhow::Resul
     let client = start_pair().await?;
     let mut options =
         PeerRequestOptions::with_timeout(Duration::from_millis(75)).reset_timeout_on_progress();
-    options.meta = Some(Meta::with_progress_token(ProgressToken(
+    options.meta = Some(RequestMetaObject::with_progress_token(ProgressToken(
         NumberOrString::Number(999_999),
     )));
 

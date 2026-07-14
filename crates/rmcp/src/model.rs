@@ -339,7 +339,8 @@ pub struct ProgressToken(pub NumberOrString);
 pub struct Request<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -372,7 +373,8 @@ pub struct RequestOptionalParam<M = String, P = JsonObject> {
     pub method: M,
     // #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<P>,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -394,7 +396,8 @@ impl<M: Default, P> RequestOptionalParam<M, P> {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RequestNoParam<M = String> {
     pub method: M,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -415,7 +418,8 @@ impl<M> GetExtensions for RequestNoParam<M> {
 pub struct Notification<M = String, P = JsonObject> {
     pub method: M,
     pub params: P,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -437,7 +441,8 @@ impl<M: Default, P> Notification<M, P> {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct NotificationNoParam<M = String> {
     pub method: M,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -782,7 +787,7 @@ pub struct CancelledNotificationParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<NotificationMetaObject>,
 }
 
 impl CancelledNotificationParam {
@@ -818,7 +823,8 @@ pub type CancelledNotification =
 pub struct CustomNotification {
     pub method: String,
     pub params: Option<Value>,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -853,7 +859,8 @@ impl CustomNotification {
 pub struct CustomRequest {
     pub method: String,
     pub params: Option<Value>,
-    /// extensions will carry anything possible in the context, including [`Meta`]
+    /// extensions will carry anything possible in the context, including the metadata
+    /// ([`RequestMetaObject`] for requests, [`NotificationMetaObject`] for notifications)
     ///
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
@@ -898,7 +905,7 @@ pub type InitializedNotification = NotificationNoParam<InitializedNotificationMe
 pub struct InitializeRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// The MCP protocol version this client supports
     pub protocol_version: ProtocolVersion,
     /// The capabilities this client supports (sampling, roots, etc.)
@@ -925,10 +932,10 @@ impl InitializeRequestParams {
 }
 
 impl RequestParamsMeta for InitializeRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -956,7 +963,7 @@ pub struct InitializeResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl InitializeResult {
@@ -1167,7 +1174,7 @@ impl Implementation {
 pub struct PaginatedRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
@@ -1180,10 +1187,10 @@ impl PaginatedRequestParams {
 }
 
 impl RequestParamsMeta for PaginatedRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -1214,7 +1221,7 @@ pub struct ProgressNotificationParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<NotificationMetaObject>,
 }
 
 impl ProgressNotificationParam {
@@ -1287,7 +1294,7 @@ macro_rules! paginated_result {
             #[serde(default)]
             pub result_type: ResultType,
             #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-            pub meta: Option<Meta>,
+            pub meta: Option<MetaObject>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub next_cursor: Option<Cursor>,
             /// Time, in milliseconds, that this result may be treated as fresh (SEP-2549).
@@ -1365,7 +1372,7 @@ const_string!(ReadResourceRequestMethod = "resources/read");
 pub struct ReadResourceRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// The URI of the resource to read
     pub uri: String,
     /// Client responses to server-initiated input requests from a previous
@@ -1389,7 +1396,7 @@ impl ReadResourceRequestParams {
     }
 
     /// Set the metadata for this request.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -1408,10 +1415,10 @@ impl ReadResourceRequestParams {
 }
 
 impl RequestParamsMeta for ReadResourceRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -1446,7 +1453,7 @@ pub struct ReadResourceResult {
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl ReadResourceResult {
@@ -1491,7 +1498,7 @@ const_string!(SubscribeRequestMethod = "resources/subscribe");
 pub struct SubscribeRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// The URI of the resource to subscribe to
     pub uri: String,
 }
@@ -1507,10 +1514,10 @@ impl SubscribeRequestParams {
 }
 
 impl RequestParamsMeta for SubscribeRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -1531,7 +1538,7 @@ const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
 pub struct UnsubscribeRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// The URI of the resource to unsubscribe from
     pub uri: String,
 }
@@ -1547,10 +1554,10 @@ impl UnsubscribeRequestParams {
 }
 
 impl RequestParamsMeta for UnsubscribeRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -1572,7 +1579,7 @@ pub struct ResourceUpdatedNotificationParam {
     /// The URI of the resource that was updated
     pub uri: String,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<NotificationMetaObject>,
 }
 
 impl ResourceUpdatedNotificationParam {
@@ -1611,7 +1618,7 @@ const_string!(GetPromptRequestMethod = "prompts/get");
 pub struct GetPromptRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
@@ -1643,7 +1650,7 @@ impl GetPromptRequestParams {
     }
 
     /// Set the metadata for this request.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -1662,10 +1669,10 @@ impl GetPromptRequestParams {
 }
 
 impl RequestParamsMeta for GetPromptRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -1722,7 +1729,7 @@ const_string!(SetLevelRequestMethod = "logging/setLevel");
 pub struct SetLevelRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// The desired logging level
     pub level: LoggingLevel,
 }
@@ -1735,10 +1742,10 @@ impl SetLevelRequestParams {
 }
 
 impl RequestParamsMeta for SetLevelRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -1773,7 +1780,7 @@ pub struct LoggingMessageNotificationParam {
     /// The actual log data
     pub data: Value,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<NotificationMetaObject>,
 }
 
 impl LoggingMessageNotificationParam {
@@ -1994,7 +2001,7 @@ pub struct SamplingMessage {
     /// The actual content of the message (text, image, audio, tool use, or tool result)
     pub content: SamplingContent<SamplingMessageContentBlock>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 /// Content types for sampling messages (SEP-1577).
@@ -2161,7 +2168,7 @@ pub enum ContextInclusion {
 pub struct CreateMessageRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// Task metadata for async task management (SEP-1319)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<TaskMetadata>,
@@ -2196,10 +2203,10 @@ pub struct CreateMessageRequestParams {
 }
 
 impl RequestParamsMeta for CreateMessageRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -2516,7 +2523,7 @@ impl CompletionContext {
 pub struct CompleteRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     pub r#ref: Reference,
     pub argument: ArgumentInfo,
     /// Optional context containing previously resolved argument values
@@ -2543,10 +2550,10 @@ impl CompleteRequestParams {
 }
 
 impl RequestParamsMeta for CompleteRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -2646,7 +2653,7 @@ pub struct CompleteResult {
     pub result_type: ResultType,
     pub completion: CompletionInfo,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl CompleteResult {
@@ -2789,7 +2796,7 @@ pub struct Root {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl Root {
@@ -2809,7 +2816,7 @@ impl Root {
     }
 
     /// Sets the protocol-level metadata for this root.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -2833,7 +2840,7 @@ pub type ListRootsRequest = RequestNoParam<ListRootsRequestMethod>;
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl ListRootsResult {
@@ -2843,7 +2850,7 @@ impl ListRootsResult {
     }
 
     /// Sets the protocol-level metadata for this result.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -2889,14 +2896,14 @@ enum CreateElicitationRequestParamDeserializeHelper {
     #[serde(rename = "form", rename_all = "camelCase")]
     FormElicitationParam {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<RequestMetaObject>,
         message: String,
         requested_schema: ElicitationSchema,
     },
     #[serde(rename = "url", rename_all = "camelCase")]
     UrlElicitationParam {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<RequestMetaObject>,
         message: String,
         url: String,
         elicitation_id: String,
@@ -2904,7 +2911,7 @@ enum CreateElicitationRequestParamDeserializeHelper {
     #[serde(untagged, rename_all = "camelCase")]
     FormElicitationParamBackwardsCompat {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<RequestMetaObject>,
         message: String,
         requested_schema: ElicitationSchema,
     },
@@ -2988,7 +2995,7 @@ pub enum ElicitRequestParams {
     FormElicitationParams {
         /// Protocol-level metadata for this request (SEP-1319)
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<RequestMetaObject>,
         /// Human-readable message explaining what input is needed from the user.
         /// This should be clear and provide sufficient context for the user to understand
         /// what information they need to provide.
@@ -3003,7 +3010,7 @@ pub enum ElicitRequestParams {
     UrlElicitationParams {
         /// Protocol-level metadata for this request (SEP-1319)
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-        meta: Option<Meta>,
+        meta: Option<RequestMetaObject>,
         /// Human-readable message explaining what input is needed from the user.
         /// This should be clear and provide sufficient context for the user to understand
         /// what information they need to provide.
@@ -3018,13 +3025,13 @@ pub enum ElicitRequestParams {
 }
 
 impl RequestParamsMeta for ElicitRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         match self {
             ElicitRequestParams::FormElicitationParams { meta, .. } => meta.as_ref(),
             ElicitRequestParams::UrlElicitationParams { meta, .. } => meta.as_ref(),
         }
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         match self {
             ElicitRequestParams::FormElicitationParams { meta, .. } => meta,
             ElicitRequestParams::UrlElicitationParams { meta, .. } => meta,
@@ -3059,7 +3066,7 @@ pub struct ElicitResult {
 
     /// Optional protocol-level metadata for this result.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl ElicitResult {
@@ -3079,7 +3086,7 @@ impl ElicitResult {
     }
 
     /// Set the metadata on this result.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -3121,7 +3128,7 @@ pub struct CallToolResult {
     pub is_error: Option<bool>,
     /// Optional protocol-level metadata for this result
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 // Custom Deserialize implementation that:
@@ -3143,7 +3150,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
             structured_content: Option<Value>,
             is_error: Option<bool>,
             #[serde(rename = "_meta")]
-            meta: Option<Meta>,
+            meta: Option<MetaObject>,
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -3290,7 +3297,7 @@ impl CallToolResult {
     }
 
     /// Set the metadata on this result
-    pub fn with_meta(mut self, meta: Option<Meta>) -> Self {
+    pub fn with_meta(mut self, meta: Option<MetaObject>) -> Self {
         self.meta = meta;
         self
     }
@@ -3349,7 +3356,7 @@ const_string!(CallToolRequestMethod = "tools/call");
 pub struct CallToolRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// The name of the tool to call
     pub name: Cow<'static, str>,
     /// Arguments to pass to the tool (must match the tool's input schema)
@@ -3407,10 +3414,10 @@ impl CallToolRequestParams {
 }
 
 impl RequestParamsMeta for CallToolRequestParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -3503,7 +3510,7 @@ pub struct GetPromptResult {
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl GetPromptResult {
@@ -3543,7 +3550,7 @@ pub type GetTaskInfoRequest = GetTaskRequest;
 pub struct GetTaskParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     pub task_id: String,
 }
 
@@ -3557,10 +3564,10 @@ impl GetTaskParams {
 }
 
 impl RequestParamsMeta for GetTaskParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -3589,7 +3596,7 @@ pub type GetTaskResultRequest = GetTaskPayloadRequest;
 pub struct GetTaskPayloadParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     pub task_id: String,
 }
 
@@ -3603,10 +3610,10 @@ impl GetTaskPayloadParams {
 }
 
 impl RequestParamsMeta for GetTaskPayloadParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -3626,7 +3633,7 @@ pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
 pub struct CancelTaskParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     pub task_id: String,
 }
 
@@ -3640,10 +3647,10 @@ impl CancelTaskParams {
 }
 
 impl RequestParamsMeta for CancelTaskParams {
-    fn meta(&self) -> Option<&Meta> {
+    fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
-    fn meta_mut(&mut self) -> &mut Option<Meta> {
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
     }
 }
@@ -3666,7 +3673,7 @@ const_string!(TaskStatusNotificationMethod = "notifications/tasks/status");
 #[non_exhaustive]
 pub struct TaskStatusNotificationParam {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<NotificationMetaObject>,
     #[serde(flatten)]
     pub task: crate::model::Task,
 }
@@ -3676,7 +3683,7 @@ impl TaskStatusNotificationParam {
         Self { meta: None, task }
     }
 
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: NotificationMetaObject) -> Self {
         self.meta = Some(meta);
         self
     }
@@ -3717,7 +3724,7 @@ pub struct ListTasksResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 impl ListTasksResult {
@@ -4487,7 +4494,9 @@ mod tests {
         {
             assert_eq!(
                 meta,
-                Some(Meta(object!({ "meta_form_key_1": "meta form value 1" })))
+                Some(RequestMetaObject(MetaObject(
+                    object!({ "meta_form_key_1": "meta form value 1" })
+                )))
             );
             assert_eq!(message, "Please provide more details.");
             assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
@@ -4514,7 +4523,9 @@ mod tests {
         {
             assert_eq!(
                 meta,
-                Some(Meta(object!({ "meta_url_key_1": "meta url value 1" })))
+                Some(RequestMetaObject(MetaObject(
+                    object!({ "meta_url_key_1": "meta url value 1" })
+                )))
             );
             assert_eq!(message, "Please fill out the form at the following URL.");
             assert_eq!(url, "https://example.com/form");
@@ -4527,7 +4538,9 @@ mod tests {
     #[test]
     fn test_elicitation_serialization() {
         let form_elicitation = ElicitRequestParams::FormElicitationParams {
-            meta: Some(Meta(object!({ "meta_form_key_1": "meta form value 1" }))),
+            meta: Some(RequestMetaObject(MetaObject(
+                object!({ "meta_form_key_1": "meta form value 1" }),
+            ))),
             message: "Please provide more details.".to_string(),
             requested_schema: ElicitationSchema::builder()
                 .title("User Details")
@@ -4551,7 +4564,9 @@ mod tests {
         assert_eq!(json_form, expected_form_json);
 
         let url_elicitation = ElicitRequestParams::UrlElicitationParams {
-            meta: Some(Meta(object!({ "meta_url_key_1": "meta url value 1" }))),
+            meta: Some(RequestMetaObject(MetaObject(
+                object!({ "meta_url_key_1": "meta url value 1" }),
+            ))),
             message: "Please fill out the form at the following URL.".to_string(),
             url: "https://example.com/form".to_string(),
             elicitation_id: "elicitation-123".to_string(),

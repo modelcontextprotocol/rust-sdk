@@ -125,7 +125,7 @@ async fn test_elicitation_result_serialization() {
     assert_eq!(deserialized.meta, None);
 
     // Test protocol-level metadata round-trips as _meta.
-    let meta_result = ElicitResult::new(ElicitationAction::Accept).with_meta(Meta(object!({
+    let meta_result = ElicitResult::new(ElicitationAction::Accept).with_meta(MetaObject(object!({
         "traceId": "elicitation-123"
     })));
 
@@ -139,7 +139,7 @@ async fn test_elicitation_result_serialization() {
     let deserialized: ElicitResult = serde_json::from_value(expected).unwrap();
     assert_eq!(
         deserialized.meta,
-        Some(Meta(object!({ "traceId": "elicitation-123" })))
+        Some(MetaObject(object!({ "traceId": "elicitation-123" })))
     );
 }
 

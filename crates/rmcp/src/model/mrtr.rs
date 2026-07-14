@@ -42,8 +42,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-    CallToolResult, CreateMessageRequest, ElicitRequest, GetPromptResult, ListRootsRequest, Meta,
-    ReadResourceResult, ResultType, ServerResult,
+    CallToolResult, CreateMessageRequest, ElicitRequest, GetPromptResult, ListRootsRequest,
+    MetaObject, ReadResourceResult, ResultType, ServerResult,
 };
 
 /// Default maximum number of MRTR rounds a high-level client call will drive.
@@ -220,7 +220,7 @@ pub struct InputRequiredResult {
 
     /// Optional protocol-level metadata.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
+    pub meta: Option<MetaObject>,
 }
 
 /// Custom deserializer that requires `resultType: "input_required"` to prevent
@@ -238,7 +238,7 @@ impl<'de> Deserialize<'de> for InputRequiredResult {
             input_requests: Option<InputRequests>,
             request_state: Option<String>,
             #[serde(rename = "_meta")]
-            meta: Option<Meta>,
+            meta: Option<MetaObject>,
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -283,7 +283,7 @@ impl InputRequiredResult {
     }
 
     /// Sets optional metadata.
-    pub fn with_meta(mut self, meta: Meta) -> Self {
+    pub fn with_meta(mut self, meta: MetaObject) -> Self {
         self.meta = Some(meta);
         self
     }

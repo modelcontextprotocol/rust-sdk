@@ -52,8 +52,8 @@ use crate::{
     error::ErrorData as McpError,
     model::{
         CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
-        JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, Meta,
-        NumberOrString, ProgressToken, RequestId,
+        JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+        NotificationMetaObject, NumberOrString, ProgressToken, RequestId, RequestMetaObject,
     },
     transport::{DynamicTransportError, IntoTransport, Transport},
 };
@@ -109,17 +109,17 @@ impl<T> TransferObject for T where
 
 #[allow(private_bounds, reason = "there's no the third implementation")]
 pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
-    type Req: TransferObject + GetMeta + GetExtensions;
+    type Req: TransferObject + GetMeta<Metadata = RequestMetaObject> + GetExtensions;
     type Resp: TransferObject;
     type Not: TryInto<CancelledNotification, Error = Self::Not>
         + From<CancelledNotification>
         + TransferObject;
-    type PeerReq: TransferObject + GetMeta + GetExtensions;
+    type PeerReq: TransferObject + GetMeta<Metadata = RequestMetaObject> + GetExtensions;
     type PeerResp: TransferObject;
     type PeerNot: TryInto<CancelledNotification, Error = Self::PeerNot>
         + From<CancelledNotification>
         + TransferObject
-        + GetMeta
+        + GetMeta<Metadata = NotificationMetaObject>
         + GetExtensions;
     type InitializeError;
     const IS_CLIENT: bool;
@@ -544,7 +544,7 @@ type ProxyOutbound<R> = mpsc::Receiver<PeerSinkMessage<R>>;
 #[non_exhaustive]
 pub struct PeerRequestOptions {
     pub timeout: Option<Duration>,
-    pub meta: Option<Meta>,
+    pub meta: Option<RequestMetaObject>,
     /// Reset the request timeout when a matching progress notification is received.
     pub reset_timeout_on_progress: bool,
     /// Maximum total time to wait for the request, regardless of progress notifications.
@@ -862,7 +862,7 @@ pub struct RequestContext<R: ServiceRole> {
     /// this token will be cancelled when the [`CancelledNotification`] is received.
     pub ct: CancellationToken,
     pub id: RequestId,
-    pub meta: Meta,
+    pub meta: RequestMetaObject,
     pub extensions: Extensions,
     /// An interface to fetch the remote client or server
     pub peer: Peer<R>,
@@ -874,7 +874,7 @@ impl<R: ServiceRole> RequestContext<R> {
         Self {
             ct: CancellationToken::new(),
             id,
-            meta: Meta::default(),
+            meta: RequestMetaObject::default(),
             extensions: Extensions::default(),
             peer,
         }
@@ -895,7 +895,7 @@ impl RequestContext<RoleServer> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct NotificationContext<R: ServiceRole> {
-    pub meta: Meta,
+    pub meta: NotificationMetaObject,
     pub extensions: Extensions,
     /// An interface to fetch the remote client or server
     pub peer: Peer<R>,
@@ -1171,7 +1171,7 @@ where
                         let context_ct = request_ct.child_token();
                         local_ct_pool.insert(id.clone(), request_ct);
                         let mut extensions = Extensions::new();
-                        let mut meta = Meta::new();
+                        let mut meta = RequestMetaObject::new();
                         // avoid clone
                         // swap meta firstly, otherwise progress token will be lost
                         std::mem::swap(&mut meta, request.get_meta_mut());
@@ -1226,7 +1226,7 @@ where
                     {
                         let service = shared_service.clone();
                         let mut extensions = Extensions::new();
-                        let mut meta = Meta::new();
+                        let mut meta = NotificationMetaObject::new();
                         // avoid clone
                         std::mem::swap(&mut extensions, notification.extensions_mut());
                         std::mem::swap(&mut meta, notification.get_meta_mut());

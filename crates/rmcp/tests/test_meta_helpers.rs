@@ -1,6 +1,8 @@
 #![allow(deprecated)]
 
-use rmcp::model::{ClientCapabilities, Implementation, LoggingLevel, Meta, ProtocolVersion};
+use rmcp::model::{
+    ClientCapabilities, Implementation, LoggingLevel, ProtocolVersion, RequestMetaObject,
+};
 use serde_json::json;
 
 const META_KEY_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
@@ -10,7 +12,7 @@ const META_KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
 
 #[test]
 fn meta_setters_store_sep_2575_values() {
-    let mut meta = Meta::new();
+    let mut meta = RequestMetaObject::new();
     meta.set_protocol_version(ProtocolVersion::V_2026_07_28);
     meta.set_client_info(Implementation::new("test-client", "1.0.0"));
     meta.set_client_capabilities(ClientCapabilities::default());
@@ -30,7 +32,7 @@ fn meta_setters_store_sep_2575_values() {
 
 #[test]
 fn meta_accessors_decode_wire_values() {
-    let meta: Meta = serde_json::from_value(json!({
+    let meta: RequestMetaObject = serde_json::from_value(json!({
         "progressToken": "progress-1",
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientInfo": {
@@ -58,7 +60,7 @@ fn meta_accessors_decode_wire_values() {
 
 #[test]
 fn meta_accessors_ignore_missing_or_malformed_values() {
-    let meta: Meta = serde_json::from_value(json!({
+    let meta: RequestMetaObject = serde_json::from_value(json!({
         "io.modelcontextprotocol/protocolVersion": 20260728,
         "io.modelcontextprotocol/clientInfo": "not an implementation",
         "io.modelcontextprotocol/clientCapabilities": "not capabilities",
