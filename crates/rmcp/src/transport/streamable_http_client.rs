@@ -288,6 +288,12 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     + '_;
     /// Send a message while enforcing a maximum raw SSE event size.
     ///
+    /// `max_sse_event_size` is not a per-request option: it is the
+    /// transport-wide [`StreamableHttpClientTransportConfig::max_sse_event_size`]
+    /// value, passed identically on every call because the limit must be applied
+    /// inside the client (at the raw byte layer, before SSE parsing) rather than
+    /// by the caller.
+    ///
     /// Custom clients that parse SSE responses should override this method.
     /// The default implementation delegates to [`Self::post_message`].
     fn post_message_with_max_sse_event_size(
@@ -325,6 +331,12 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     > + Send
     + '_;
     /// Open an SSE stream while enforcing a maximum raw event size.
+    ///
+    /// `max_sse_event_size` is not a per-request option: it is the
+    /// transport-wide [`StreamableHttpClientTransportConfig::max_sse_event_size`]
+    /// value, passed identically on every call because the limit must be applied
+    /// inside the client (at the raw byte layer, before SSE parsing) rather than
+    /// by the caller.
     ///
     /// Custom clients that parse SSE responses should override this method.
     /// The default implementation delegates to [`Self::get_stream`].

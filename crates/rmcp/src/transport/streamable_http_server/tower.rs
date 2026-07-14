@@ -39,7 +39,7 @@ use crate::{
 };
 
 /// Default maximum POST request body size (4 MiB).
-pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 #[non_exhaustive]
 #[derive(Debug, Clone)]
