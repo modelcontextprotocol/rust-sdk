@@ -3899,7 +3899,7 @@ macro_rules! ts_union {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         #[allow(clippy::large_enum_variant)]
-        #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+        #[non_exhaustive]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub enum $U {
             $($declared)*
