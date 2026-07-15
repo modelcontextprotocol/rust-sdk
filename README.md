@@ -74,6 +74,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 </details>
 
+### Client lifecycle modes
+
+`serve()` uses the legacy MCP lifecycle: the client sends `initialize`, receives
+the negotiated server information, and then sends `notifications/initialized`.
+Use [`ClientServiceExt::serve_with_lifecycle`](crates/rmcp/src/service/client.rs) to
+select another lifecycle explicitly:
+
+```rust, ignore
+use rmcp::{ClientInfo, ClientLifecycleMode, ClientServiceExt, ProtocolVersion};
+
+// Start directly with server/discover and include client metadata on every request.
+let client = ClientInfo::default()
+    .serve_with_lifecycle(
+        transport,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await?;
+
+// Or probe the modern lifecycle and fall back when a legacy server reports
+// that server/discover is not implemented.
+let client = ClientInfo::default()
+    .serve_with_lifecycle(
+        transport,
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            legacy_version: Some(ProtocolVersion::V_2025_11_25),
+        },
+    )
+    .await?;
+```
+
+`ClientLifecycleMode::Initialize` is equivalent to the existing `serve()` behavior.
+Modern startup does not send `notifications/initialized`; discovery completes
+startup, and each subsequent request carries its protocol version, client
+information, and capabilities in `_meta`.
+
 ### Build a Server
 
 <details>
@@ -812,10 +850,11 @@ impl ServerHandler for MyServer {
 
 ### Initialized notification
 
-Clients send `initialized` after the handshake completes:
+Legacy clients send `initialized` after the `initialize` handshake completes.
+Clients using `ClientLifecycleMode::Discover` do not send this notification:
 
 ```rust
-// Sent automatically by rmcp during the serve() handshake.
+// Sent automatically by rmcp during the legacy serve() handshake.
 // Servers handle it via:
 impl ServerHandler for MyServer {
     async fn on_initialized(

@@ -226,6 +226,14 @@ jobs:
             --scenario sep-2322-client-request-state \
             -o conformance-client-results/mrtr
 
+      - name: Run draft SEP-2575 client scenario
+        run: |
+          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
+            --command "$(pwd)/target/debug/conformance-client" \
+            --scenario request-metadata \
+            --spec-version draft \
+            -o conformance-client-results/sep-2575
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7

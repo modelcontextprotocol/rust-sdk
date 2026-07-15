@@ -54,6 +54,17 @@ pub enum ClientInitializeError {
     #[error("JSON-RPC error: {0}")]
     JsonRpcError(ErrorData),
 
+    #[error(
+        "no compatible protocol version (client: {client_supported:?}, server: {server_supported:?})"
+    )]
+    NoCompatibleProtocolVersion {
+        client_supported: Vec<ProtocolVersion>,
+        server_supported: Vec<ProtocolVersion>,
+    },
+
+    #[error("modern startup requires at least one preferred protocol version")]
+    NoPreferredProtocolVersion,
+
     #[error("Cancelled")]
     Cancelled,
 }
@@ -177,6 +188,43 @@ impl ServiceRole for RoleClient {
 
 pub type ServerSink = Peer<RoleClient>;
 
+/// Selects how a client establishes its MCP lifecycle.
+///
+/// Existing [`ServiceExt::serve`] behavior remains legacy initialization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClientLifecycleMode {
+    /// Use the legacy `initialize` / `notifications/initialized` handshake.
+    Initialize,
+    /// Use `server/discover` and send self-contained per-request metadata.
+    Discover {
+        preferred_versions: Vec<ProtocolVersion>,
+    },
+    /// Probe with `server/discover`, falling back only when the peer proves it is legacy.
+    Auto {
+        preferred_versions: Vec<ProtocolVersion>,
+        legacy_version: Option<ProtocolVersion>,
+    },
+}
+
+/// Client-specific lifecycle entry points.
+pub trait ClientServiceExt: Service<RoleClient> + Sized {
+    fn serve_with_lifecycle<T, E, A>(
+        self,
+        transport: T,
+        lifecycle: ClientLifecycleMode,
+    ) -> impl Future<Output = Result<RunningService<RoleClient, Self>, ClientInitializeError>>
+    + MaybeSendFuture
+    where
+        T: IntoTransport<RoleClient, E, A>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        serve_client_with_lifecycle(self, transport, lifecycle)
+    }
+}
+
+impl<S: Service<RoleClient>> ClientServiceExt for S {}
+
 impl<S: Service<RoleClient>> ServiceExt<RoleClient> for S {
     fn serve_with_ct<T, E, A>(
         self,
@@ -202,7 +250,13 @@ where
     T: IntoTransport<RoleClient, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
-    serve_client_with_ct(service, transport, Default::default()).await
+    serve_client_with_lifecycle_and_ct(
+        service,
+        transport,
+        ClientLifecycleMode::Initialize,
+        Default::default(),
+    )
+    .await
 }
 
 pub async fn serve_client_with_ct<S, T, E, A>(
@@ -215,8 +269,36 @@ where
     T: IntoTransport<RoleClient, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
+    serve_client_with_lifecycle_and_ct(service, transport, ClientLifecycleMode::Initialize, ct)
+        .await
+}
+
+pub async fn serve_client_with_lifecycle<S, T, E, A>(
+    service: S,
+    transport: T,
+    lifecycle: ClientLifecycleMode,
+) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
+where
+    S: Service<RoleClient>,
+    T: IntoTransport<RoleClient, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    serve_client_with_lifecycle_and_ct(service, transport, lifecycle, Default::default()).await
+}
+
+pub async fn serve_client_with_lifecycle_and_ct<S, T, E, A>(
+    service: S,
+    transport: T,
+    lifecycle: ClientLifecycleMode,
+    ct: CancellationToken,
+) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
+where
+    S: Service<RoleClient>,
+    T: IntoTransport<RoleClient, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     tokio::select! {
-        result = serve_client_with_ct_inner(service, transport.into_transport(), ct.clone()) => { result }
+        result = serve_client_with_ct_inner(service, transport.into_transport(), lifecycle, ct.clone()) => { result }
         _ = ct.cancelled() => {
             Err(ClientInitializeError::Cancelled)
         }
@@ -226,6 +308,7 @@ where
 async fn serve_client_with_ct_inner<S, T>(
     service: S,
     transport: T,
+    lifecycle: ClientLifecycleMode,
     ct: CancellationToken,
 ) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
 where
@@ -234,12 +317,71 @@ where
 {
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
+    let (peer, peer_rx) = Peer::new(id_provider.clone(), None);
+    let client_info = service.get_info();
 
-    // service
+    match lifecycle {
+        ClientLifecycleMode::Initialize => {
+            legacy_startup(&service, &mut transport, &id_provider, &peer, client_info).await?;
+        }
+        ClientLifecycleMode::Discover { preferred_versions } => {
+            modern_startup(
+                &service,
+                &mut transport,
+                &id_provider,
+                &peer,
+                &client_info,
+                preferred_versions,
+            )
+            .await?;
+        }
+        ClientLifecycleMode::Auto {
+            preferred_versions,
+            legacy_version,
+        } => {
+            let modern_result = modern_startup(
+                &service,
+                &mut transport,
+                &id_provider,
+                &peer,
+                &client_info,
+                preferred_versions,
+            )
+            .await;
+            match modern_result {
+                Ok(()) => {}
+                Err(ClientInitializeError::JsonRpcError(error))
+                    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
+                {
+                    let mut legacy_info = client_info;
+                    if let Some(version) = legacy_version {
+                        legacy_info.protocol_version = version;
+                    }
+                    legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
+                        .await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(serve_inner(service, transport, peer, peer_rx, ct))
+}
+
+async fn legacy_startup<S, T>(
+    service: &S,
+    transport: &mut T,
+    id_provider: &Arc<AtomicU32RequestIdProvider>,
+    peer: &Peer<RoleClient>,
+    client_info: ClientInfo,
+) -> Result<(), ClientInitializeError>
+where
+    S: Service<RoleClient>,
+    T: Transport<RoleClient> + 'static,
+{
     let id = id_provider.next_request_id();
     let init_request = InitializeRequest {
         method: Default::default(),
-        params: service.get_info(),
+        params: client_info,
         extensions: Default::default(),
     };
     transport
@@ -253,15 +395,8 @@ where
             context: "send initialize request".into(),
         })?;
 
-    let (peer, peer_rx) = Peer::new(id_provider, None);
-
-    let (response, response_id) = expect_response(
-        &mut transport,
-        "initialize response",
-        &service,
-        peer.clone(),
-    )
-    .await?;
+    let (response, response_id) =
+        expect_response(transport, "initialize response", service, peer.clone()).await?;
 
     if id != response_id {
         return Err(ClientInitializeError::ConflictInitResponseId(
@@ -285,7 +420,115 @@ where
     transport.send(notification).await.map_err(|error| {
         ClientInitializeError::transport::<T>(error, "send initialized notification")
     })?;
-    Ok(serve_inner(service, transport, peer, peer_rx, ct))
+    Ok(())
+}
+
+async fn modern_startup<S, T>(
+    service: &S,
+    transport: &mut T,
+    id_provider: &Arc<AtomicU32RequestIdProvider>,
+    peer: &Peer<RoleClient>,
+    client_info: &ClientInfo,
+    preferred_versions: Vec<ProtocolVersion>,
+) -> Result<(), ClientInitializeError>
+where
+    S: Service<RoleClient>,
+    T: Transport<RoleClient> + 'static,
+{
+    if preferred_versions.is_empty() {
+        return Err(ClientInitializeError::NoPreferredProtocolVersion);
+    }
+
+    let mut attempted = Vec::new();
+    let mut candidate = preferred_versions[0].clone();
+    loop {
+        attempted.push(candidate.clone());
+
+        let meta = RequestMetaObject::with_client_context(
+            candidate.clone(),
+            client_info.client_info.clone(),
+            client_info.capabilities.clone(),
+        );
+        let mut discover = DiscoverRequest::new(DiscoverRequestParams {});
+        discover.extensions.insert(meta);
+        let id = id_provider.next_request_id();
+        transport
+            .send(ClientJsonRpcMessage::request(
+                ClientRequest::DiscoverRequest(discover),
+                id.clone(),
+            ))
+            .await
+            .map_err(|error| {
+                ClientInitializeError::transport::<T>(error, "send discover request")
+            })?;
+
+        match expect_response(transport, "discover response", service, peer.clone()).await {
+            Ok((ServerResult::DiscoverResult(result), response_id)) => {
+                if response_id != id {
+                    return Err(ClientInitializeError::ConflictInitResponseId(
+                        id,
+                        response_id,
+                    ));
+                }
+                let Some(selected) =
+                    select_protocol_version(&preferred_versions, &result.supported_versions)
+                else {
+                    return Err(ClientInitializeError::NoCompatibleProtocolVersion {
+                        client_supported: preferred_versions,
+                        server_supported: result.supported_versions,
+                    });
+                };
+                peer.set_peer_info(ServerInfo {
+                    protocol_version: selected.clone(),
+                    capabilities: result.capabilities,
+                    server_info: result.server_info,
+                    instructions: result.instructions,
+                    meta: result.meta,
+                });
+                peer.set_client_request_metadata(ClientRequestMetadata {
+                    protocol_version: selected,
+                    client_info: client_info.client_info.clone(),
+                    client_capabilities: client_info.capabilities.clone(),
+                });
+                return Ok(());
+            }
+            Ok((response, _)) => {
+                return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
+            }
+            Err(ClientInitializeError::JsonRpcError(error))
+                if error.code == crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION =>
+            {
+                let supported = error
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("supported"))
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<Vec<ProtocolVersion>>(value).ok())
+                    .unwrap_or_default();
+                let may_retry_current = attempted
+                    .iter()
+                    .filter(|version| *version == &candidate)
+                    .count()
+                    == 1;
+                let next = preferred_versions
+                    .iter()
+                    .find(|version| {
+                        supported.contains(version)
+                            && (!attempted.contains(version)
+                                || (may_retry_current && *version == &candidate))
+                    })
+                    .cloned();
+                let Some(next) = next else {
+                    return Err(ClientInitializeError::NoCompatibleProtocolVersion {
+                        client_supported: preferred_versions,
+                        server_supported: supported,
+                    });
+                };
+                candidate = next;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 macro_rules! method {

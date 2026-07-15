@@ -217,12 +217,41 @@ where
         }
     };
 
-    let ClientRequest::InitializeRequest(peer_info) = &request else {
-        return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
-            ClientJsonRpcMessage::request(request, id),
-        )));
+    let initialize_request = match request {
+        ClientRequest::InitializeRequest(request) => request,
+        mut request => {
+            if !request
+                .get_meta()
+                .missing_required_keys(&ProtocolVersion::V_2026_07_28)
+                .is_empty()
+            {
+                return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
+                    ClientJsonRpcMessage::request(request, id),
+                )));
+            }
+            let (peer, peer_rx) = Peer::new(id_provider, None);
+            peer.require_request_metadata();
+            let context = RequestContext {
+                ct: ct.child_token(),
+                id: id.clone(),
+                meta: std::mem::take(request.get_meta_mut()),
+                extensions: std::mem::take(request.extensions_mut()),
+                peer: peer.clone(),
+            };
+            let response = match service.handle_request(request, context).await {
+                Ok(result) => ServerJsonRpcMessage::response(result, id),
+                Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
+            };
+            transport.send(response).await.map_err(|error| {
+                ServerInitializeError::transport::<T>(error, "sending modern request response")
+            })?;
+            return Ok(serve_inner(service, transport, peer, peer_rx, ct));
+        }
     };
-    let (peer, peer_rx) = Peer::new(id_provider, Some(peer_info.params.clone()));
+    let requested_protocol_version = initialize_request.params.protocol_version.clone();
+    let mut negotiated_peer_info = initialize_request.params.clone();
+    let (peer, peer_rx) = Peer::new(id_provider, Some(negotiated_peer_info.clone()));
+    let request = ClientRequest::InitializeRequest(initialize_request);
     let context = RequestContext {
         ct: ct.child_token(),
         id: id.clone(),
@@ -231,7 +260,7 @@ where
         peer: peer.clone(),
     };
     // Send initialize response
-    let init_response = service.handle_request(request.clone(), context).await;
+    let init_response = service.handle_request(request, context).await;
     let mut init_response = match init_response {
         Ok(ServerResult::InitializeResult(init_response)) => init_response,
         Ok(result) => {
@@ -247,13 +276,10 @@ where
             return Err(ServerInitializeError::InitializeFailed(e));
         }
     };
-    init_response.protocol_version = negotiate_protocol_version(
-        &peer_info.params.protocol_version,
-        init_response.protocol_version,
-    );
+    init_response.protocol_version =
+        negotiate_protocol_version(&requested_protocol_version, init_response.protocol_version);
     // Update peer_info so context.protocol_version() reflects the negotiated
     // version in all subsequent request handlers.
-    let mut negotiated_peer_info = peer_info.params.clone();
     negotiated_peer_info.protocol_version = init_response.protocol_version.clone();
     peer.set_peer_info(negotiated_peer_info);
     transport

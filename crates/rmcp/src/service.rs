@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use futures::FutureExt;
 #[cfg(not(feature = "local"))]
 use futures::future::BoxFuture;
@@ -51,9 +53,10 @@ use crate::model::ServerNotification;
 use crate::{
     error::ErrorData as McpError,
     model::{
-        CancelledNotification, CancelledNotificationParam, Extensions, GetExtensions, GetMeta,
-        JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-        NotificationMetaObject, NumberOrString, ProgressToken, RequestId, RequestMetaObject,
+        CancelledNotification, CancelledNotificationParam, ClientCapabilities, Extensions,
+        GetExtensions, GetMeta, Implementation, JsonRpcError, JsonRpcMessage, JsonRpcNotification,
+        JsonRpcRequest, JsonRpcResponse, NotificationMetaObject, NumberOrString, ProgressToken,
+        ProtocolVersion, RequestId, RequestMetaObject,
     },
     transport::{DynamicTransportError, IntoTransport, Transport},
 };
@@ -515,6 +518,13 @@ pub(crate) enum PeerSinkMessage<R: ServiceRole> {
     },
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ClientRequestMetadata {
+    pub protocol_version: ProtocolVersion,
+    pub client_info: Implementation,
+    pub client_capabilities: ClientCapabilities,
+}
+
 /// An interface to fetch the remote client or server
 ///
 /// For general purpose, call [`Peer::send_request`] or [`Peer::send_notification`] to send message to remote peer.
@@ -527,6 +537,8 @@ pub struct Peer<R: ServiceRole> {
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
     progress_timeout_watchers: ProgressTimeoutWatchers,
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
+    client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
+    request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
@@ -563,6 +575,14 @@ impl PeerRequestOptions {
         }
     }
 
+    /// Adds request metadata while preserving any other configured options.
+    ///
+    /// Explicit values take precedence over modern-lifecycle metadata defaults.
+    pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+
     pub fn reset_timeout_on_progress(mut self) -> Self {
         self.reset_timeout_on_progress = true;
         self
@@ -588,6 +608,8 @@ impl<R: ServiceRole> Peer<R> {
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 progress_timeout_watchers: Default::default(),
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
+                client_request_metadata: Default::default(),
+                request_metadata_required: Default::default(),
             },
             rx,
         )
@@ -625,6 +647,12 @@ impl<R: ServiceRole> Peer<R> {
     ) -> Result<RequestHandle<R>, ServiceError> {
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
+        if let Some(metadata) = self.client_request_metadata.get() {
+            let meta = request.get_meta_mut();
+            meta.set_protocol_version(metadata.protocol_version.clone());
+            meta.set_client_info(metadata.client_info.clone());
+            meta.set_client_capabilities(metadata.client_capabilities.clone());
+        }
         if let Some(meta) = options.meta.clone() {
             request.get_meta_mut().extend(meta);
         }
@@ -701,6 +729,21 @@ impl<R: ServiceRole> Peer<R> {
     /// Stores the peer's handshake info, overwriting any previous value.
     pub fn set_peer_info(&self, info: R::PeerInfo) {
         *self.info.write().expect("peer info lock poisoned") = Some(Arc::new(info));
+    }
+
+    pub(crate) fn set_client_request_metadata(&self, metadata: ClientRequestMetadata) {
+        let result = self.client_request_metadata.set(metadata);
+        debug_assert!(result.is_ok(), "client request metadata set more than once");
+    }
+
+    pub(crate) fn require_request_metadata(&self) {
+        self.request_metadata_required
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn request_metadata_required(&self) -> bool {
+        self.request_metadata_required
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub fn is_transport_closed(&self) -> bool {
@@ -883,11 +926,35 @@ impl<R: ServiceRole> RequestContext<R> {
 
 #[cfg(feature = "server")]
 impl RequestContext<RoleServer> {
-    /// The protocol version the client negotiated, or `None` before peer info is recorded.
+    /// The current request's protocol version, falling back to legacy handshake state.
     pub fn protocol_version(&self) -> Option<crate::model::ProtocolVersion> {
-        self.peer
-            .peer_info()
-            .map(|info| info.protocol_version.clone())
+        self.meta.protocol_version().or_else(|| {
+            self.peer
+                .peer_info()
+                .map(|info| info.protocol_version.clone())
+        })
+    }
+
+    /// The current request's client implementation, falling back only for legacy sessions.
+    pub fn client_info(&self) -> Option<Implementation> {
+        if self.peer.request_metadata_required() {
+            self.meta.client_info()
+        } else {
+            self.meta
+                .client_info()
+                .or_else(|| self.peer.peer_info().map(|info| info.client_info.clone()))
+        }
+    }
+
+    /// The current request's client capabilities, falling back only for legacy sessions.
+    pub fn client_capabilities(&self) -> Option<ClientCapabilities> {
+        if self.peer.request_metadata_required() {
+            self.meta.client_capabilities()
+        } else {
+            self.meta
+                .client_capabilities()
+                .or_else(|| self.peer.peer_info().map(|info| info.capabilities.clone()))
+        }
     }
 }
 

@@ -19,8 +19,9 @@ use super::common::client_side_sse::{
 use crate::{
     RoleClient,
     model::{
-        ClientJsonRpcMessage, ClientNotification, ErrorData, InitializedNotification, JsonObject,
-        ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData, GetMeta,
+        InitializedNotification, JsonObject, ProtocolVersion, RequestId, ServerJsonRpcMessage,
+        ServerResult,
     },
     transport::{
         common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
@@ -29,6 +30,7 @@ use crate::{
 };
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
+const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_request_headers(
     base: &HashMap<HeaderName, HeaderValue>,
@@ -56,6 +58,27 @@ fn build_request_headers(
         }
     }
     headers
+}
+
+fn request_version_headers(
+    base: &HashMap<HeaderName, HeaderValue>,
+    message: &ClientJsonRpcMessage,
+    fallback: &ProtocolVersion,
+    tool_cache: &HashMap<String, Arc<JsonObject>>,
+) -> (ProtocolVersion, HashMap<HeaderName, HeaderValue>) {
+    let version = match message {
+        ClientJsonRpcMessage::Request(request) => request
+            .request
+            .get_meta()
+            .protocol_version()
+            .unwrap_or_else(|| fallback.clone()),
+        _ => fallback.clone(),
+    };
+    let mut headers = build_request_headers(base, message, tool_cache, &version);
+    if let Ok(value) = HeaderValue::from_str(version.as_str()) {
+        headers.insert(HeaderName::from_static("mcp-protocol-version"), value);
+    }
+    (version, headers)
 }
 
 fn cache_tools_from_response(
@@ -184,7 +207,10 @@ pub enum StreamableHttpProtocolError {
     MissingSessionIdInResponse,
 }
 
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing the streaming response would add an allocation to the common response path"
+)]
 #[non_exhaustive]
 pub enum StreamableHttpPostResponse {
     Accepted,
@@ -651,6 +677,67 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         Ok(())
     }
 
+    fn spawn_common_stream(
+        streams: &mut tokio::task::JoinSet<Result<(), StreamableHttpError<C::Error>>>,
+        client: C,
+        session_id: Arc<str>,
+        config: &StreamableHttpClientTransportConfig,
+        protocol_headers: HashMap<HeaderName, HeaderValue>,
+        sse_worker_tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
+        transport_task_ct: CancellationToken,
+    ) {
+        let uri = config.uri.clone();
+        let auth_header = config.auth_header.clone();
+        let retry_config = config.retry_config.clone();
+        let reconnect_uri = config.uri.clone();
+        let reconnect_auth_header = config.auth_header.clone();
+        let max_sse_event_size = config.max_sse_event_size;
+
+        streams.spawn(async move {
+            match client
+                .get_stream_with_max_sse_event_size(
+                    uri,
+                    session_id.clone(),
+                    None,
+                    auth_header,
+                    protocol_headers.clone(),
+                    max_sse_event_size,
+                )
+                .await
+            {
+                Ok(stream) => {
+                    let sse_stream = SseAutoReconnectStream::new(
+                        stream,
+                        StreamableHttpClientReconnect {
+                            client,
+                            session_id,
+                            uri: reconnect_uri,
+                            auth_header: reconnect_auth_header,
+                            custom_headers: protocol_headers,
+                            max_sse_event_size,
+                        },
+                        retry_config,
+                    );
+                    Self::execute_sse_stream(
+                        sse_stream,
+                        sse_worker_tx,
+                        false,
+                        transport_task_ct.child_token(),
+                    )
+                    .await
+                }
+                Err(StreamableHttpError::ServerDoesNotSupportSse) => {
+                    tracing::debug!("server doesn't support sse, skip common stream");
+                    Ok(())
+                }
+                Err(error) => {
+                    tracing::error!("fail to get common stream: {error}");
+                    Err(error)
+                }
+            }
+        });
+    }
+
     /// Performs a transparent re-initialization handshake after a session-expired 404.
     ///
     /// Takes an owned clone of the client (avoiding `&self` across `.await` so the
@@ -667,8 +754,14 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
-    ) -> Result<(Option<Arc<str>>, HashMap<HeaderName, HeaderValue>), StreamableHttpError<C::Error>>
-    {
+    ) -> Result<
+        (
+            Option<Arc<str>>,
+            ProtocolVersion,
+            HashMap<HeaderName, HeaderValue>,
+        ),
+        StreamableHttpError<C::Error>,
+    > {
         let (init_msg, new_session_id_str) = client
             .post_message_with_max_sse_event_size(
                 uri.clone(),
@@ -712,7 +805,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             .await?
             .expect_accepted_or_json::<C::Error>()?;
 
-        Ok((new_session_id, new_protocol_headers))
+        Ok((new_session_id, negotiated_version, new_protocol_headers))
     }
 }
 
@@ -743,17 +836,33 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let _drop_guard = transport_task_ct.clone().drop_guard();
         let WorkerSendRequest {
             responder,
-            message: initialize_request,
+            message: startup_request,
         } = context.recv_from_handler().await?;
-        let saved_init_request = initialize_request.clone();
+        let is_legacy_startup = matches!(
+            &startup_request,
+            ClientJsonRpcMessage::Request(request)
+                if matches!(&request.request, ClientRequest::InitializeRequest(_))
+        );
+        let mut saved_init_request = is_legacy_startup.then(|| startup_request.clone());
+        let empty_tool_cache = HashMap::new();
+        let (bootstrap_version, bootstrap_headers) = if is_legacy_startup {
+            (ProtocolVersion::default(), config.custom_headers.clone())
+        } else {
+            request_version_headers(
+                &config.custom_headers,
+                &startup_request,
+                &ProtocolVersion::default(),
+                &empty_tool_cache,
+            )
+        };
         let (message, session_id) = match self
             .client
             .post_message_with_max_sse_event_size(
                 config.uri.clone(),
-                initialize_request,
+                startup_request,
                 None,
                 config.auth_header.clone(),
-                config.custom_headers.clone(),
+                bootstrap_headers.clone(),
                 config.max_sse_event_size,
             )
             .await
@@ -784,8 +893,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
             None
         };
-        let (negotiated_version, mut protocol_headers) =
-            negotiate_version_headers(&message, config.custom_headers.clone());
+        let (mut negotiated_version, mut protocol_headers) = if is_legacy_startup {
+            negotiate_version_headers(&message, config.custom_headers.clone())
+        } else {
+            (bootstrap_version, bootstrap_headers)
+        };
         // SEP-2243: tool input schemas (name -> schema) cached from tools/list responses,
         // used to promote annotated tools/call arguments to Mcp-Param-* headers.
         let mut tool_header_cache: HashMap<String, Arc<JsonObject>> = HashMap::new();
@@ -800,33 +912,37 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         });
 
         context.send_to_handler(message).await?;
-        let initialized_notification = context.recv_from_handler().await?;
-        // expect a initialized response
-        let initialized_headers = build_request_headers(
-            &protocol_headers,
-            &initialized_notification.message,
-            &tool_header_cache,
-            &negotiated_version,
-        );
-        self.client
-            .post_message_with_max_sse_event_size(
-                config.uri.clone(),
-                initialized_notification.message,
-                session_id.clone(),
-                config.auth_header.clone(),
-                initialized_headers,
-                config.max_sse_event_size,
-            )
-            .await
-            .map_err(WorkerQuitReason::fatal_context(
-                "send initialized notification",
-            ))?
-            .expect_accepted_or_json::<C::Error>()
-            .map_err(WorkerQuitReason::fatal_context(
-                "process initialized notification response",
-            ))?;
-        let _ = initialized_notification.responder.send(Ok(()));
-        #[allow(clippy::large_enum_variant)]
+        if is_legacy_startup {
+            let initialized_notification = context.recv_from_handler().await?;
+            let initialized_headers = build_request_headers(
+                &protocol_headers,
+                &initialized_notification.message,
+                &tool_header_cache,
+                &negotiated_version,
+            );
+            self.client
+                .post_message_with_max_sse_event_size(
+                    config.uri.clone(),
+                    initialized_notification.message,
+                    session_id.clone(),
+                    config.auth_header.clone(),
+                    initialized_headers,
+                    config.max_sse_event_size,
+                )
+                .await
+                .map_err(WorkerQuitReason::fatal_context(
+                    "send initialized notification",
+                ))?
+                .expect_accepted_or_json::<C::Error>()
+                .map_err(WorkerQuitReason::fatal_context(
+                    "process initialized notification response",
+                ))?;
+            let _ = initialized_notification.responder.send(Ok(()));
+        }
+        #[expect(
+            clippy::large_enum_variant,
+            reason = "the event is short-lived and boxing would add allocation in the event loop"
+        )]
         enum Event<W: Worker, E: std::error::Error + Send + Sync + 'static> {
             ClientMessage(WorkerSendRequest<W>),
             ServerMessage(ServerJsonRpcMessage),
@@ -834,63 +950,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         }
         let mut streams = tokio::task::JoinSet::new();
         let mut pending_stream_response_ids = HashSet::new();
+        let mut awaiting_fallback_initialized = false;
         if let Some(session_id) = &session_id {
-            let client = self.client.clone();
-            let uri = config.uri.clone();
-            let session_id = session_id.clone();
-            let auth_header = config.auth_header.clone();
-            let retry_config = self.config.retry_config.clone();
-            let sse_worker_tx = sse_worker_tx.clone();
-            let transport_task_ct = transport_task_ct.clone();
-            let config_uri = config.uri.clone();
-            let config_auth_header = config.auth_header.clone();
-            let spawn_headers = protocol_headers.clone();
-            let max_sse_event_size = config.max_sse_event_size;
-
-            streams.spawn(async move {
-                match client
-                    .get_stream_with_max_sse_event_size(
-                        uri.clone(),
-                        session_id.clone(),
-                        None,
-                        auth_header.clone(),
-                        spawn_headers.clone(),
-                        max_sse_event_size,
-                    )
-                    .await
-                {
-                    Ok(stream) => {
-                        let sse_stream = SseAutoReconnectStream::new(
-                            stream,
-                            StreamableHttpClientReconnect {
-                                client: client.clone(),
-                                session_id: session_id.clone(),
-                                uri: config_uri,
-                                auth_header: config_auth_header,
-                                custom_headers: spawn_headers,
-                                max_sse_event_size,
-                            },
-                            retry_config,
-                        );
-                        Self::execute_sse_stream(
-                            sse_stream,
-                            sse_worker_tx,
-                            false,
-                            transport_task_ct.child_token(),
-                        )
-                        .await
-                    }
-                    Err(StreamableHttpError::ServerDoesNotSupportSse) => {
-                        tracing::debug!("server doesn't support sse, skip common stream");
-                        Ok(())
-                    }
-                    Err(e) => {
-                        // fail to get common stream
-                        tracing::error!("fail to get common stream: {e}");
-                        Err(e)
-                    }
-                }
-            });
+            Self::spawn_common_stream(
+                &mut streams,
+                self.client.clone(),
+                session_id.clone(),
+                &config,
+                protocol_headers.clone(),
+                sse_worker_tx.clone(),
+                transport_task_ct.clone(),
+            );
         }
         // Main event loop - capture exit reason so we can do cleanup before returning
         let loop_result: Result<(), WorkerQuitReason<Self::Error>> = 'main_loop: loop {
@@ -926,16 +996,127 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             match event {
                 Event::ClientMessage(send_request) => {
                     let WorkerSendRequest { message, responder } = send_request;
+                    let is_fallback_initialize = saved_init_request.is_none()
+                        && matches!(
+                            &message,
+                            ClientJsonRpcMessage::Request(request)
+                                if matches!(
+                                    &request.request,
+                                    ClientRequest::InitializeRequest(_)
+                                )
+                        );
+                    if is_fallback_initialize {
+                        saved_init_request = Some(message.clone());
+                        streams.abort_all();
+                        while streams.join_next().await.is_some() {}
+                        if let Some(cleanup) = session_cleanup_info.take() {
+                            match tokio::time::timeout(
+                                SESSION_CLEANUP_TIMEOUT,
+                                cleanup.client.delete_session(
+                                    cleanup.uri,
+                                    cleanup.session_id,
+                                    cleanup.auth_header,
+                                    cleanup.protocol_headers,
+                                ),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) => tracing::debug!(
+                                    "failed to clean up discovery session before legacy fallback: {error}"
+                                ),
+                                Err(_) => tracing::warn!(
+                                    "discovery session cleanup timed out before legacy fallback"
+                                ),
+                            }
+                        }
+                        session_id = None;
+
+                        let response = self
+                            .client
+                            .post_message_with_max_sse_event_size(
+                                config.uri.clone(),
+                                message,
+                                None,
+                                config.auth_header.clone(),
+                                config.custom_headers.clone(),
+                                config.max_sse_event_size,
+                            )
+                            .await;
+                        let response = match response {
+                            Ok(response) => {
+                                let _ = responder.send(Ok(()));
+                                response
+                            }
+                            Err(error) => {
+                                let _ = responder.send(Err(error));
+                                continue;
+                            }
+                        };
+                        let (initialize_response, new_session_id) = response
+                            .expect_initialized::<C::Error>()
+                            .await
+                            .map_err(WorkerQuitReason::fatal_context(
+                                "process fallback initialize response",
+                            ))?;
+                        session_id = new_session_id.map(Arc::from);
+                        if session_id.is_none() && !config.allow_stateless {
+                            return Err(WorkerQuitReason::fatal(
+                                StreamableHttpError::<C::Error>::MissingSessionIdInResponse,
+                                "process fallback initialize response",
+                            ));
+                        }
+                        (negotiated_version, protocol_headers) = negotiate_version_headers(
+                            &initialize_response,
+                            config.custom_headers.clone(),
+                        );
+                        session_cleanup_info =
+                            session_id.as_ref().map(|session_id| SessionCleanupInfo {
+                                client: self.client.clone(),
+                                uri: config.uri.clone(),
+                                session_id: session_id.clone(),
+                                auth_header: config.auth_header.clone(),
+                                protocol_headers: protocol_headers.clone(),
+                            });
+                        context.send_to_handler(initialize_response).await?;
+                        awaiting_fallback_initialized = true;
+                        continue;
+                    }
+
                     let request_id = Self::client_request_id(&message);
+                    let inline_version = match &message {
+                        ClientJsonRpcMessage::Request(request) => {
+                            request.request.get_meta().protocol_version()
+                        }
+                        _ => None,
+                    };
+                    let is_initialized_notification = matches!(
+                        &message,
+                        ClientJsonRpcMessage::Notification(notification)
+                            if matches!(
+                                &notification.notification,
+                                ClientNotification::InitializedNotification(_)
+                            )
+                    );
                     // Pass a clone to the first attempt so `message` is retained for a
                     // potential re-init retry. `post_message` takes ownership and the
                     // trait cannot be changed, so the clone is unavoidable.
-                    let request_headers = build_request_headers(
+                    let (request_version, request_headers) = request_version_headers(
                         &protocol_headers,
                         &message,
-                        &tool_header_cache,
                         &negotiated_version,
+                        &tool_header_cache,
                     );
+                    if inline_version.is_some() {
+                        negotiated_version = request_version.clone();
+                        if let Ok(value) = HeaderValue::from_str(request_version.as_str()) {
+                            protocol_headers
+                                .insert(HeaderName::from_static("mcp-protocol-version"), value);
+                        }
+                        if let Some(cleanup) = &mut session_cleanup_info {
+                            cleanup.protocol_headers = protocol_headers.clone();
+                        }
+                    }
                     let response = self
                         .client
                         .post_message_with_max_sse_event_size(
@@ -949,9 +1130,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         .await;
                     let send_result = match response {
                         Err(StreamableHttpError::SessionExpired) => {
-                            if !config.reinit_on_expired_session {
-                                Err(StreamableHttpError::SessionExpired)
-                            } else {
+                            if let Some(saved_init_request) = saved_init_request
+                                .as_ref()
+                                .filter(|_| config.reinit_on_expired_session)
+                            {
                                 // The server discarded the session (HTTP 404). Perform a
                                 // fresh handshake once and replay the original message.
                                 tracing::info!(
@@ -967,7 +1149,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 )
                                 .await
                                 {
-                                    Ok((new_session_id, new_protocol_headers)) => {
+                                    Ok((
+                                        new_session_id,
+                                        new_negotiated_version,
+                                        new_protocol_headers,
+                                    )) => {
                                         // Old streams hold the stale session ID. Stop them first
                                         // so no late stale-session messages can arrive after the
                                         // pending requests below are completed.
@@ -990,6 +1176,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                         .await?;
 
                                         session_id = new_session_id;
+                                        negotiated_version = new_negotiated_version;
                                         protocol_headers = new_protocol_headers;
                                         session_cleanup_info =
                                             session_id.as_ref().map(|sid| SessionCleanupInfo {
@@ -1001,71 +1188,22 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                             });
 
                                         if let Some(new_sid) = &session_id {
-                                            let client = self.client.clone();
-                                            let uri = config.uri.clone();
-                                            let new_sid = new_sid.clone();
-                                            let auth_header = config.auth_header.clone();
-                                            let retry_config = self.config.retry_config.clone();
-                                            let sse_tx = sse_worker_tx.clone();
-                                            let task_ct = transport_task_ct.clone();
-                                            let config_uri = config.uri.clone();
-                                            let config_auth = config.auth_header.clone();
-                                            let spawn_headers = protocol_headers.clone();
-                                            let max_sse_event_size = config.max_sse_event_size;
-                                            streams.spawn(async move {
-                                            match client
-                                                .get_stream_with_max_sse_event_size(
-                                                    uri,
-                                                    new_sid.clone(),
-                                                    None,
-                                                    auth_header.clone(),
-                                                    spawn_headers.clone(),
-                                                    max_sse_event_size,
-                                                )
-                                                .await
-                                            {
-                                                Ok(stream) => {
-                                                    let sse_stream = SseAutoReconnectStream::new(
-                                                        stream,
-                                                        StreamableHttpClientReconnect {
-                                                            client: client.clone(),
-                                                            session_id: new_sid,
-                                                            uri: config_uri,
-                                                            auth_header: config_auth,
-                                                            custom_headers: spawn_headers,
-                                                            max_sse_event_size,
-                                                        },
-                                                        retry_config,
-                                                    );
-                                                    Self::execute_sse_stream(
-                                                        sse_stream,
-                                                        sse_tx,
-                                                        false,
-                                                        task_ct.child_token(),
-                                                    )
-                                                    .await
-                                                }
-                                                Err(StreamableHttpError::ServerDoesNotSupportSse) => {
-                                                    tracing::debug!(
-                                                        "server doesn't support sse after re-init"
-                                                    );
-                                                    Ok(())
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!(
-                                                        "fail to get common stream after re-init: {e}"
-                                                    );
-                                                    Err(e)
-                                                }
-                                            }
-                                        });
+                                            Self::spawn_common_stream(
+                                                &mut streams,
+                                                self.client.clone(),
+                                                new_sid.clone(),
+                                                &config,
+                                                protocol_headers.clone(),
+                                                sse_worker_tx.clone(),
+                                                transport_task_ct.clone(),
+                                            );
                                         }
 
-                                        let retry_headers = build_request_headers(
+                                        let (_, retry_headers) = request_version_headers(
                                             &protocol_headers,
                                             &message,
-                                            &tool_header_cache,
                                             &negotiated_version,
+                                            &tool_header_cache,
                                         );
                                         let retry_response = self
                                             .client
@@ -1126,7 +1264,9 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                     }
                                     Err(reinit_err) => Err(reinit_err),
                                 }
-                            } // else enable_reinit_on_expired_session
+                            } else {
+                                Err(StreamableHttpError::SessionExpired)
+                            }
                         }
                         Err(e) => Err(e),
                         Ok(StreamableHttpPostResponse::Accepted) => {
@@ -1167,6 +1307,23 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                     };
+                    if send_result.is_ok()
+                        && awaiting_fallback_initialized
+                        && is_initialized_notification
+                    {
+                        if let Some(session_id) = &session_id {
+                            Self::spawn_common_stream(
+                                &mut streams,
+                                self.client.clone(),
+                                session_id.clone(),
+                                &config,
+                                protocol_headers.clone(),
+                                sse_worker_tx.clone(),
+                                transport_task_ct.clone(),
+                            );
+                        }
+                        awaiting_fallback_initialized = false;
+                    }
                     let _ = responder.send(send_result);
                 }
                 Event::ServerMessage(json_rpc_message) => {
@@ -1194,7 +1351,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         // Cleanup session before returning (ensures close() waits for session deletion)
         // Use a timeout to prevent indefinite hangs if the server is unresponsive
         if let Some(cleanup) = session_cleanup_info {
-            const SESSION_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
             let cleanup_session_id = cleanup.session_id.clone();
             match tokio::time::timeout(
                 SESSION_CLEANUP_TIMEOUT,

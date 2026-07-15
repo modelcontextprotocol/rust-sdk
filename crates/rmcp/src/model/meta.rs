@@ -439,6 +439,19 @@ impl RequestMetaObject {
         meta
     }
 
+    /// Create request metadata with the client context required by the modern lifecycle.
+    pub fn with_client_context(
+        protocol_version: ProtocolVersion,
+        client_info: Implementation,
+        client_capabilities: ClientCapabilities,
+    ) -> Self {
+        let mut meta = Self::new();
+        meta.set_protocol_version(protocol_version);
+        meta.set_client_info(client_info);
+        meta.set_client_capabilities(client_capabilities);
+        meta
+    }
+
     pub(crate) fn static_empty() -> &'static Self {
         static EMPTY: std::sync::OnceLock<RequestMetaObject> = std::sync::OnceLock::new();
         EMPTY.get_or_init(Default::default)

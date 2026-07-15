@@ -31,6 +31,29 @@ fn meta_setters_store_sep_2575_values() {
 }
 
 #[test]
+fn with_client_context_sets_all_modern_lifecycle_fields() {
+    let meta = RequestMetaObject::with_client_context(
+        ProtocolVersion::V_2026_07_28,
+        Implementation::new("test-client", "1.0.0"),
+        ClientCapabilities::default(),
+    );
+
+    assert!(
+        meta.missing_required_keys(&ProtocolVersion::V_2026_07_28)
+            .is_empty()
+    );
+    assert_eq!(meta.protocol_version(), Some(ProtocolVersion::V_2026_07_28));
+    assert_eq!(
+        meta.client_info(),
+        Some(Implementation::new("test-client", "1.0.0"))
+    );
+    assert_eq!(
+        meta.client_capabilities(),
+        Some(ClientCapabilities::default())
+    );
+}
+
+#[test]
 fn meta_accessors_decode_wire_values() {
     let meta: RequestMetaObject = serde_json::from_value(json!({
         "progressToken": "progress-1",

@@ -1,7 +1,7 @@
 use rmcp::{
-    ClientHandler, ErrorData, RoleClient, ServiceExt,
+    ClientHandler, ClientLifecycleMode, ClientServiceExt, ErrorData, RoleClient, ServiceExt,
     model::*,
-    service::{RequestContext, serve_directly},
+    service::RequestContext,
     transport::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
         auth::{AuthorizationCallback, OAuthState},
@@ -846,33 +846,6 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
     Ok(())
 }
 
-/// A minimal stateless client transport: every outgoing message is one HTTP
-/// POST and the JSON response body (if any) is queued for `receive()`.
-///
-/// The SEP-2322 client scenario's mock server speaks the stateless lifecycle
-/// (no `initialize` handshake, plain JSON responses), which the session-based
-/// `StreamableHttpClientTransport` cannot do. The transport is harness
-/// plumbing; the behavior under test — the SDK's MRTR retry driver — runs
-/// unchanged on top of it.
-struct StatelessHttpTransport {
-    http: reqwest::Client,
-    uri: std::sync::Arc<str>,
-    tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
-    rx: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
-}
-
-impl StatelessHttpTransport {
-    fn new(uri: &str) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel(16);
-        Self {
-            http: reqwest::Client::new(),
-            uri: uri.into(),
-            tx,
-            rx,
-        }
-    }
-}
-
 fn conformance_protocol_version() -> ProtocolVersion {
     std::env::var("MCP_CONFORMANCE_PROTOCOL_VERSION")
         .ok()
@@ -880,62 +853,22 @@ fn conformance_protocol_version() -> ProtocolVersion {
         .unwrap_or(ProtocolVersion::V_2026_07_28)
 }
 
-impl rmcp::transport::Transport<RoleClient> for StatelessHttpTransport {
-    type Error = std::io::Error;
-
-    fn send(
-        &mut self,
-        item: rmcp::model::ClientJsonRpcMessage,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send + 'static {
-        let http = self.http.clone();
-        let uri = self.uri.clone();
-        let tx = self.tx.clone();
-        async move {
-            let response = http
-                .post(uri.as_ref())
-                .header(
-                    "MCP-Protocol-Version",
-                    conformance_protocol_version().as_str(),
-                )
-                .json(&item)
-                .send()
-                .await
-                .map_err(std::io::Error::other)?;
-            match response.json::<ServerJsonRpcMessage>().await {
-                Ok(message) => {
-                    let _ = tx.send(message).await;
-                }
-                Err(_) => {
-                    // No JSON-RPC body (e.g. 202/204 for notifications).
-                }
-            }
-            Ok(())
+/// Runs draft stateless scenarios through the public modern lifecycle and
+/// Streamable HTTP transport.
+async fn run_modern_client(server_url: &str) -> anyhow::Result<()> {
+    let mut preferred_versions = vec![conformance_protocol_version()];
+    for version in ProtocolVersion::KNOWN_VERSIONS.iter().rev() {
+        if !preferred_versions.contains(version) {
+            preferred_versions.push(version.clone());
         }
     }
-
-    async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
-        self.rx.recv().await
-    }
-
-    async fn close(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
-
-/// Runs a client using the draft stateless lifecycle.
-///
-/// Stateless servers do not implement the `initialize` handshake, so this
-/// uses `serve_directly`. The protocol version comes from
-/// `MCP_CONFORMANCE_PROTOCOL_VERSION` (defaulting to `2026-07-28`) and is
-/// used for both peer configuration and outgoing HTTP request headers.
-///
-/// Lists available tools and calls each one, allowing the SDK's high-level
-/// tool-call handling to process any request retries.
-async fn run_stateless_client(server_url: &str) -> anyhow::Result<()> {
-    let transport = StatelessHttpTransport::new(server_url);
-    let peer_info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-        .with_protocol_version(conformance_protocol_version());
-    let client = serve_directly(FullClientHandler, transport, Some(peer_info));
+    let transport = StreamableHttpClientTransport::from_uri(server_url);
+    let client = FullClientHandler
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Discover { preferred_versions },
+        )
+        .await?;
 
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
@@ -989,14 +922,14 @@ async fn main() -> anyhow::Result<()> {
     match scenario.as_str() {
         // Non-auth scenarios
         "initialize" => run_basic_client(&server_url).await?,
-        "json-schema-ref-no-deref" => run_stateless_client(&server_url).await?,
+        "json-schema-ref-no-deref" => run_modern_client(&server_url).await?,
         "tools_call" => run_tools_call_client(&server_url, &ctx).await?,
         "elicitation-sep1034-client-defaults" => {
             run_elicitation_defaults_client(&server_url).await?
         }
         "sse-retry" => run_sse_retry_client(&server_url).await?,
         "request-metadata" | "sep-2322-client-request-state" => {
-            run_stateless_client(&server_url).await?
+            run_modern_client(&server_url).await?
         }
         "http-standard-headers" | "http-custom-headers" | "http-invalid-tool-headers" => {
             run_tools_call_client(&server_url, &ctx).await?

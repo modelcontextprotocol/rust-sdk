@@ -303,6 +303,26 @@ required-features = ["server", "client"]
 path = "tests/test_protocol_version_negotiation.rs"
 
 [[test]]
+name = "test_client_startup_modes"
+required-features = ["client", "server"]
+path = "tests/test_client_startup_modes.rs"
+
+[[test]]
+name = "test_modern_server_requests"
+required-features = ["client", "server"]
+path = "tests/test_modern_server_requests.rs"
+
+[[test]]
+name = "test_modern_http_client_startup"
+required-features = [
+  "client",
+  "reqwest",
+  "transport-streamable-http-client-reqwest",
+  "transport-streamable-http-server",
+]
+path = "tests/test_modern_http_client_startup.rs"
+
+[[test]]
 name = "test_streamable_http_standard_headers"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_standard_headers.rs"

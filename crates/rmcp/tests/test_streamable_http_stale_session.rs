@@ -16,7 +16,7 @@ use rmcp::{
     ServiceError, ServiceExt,
     model::{
         CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, ClientRequest, ErrorCode,
-        ErrorData, InitializeResult, PingRequest, RequestId, ServerCapabilities,
+        ErrorData, InitializeResult, PingRequest, ProtocolVersion, RequestId, ServerCapabilities,
         ServerJsonRpcMessage, ServerResult,
     },
     transport::{
@@ -90,7 +90,7 @@ impl StreamableHttpClient for ReinitDropsAcceptedResponseClient {
         message: ClientJsonRpcMessage,
         _session_id: Option<Arc<str>>,
         _auth_header: Option<String>,
-        _custom_headers: HashMap<HeaderName, HeaderValue>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut state = self.state.lock().await;
         match state
@@ -100,15 +100,23 @@ impl StreamableHttpClient for ReinitDropsAcceptedResponseClient {
         {
             MockPost::Initialize => {
                 state.session_counter += 1;
+                let protocol_version = if state.session_counter == 1 {
+                    ProtocolVersion::V_2025_11_25
+                } else {
+                    ProtocolVersion::V_2025_06_18
+                };
                 let id = match message {
                     ClientJsonRpcMessage::Request(request) => request.id,
                     other => panic!("expected initialize request, got {other:?}"),
                 };
                 Ok(StreamableHttpPostResponse::Json(
                     ServerJsonRpcMessage::response(
-                        ServerResult::InitializeResult(InitializeResult::new(
-                            ServerCapabilities::builder().enable_tools().build(),
-                        )),
+                        ServerResult::InitializeResult(
+                            InitializeResult::new(
+                                ServerCapabilities::builder().enable_tools().build(),
+                            )
+                            .with_protocol_version(protocol_version),
+                        ),
                         id,
                     ),
                     Some(format!("session-{}", state.session_counter)),
@@ -123,6 +131,12 @@ impl StreamableHttpClient for ReinitDropsAcceptedResponseClient {
             }
             MockPost::Accepted => {
                 if state.posts.is_empty() {
+                    assert_eq!(
+                        custom_headers
+                            .get(&HeaderName::from_static("mcp-protocol-version"))
+                            .and_then(|value| value.to_str().ok()),
+                        Some(ProtocolVersion::V_2025_06_18.as_str())
+                    );
                     self.final_retry_accepted.add_permits(1);
                 } else {
                     self.initial_request_accepted.add_permits(1);

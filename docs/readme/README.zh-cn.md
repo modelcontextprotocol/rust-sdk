@@ -74,6 +74,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 </details>
 
+### 客户端生命周期模式
+
+`serve()` 使用传统 MCP 生命周期：客户端发送 `initialize`，接收协商后的服务端信息，
+然后发送 `notifications/initialized`。如需显式选择其他生命周期，请使用
+[`ClientServiceExt::serve_with_lifecycle`](../../crates/rmcp/src/service/client.rs)：
+
+```rust, ignore
+use rmcp::{ClientInfo, ClientLifecycleMode, ClientServiceExt, ProtocolVersion};
+
+// 直接通过 server/discover 启动，并在每个请求中携带客户端元数据。
+let client = ClientInfo::default()
+    .serve_with_lifecycle(
+        transport,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await?;
+
+// 或先尝试现代生命周期；当传统服务端报告未实现 server/discover 时回退。
+let client = ClientInfo::default()
+    .serve_with_lifecycle(
+        transport,
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            legacy_version: Some(ProtocolVersion::V_2025_11_25),
+        },
+    )
+    .await?;
+```
+
+`ClientLifecycleMode::Initialize` 等同于现有的 `serve()` 行为。现代启动不会发送
+`notifications/initialized`；发现过程即完成启动，后续每个请求都会在 `_meta`
+中携带协议版本、客户端信息和客户端能力。
+
 ### 构建服务端
 
 <details>
@@ -804,10 +839,11 @@ impl ServerHandler for MyServer {
 
 ### 初始化通知
 
-客户端在握手完成后发送 `initialized` 通知：
+传统客户端在 `initialize` 握手完成后发送 `initialized` 通知。
+使用 `ClientLifecycleMode::Discover` 的客户端不会发送此通知：
 
 ```rust
-// 在 serve() 握手过程中由 rmcp 自动发送。
+// 在传统 serve() 握手过程中由 rmcp 自动发送。
 // 服务端通过以下方式处理：
 impl ServerHandler for MyServer {
     async fn on_initialized(
