@@ -236,50 +236,36 @@ async fn perform_oauth_flow(
     Ok(AuthClient::new(reqwest::Client::default(), am))
 }
 
-/// Like `perform_oauth_flow` but uses pre-registered client credentials.
+/// Like `perform_oauth_flow` but uses pre-registered client credentials,
+/// exercising the SDK's high-level `OAuthState` path (no DCR).
 async fn perform_oauth_flow_preregistered(
     server_url: &str,
     client_id: &str,
     client_secret: &str,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
-    let mut manager = AuthorizationManager::new(server_url).await?;
-    let metadata = manager.discover_metadata().await?;
-    manager.set_metadata(metadata);
+    let mut oauth = OAuthState::new(server_url, None).await?;
 
-    // Configure with pre-registered credentials
     let config = rmcp::transport::auth::OAuthClientConfig::new(client_id, REDIRECT_URI)
         .with_client_secret(client_secret);
-    manager.configure_client(config)?;
+    oauth
+        .start_authorization_with_preregistered_client(config)
+        .await?;
 
-    let scopes = manager.select_scopes(None, &[]);
-    let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
-    let auth_url = manager.get_authorization_url(&scope_refs).await?;
+    let auth_url = oauth.get_authorization_url().await?;
+    let callback = headless_authorize(&auth_url).await?;
+    oauth
+        .handle_callback_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await?;
 
-    // Headless redirect
-    let http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
-    let resp = http.get(&auth_url).send().await?;
-    let location = resp
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| anyhow::anyhow!("No Location header"))?;
-    let redirect_url = url::Url::parse(location)?;
-    let code = redirect_url
-        .query_pairs()
-        .find(|(k, _)| k == "code")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No code"))?;
-    let state = redirect_url
-        .query_pairs()
-        .find(|(k, _)| k == "state")
-        .map(|(_, v)| v.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No state"))?;
+    let am = oauth
+        .into_authorization_manager()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get authorization manager"))?;
 
-    manager.exchange_code_for_token(&code, &state).await?;
-
-    Ok(AuthClient::new(reqwest::Client::default(), manager))
+    Ok(AuthClient::new(reqwest::Client::default(), am))
 }
 
 /// Run the standard auth flow, then connect and exercise the server.

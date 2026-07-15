@@ -2803,6 +2803,34 @@ impl AuthorizationSession {
         })
     }
 
+    /// create a session using pre-registered client credentials, skipping
+    /// dynamic client registration and URL-based client IDs.
+    ///
+    /// The manager must already have discovered authorization server metadata.
+    ///
+    /// On failure, the manager is returned alongside the error so callers can
+    /// retry without losing the original configuration and stores.
+    pub async fn with_preregistered_client(
+        mut auth_manager: AuthorizationManager,
+        config: OAuthClientConfig,
+    ) -> Result<Self, (AuthorizationManager, AuthError)> {
+        let redirect_uri = config.redirect_uri.clone();
+        let scopes = config.scopes.clone();
+        if let Err(e) = auth_manager.configure_client(config) {
+            return Err((auth_manager, e));
+        }
+        let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+        let auth_url = match auth_manager.get_authorization_url(&scope_refs).await {
+            Ok(url) => url,
+            Err(e) => return Err((auth_manager, e)),
+        };
+        Ok(Self {
+            auth_manager,
+            auth_url,
+            redirect_uri,
+        })
+    }
+
     /// create session for scope upgrade flow (existing manager + pre-computed auth url)
     pub fn for_scope_upgrade(
         auth_manager: AuthorizationManager,
@@ -3070,6 +3098,50 @@ impl OAuthState {
             Err(AuthError::InternalError(
                 "Already in session state".to_string(),
             ))
+        }
+    }
+
+    /// start authorization using pre-registered client credentials,
+    /// skipping dynamic client registration.
+    ///
+    /// Use this when the client was registered with the authorization server
+    /// out of band and already holds a `client_id` (and optionally a
+    /// `client_secret`). If `config.scopes` is empty, scopes are selected
+    /// using the SDK's normal scope-selection policy.
+    pub async fn start_authorization_with_preregistered_client(
+        &mut self,
+        mut config: OAuthClientConfig,
+    ) -> Result<(), AuthError> {
+        let placeholder = self.placeholder().await?;
+        let old = std::mem::replace(self, placeholder);
+        let OAuthState::Unauthorized(mut manager) = old else {
+            *self = old;
+            return Err(AuthError::InternalError(
+                "Already in session state".to_string(),
+            ));
+        };
+        let metadata = match manager.discover_metadata().await {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                *self = OAuthState::Unauthorized(manager);
+                return Err(e);
+            }
+        };
+        manager.metadata = Some(metadata);
+        if config.scopes.is_empty() {
+            config.scopes = manager.select_scopes(None, &[]);
+        } else {
+            manager.add_offline_access_if_supported(&mut config.scopes);
+        }
+        match AuthorizationSession::with_preregistered_client(manager, config).await {
+            Ok(session) => {
+                *self = OAuthState::Session(session);
+                Ok(())
+            }
+            Err((manager, e)) => {
+                *self = OAuthState::Unauthorized(manager);
+                Err(e)
+            }
         }
     }
 
@@ -3581,6 +3653,204 @@ mod tests {
                 ],
             )
         );
+    }
+
+    fn preregistered_as_metadata_response() -> HttpResponse {
+        http_response(
+            200,
+            serde_json::json!({
+                "issuer": "https://auth.example.com",
+                "authorization_endpoint": "https://auth.example.com/authorize",
+                "token_endpoint": "https://auth.example.com/token",
+                "registration_endpoint": "https://auth.example.com/register",
+                "scopes_supported": ["read", "write", "offline_access"]
+            }),
+        )
+    }
+
+    /// discovery responses for the preregistered-client tests: a 401 challenge
+    /// pointing at protected resource metadata, the PRM document, then the
+    /// authorization server metadata.
+    fn preregistered_discovery_responses() -> Vec<HttpResponse> {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            preregistered_as_metadata_response(),
+        ]
+    }
+
+    fn auth_url_query(auth_url: &str) -> HashMap<String, String> {
+        Url::parse(auth_url)
+            .unwrap()
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn preregistered_client_skips_registration_endpoint() {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let config = OAuthClientConfig {
+            client_id: "preregistered-client".to_string(),
+            client_secret: Some("secret".to_string()),
+            scopes: vec!["read".to_string()],
+            redirect_uri: "http://localhost:8080/callback".to_string(),
+            application_type: None,
+        };
+        state
+            .start_authorization_with_preregistered_client(config)
+            .await
+            .unwrap();
+
+        // the registration endpoint was advertised but must not be called
+        let requests = client.requests();
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.uri.contains("/register")),
+            "registration endpoint should not be called: {requests:?}"
+        );
+
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        assert_eq!(query.get("client_id").unwrap(), "preregistered-client");
+        assert!(matches!(state, super::OAuthState::Session(_)));
+    }
+
+    #[tokio::test]
+    async fn preregistered_client_selects_default_scopes_when_none_provided() {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let config = OAuthClientConfig {
+            client_id: "preregistered-client".to_string(),
+            client_secret: None,
+            scopes: Vec::new(),
+            redirect_uri: "http://localhost:8080/callback".to_string(),
+            application_type: None,
+        };
+        state
+            .start_authorization_with_preregistered_client(config)
+            .await
+            .unwrap();
+
+        // empty config scopes fall back to the discovered scopes_supported
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        assert_eq!(query.get("scope").unwrap(), "read write offline_access");
+    }
+
+    #[tokio::test]
+    async fn preregistered_client_uses_explicit_scopes_and_adds_offline_access() {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let config = OAuthClientConfig {
+            client_id: "preregistered-client".to_string(),
+            client_secret: None,
+            scopes: vec!["read".to_string()],
+            redirect_uri: "http://localhost:8080/callback".to_string(),
+            application_type: None,
+        };
+        state
+            .start_authorization_with_preregistered_client(config)
+            .await
+            .unwrap();
+
+        // explicit scopes are preserved; offline_access is appended per SEP-2207
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        assert_eq!(query.get("scope").unwrap(), "read offline_access");
+    }
+
+    #[tokio::test]
+    async fn preregistered_client_recovers_unauthorized_state_after_discovery_failure() {
+        // first discovery attempt fails: protected resource metadata reports a
+        // mismatched resource identifier, which discover_metadata rejects
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://other.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+        ]);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let config = OAuthClientConfig {
+            client_id: "preregistered-client".to_string(),
+            client_secret: None,
+            scopes: vec!["read".to_string()],
+            redirect_uri: "http://localhost:8080/callback".to_string(),
+            application_type: None,
+        };
+        let err = state
+            .start_authorization_with_preregistered_client(config.clone())
+            .await
+            .unwrap_err();
+        assert!(!matches!(err, AuthError::InternalError(_)), "{err:?}");
+        assert!(
+            matches!(state, super::OAuthState::Unauthorized(_)),
+            "state should return to Unauthorized after a transient failure"
+        );
+
+        // retrying with the same state succeeds once the server responds
+        client
+            .responses
+            .lock()
+            .unwrap()
+            .extend(preregistered_discovery_responses());
+        state
+            .start_authorization_with_preregistered_client(config)
+            .await
+            .unwrap();
+        assert!(matches!(state, super::OAuthState::Session(_)));
     }
 
     #[tokio::test]
