@@ -743,6 +743,83 @@
     "CustomResult": {
       "description": "A catch-all response either side can use for custom requests."
     },
+    "DiscoverResult": {
+      "description": "The server's response to a [`DiscoverRequest`].",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level response metadata.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheScope": {
+          "description": "Whether the cached result may be shared across authorization contexts.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            }
+          ]
+        },
+        "capabilities": {
+          "description": "Capabilities provided by this server.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ServerCapabilities"
+            }
+          ]
+        },
+        "instructions": {
+          "description": "Optional guidance for using the server.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resultType": {
+          "description": "Identifies how the result should be parsed.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        },
+        "serverInfo": {
+          "description": "Information about the server implementation.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Implementation"
+            }
+          ]
+        },
+        "supportedVersions": {
+          "description": "Protocol versions implemented by this server.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProtocolVersion"
+          }
+        },
+        "ttlMs": {
+          "description": "How long clients may consider this response fresh, in milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "resultType",
+        "supportedVersions",
+        "capabilities",
+        "serverInfo",
+        "ttlMs",
+        "cacheScope"
+      ]
+    },
     "ElicitRequestParams": {
       "description": "Parameters for creating an elicitation request to gather user input.\n\nThis structure contains everything needed to request interactive input from a user:\n- A human-readable message explaining what information is needed\n- A type-safe schema defining the expected structure of the response\n\n# Example\n1. Form-based elicitation request\n```rust\nuse rmcp::model::*;\n\nlet params = ElicitRequestParams::FormElicitationParams {\n   meta: None,\n    message: \"Please provide your email\".to_string(),\n    requested_schema: ElicitationSchema::builder()\n        .required_email(\"email\")\n        .build()\n        .unwrap(),\n};\n```\n2. URL-based elicitation request\n```rust\nuse rmcp::model::*;\nlet params = ElicitRequestParams::UrlElicitationParams {\n    meta: None,\n    message: \"Please provide your feedback at the following URL\".to_string(),\n    url: \"https://example.com/feedback\".to_string(),\n    elicitation_id: \"unique-id-123\".to_string(),\n};\n```",
       "anyOf": [
@@ -3194,6 +3271,9 @@
     },
     "ServerResult": {
       "anyOf": [
+        {
+          "$ref": "#/definitions/DiscoverResult"
+        },
         {
           "$ref": "#/definitions/InitializeResult"
         },

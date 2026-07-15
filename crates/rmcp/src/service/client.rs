@@ -10,17 +10,19 @@ use crate::{
         ArgumentInfo, CallToolRequest, CallToolRequestParams, CallToolResponse, CallToolResult,
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams,
-        CompleteResult, CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, ErrorData,
-        GetExtensions, GetMeta, GetPromptRequest, GetPromptRequestParams, GetPromptResponse,
-        GetPromptResult, InitializeRequest, InitializedNotification, InputRequest,
-        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
-        ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
-        ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
-        NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
+        CompleteResult, CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS,
+        DiscoverRequest, DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta,
+        GetPromptRequest, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+        InitializeRequest, InitializedNotification, InputRequest, InputRequiredResult,
+        InputResponses, JsonRpcResponse, ListPromptsRequest, ListPromptsResult,
+        ListResourceTemplatesRequest, ListResourceTemplatesResult, ListResourcesRequest,
+        ListResourcesResult, ListToolsRequest, ListToolsResult, NumberOrString,
+        PaginatedRequestParams, ProgressNotification, ProgressNotificationParam, ProtocolVersion,
         ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-        Reference, RequestId, RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage,
-        ServerNotification, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams,
-        SubscribeRequest, SubscribeRequestParams, UnsubscribeRequest, UnsubscribeRequestParams,
+        Reference, RequestId, RequestMetaObject, RootsListChangedNotification, ServerInfo,
+        ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult, SetLevelRequest,
+        SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams, UnsubscribeRequest,
+        UnsubscribeRequestParams,
     },
     transport::DynamicTransportError,
 };
@@ -146,6 +148,19 @@ where
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct RoleClient;
+
+/// Select the first client-preferred protocol version supported by the server.
+///
+/// Returns `None` when no version is shared.
+pub fn select_protocol_version(
+    client_preference: &[ProtocolVersion],
+    server_supported: &[ProtocolVersion],
+) -> Option<ProtocolVersion> {
+    client_preference
+        .iter()
+        .find(|version| server_supported.contains(version))
+        .cloned()
+}
 
 impl ServiceRole for RoleClient {
     type Req = ClientRequest;
@@ -363,6 +378,22 @@ macro_rules! method {
 }
 
 impl Peer<RoleClient> {
+    /// Discover the server's supported protocol versions and capabilities.
+    ///
+    /// The high-level client currently exposes this peer only after initialization;
+    /// pre-initialization probing is planned as follow-up work.
+    pub async fn discover(&self, meta: RequestMetaObject) -> Result<DiscoverResult, ServiceError> {
+        let mut request = DiscoverRequest::new(DiscoverRequestParams {});
+        request.extensions.insert(meta);
+        let result = self
+            .send_request(ClientRequest::DiscoverRequest(request))
+            .await?;
+        match result {
+            ServerResult::DiscoverResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
     /// Send one `tools/call` request and return either a final result or an MRTR
     /// `InputRequiredResult` without driving any follow-up rounds.
     pub async fn call_tool_once(

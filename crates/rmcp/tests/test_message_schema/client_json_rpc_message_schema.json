@@ -562,6 +562,22 @@
     "CustomResult": {
       "description": "A catch-all response either side can use for custom requests."
     },
+    "DiscoverRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "server/discover"
+    },
+    "DiscoverRequestParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/definitions/RequestMetaObject"
+        }
+      },
+      "required": [
+        "_meta"
+      ]
+    },
     "ElicitResult": {
       "description": "The result returned by a client in response to an elicitation request.\n\nContains the user's decision (accept/decline/cancel) and optionally their input data\nif they chose to accept the request.",
       "type": "object",
@@ -1121,6 +1137,9 @@
           "$ref": "#/definitions/Request4"
         },
         {
+          "$ref": "#/definitions/Request5"
+        },
+        {
           "$ref": "#/definitions/RequestOptionalParam"
         },
         {
@@ -1128,9 +1147,6 @@
         },
         {
           "$ref": "#/definitions/RequestOptionalParam3"
-        },
-        {
-          "$ref": "#/definitions/Request5"
         },
         {
           "$ref": "#/definitions/Request6"
@@ -1142,19 +1158,22 @@
           "$ref": "#/definitions/Request8"
         },
         {
-          "$ref": "#/definitions/RequestOptionalParam4"
-        },
-        {
           "$ref": "#/definitions/Request9"
         },
         {
-          "$ref": "#/definitions/RequestOptionalParam5"
+          "$ref": "#/definitions/RequestOptionalParam4"
         },
         {
           "$ref": "#/definitions/Request10"
         },
         {
+          "$ref": "#/definitions/RequestOptionalParam5"
+        },
+        {
           "$ref": "#/definitions/Request11"
+        },
+        {
+          "$ref": "#/definitions/Request12"
         },
         {
           "$ref": "#/definitions/CustomRequest"
@@ -1552,6 +1571,22 @@
       "type": "object",
       "properties": {
         "method": {
+          "$ref": "#/definitions/GetTaskMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetTaskParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request11": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
           "$ref": "#/definitions/GetTaskPayloadMethod"
         },
         "params": {
@@ -1563,7 +1598,7 @@
         "params"
       ]
     },
-    "Request11": {
+    "Request12": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1584,6 +1619,22 @@
       "type": "object",
       "properties": {
         "method": {
+          "$ref": "#/definitions/DiscoverRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/DiscoverRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request3": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
           "$ref": "#/definitions/CompleteRequestMethod"
         },
         "params": {
@@ -1595,7 +1646,7 @@
         "params"
       ]
     },
-    "Request3": {
+    "Request4": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1611,7 +1662,7 @@
         "params"
       ]
     },
-    "Request4": {
+    "Request5": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1627,7 +1678,7 @@
         "params"
       ]
     },
-    "Request5": {
+    "Request6": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1643,7 +1694,7 @@
         "params"
       ]
     },
-    "Request6": {
+    "Request7": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1659,7 +1710,7 @@
         "params"
       ]
     },
-    "Request7": {
+    "Request8": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1675,7 +1726,7 @@
         "params"
       ]
     },
-    "Request8": {
+    "Request9": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1684,22 +1735,6 @@
         },
         "params": {
           "$ref": "#/definitions/CallToolRequestParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    "Request9": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/GetTaskMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/GetTaskParams"
         }
       },
       "required": [

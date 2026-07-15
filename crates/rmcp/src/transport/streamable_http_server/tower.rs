@@ -16,10 +16,10 @@ use super::session::{
 use crate::{
     RoleServer,
     model::{
-        ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData,
-        GetExtensions, Implementation, InitializeRequest, InitializeRequestParams,
-        InitializedNotification, JsonObject, JsonRpcError, ProtocolVersion, RequestId,
-        ServerJsonRpcMessage,
+        ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode,
+        ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
+        InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
+        ProtocolVersion, RequestId, ServerJsonRpcMessage,
     },
     serve_server,
     service::serve_directly,
@@ -199,7 +199,10 @@ impl StreamableHttpServerConfig {
 /// Per the MCP 2025-06-18 spec:
 /// - If the header is present but contains an unsupported version, return 400 Bad Request.
 /// - If the header is absent, assume `2025-03-26` for backwards compatibility (no error).
-fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), BoxResponse> {
+fn validate_protocol_version_header(
+    headers: &http::HeaderMap,
+    allow_unknown: bool,
+) -> Result<(), BoxResponse> {
     if let Some(value) = headers.get(HEADER_MCP_PROTOCOL_VERSION) {
         let version_str = value.to_str().map_err(|_| {
             Response::builder()
@@ -215,7 +218,7 @@ fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), Box
         let is_known = ProtocolVersion::KNOWN_VERSIONS
             .iter()
             .any(|v| v.as_str() == version_str);
-        if !is_known {
+        if !allow_unknown && !is_known {
             return Err(Response::builder()
                 .status(http::StatusCode::BAD_REQUEST)
                 .body(
@@ -230,11 +233,33 @@ fn validate_protocol_version_header(headers: &http::HeaderMap) -> Result<(), Box
     Ok(())
 }
 
+fn message_has_per_request_protocol_version(message: &ClientJsonRpcMessage) -> bool {
+    match message {
+        ClientJsonRpcMessage::Request(request) => {
+            request.request.get_meta().protocol_version().is_some()
+        }
+        _ => false,
+    }
+}
+
 fn invalid_request_jsonrpc_response(
     id: Option<RequestId>,
     message: impl Into<Cow<'static, str>>,
 ) -> BoxResponse {
     let err = JsonRpcError::new(id, ErrorData::invalid_request(message, None));
+    let body = serde_json::to_vec(&err).expect("serialize JsonRpcError");
+    Response::builder()
+        .status(http::StatusCode::BAD_REQUEST)
+        .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+        .body(Full::new(Bytes::from(body)).boxed())
+        .expect("valid response")
+}
+
+fn invalid_params_jsonrpc_response(
+    id: Option<RequestId>,
+    message: impl Into<Cow<'static, str>>,
+) -> BoxResponse {
+    let err = JsonRpcError::new(id, ErrorData::invalid_params(message, None));
     let body = serde_json::to_vec(&err).expect("serialize JsonRpcError");
     Response::builder()
         .status(http::StatusCode::BAD_REQUEST)
@@ -276,6 +301,83 @@ fn validate_header_matches_init_body(
         ));
     }
     Ok(())
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "BoxResponse is intentionally large; matches other handlers in this file"
+)]
+fn validate_request_protocol_version_meta(
+    headers: &HeaderMap,
+    message: &ClientJsonRpcMessage,
+) -> Result<(), BoxResponse> {
+    let ClientJsonRpcMessage::Request(request) = message else {
+        return Ok(());
+    };
+    if matches!(&request.request, ClientRequest::InitializeRequest(_)) {
+        return Ok(());
+    }
+    let is_discover = matches!(&request.request, ClientRequest::DiscoverRequest(_));
+    let Some(meta_version) = request.request.get_meta().protocol_version() else {
+        if is_discover {
+            return Err(invalid_params_jsonrpc_response(
+                Some(request.id.clone()),
+                "Invalid params: server/discover requires protocolVersion in request _meta",
+            ));
+        }
+        return Ok(());
+    };
+    let Some(header_version) = headers
+        .get(HEADER_MCP_PROTOCOL_VERSION)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(invalid_request_jsonrpc_response(
+            Some(request.id.clone()),
+            "Invalid Request: request _meta protocolVersion requires MCP-Protocol-Version header",
+        ));
+    };
+    if header_version != meta_version.as_str() {
+        return Err(header_mismatch_jsonrpc_response(
+            Some(request.id.clone()),
+            format!(
+                "MCP-Protocol-Version header ({header_version}) does not match request _meta protocolVersion ({meta_version})"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn jsonrpc_http_status(message: &ServerJsonRpcMessage) -> http::StatusCode {
+    let ServerJsonRpcMessage::Error(error) = message else {
+        return http::StatusCode::OK;
+    };
+    // Modern per-request HTTP treats invalid params as a malformed request.
+    // Legacy requests bypass this mapper and retain HTTP 200 JSON-RPC errors.
+    match error.error.code {
+        ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+        | ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
+        | ErrorCode::INVALID_PARAMS => http::StatusCode::BAD_REQUEST,
+        ErrorCode::METHOD_NOT_FOUND => http::StatusCode::NOT_FOUND,
+        _ => http::StatusCode::OK,
+    }
+}
+
+fn jsonrpc_message_response(
+    message: ServerJsonRpcMessage,
+    map_protocol_status: bool,
+) -> Result<BoxResponse, BoxResponse> {
+    let status = if map_protocol_status {
+        jsonrpc_http_status(&message)
+    } else {
+        http::StatusCode::OK
+    };
+    let body =
+        serde_json::to_vec(&message).map_err(internal_error_response("serialize json response"))?;
+    Ok(Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+        .body(Full::new(Bytes::from(body)).boxed())
+        .expect("valid response"))
 }
 
 fn header_mismatch_jsonrpc_response(
@@ -739,6 +841,51 @@ where
         (self.service_factory)()
     }
 
+    // The HTTP status must be known before opening an SSE stream.
+    async fn serve_negotiated_request_directly(
+        &self,
+        service: S,
+        mut request: crate::model::JsonRpcRequest<ClientRequest>,
+        parts: http::request::Parts,
+    ) -> Result<BoxResponse, BoxResponse> {
+        let peer_info = Self::peer_info_for_stateless_request(&request, &parts.headers);
+        request.request.extensions_mut().insert(parts);
+        let (transport, mut receiver) =
+            OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
+        let service = serve_directly(service, transport, peer_info);
+        tokio::spawn(async move {
+            let _ = service.waiting().await;
+        });
+
+        let cancel = self.config.cancellation_token.child_token();
+        let first = tokio::select! {
+            message = receiver.recv() => message,
+            _ = cancel.cancelled() => None,
+        }
+        .ok_or_else(|| {
+            internal_error_response("empty response")(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "no response message received from handler",
+            ))
+        })?;
+
+        if self.config.json_response || jsonrpc_http_status(&first) != http::StatusCode::OK {
+            return jsonrpc_message_response(first, true);
+        }
+
+        let stream = futures::stream::once(async move { first })
+            .chain(ReceiverStream::new(receiver))
+            .map(|message| {
+                tracing::trace!(?message);
+                ServerSseMessage::from_message(message)
+            });
+        Ok(sse_stream_response(
+            stream,
+            self.config.sse_keep_alive,
+            self.config.cancellation_token.child_token(),
+        ))
+    }
+
     /// Returns the cached input schema for `name`, constructing a service once
     /// per name to read its `ServerHandler::get_tool` definition. Used to
     /// validate SEP-2243 `Mcp-Param-*` headers against the request body.
@@ -1061,7 +1208,7 @@ where
             }
         }
         // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
-        validate_protocol_version_header(&parts.headers)?;
+        validate_protocol_version_header(&parts.headers, false)?;
         // check if last event id is provided
         let last_event_id = parts
             .headers
@@ -1191,7 +1338,9 @@ where
                 }
 
                 // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
-                validate_protocol_version_header(&part.headers)?;
+                let has_per_request_version = message_has_per_request_protocol_version(&message);
+                validate_protocol_version_header(&part.headers, has_per_request_version)?;
+                validate_request_protocol_version_meta(&part.headers, &message)?;
                 // Validate SEP-2243 standard headers against the body
                 validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
 
@@ -1236,6 +1385,29 @@ where
                     }
                 }
             } else {
+                if matches!(
+                    &message,
+                    ClientJsonRpcMessage::Request(request)
+                        if matches!(&request.request, ClientRequest::DiscoverRequest(_))
+                ) {
+                    validate_protocol_version_header(
+                        &part.headers,
+                        message_has_per_request_protocol_version(&message),
+                    )?;
+                    validate_standard_headers(&part.headers, &message, |name| {
+                        self.tool_schema(name)
+                    })?;
+                    validate_request_protocol_version_meta(&part.headers, &message)?;
+                    let ClientJsonRpcMessage::Request(request) = message else {
+                        unreachable!("guarded as a request above");
+                    };
+                    let service = self
+                        .get_service()
+                        .map_err(internal_error_response("get service"))?;
+                    return self
+                        .serve_negotiated_request_directly(service, request, part)
+                        .await;
+                }
                 // Capture init params for external store persistence before
                 // extensions are injected (which would require Clone).
                 let stored_init_params = match &mut message {
@@ -1330,6 +1502,7 @@ where
             // Stateless mode:
             // - on initialize: the header (if present) must match `params.protocolVersion`
             // - on every other request: the header must name a known version.
+            let has_per_request_version = message_has_per_request_protocol_version(&message);
             match &message {
                 ClientJsonRpcMessage::Request(req) => {
                     if let ClientRequest::InitializeRequest(init_req) = &req.request {
@@ -1339,20 +1512,28 @@ where
                             Some(req.id.clone()),
                         )?;
                     } else {
-                        validate_protocol_version_header(&part.headers)?;
+                        validate_protocol_version_header(&part.headers, has_per_request_version)?;
                     }
                 }
                 _ => {
-                    validate_protocol_version_header(&part.headers)?;
+                    validate_protocol_version_header(&part.headers, has_per_request_version)?;
                 }
             }
             // Validate SEP-2243 standard headers against the body
             validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
+            validate_request_protocol_version_meta(&part.headers, &message)?;
             let service = self
                 .get_service()
                 .map_err(internal_error_response("get service"))?;
             match message {
                 ClientJsonRpcMessage::Request(mut request) => {
+                    let negotiates_per_request = has_per_request_version
+                        || matches!(&request.request, ClientRequest::DiscoverRequest(_));
+                    if negotiates_per_request {
+                        return self
+                            .serve_negotiated_request_directly(service, request, part)
+                            .await;
+                    }
                     // Build a peer_info so context.protocol_version() works inside handlers.
                     // serve_directly skips the handshake and receives None by default, making
                     // protocol_version() always return None in stateless mode. We reconstruct it:
@@ -1453,7 +1634,7 @@ where
                 .expect("valid response"));
         };
         // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
-        validate_protocol_version_header(request.headers())?;
+        validate_protocol_version_header(request.headers(), false)?;
         // close session
         self.session_manager
             .close_session(&session_id)

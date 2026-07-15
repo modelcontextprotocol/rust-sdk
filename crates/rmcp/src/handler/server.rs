@@ -1,6 +1,6 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use crate::{
     error::ErrorData as McpError,
@@ -30,11 +30,46 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         let mrtr_supported = protocol_version
             .as_ref()
             .is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        let requested_version = context.meta.protocol_version();
+        let uses_inline_negotiation = !matches!(&request, ClientRequest::InitializeRequest(_));
+        if uses_inline_negotiation && let Some(requested_version) = requested_version.as_ref() {
+            let supported_versions = self.supported_protocol_versions();
+            if !supported_versions.contains(requested_version) {
+                return Err(McpError::unsupported_protocol_version(
+                    requested_version.clone(),
+                    &supported_versions,
+                ));
+            }
+        }
+        if matches!(&request, ClientRequest::DiscoverRequest(_)) {
+            if requested_version.is_none() {
+                return Err(McpError::invalid_params(
+                    "server/discover requires protocolVersion in request _meta",
+                    None,
+                ));
+            }
+            if context.meta.client_info().is_none() {
+                return Err(McpError::invalid_params(
+                    "server/discover requires clientInfo in request _meta",
+                    None,
+                ));
+            }
+            if context.meta.client_capabilities().is_none() {
+                return Err(McpError::invalid_params(
+                    "server/discover requires clientCapabilities in request _meta",
+                    None,
+                ));
+            }
+        }
         let result = match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
                 .await
                 .map(ServerResult::InitializeResult),
+            ClientRequest::DiscoverRequest(_request) => self
+                .discover(context)
+                .await
+                .map(ServerResult::DiscoverResult),
             ClientRequest::PingRequest(_request) => {
                 self.ping(context).await.map(ServerResult::empty)
             }
@@ -224,6 +259,20 @@ macro_rules! server_handler_methods {
                 info.protocol_version,
             );
             std::future::ready(Ok(info))
+        }
+        /// Return the protocol versions supported by this server.
+        fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+            Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
+        }
+        /// Return this server's discovery information.
+        fn discover(
+            &self,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<DiscoverResult, McpError>> + MaybeSendFuture + '_ {
+            std::future::ready(Ok(DiscoverResult::from_server_info(
+                self.supported_protocol_versions().into_owned(),
+                self.get_info(),
+            )))
         }
         fn complete(
             &self,
@@ -477,6 +526,17 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).initialize(request, context)
+            }
+
+            fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+                (**self).supported_protocol_versions()
+            }
+
+            fn discover(
+                &self,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<DiscoverResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).discover(context)
             }
 
             fn complete(

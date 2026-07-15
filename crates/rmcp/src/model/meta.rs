@@ -189,6 +189,7 @@ variant_extension! {
     ClientRequest: RequestMetaObject {
         PingRequest
         InitializeRequest
+        DiscoverRequest
         CompleteRequest
         SetLevelRequest
         GetPromptRequest

@@ -524,6 +524,10 @@ pub struct JsonRpcNotification<N = Notification> {
 pub struct ErrorCode(pub i32);
 
 impl ErrorCode {
+    /// The request used a protocol version the server does not support.
+    pub const UNSUPPORTED_PROTOCOL_VERSION: Self = Self(-32022);
+    /// Processing the request requires a client capability that was not declared.
+    pub const MISSING_REQUIRED_CLIENT_CAPABILITY: Self = Self(-32021);
     pub const HEADER_MISMATCH: Self = Self(-32020);
     pub const RESOURCE_NOT_FOUND: Self = Self(-32002);
     pub const INVALID_REQUEST: Self = Self(-32600);
@@ -572,6 +576,30 @@ impl ErrorData {
     }
     pub fn header_mismatch(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::HEADER_MISMATCH, message, data)
+    }
+    /// Create an unsupported-protocol-version error.
+    pub fn unsupported_protocol_version(
+        requested: ProtocolVersion,
+        supported: &[ProtocolVersion],
+    ) -> Self {
+        Self::new(
+            ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+            "Unsupported protocol version",
+            Some(serde_json::json!({
+                "requested": requested,
+                "supported": supported,
+            })),
+        )
+    }
+    /// Create a missing-required-capability error.
+    pub fn missing_required_client_capability(required: ClientCapabilities) -> Self {
+        Self::new(
+            ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "Missing required client capability",
+            Some(serde_json::json!({
+                "requiredCapabilities": required,
+            })),
+        )
     }
     pub fn parse_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::PARSE_ERROR, message, data)
@@ -999,6 +1027,112 @@ impl InitializeResult {
 
 pub type ServerInfo = InitializeResult;
 pub type ClientInfo = InitializeRequestParams;
+
+const_string!(DiscoverRequestMethod = "server/discover");
+
+/// Parameters for [`DiscoverRequest`].
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+pub struct DiscoverRequestParams {}
+
+#[cfg(feature = "schemars")]
+#[derive(schemars::JsonSchema)]
+#[expect(dead_code, reason = "schema-only representation of request parameters")]
+struct DiscoverRequestParamsSchema {
+    #[schemars(rename = "_meta")]
+    meta: RequestMetaObject,
+}
+
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for DiscoverRequestParams {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("DiscoverRequestParams")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        DiscoverRequestParamsSchema::json_schema(generator)
+    }
+}
+
+/// A request for the server's supported protocol versions and capabilities.
+pub type DiscoverRequest = Request<DiscoverRequestMethod, DiscoverRequestParams>;
+
+/// The server's response to a [`DiscoverRequest`].
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct DiscoverResult {
+    /// Identifies how the result should be parsed.
+    pub result_type: ResultType,
+    /// Protocol versions implemented by this server.
+    pub supported_versions: Vec<ProtocolVersion>,
+    /// Capabilities provided by this server.
+    pub capabilities: ServerCapabilities,
+    /// Information about the server implementation.
+    pub server_info: Implementation,
+    /// Optional guidance for using the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// How long clients may consider this response fresh, in milliseconds.
+    pub ttl_ms: u64,
+    /// Whether the cached result may be shared across authorization contexts.
+    pub cache_scope: CacheScope,
+    /// Protocol-level response metadata.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<MetaObject>,
+}
+
+impl DiscoverResult {
+    /// Create a non-cacheable private discovery result.
+    pub fn new(
+        supported_versions: Vec<ProtocolVersion>,
+        capabilities: ServerCapabilities,
+        server_info: Implementation,
+    ) -> Self {
+        Self {
+            result_type: ResultType::COMPLETE,
+            supported_versions,
+            capabilities,
+            server_info,
+            instructions: None,
+            ttl_ms: 0,
+            cache_scope: CacheScope::Private,
+            meta: None,
+        }
+    }
+
+    /// Create a discovery result from the server's initialization information.
+    pub fn from_server_info(
+        supported_versions: Vec<ProtocolVersion>,
+        server_info: ServerInfo,
+    ) -> Self {
+        let ServerInfo {
+            capabilities,
+            server_info,
+            instructions,
+            meta,
+            ..
+        } = server_info;
+        let mut result = Self::new(supported_versions, capabilities, server_info);
+        result.instructions = instructions;
+        result.meta = meta;
+        result
+    }
+
+    /// Set the cache lifetime hint in milliseconds.
+    pub fn with_ttl_ms(mut self, ttl_ms: u64) -> Self {
+        self.ttl_ms = ttl_ms;
+        self
+    }
+
+    /// Set the cache scope.
+    pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
+        self.cache_scope = cache_scope;
+        self
+    }
+}
 
 #[allow(clippy::derivable_impls)]
 impl Default for ServerInfo {
@@ -3795,6 +3929,7 @@ ts_union!(
     export type ClientRequest =
     | PingRequest
     | InitializeRequest
+    | DiscoverRequest
     | CompleteRequest
     | SetLevelRequest
     | GetPromptRequest
@@ -3818,6 +3953,7 @@ impl ClientRequest {
         match &self {
             ClientRequest::PingRequest(r) => r.method.as_str(),
             ClientRequest::InitializeRequest(r) => r.method.as_str(),
+            ClientRequest::DiscoverRequest(r) => r.method.as_str(),
             ClientRequest::CompleteRequest(r) => r.method.as_str(),
             ClientRequest::SetLevelRequest(r) => r.method.as_str(),
             ClientRequest::GetPromptRequest(r) => r.method.as_str(),
@@ -3889,6 +4025,7 @@ ts_union!(
 
 ts_union!(
     export type ServerResult =
+    | DiscoverResult
     | InitializeResult
     | CompleteResult
     | GetPromptResult
