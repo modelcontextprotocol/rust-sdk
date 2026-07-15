@@ -34,6 +34,9 @@ jobs:
       - name: Build conformance binaries
         run: cargo build -p mcp-conformance
 
+      - name: Test conformance server
+        run: cargo test -p mcp-conformance --bin conformance-server
+
       - name: Start conformance server
         run: |
           PORT=8001 ./target/debug/conformance-server &
@@ -80,7 +83,12 @@ jobs:
 
       - name: Run draft SEP scenarios
         run: |
-          for scenario in sep-2164-resource-not-found caching http-header-validation; do
+          for scenario in \
+            sep-2164-resource-not-found \
+            caching \
+            http-header-validation \
+            http-custom-header-server-validation \
+          ; do
             npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
               --url http://127.0.0.1:8002/mcp \
               --scenario "$scenario" \

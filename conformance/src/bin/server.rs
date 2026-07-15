@@ -28,6 +28,20 @@ fn json_object(v: Value) -> JsonObject {
     }
 }
 
+fn custom_header_tool() -> Tool {
+    Tool::new(
+        "test_custom_header",
+        "Validates SEP-2243 custom parameter headers",
+        json_object(json!({
+            "type": "object",
+            "properties": {
+                "value": { "type": "string", "x-mcp-header": "Value" }
+            },
+            "required": ["value"]
+        })),
+    )
+}
+
 /// Signing key for SEP-2322 `requestState` sealing. A fixed key is fine for a
 /// conformance harness; real servers must load a secret out of clients' reach.
 const REQUEST_STATE_KEY: &[u8] = b"rust-sdk-conformance-request-state-key!!";
@@ -361,6 +375,10 @@ impl ConformanceServer {
 }
 
 impl ServerHandler for ConformanceServer {
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        (name == "test_custom_header").then(custom_header_tool)
+    }
+
     async fn initialize(
         &self,
         request: InitializeRequestParams,
@@ -521,6 +539,7 @@ impl ServerHandler for ConformanceServer {
                     "properties": {}
                 })),
             ),
+            custom_header_tool(),
         ];
         // SEP-2322 MRTR test tools; all take no arguments.
         let mrtr_tools = [
@@ -666,6 +685,14 @@ impl ServerHandler for ConformanceServer {
                 Ok(CallToolResult::success(vec![ContentBlock::text(
                     "Progress test completed",
                 )]))
+            }
+
+            "test_custom_header" => {
+                let value = args
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ErrorData::invalid_params("value must be a string", None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(value)]))
             }
 
             "test_sampling" => {
@@ -1217,4 +1244,27 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_exposes_custom_header_tool_for_transport_validation() {
+        let tool = ConformanceServer::new()
+            .get_tool("test_custom_header")
+            .expect("custom-header conformance tool");
+        let value = Value::Object((*tool.input_schema).clone());
+
+        assert_eq!(
+            value.pointer("/properties/value/type"),
+            Some(&json!("string"))
+        );
+        assert_eq!(
+            value.pointer("/properties/value/x-mcp-header"),
+            Some(&json!("Value"))
+        );
+        assert_eq!(value.pointer("/required/0"), Some(&json!("value")));
+    }
 }

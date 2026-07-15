@@ -268,6 +268,29 @@ async fn rejects_param_mismatch_with_32020() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn rejects_decoded_base64_param_mismatch_with_32020() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server().await;
+
+    let response = post_tool_call(
+        &client,
+        &url,
+        SEP_VERSION,
+        "deploy",
+        serde_json::json!({ "region": "us-west1" }),
+        Some("tools/call"),
+        Some("deploy"),
+        Some("=?base64?ZXUtY2VudHJhbDE=?="),
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32020);
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
 async fn rejects_missing_param_header_with_32020() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server().await;
 
