@@ -577,7 +577,7 @@ impl PeerRequestOptions {
 
     /// Adds request metadata while preserving any other configured options.
     ///
-    /// Explicit values take precedence over modern-lifecycle metadata defaults.
+    /// Explicit values take precedence over discover-lifecycle metadata defaults.
     pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
         self.meta = Some(meta);
         self

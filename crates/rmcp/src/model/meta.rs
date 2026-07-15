@@ -439,7 +439,7 @@ impl RequestMetaObject {
         meta
     }
 
-    /// Create request metadata with the client context required by the modern lifecycle.
+    /// Create request metadata with the client context SEP-2575 requires on every request.
     pub fn with_client_context(
         protocol_version: ProtocolVersion,
         client_info: Implementation,

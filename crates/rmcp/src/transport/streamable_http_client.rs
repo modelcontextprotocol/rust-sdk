@@ -1007,30 +1007,15 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         );
                     if is_fallback_initialize {
                         saved_init_request = Some(message.clone());
-                        streams.abort_all();
-                        while streams.join_next().await.is_some() {}
-                        if let Some(cleanup) = session_cleanup_info.take() {
-                            match tokio::time::timeout(
-                                SESSION_CLEANUP_TIMEOUT,
-                                cleanup.client.delete_session(
-                                    cleanup.uri,
-                                    cleanup.session_id,
-                                    cleanup.auth_header,
-                                    cleanup.protocol_headers,
-                                ),
-                            )
-                            .await
-                            {
-                                Ok(Ok(())) => {}
-                                Ok(Err(error)) => tracing::debug!(
-                                    "failed to clean up discovery session before legacy fallback: {error}"
-                                ),
-                                Err(_) => tracing::warn!(
-                                    "discovery session cleanup timed out before legacy fallback"
-                                ),
-                            }
-                        }
-                        session_id = None;
+                        // Servers do not assign sessions to `server/discover`, so a
+                        // fallback initialize starts from a clean slate: no session
+                        // ID, no cleanup state, and no streams to tear down.
+                        debug_assert!(
+                            session_id.is_none()
+                                && session_cleanup_info.is_none()
+                                && streams.is_empty(),
+                            "discover bootstrap must not create session state"
+                        );
 
                         let response = self
                             .client

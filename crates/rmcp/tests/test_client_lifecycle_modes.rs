@@ -12,26 +12,26 @@ use rmcp::{
 };
 
 #[derive(Clone, Default)]
-struct ModernClient;
+struct DiscoverClient;
 
-impl ClientHandler for ModernClient {}
+impl ClientHandler for DiscoverClient {}
 
 #[derive(Clone, Default)]
-struct ModernServer;
+struct StatelessServer;
 
-impl ServerHandler for ModernServer {}
+impl ServerHandler for StatelessServer {}
 
 #[tokio::test]
-async fn high_level_server_accepts_modern_startup_without_initialize() {
+async fn high_level_server_accepts_discover_startup_without_initialize() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_task = tokio::spawn(async move {
-        ModernServer
+        StatelessServer
             .serve(server_transport)
             .await
             .expect("server should accept discover")
     });
 
-    let client = ModernClient
+    let client = DiscoverClient
         .serve_with_lifecycle(
             client_transport,
             ClientLifecycleMode::Discover {
@@ -39,7 +39,7 @@ async fn high_level_server_accepts_modern_startup_without_initialize() {
             },
         )
         .await
-        .expect("modern client should start");
+        .expect("discover client should start");
     client.list_tools(None).await.expect("list tools");
     client.cancel().await.expect("cancel client");
     let server = server_task.await.expect("server task");
@@ -47,7 +47,7 @@ async fn high_level_server_accepts_modern_startup_without_initialize() {
 }
 
 #[tokio::test]
-async fn modern_startup_discovers_without_initialize() {
+async fn discover_startup_omits_initialize() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
     let server_task = tokio::spawn(async move {
@@ -67,7 +67,7 @@ async fn modern_startup_discovers_without_initialize() {
                 ServerResult::DiscoverResult(DiscoverResult::new(
                     vec![ProtocolVersion::V_2026_07_28],
                     ServerCapabilities::default(),
-                    Implementation::new("modern-server", "1.0.0"),
+                    Implementation::new("discover-server", "1.0.0"),
                 )),
                 request.id,
             ))
@@ -100,7 +100,7 @@ async fn modern_startup_discovers_without_initialize() {
             .expect("send tools response");
     });
 
-    let client = ModernClient
+    let client = DiscoverClient
         .serve_with_lifecycle(
             client_transport,
             ClientLifecycleMode::Discover {
@@ -108,7 +108,7 @@ async fn modern_startup_discovers_without_initialize() {
             },
         )
         .await
-        .expect("modern client should start");
+        .expect("discover client should start");
     let mut caller_meta = rmcp::model::RequestMetaObject::new();
     caller_meta.insert("example.test/extension".into(), serde_json::json!(7));
     caller_meta.set_protocol_version(ProtocolVersion::V_2025_11_25);
@@ -176,7 +176,7 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
         ));
     });
 
-    let client = ModernClient
+    let client = DiscoverClient
         .serve_with_lifecycle(
             client_transport,
             ClientLifecycleMode::Auto {
@@ -191,7 +191,7 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
 }
 
 #[tokio::test]
-async fn modern_startup_retries_a_mutually_supported_version() {
+async fn discover_startup_retries_a_mutually_supported_version() {
     let unsupported: ProtocolVersion =
         serde_json::from_value(serde_json::json!("2099-01-01")).unwrap();
     let (server_transport, client_transport) = tokio::io::duplex(4096);
@@ -231,7 +231,7 @@ async fn modern_startup_retries_a_mutually_supported_version() {
                 ServerResult::DiscoverResult(DiscoverResult::new(
                     vec![ProtocolVersion::V_2026_07_28],
                     ServerCapabilities::default(),
-                    Implementation::new("modern-server", "1.0.0"),
+                    Implementation::new("discover-server", "1.0.0"),
                 )),
                 second.id,
             ))
@@ -239,7 +239,7 @@ async fn modern_startup_retries_a_mutually_supported_version() {
             .expect("send discover response");
     });
 
-    let client = ModernClient
+    let client = DiscoverClient
         .serve_with_lifecycle(
             client_transport,
             ClientLifecycleMode::Discover {
@@ -250,13 +250,13 @@ async fn modern_startup_retries_a_mutually_supported_version() {
             },
         )
         .await
-        .expect("modern client should retry");
+        .expect("discover client should retry");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }
 
 #[tokio::test]
-async fn modern_startup_retries_current_version_once_when_server_reports_it_supported() {
+async fn discover_startup_retries_current_version_once_when_server_reports_it_supported() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
     let server_task = tokio::spawn(async move {
@@ -290,7 +290,7 @@ async fn modern_startup_retries_current_version_once_when_server_reports_it_supp
                 ServerResult::DiscoverResult(DiscoverResult::new(
                     vec![ProtocolVersion::V_2026_07_28],
                     ServerCapabilities::default(),
-                    Implementation::new("modern-server", "1.0.0"),
+                    Implementation::new("discover-server", "1.0.0"),
                 )),
                 second.id,
             ))
@@ -298,7 +298,7 @@ async fn modern_startup_retries_current_version_once_when_server_reports_it_supp
             .expect("send discover response");
     });
 
-    let client = ModernClient
+    let client = DiscoverClient
         .serve_with_lifecycle(
             client_transport,
             ClientLifecycleMode::Discover {
@@ -306,7 +306,7 @@ async fn modern_startup_retries_current_version_once_when_server_reports_it_supp
             },
         )
         .await
-        .expect("modern client should retry once");
+        .expect("discover client should retry once");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }

@@ -62,7 +62,7 @@ pub enum ClientInitializeError {
         server_supported: Vec<ProtocolVersion>,
     },
 
-    #[error("modern startup requires at least one preferred protocol version")]
+    #[error("discover startup requires at least one preferred protocol version")]
     NoPreferredProtocolVersion,
 
     #[error("Cancelled")]
@@ -325,7 +325,7 @@ where
             legacy_startup(&service, &mut transport, &id_provider, &peer, client_info).await?;
         }
         ClientLifecycleMode::Discover { preferred_versions } => {
-            modern_startup(
+            discover_startup(
                 &service,
                 &mut transport,
                 &id_provider,
@@ -339,7 +339,7 @@ where
             preferred_versions,
             legacy_version,
         } => {
-            let modern_result = modern_startup(
+            let discover_result = discover_startup(
                 &service,
                 &mut transport,
                 &id_provider,
@@ -348,7 +348,7 @@ where
                 preferred_versions,
             )
             .await;
-            match modern_result {
+            match discover_result {
                 Ok(()) => {}
                 Err(ClientInitializeError::JsonRpcError(error))
                     if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
@@ -423,7 +423,7 @@ where
     Ok(())
 }
 
-async fn modern_startup<S, T>(
+async fn discover_startup<S, T>(
     service: &S,
     transport: &mut T,
     id_provider: &Arc<AtomicU32RequestIdProvider>,

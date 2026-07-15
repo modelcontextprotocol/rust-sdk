@@ -93,7 +93,7 @@ let client = ClientInfo::default()
     )
     .await?;
 
-// 或先尝试现代生命周期；当传统服务端报告未实现 server/discover 时回退。
+// 或先尝试发现生命周期；当传统服务端报告未实现 server/discover 时回退。
 let client = ClientInfo::default()
     .serve_with_lifecycle(
         transport,
@@ -105,7 +105,7 @@ let client = ClientInfo::default()
     .await?;
 ```
 
-`ClientLifecycleMode::Initialize` 等同于现有的 `serve()` 行为。现代启动不会发送
+`ClientLifecycleMode::Initialize` 等同于现有的 `serve()` 行为。发现启动不会发送
 `notifications/initialized`；发现过程即完成启动，后续每个请求都会在 `_meta`
 中携带协议版本、客户端信息和客户端能力。
 

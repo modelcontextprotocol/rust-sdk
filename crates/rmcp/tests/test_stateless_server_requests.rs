@@ -15,12 +15,12 @@ use rmcp::{
 };
 
 #[derive(Clone, Default)]
-struct ModernServer;
+struct StatelessServer;
 
-impl ServerHandler for ModernServer {}
+impl ServerHandler for StatelessServer {}
 
 fn complete_meta() -> RequestMetaObject {
-    complete_meta_for("modern-client")
+    complete_meta_for("stateless-client")
 }
 
 fn complete_meta_for(client_name: &str) -> RequestMetaObject {
@@ -45,10 +45,10 @@ fn list_tools_request(meta: RequestMetaObject) -> ClientJsonRpcMessage {
 }
 
 #[tokio::test]
-async fn modern_server_rejects_missing_metadata_on_every_request() {
+async fn stateless_server_rejects_missing_metadata_on_every_request() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_task = tokio::spawn(async move {
-        ModernServer
+        StatelessServer
             .serve(server_transport)
             .await
             .expect("server should start")
@@ -116,7 +116,7 @@ impl ServerHandler for ContextServer {
 }
 
 #[tokio::test]
-async fn modern_server_uses_each_requests_client_context() {
+async fn stateless_server_uses_each_requests_client_context() {
     let seen_clients = Arc::new(Mutex::new(Vec::new()));
     let handler = ContextServer {
         seen_clients: seen_clients.clone(),
@@ -162,9 +162,9 @@ async fn modern_server_uses_each_requests_client_context() {
 }
 
 #[tokio::test]
-async fn modern_server_rejects_malformed_metadata_opener() {
+async fn stateless_server_rejects_malformed_metadata_opener() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
-    let server_task = tokio::spawn(async move { ModernServer.serve(server_transport).await });
+    let server_task = tokio::spawn(async move { StatelessServer.serve(server_transport).await });
     let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
 
     let mut request = ListToolsRequest {

@@ -853,9 +853,9 @@ fn conformance_protocol_version() -> ProtocolVersion {
         .unwrap_or(ProtocolVersion::V_2026_07_28)
 }
 
-/// Runs draft stateless scenarios through the public modern lifecycle and
+/// Runs draft stateless scenarios through the public discover lifecycle and
 /// Streamable HTTP transport.
-async fn run_modern_client(server_url: &str) -> anyhow::Result<()> {
+async fn run_discover_client(server_url: &str) -> anyhow::Result<()> {
     let mut preferred_versions = vec![conformance_protocol_version()];
     for version in ProtocolVersion::KNOWN_VERSIONS.iter().rev() {
         if !preferred_versions.contains(version) {
@@ -922,14 +922,14 @@ async fn main() -> anyhow::Result<()> {
     match scenario.as_str() {
         // Non-auth scenarios
         "initialize" => run_basic_client(&server_url).await?,
-        "json-schema-ref-no-deref" => run_modern_client(&server_url).await?,
+        "json-schema-ref-no-deref" => run_discover_client(&server_url).await?,
         "tools_call" => run_tools_call_client(&server_url, &ctx).await?,
         "elicitation-sep1034-client-defaults" => {
             run_elicitation_defaults_client(&server_url).await?
         }
         "sse-retry" => run_sse_retry_client(&server_url).await?,
         "request-metadata" | "sep-2322-client-request-state" => {
-            run_modern_client(&server_url).await?
+            run_discover_client(&server_url).await?
         }
         "http-standard-headers" | "http-custom-headers" | "http-invalid-tool-headers" => {
             run_tools_call_client(&server_url, &ctx).await?

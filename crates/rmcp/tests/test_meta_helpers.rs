@@ -31,7 +31,7 @@ fn meta_setters_store_sep_2575_values() {
 }
 
 #[test]
-fn with_client_context_sets_all_modern_lifecycle_fields() {
+fn with_client_context_sets_all_required_sep_2575_fields() {
     let meta = RequestMetaObject::with_client_context(
         ProtocolVersion::V_2026_07_28,
         Implementation::new("test-client", "1.0.0"),

@@ -22,9 +22,9 @@ use rmcp::{
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]
-struct ModernHttpServer;
+struct DiscoverHttpServer;
 
-impl ServerHandler for ModernHttpServer {
+impl ServerHandler for DiscoverHttpServer {
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(&[ProtocolVersion::V_2026_07_28])
     }
@@ -47,11 +47,11 @@ impl ServerHandler for LegacyHttpServer {
 }
 
 #[tokio::test]
-async fn modern_http_client_bootstraps_headers_without_initialize() {
+async fn discover_http_client_bootstraps_headers_without_initialize() {
     let ct = CancellationToken::new();
-    let service: StreamableHttpService<ModernHttpServer, LocalSessionManager> =
+    let service: StreamableHttpService<DiscoverHttpServer, LocalSessionManager> =
         StreamableHttpService::new(
-            || Ok(ModernHttpServer),
+            || Ok(DiscoverHttpServer),
             Default::default(),
             StreamableHttpServerConfig::default()
                 .with_stateful_mode(false)
@@ -83,7 +83,7 @@ async fn modern_http_client_bootstraps_headers_without_initialize() {
             },
         )
         .await
-        .expect("modern HTTP client should start");
+        .expect("discover HTTP client should start");
     client.list_tools(None).await.expect("list tools");
     client.cancel().await.expect("cancel client");
 

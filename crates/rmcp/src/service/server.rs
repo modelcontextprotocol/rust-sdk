@@ -243,7 +243,7 @@ where
                 Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
             };
             transport.send(response).await.map_err(|error| {
-                ServerInitializeError::transport::<T>(error, "sending modern request response")
+                ServerInitializeError::transport::<T>(error, "sending negotiated request response")
             })?;
             return Ok(serve_inner(service, transport, peer, peer_rx, ct));
         }
