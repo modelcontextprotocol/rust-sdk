@@ -37,14 +37,29 @@ async fn resource_metadata_handler(req: Request<Body>) -> Result<Response<Body>,
 async fn auth_server_metadata_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     let host = req.headers().get("host").unwrap().to_str().unwrap();
     let base_url = format!("http://{}", host);
-    Ok(json_response(serde_json::json!({
-        "issuer": base_url,
-        "authorization_endpoint": format!("{}/authorize", base_url),
-        "token_endpoint": format!("{}/token", base_url),
+    Ok(auth_server_metadata_response(&base_url, &base_url))
+}
+
+async fn path_inserted_auth_server_metadata_handler(
+    req: Request<Body>,
+) -> Result<Response<Body>, Infallible> {
+    let host = req.headers().get("host").unwrap().to_str().unwrap();
+    let base_url = format!("http://{}", host);
+    Ok(auth_server_metadata_response(
+        &format!("{}/mcp", base_url),
+        &base_url,
+    ))
+}
+
+fn auth_server_metadata_response(issuer: &str, endpoint_base_url: &str) -> Response<Body> {
+    json_response(serde_json::json!({
+        "issuer": issuer,
+        "authorization_endpoint": format!("{}/authorize", endpoint_base_url),
+        "token_endpoint": format!("{}/token", endpoint_base_url),
         "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
         "grant_types_supported": ["client_credentials"],
         "scopes_supported": ["read", "write"]
-    })))
+    }))
 }
 
 async fn token_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -144,7 +159,7 @@ async fn start_path_insert_metadata_server() -> (String, SocketAddr) {
     let app = Router::new()
         .route(
             "/.well-known/oauth-authorization-server/mcp",
-            get(auth_server_metadata_handler),
+            get(path_inserted_auth_server_metadata_handler),
         )
         .route("/token", post(token_handler));
 

@@ -1876,12 +1876,87 @@ impl AuthorizationManager {
         }
 
         match serde_json::from_slice::<AuthorizationMetadata>(response.body()) {
-            Ok(metadata) => Ok(Some(metadata)),
+            Ok(metadata) => {
+                Self::validate_authorization_metadata_issuer(discovery_url, &metadata)?;
+                Ok(Some(metadata))
+            }
             Err(err) => {
                 debug!("Failed to parse metadata for {}: {}", discovery_url, err);
                 Ok(None) // malformed JSON ⇒ try next candidate
             }
         }
+    }
+
+    fn expected_issuer_for_authorization_metadata_url(discovery_url: &Url) -> Option<String> {
+        let path = discovery_url.path();
+        let oauth_prefix = "/.well-known/oauth-authorization-server";
+        let oidc_prefix = "/.well-known/openid-configuration";
+
+        let issuer_path = if path == oauth_prefix || path == oidc_prefix {
+            ""
+        } else if let Some(suffix) = path.strip_prefix(&format!("{oauth_prefix}/")) {
+            // RFC 8414 path-insertion form
+            suffix
+        } else if let Some(suffix) = path.strip_prefix(&format!("{oidc_prefix}/")) {
+            // MCP-required OpenID Connect path-insertion compatibility form
+            suffix
+        } else if let Some(prefix) = path.strip_suffix(oidc_prefix) {
+            // OpenID Connect path-appended form
+            prefix.trim_start_matches('/')
+        } else {
+            return None;
+        };
+
+        let mut issuer = discovery_url.clone();
+        issuer.set_query(None);
+        issuer.set_fragment(None);
+        if issuer_path.is_empty() {
+            issuer.set_path("");
+        } else {
+            issuer.set_path(&format!("/{issuer_path}"));
+        }
+        Some(issuer.to_string())
+    }
+
+    fn issuer_identifiers_match(received_issuer: &str, expected_issuer: &str) -> bool {
+        if received_issuer == expected_issuer {
+            return true;
+        }
+
+        let trim_root_slash = |issuer: &str| -> String {
+            issuer
+                .strip_suffix('/')
+                .filter(|without_slash| {
+                    Url::parse(without_slash)
+                        .map(|url| url.path().is_empty() || url.path() == "/")
+                        .unwrap_or(false)
+                })
+                .unwrap_or(issuer)
+                .to_string()
+        };
+
+        trim_root_slash(received_issuer) == trim_root_slash(expected_issuer)
+    }
+
+    fn validate_authorization_metadata_issuer(
+        discovery_url: &Url,
+        metadata: &AuthorizationMetadata,
+    ) -> Result<(), AuthError> {
+        let Some(expected_issuer) =
+            Self::expected_issuer_for_authorization_metadata_url(discovery_url)
+        else {
+            return Ok(());
+        };
+        let Some(received_issuer) = metadata.issuer.as_deref() else {
+            return Err(AuthError::AuthorizationServerMissingIssuer { expected_issuer });
+        };
+        if !Self::issuer_identifiers_match(received_issuer, &expected_issuer) {
+            return Err(AuthError::AuthorizationServerMismatch {
+                expected_issuer,
+                received_issuer: received_issuer.to_string(),
+            });
+        }
+        Ok(())
     }
 
     async fn discover_oauth_server_via_resource_metadata(
@@ -3464,6 +3539,125 @@ mod tests {
                     "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
                 ],
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn authorization_metadata_rejects_mismatched_issuer() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://evil.example.com/tenant1",
+                    "authorization_endpoint": "https://evil.example.com/tenant1/authorize",
+                    "token_endpoint": "https://evil.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.discover_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::AuthorizationServerMismatch {
+                    ref expected_issuer,
+                    ref received_issuer
+                } if expected_issuer == "https://auth.example.com/tenant1"
+                    && received_issuer == "https://evil.example.com/tenant1"
+            ),
+            "expected authorization server issuer mismatch, got: {error:?}"
+        );
+    }
+
+    #[test]
+    fn authorization_metadata_accepts_oidc_path_appended_issuer() {
+        let discovery_url =
+            Url::parse("https://auth.example.com/tenant1/.well-known/openid-configuration")
+                .unwrap();
+        let metadata = AuthorizationMetadata {
+            issuer: Some("https://auth.example.com/tenant1".to_string()),
+            authorization_endpoint: "https://auth.example.com/tenant1/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
+            ..Default::default()
+        };
+
+        AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .unwrap();
+    }
+
+    #[test]
+    fn authorization_metadata_allows_only_root_trailing_slash_equivalence() {
+        assert!(AuthorizationManager::issuer_identifiers_match(
+            "https://auth.example.com/",
+            "https://auth.example.com"
+        ));
+        assert!(!AuthorizationManager::issuer_identifiers_match(
+            "https://auth.example.com/tenant1/",
+            "https://auth.example.com/tenant1"
+        ));
+    }
+
+    #[test]
+    fn authorization_metadata_accepts_oidc_path_inserted_issuer() {
+        let discovery_url =
+            Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
+                .unwrap();
+        let metadata = AuthorizationMetadata {
+            issuer: Some("https://auth.example.com/tenant1".to_string()),
+            authorization_endpoint: "https://auth.example.com/tenant1/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
+            ..Default::default()
+        };
+
+        AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .unwrap();
+    }
+
+    #[test]
+    fn authorization_metadata_rejects_missing_issuer_for_standard_discovery_url() {
+        let discovery_url =
+            Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
+                .unwrap();
+        let metadata = AuthorizationMetadata {
+            issuer: None,
+            authorization_endpoint: "https://auth.example.com/tenant1/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
+            ..Default::default()
+        };
+
+        let error =
+            AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+                .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::AuthorizationServerMissingIssuer { ref expected_issuer }
+                    if expected_issuer == "https://auth.example.com/tenant1"
+            ),
+            "expected missing issuer error, got: {error:?}"
         );
     }
 
