@@ -4,7 +4,7 @@ use rmcp::{
     service::RequestContext,
     transport::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
-        auth::{AuthorizationCallback, OAuthState},
+        auth::{AuthorizationCallback, InMemoryCredentialStore, OAuthState},
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
@@ -495,6 +495,66 @@ async fn run_auth_scope_retry_limit_client(
     Ok(())
 }
 
+async fn migration_token(
+    server_url: &str,
+    store: &InMemoryCredentialStore,
+) -> anyhow::Result<String> {
+    let mut manager = AuthorizationManager::new(server_url).await?;
+    manager.set_credential_store(store.clone());
+
+    if manager.initialize_from_store().await? {
+        return Ok(manager.get_access_token().await?);
+    }
+
+    let metadata = manager.discover_metadata().await?;
+    manager.set_metadata(metadata);
+    manager
+        .register_client("conformance-client", REDIRECT_URI, &[])
+        .await?;
+
+    let scopes = manager.select_scopes(None, &[]);
+    let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+    let auth_url = manager.get_authorization_url(&scope_refs).await?;
+    let callback = headless_authorize(&auth_url).await?;
+    manager
+        .exchange_code_for_token_with_issuer(
+            &callback.code,
+            &callback.csrf_token,
+            callback.issuer.as_deref(),
+        )
+        .await?;
+
+    Ok(manager.get_access_token().await?)
+}
+
+async fn run_auth_server_migration_client(
+    server_url: &str,
+    _ctx: &ConformanceContext,
+) -> anyhow::Result<()> {
+    let store = InMemoryCredentialStore::new();
+    let http = reqwest::Client::new();
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}});
+
+    let mut token = migration_token(server_url, &store).await?;
+    for _ in 0..3 {
+        let resp = http
+            .post(server_url)
+            .header(
+                "MCP-Protocol-Version",
+                conformance_protocol_version().as_str(),
+            )
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            token = migration_token(server_url, &store).await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Auth flow with pre-registered credentials (from context).
 async fn run_auth_preregistered_client(
     server_url: &str,
@@ -955,6 +1015,11 @@ async fn main() -> anyhow::Result<()> {
 
         // Auth - scope retry limit
         "auth/scope-retry-limit" => run_auth_scope_retry_limit_client(&server_url, &ctx).await?,
+
+        // Auth - authorization server migration (SEP-2352)
+        "auth/authorization-server-migration" => {
+            run_auth_server_migration_client(&server_url, &ctx).await?
+        }
 
         // Auth - pre-registration
         "auth/pre-registration" => run_auth_preregistered_client(&server_url, &ctx).await?,
