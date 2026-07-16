@@ -1340,7 +1340,31 @@ where
             Err(response) => return Ok(response),
         };
 
-        if self.config.stateful_mode {
+        // SEP-2567: sessions are removed at the protocol level from 2026-07-28.
+        // Serve such requests statelessly even in stateful mode, never assigning
+        // or requiring an Mcp-Session-Id. `initialize` declares the version in its
+        // body params; every other request in the `MCP-Protocol-Version` header
+        // (defaulting to `2025-03-26` when absent).
+        let init_version = match &message {
+            ClientJsonRpcMessage::Request(req) => match &req.request {
+                ClientRequest::InitializeRequest(init) => {
+                    Some(init.params.protocol_version.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let declared_version = init_version.unwrap_or_else(|| {
+            part.headers
+                .get(HEADER_MCP_PROTOCOL_VERSION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
+                .unwrap_or(ProtocolVersion::V_2025_03_26)
+        });
+        let use_session =
+            self.config.stateful_mode && declared_version < ProtocolVersion::V_2026_07_28;
+
+        if use_session {
             // do we have a session id?
             let session_id = part
                 .headers
