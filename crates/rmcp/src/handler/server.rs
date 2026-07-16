@@ -41,10 +41,15 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 ));
             }
         }
+        // Self-contained metadata is required only when the request itself uses
+        // the inline lifecycle: a discover opener, a session that started without
+        // `initialize`, or a request that declares 2026-07-28+ in its own _meta.
+        // Sessions that negotiated via `initialize` (or `serve_directly`) keep the
+        // session model and may omit per-request metadata.
         let requires_request_metadata = uses_inline_negotiation
             && (matches!(&request, ClientRequest::DiscoverRequest(_))
                 || context.peer.request_metadata_required()
-                || protocol_version.as_ref().is_some_and(|version| {
+                || requested_version.as_ref().is_some_and(|version| {
                     version.as_str() >= ProtocolVersion::V_2026_07_28.as_str()
                 }));
         if requires_request_metadata {
