@@ -3442,6 +3442,7 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
+                    "issuer": "https://auth.example.com",
                     "authorization_endpoint": "https://auth.example.com/authorize",
                     "token_endpoint": "https://auth.example.com/token"
                 }),
@@ -3866,6 +3867,7 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
+                    "issuer": "https://auth.example.com",
                     "authorization_endpoint": "https://auth.example.com/authorize",
                     "token_endpoint": "https://auth.example.com/token"
                 }),
