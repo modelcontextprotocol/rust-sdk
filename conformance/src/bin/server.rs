@@ -1229,7 +1229,7 @@ async fn main() -> anyhow::Result<()> {
     let server = ConformanceServer::new();
     let stateless = std::env::var_os("STATELESS").is_some();
     let config = StreamableHttpServerConfig::default()
-        .with_stateful_mode(!stateless)
+        .with_legacy_session_mode(!stateless)
         .with_json_response(stateless);
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),

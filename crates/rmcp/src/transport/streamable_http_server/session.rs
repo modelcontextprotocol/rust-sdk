@@ -13,7 +13,7 @@
 //!
 //! * [`local::LocalSessionManager`] — in-memory session store (default).
 //! * [`never::NeverSessionManager`] — rejects all session operations, used
-//!   when stateful mode is disabled.
+//!   when legacy session mode is disabled.
 //!
 //! # Custom session managers
 //!

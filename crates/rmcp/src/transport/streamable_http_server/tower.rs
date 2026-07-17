@@ -59,8 +59,13 @@ pub struct StreamableHttpServerConfig {
     pub sse_retry: Option<Duration>,
     /// If true, the server will create a session for each request and keep it alive.
     /// When enabled, SSE priming events are sent to enable client reconnection.
-    pub stateful_mode: bool,
-    /// When true and `stateful_mode` is false, the server prefers
+    ///
+    /// Only applies to legacy protocol versions (`< 2026-07-28`). Per SEP-2567,
+    /// sessions are removed from the `2026-07-28` draft version, so requests
+    /// negotiating that version are always served statelessly regardless of
+    /// this setting.
+    pub legacy_session_mode: bool,
+    /// When true and `legacy_session_mode` is false, the server prefers
     /// `Content-Type: application/json` for simple request-response tools.
     /// If the handler emits a notification or request before the final response,
     /// the server falls back to `text/event-stream` so no message is lost.
@@ -130,7 +135,7 @@ impl Default for StreamableHttpServerConfig {
         Self {
             sse_keep_alive: Some(Duration::from_secs(15)),
             sse_retry: Some(Duration::from_secs(3)),
-            stateful_mode: true,
+            legacy_session_mode: true,
             json_response: false,
             cancellation_token: CancellationToken::new(),
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
@@ -176,8 +181,8 @@ impl StreamableHttpServerConfig {
         self
     }
 
-    pub fn with_stateful_mode(mut self, stateful: bool) -> Self {
-        self.stateful_mode = stateful;
+    pub fn with_legacy_session_mode(mut self, legacy_session_mode: bool) -> Self {
+        self.legacy_session_mode = legacy_session_mode;
         self
     }
 
@@ -690,7 +695,7 @@ fn validate_origin_header(
 ///
 /// ## Session management
 ///
-/// When [`StreamableHttpServerConfig::stateful_mode`] is `true` (the default),
+/// When [`StreamableHttpServerConfig::legacy_session_mode`] is `true` (the default),
 /// the server creates a session for each client that sends an `initialize`
 /// request. The session ID is returned in the `Mcp-Session-Id` response header
 /// and the client must include it on all subsequent requests.
@@ -1186,13 +1191,13 @@ where
             return response;
         }
         let method = request.method().clone();
-        let allowed_methods = match self.config.stateful_mode {
+        let allowed_methods = match self.config.legacy_session_mode {
             true => "GET, POST, DELETE",
             false => "POST",
         };
-        let result = match (method, self.config.stateful_mode) {
+        let result = match (method, self.config.legacy_session_mode) {
             (Method::POST, _) => self.handle_post(request).await,
-            // if we're not in stateful mode, we don't support GET or DELETE because there is no session
+            // if legacy session mode is disabled, we don't support GET or DELETE because there is no session
             (Method::GET, true) => self.handle_get(request).await,
             (Method::DELETE, true) => self.handle_delete(request).await,
             _ => {
@@ -1372,7 +1377,7 @@ where
         };
 
         let use_session =
-            self.config.stateful_mode && is_legacy_request(Some(&message), &part.headers);
+            self.config.legacy_session_mode && is_legacy_request(Some(&message), &part.headers);
 
         if use_session {
             // do we have a session id?

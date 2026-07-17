@@ -14,7 +14,7 @@ use common::calculator::Calculator;
 async fn test_priming_on_stream_start() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
 
-    // stateful_mode: true automatically enables priming with DEFAULT_RETRY_INTERVAL (3 seconds)
+    // legacy_session_mode: true automatically enables priming with DEFAULT_RETRY_INTERVAL (3 seconds)
     let service: StreamableHttpService<Calculator, LocalSessionManager> =
         StreamableHttpService::new(
             || Ok(Calculator::new()),
@@ -416,7 +416,7 @@ async fn test_priming_on_stream_close() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
     let session_manager = Arc::new(LocalSessionManager::default());
 
-    // stateful_mode: true automatically enables priming with DEFAULT_RETRY_INTERVAL (3 seconds)
+    // legacy_session_mode: true automatically enables priming with DEFAULT_RETRY_INTERVAL (3 seconds)
     let service = StreamableHttpService::new(
         || Ok(Calculator::new()),
         session_manager.clone(),

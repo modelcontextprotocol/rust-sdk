@@ -103,7 +103,7 @@ async fn stateless_json_response_returns_application_json() -> anyhow::Result<()
     let ct = CancellationToken::new();
     let (client, url, ct) = spawn_server(
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_sse_keep_alive(None)
             .with_cancellation_token(ct.child_token()),
@@ -145,7 +145,7 @@ async fn stateless_json_response_falls_back_to_sse_for_progress() -> anyhow::Res
     let ct = CancellationToken::new();
     let (client, url, ct) = spawn_progress_server(
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_sse_keep_alive(None)
             .with_cancellation_token(ct.child_token()),
@@ -197,7 +197,7 @@ async fn stateless_sse_mode_default_unchanged() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
     let (client, url, ct) = spawn_server(
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_sse_keep_alive(None)
             .with_cancellation_token(ct.child_token()),
     )
@@ -234,9 +234,9 @@ async fn stateless_sse_mode_default_unchanged() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn json_response_ignored_in_stateful_mode() -> anyhow::Result<()> {
+async fn json_response_ignored_in_legacy_session_mode() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
-    // json_response: true has no effect when stateful_mode: true — server still uses SSE
+    // json_response: true has no effect when legacy_session_mode: true — server still uses SSE
     let (client, url, ct) = spawn_server(
         StreamableHttpServerConfig::default()
             .with_json_response(true)

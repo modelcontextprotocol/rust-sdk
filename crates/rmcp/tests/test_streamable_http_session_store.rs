@@ -73,7 +73,7 @@ fn make_service(
 ) -> StreamableHttpService<Calculator, LocalSessionManager> {
     StreamableHttpService::new(|| Ok(Calculator::new()), Default::default(), {
         let mut cfg = StreamableHttpServerConfig::default();
-        cfg.stateful_mode = true;
+        cfg.legacy_session_mode = true;
         cfg.sse_keep_alive = None;
         cfg.cancellation_token = ct.child_token();
         cfg.session_store = Some(session_store);
@@ -147,7 +147,7 @@ async fn test_session_state_deleted_from_store_on_delete() -> anyhow::Result<()>
 
     let service = StreamableHttpService::new(|| Ok(Calculator::new()), session_manager.clone(), {
         let mut cfg = StreamableHttpServerConfig::default();
-        cfg.stateful_mode = true;
+        cfg.legacy_session_mode = true;
         cfg.sse_keep_alive = None;
         cfg.cancellation_token = ct.child_token();
         cfg.session_store = Some(store.clone());
@@ -219,7 +219,7 @@ fn spawn_server(
 ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     let svc = StreamableHttpService::new(|| Ok(Calculator::new()), session_manager, {
         let mut cfg = StreamableHttpServerConfig::default();
-        cfg.stateful_mode = true;
+        cfg.legacy_session_mode = true;
         cfg.sse_keep_alive = None;
         cfg.cancellation_token = ct.child_token();
         cfg.session_store = session_store;

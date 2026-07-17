@@ -81,7 +81,7 @@ async fn spawn_stateless_server(json_response: bool) -> anyhow::Result<TestServe
 
     let server_ct = CancellationToken::new();
     let config = StreamableHttpServerConfig::default()
-        .with_stateful_mode(false)
+        .with_legacy_session_mode(false)
         .with_json_response(json_response)
         // A short keep-alive lets the SSE server notice a dropped connection
         // quickly (hyper only observes the disconnect on its next write).

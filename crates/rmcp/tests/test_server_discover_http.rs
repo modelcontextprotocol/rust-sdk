@@ -32,16 +32,16 @@ impl ServerHandler for DiscoveryServer {
 }
 
 async fn spawn_server(json_response: bool) -> (reqwest::Client, String, CancellationToken) {
-    spawn_server_with_stateful_mode(json_response, false).await
+    spawn_server_with_legacy_session_mode(json_response, false).await
 }
 
-async fn spawn_server_with_stateful_mode(
+async fn spawn_server_with_legacy_session_mode(
     json_response: bool,
-    stateful_mode: bool,
+    legacy_session_mode: bool,
 ) -> (reqwest::Client, String, CancellationToken) {
     let cancellation_token = CancellationToken::new();
     let config = StreamableHttpServerConfig::default()
-        .with_stateful_mode(stateful_mode)
+        .with_legacy_session_mode(legacy_session_mode)
         .with_json_response(json_response)
         .with_sse_keep_alive(None)
         .with_cancellation_token(cancellation_token.clone());
@@ -136,8 +136,8 @@ async fn discover_returns_server_metadata_without_session() {
 }
 
 #[tokio::test]
-async fn discover_does_not_require_initialization_in_stateful_mode() {
-    let (client, url, cancellation_token) = spawn_server_with_stateful_mode(true, true).await;
+async fn discover_does_not_require_initialization_in_legacy_session_mode() {
+    let (client, url, cancellation_token) = spawn_server_with_legacy_session_mode(true, true).await;
 
     let response = post_discover(&client, &url, "2025-11-25", Some("2025-11-25")).await;
 

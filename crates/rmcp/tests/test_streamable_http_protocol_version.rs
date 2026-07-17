@@ -50,7 +50,7 @@ async fn spawn_server_with_manager(
 
 fn stateless_json_config() -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
-        .with_stateful_mode(false)
+        .with_legacy_session_mode(false)
         .with_json_response(true)
         .with_sse_keep_alive(None)
         .with_cancellation_token(CancellationToken::new())
@@ -58,7 +58,7 @@ fn stateless_json_config() -> StreamableHttpServerConfig {
 
 fn stateful_config() -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
-        .with_stateful_mode(true)
+        .with_legacy_session_mode(true)
         .with_sse_keep_alive(None)
         .with_cancellation_token(CancellationToken::new())
 }

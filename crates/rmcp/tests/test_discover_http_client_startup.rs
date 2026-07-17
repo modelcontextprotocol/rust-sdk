@@ -54,7 +54,7 @@ async fn discover_http_client_bootstraps_headers_without_initialize() {
             || Ok(DiscoverHttpServer),
             Default::default(),
             StreamableHttpServerConfig::default()
-                .with_stateful_mode(false)
+                .with_legacy_session_mode(false)
                 .with_json_response(true)
                 .with_cancellation_token(ct.child_token()),
         );

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: rename `StreamableHttpServerConfig::stateful_mode` to `legacy_session_mode` (and the builder `with_stateful_mode` to `with_legacy_session_mode`) to clarify that the option only affects legacy protocol versions (`< 2026-07-28`); per SEP-2567 the `2026-07-28` draft version is always served statelessly ([#999](https://github.com/modelcontextprotocol/rust-sdk/pull/999))
+
 ## [2.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v2.1.0...rmcp-v2.2.0) - 2026-07-08
 
 ### Added
