@@ -1,0 +1,35 @@
+name: Clean Up Stale PRs and Issues
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  stale:
+    name: Clean Up
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v10
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          exempt-issue-labels: keep,security,pinned
+          exempt-pr-labels: keep,security,pinned
+          exempt-draft-pr: true
+          stale-issue-message: >
+            This issue has had no activity for 60 days and is now marked as stale.
+            It will be closed in 14 days if there is no further activity. Add the
+            `keep` label to keep it open.
+          close-issue-message: >
+            Closing this issue after 14 days of inactivity since it was marked stale.
+            Feel free to reopen if it is still relevant.
+          stale-pr-message: >
+            This pull request has had no activity for 60 days and is now marked as stale.
+            It will be closed in 14 days if there is no further activity. Add the
+            `keep` label to keep it open.
+          close-pr-message: >
+            Closing this pull request after 14 days of inactivity since it was marked stale.
+            Feel free to reopen if you plan to continue the work.
