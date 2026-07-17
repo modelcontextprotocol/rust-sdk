@@ -1722,9 +1722,11 @@ impl AuthorizationManager {
 
     /// Get access token from local credential store.
     /// If expired, refresh it automatically when a refresh token is available.
-    /// When the access token has expired and no refresh token is available (or
-    /// the refresh itself fails), returns [`AuthError::AuthorizationRequired`]
-    /// so the caller can re-authenticate.
+    /// When the access token has expired and no refresh token is available, or the
+    /// authorization server rejects the refresh token, returns
+    /// [`AuthError::AuthorizationRequired`] so the caller can re-authenticate.
+    /// Transient refresh failures return [`AuthError::TokenRefreshFailed`] so the
+    /// caller can retry; other errors are propagated as-is.
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
         let stored = self.credential_store.load().await?;
         let Some(stored_creds) = stored else {
