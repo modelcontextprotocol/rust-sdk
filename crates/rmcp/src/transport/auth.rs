@@ -236,6 +236,11 @@ impl StoredCredentials {
             issuer: None,
         }
     }
+
+    pub fn with_issuer(mut self, issuer: Option<String>) -> Self {
+        self.issuer = issuer;
+        self
+    }
 }
 
 /// Trait for storing and retrieving OAuth2 credentials
@@ -1095,9 +1100,43 @@ impl AuthorizationManager {
                 if let (Some(stored_issuer), Some(current_issuer)) =
                     (stored.issuer.as_deref(), self.metadata_issuer().as_deref())
                 {
+                    // A CIMD client ID is the client's metadata URL, so it is
+                    // portable across authorization servers and exempt here.
                     if stored_issuer != current_issuer {
+                        if is_https_url(&stored.client_id) {
+                            // A CIMD client ID is the client's metadata URL, so it is
+                            // portable across authorization servers — but the tokens
+                            // were minted by the previous AS and must not be reused.
+                            tracing::warn!(
+                                stored_issuer,
+                                current_issuer,
+                                "authorization server issuer changed; discarding tokens but keeping portable CIMD client ID"
+                            );
+                            self.credential_store
+                                .save(
+                                    StoredCredentials::new(
+                                        stored.client_id.clone(),
+                                        None,
+                                        vec![],
+                                        None,
+                                    )
+                                    .with_issuer(self.metadata_issuer()),
+                                )
+                                .await?;
+                            self.configure_client_id(&stored.client_id)?;
+                            return Ok(false);
+                        }
+
+                        tracing::warn!(
+                            stored_issuer,
+                            current_issuer,
+                            "authorization server issuer changed; clearing stored credentials bound to the previous issuer"
+                        );
                         self.credential_store.clear().await?;
-                        return Ok(false);
+                        return Err(AuthError::AuthorizationServerMismatch {
+                            expected_issuer: stored_issuer.to_string(),
+                            received_issuer: current_issuer.to_string(),
+                        });
                     }
                 }
 
@@ -3163,17 +3202,17 @@ impl OAuthState {
 
             *manager.current_scopes.write().await = granted_scopes.clone();
 
+            let metadata = manager.discover_metadata().await?;
+            manager.metadata = Some(metadata);
+
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
                 token_response: Some(credentials),
                 granted_scopes,
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
-                issuer: None,
+                issuer: manager.metadata_issuer(),
             };
             manager.credential_store.save(stored).await?;
-
-            let metadata = manager.discover_metadata().await?;
-            manager.metadata = Some(metadata);
 
             manager.configure_client_id(client_id)?;
 
@@ -5993,6 +6032,7 @@ mod tests {
                 )),
                 granted_scopes: vec![],
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+                issuer: None,
             })
             .await
             .unwrap();
