@@ -891,7 +891,13 @@ where
             ))
         })?;
 
-        if self.config.json_response || jsonrpc_http_status(&first) != http::StatusCode::OK {
+        let terminal = matches!(
+            &first,
+            ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
+        );
+        if terminal
+            && (self.config.json_response || jsonrpc_http_status(&first) != http::StatusCode::OK)
+        {
             // This message is the whole reply, so `receiver` is dropped here and
             // anything the handler emits afterwards is undeliverable. Cancel it so
             // a still-running handler stops instead of running on unobserved: its
