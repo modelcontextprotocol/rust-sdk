@@ -250,6 +250,34 @@ fn message_has_per_request_protocol_version(message: &ClientJsonRpcMessage) -> b
     }
 }
 
+// SEP-2567: sessions are removed from 2026-07-28; older versions are legacy.
+fn is_legacy_request(message: Option<&ClientJsonRpcMessage>, headers: &HeaderMap) -> bool {
+    let from_body = match message {
+        Some(ClientJsonRpcMessage::Request(req)) => match &req.request {
+            ClientRequest::InitializeRequest(init) => Some(init.params.protocol_version.clone()),
+            _ => req.request.get_meta().protocol_version(),
+        },
+        _ => None,
+    };
+    let version = from_body
+        .or_else(|| {
+            headers
+                .get(HEADER_MCP_PROTOCOL_VERSION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
+        })
+        .unwrap_or(ProtocolVersion::V_2025_03_26);
+    version < ProtocolVersion::V_2026_07_28
+}
+
+fn method_not_allowed_response() -> BoxResponse {
+    Response::builder()
+        .status(http::StatusCode::METHOD_NOT_ALLOWED)
+        .header(ALLOW, "POST")
+        .body(Full::new(Bytes::from("Method Not Allowed")).boxed())
+        .expect("valid response")
+}
+
 fn invalid_request_jsonrpc_response(
     id: Option<RequestId>,
     message: impl Into<Cow<'static, str>>,
@@ -1204,6 +1232,9 @@ where
                 )
                 .expect("valid response"));
         }
+        if !is_legacy_request(None, request.headers()) {
+            return Ok(method_not_allowed_response());
+        }
         // check session id
         let session_id = request
             .headers()
@@ -1340,29 +1371,8 @@ where
             Err(response) => return Ok(response),
         };
 
-        // SEP-2567: sessions are removed at the protocol level from 2026-07-28.
-        // Serve such requests statelessly even in stateful mode, never assigning
-        // or requiring an Mcp-Session-Id. `initialize` declares the version in its
-        // body params; every other request in the `MCP-Protocol-Version` header
-        // (defaulting to `2025-03-26` when absent).
-        let init_version = match &message {
-            ClientJsonRpcMessage::Request(req) => match &req.request {
-                ClientRequest::InitializeRequest(init) => {
-                    Some(init.params.protocol_version.clone())
-                }
-                _ => None,
-            },
-            _ => None,
-        };
-        let declared_version = init_version.unwrap_or_else(|| {
-            part.headers
-                .get(HEADER_MCP_PROTOCOL_VERSION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
-                .unwrap_or(ProtocolVersion::V_2025_03_26)
-        });
         let use_session =
-            self.config.stateful_mode && declared_version < ProtocolVersion::V_2026_07_28;
+            self.config.stateful_mode && is_legacy_request(Some(&message), &part.headers);
 
         if use_session {
             // do we have a session id?
@@ -1697,6 +1707,9 @@ where
         B: Body + Send + 'static,
         B::Error: Display,
     {
+        if !is_legacy_request(None, request.headers()) {
+            return Ok(method_not_allowed_response());
+        }
         // check session id
         let session_id = request
             .headers()
