@@ -85,6 +85,8 @@ pub enum ServiceError {
     TransportClosed,
     #[error("Unexpected response type")]
     UnexpectedResponse,
+    #[error("subscription consumer lagged behind its {capacity}-message buffer")]
+    SubscriptionLagged { capacity: usize },
     #[error("task cancelled for reason {}", reason.as_deref().unwrap_or("<unknown>"))]
     Cancelled { reason: Option<String> },
     #[error("request timeout after {}", chrono::Duration::from_std(*timeout).unwrap_or_default())]
@@ -128,6 +130,12 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     const IS_CLIENT: bool;
     type Info: TransferObject;
     type PeerInfo: TransferObject;
+    #[doc(hidden)]
+    fn configure_direct_peer(_peer: &Peer<Self>, _info: &Self::Info) {}
+    #[doc(hidden)]
+    fn peer_cancelled_params(_notification: &Self::PeerNot) -> Option<&CancelledNotificationParam> {
+        None
+    }
 }
 
 pub type TxJsonRpcMessage<R> =
@@ -340,6 +348,8 @@ impl ProgressNotificationToken for ServerNotification {
 
 type Responder<T> = tokio::sync::oneshot::Sender<T>;
 type ProgressTimeoutWatchers = Arc<tokio::sync::RwLock<HashMap<ProgressToken, mpsc::Sender<()>>>>;
+type SubscriptionChannel<N> = (mpsc::Sender<N>, usize);
+type SubscriptionChannelMap<N> = HashMap<RequestId, SubscriptionChannel<N>>;
 
 /// A handle to a remote request
 ///
@@ -400,10 +410,12 @@ impl<R: ServiceRole> RequestHandle<R> {
             has_progress_reset_rx,
         )
         .await;
+        self.peer.unregister_subscription(&self.id);
         result
     }
 
     async fn send_timeout_cancel_notification(&self, reason: &str) {
+        self.peer.unregister_subscription(&self.id);
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
                 request_id: Some(self.id.clone()),
@@ -478,6 +490,7 @@ impl<R: ServiceRole> RequestHandle<R> {
             self.progress_reset_rx.is_some(),
         )
         .await;
+        self.peer.unregister_subscription(&self.id);
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
                 request_id: Some(self.id),
@@ -530,7 +543,6 @@ pub(crate) struct ClientRequestMetadata {
 /// For general purpose, call [`Peer::send_request`] or [`Peer::send_notification`] to send message to remote peer.
 ///
 /// To create a cancellable request, call [`Peer::send_request_with_option`].
-#[derive(Clone)]
 pub struct Peer<R: ServiceRole> {
     tx: mpsc::Sender<PeerSinkMessage<R>>,
     request_id_provider: Arc<dyn RequestIdProvider>,
@@ -539,6 +551,25 @@ pub struct Peer<R: ServiceRole> {
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
     request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
+    subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
+}
+
+impl<R: Clone + ServiceRole> Clone for Peer<R>
+where
+    R::PeerInfo: Clone,
+{
+    fn clone(&self) -> Peer<R> {
+        Self {
+            tx: self.tx.clone(),
+            request_id_provider: self.request_id_provider.clone(),
+            progress_token_provider: self.progress_token_provider.clone(),
+            progress_timeout_watchers: self.progress_timeout_watchers.clone(),
+            info: self.info.clone(),
+            client_request_metadata: self.client_request_metadata.clone(),
+            request_metadata_required: self.request_metadata_required.clone(),
+            subscription_channels: self.subscription_channels.clone(),
+        }
+    }
 }
 
 impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
@@ -610,6 +641,7 @@ impl<R: ServiceRole> Peer<R> {
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
                 client_request_metadata: Default::default(),
                 request_metadata_required: Default::default(),
+                subscription_channels: Default::default(),
             },
             rx,
         )
@@ -642,8 +674,18 @@ impl<R: ServiceRole> Peer<R> {
 
     pub async fn send_request_with_option(
         &self,
+        request: R::Req,
+        options: PeerRequestOptions,
+    ) -> Result<RequestHandle<R>, ServiceError> {
+        self.send_request_with_option_and_subscription(request, options, None)
+            .await
+    }
+
+    async fn send_request_with_option_and_subscription(
+        &self,
         mut request: R::Req,
         options: PeerRequestOptions,
+        subscription_sender: Option<SubscriptionChannel<R::PeerNot>>,
     ) -> Result<RequestHandle<R>, ServiceError> {
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
@@ -670,6 +712,10 @@ impl<R: ServiceRole> Peer<R> {
         } else {
             None
         };
+        if let Some(channel) = subscription_sender {
+            self.subscription_channels_write()
+                .insert(id.clone(), channel);
+        }
         if self
             .tx
             .send(PeerSinkMessage::Request {
@@ -686,6 +732,7 @@ impl<R: ServiceRole> Peer<R> {
                     .await
                     .remove(&progress_token);
             }
+            self.unregister_subscription(&id);
             return Err(ServiceError::TransportClosed);
         }
         Ok(RequestHandle {
@@ -696,6 +743,67 @@ impl<R: ServiceRole> Peer<R> {
             peer: self.clone(),
             progress_reset_rx,
         })
+    }
+
+    #[cfg(feature = "client")]
+    pub(crate) async fn send_subscription_request(
+        &self,
+        request: R::Req,
+        options: PeerRequestOptions,
+        channel_capacity: usize,
+    ) -> Result<(RequestHandle<R>, mpsc::Receiver<R::PeerNot>), ServiceError> {
+        let (sender, receiver) = mpsc::channel(channel_capacity);
+        let handle = self
+            .send_request_with_option_and_subscription(
+                request,
+                options,
+                Some((sender, channel_capacity)),
+            )
+            .await?;
+        Ok((handle, receiver))
+    }
+
+    fn subscription_sender(&self, id: &RequestId) -> Option<SubscriptionChannel<R::PeerNot>> {
+        self.subscription_channels_read().get(id).cloned()
+    }
+
+    pub(crate) fn unregister_subscription(&self, id: &RequestId) {
+        self.subscription_channels_write().remove(id);
+    }
+
+    fn subscription_channels_read(
+        &self,
+    ) -> std::sync::RwLockReadGuard<'_, SubscriptionChannelMap<R::PeerNot>> {
+        match self.subscription_channels.read() {
+            Ok(channels) => channels,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn subscription_channels_write(
+        &self,
+    ) -> std::sync::RwLockWriteGuard<'_, SubscriptionChannelMap<R::PeerNot>> {
+        match self.subscription_channels.write() {
+            Ok(channels) => channels,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    pub(crate) fn try_cancel_request(&self, id: RequestId, reason: Option<String>) {
+        let notification = CancelledNotification {
+            params: CancelledNotificationParam {
+                request_id: Some(id),
+                reason,
+                meta: None,
+            },
+            method: crate::model::CancelledNotificationMethod,
+            extensions: Default::default(),
+        };
+        let (responder, _receiver) = tokio::sync::oneshot::channel();
+        let _ = self.tx.try_send(PeerSinkMessage::Notification {
+            notification: notification.into(),
+            responder,
+        });
     }
 
     async fn notify_progress_timeout_watcher(&self, progress_token: &ProgressToken) {
@@ -999,6 +1107,7 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     let (peer, peer_rx) = Peer::new(Arc::new(AtomicU32RequestIdProvider::default()), peer_info);
+    R::configure_direct_peer(&peer, &service.get_info());
     serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
 }
 
@@ -1274,19 +1383,67 @@ where
                     ..
                 })) => {
                     tracing::info!(?notification, "received notification");
-                    // catch cancelled notification
-                    let mut notification = match notification.try_into() {
-                        Ok::<CancelledNotification, _>(cancelled) => {
-                            if let Some(request_id) = &cancelled.params.request_id {
-                                if let Some(ct) = local_ct_pool.remove(request_id) {
-                                    tracing::info!(id = %request_id, reason = cancelled.params.reason, "cancelled");
+                    let cancellation_request_id =
+                        if let Some(cancelled) = R::peer_cancelled_params(&notification) {
+                            let request_id = cancelled.request_id.clone();
+                            if let Some(request_id) = request_id.as_ref() {
+                                if R::IS_CLIENT {
+                                    if let Some(responder) =
+                                        local_responder_pool.remove(request_id)
+                                    {
+                                        let _ = responder.send(Err(ServiceError::Cancelled {
+                                            reason: cancelled.reason.clone(),
+                                        }));
+                                    }
+                                } else if let Some(ct) = local_ct_pool.remove(request_id) {
+                                    tracing::info!(id = %request_id, reason = cancelled.reason, "cancelled");
                                     ct.cancel();
                                 }
                             }
-                            cancelled.into()
+                            request_id
+                        } else {
+                            None
+                        };
+                    let subscription_id = notification
+                        .get_meta()
+                        .subscription_id()
+                        .or(cancellation_request_id);
+                    if let Some(subscription_id) = subscription_id
+                        && let Some((sender, capacity)) =
+                            peer.subscription_sender(&subscription_id)
+                    {
+                        match sender.try_send(notification) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                tracing::warn!(
+                                    id = %subscription_id,
+                                    capacity,
+                                    "subscription notification buffer full"
+                                );
+                                if R::IS_CLIENT
+                                    && let Some(responder) =
+                                        local_responder_pool.remove(&subscription_id)
+                                {
+                                    let _ = responder
+                                        .send(Err(ServiceError::SubscriptionLagged { capacity }));
+                                }
+                                peer.unregister_subscription(&subscription_id);
+                                peer.try_cancel_request(
+                                    subscription_id,
+                                    Some("subscription notification buffer full".to_owned()),
+                                );
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                peer.unregister_subscription(&subscription_id);
+                                peer.try_cancel_request(
+                                    subscription_id,
+                                    Some("subscription notification receiver closed".to_owned()),
+                                );
+                            }
                         }
-                        Err(notification) => notification,
-                    };
+                        continue;
+                    }
+                    let mut notification = notification;
                     if let Some(progress_token) = notification.progress_token() {
                         peer.notify_progress_timeout_watcher(progress_token).await;
                     }
@@ -1331,7 +1488,12 @@ where
                         continue;
                     };
                     if let Some(responder) = local_responder_pool.remove(&id) {
-                        let _response_result = responder.send(Err(ServiceError::McpError(error)));
+                        let service_error = if error.is_transport_closed() {
+                            ServiceError::TransportClosed
+                        } else {
+                            ServiceError::McpError(error)
+                        };
+                        let _response_result = responder.send(Err(service_error));
                         if let Err(_error) = _response_result {
                             tracing::warn!(%id, "Error sending response");
                         }

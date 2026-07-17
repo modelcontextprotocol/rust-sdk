@@ -882,89 +882,90 @@ context.peer.notify_resource_list_changed().await?;
 
 ## Subscriptions
 
-Clients can subscribe to specific resources. When a subscribed resource changes, the server sends a notification and the client can re-read it.
+Protocol `2026-07-28` replaces `resources/subscribe`, `resources/unsubscribe`, and
+the standalone HTTP GET stream with the transport-neutral, long-lived
+`subscriptions/listen` request. Each requested notification category is opt-in.
 
-**MCP Spec:** [Resources - Subscriptions](https://modelcontextprotocol.io/specification/2025-11-25/server/resources#subscriptions)
+**MCP Spec:** [Subscriptions](https://modelcontextprotocol.io/specification/draft/basic/patterns/subscriptions)
 
 ### Server-side
 
-Enable subscriptions in the resources capability and implement the `subscribe()` / `unsubscribe()` handlers:
+Declare the notification capabilities you serve, return the accepted subset,
+and use the filter-enforcing subscription sink:
 
 ```rust
-use rmcp::{ErrorData as McpError, ServerHandler, model::*, service::RequestContext, RoleServer};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use std::collections::HashSet;
-
-#[derive(Clone)]
-struct MyServer {
-    subscriptions: Arc<Mutex<HashSet<String>>>,
-}
+use rmcp::{
+    ErrorData, ServerHandler,
+    model::*,
+    service::SubscriptionContext,
+};
 
 impl ServerHandler for MyServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
-                .enable_resources()
-                .enable_resources_subscribe()
+                .enable_tools()
+                .enable_tool_list_changed()
                 .build(),
         )
     }
 
-    async fn subscribe(
+    fn accepted_subscription_filter(
         &self,
-        request: SubscribeRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<(), McpError> {
-        self.subscriptions.lock().await.insert(request.uri);
-        Ok(())
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
     }
 
-    async fn unsubscribe(
-        &self,
-        request: UnsubscribeRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<(), McpError> {
-        self.subscriptions.lock().await.remove(&request.uri);
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        if context.accepted().tools_list_changed == Some(true) {
+            context.sink().notify_tool_list_changed().await
+                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        }
+        context.cancelled().await;
         Ok(())
     }
 }
 ```
 
-When a subscribed resource changes, notify the client:
-
-```rust
-// Check if the resource has subscribers, then notify
-context.peer.notify_resource_updated(
-    ResourceUpdatedNotificationParam::new("file:///config.json"),
-).await?;
-```
+The SDK intersects the handler's filter with the requested categories and the
+capabilities advertised by `get_info()`. It sends the acknowledgment before
+`listen`, tags every sink notification with the listen request ID, and rejects
+categories or resource URIs outside the accepted filter.
 
 ### Client-side
 
 ```rust
 use rmcp::model::*;
 
-// Subscribe to updates for a resource
-client.subscribe(SubscribeRequestParams::new("file:///config.json")).await?;
+let mut subscription = client.listen(
+    SubscriptionFilter::builder()
+        .tools_list_changed()
+        .resource_subscription("file:///config.json")
+        .build(),
+).await?;
 
-// Unsubscribe when no longer needed
-client.unsubscribe(UnsubscribeRequestParams::new("file:///config.json")).await?;
-```
-
-Handle update notifications in `ClientHandler`:
-
-```rust
-impl ClientHandler for MyClient {
-    async fn on_resource_updated(
-        &self,
-        params: ResourceUpdatedNotificationParam,
-        _context: NotificationContext<RoleClient>,
-    ) {
-        // Re-read the resource at params.uri
-    }
+println!("accepted: {:?}", subscription.acknowledged());
+while let Some(notification) = subscription.next().await? {
+    println!("notification: {notification:?}");
 }
+
+subscription.cancel().await?;
 ```
+
+`listen()` buffers up to 64 notifications per subscription. Use
+`listen_with_capacity()` to choose a different non-zero capacity; if a consumer
+falls behind, `Subscription::end()` reports `SubscriptionEnd::Lagged`.
+
+For older negotiated protocol versions, the deprecated `subscribe()` and
+`unsubscribe()` APIs retain their legacy wire behavior. Modern Streamable HTTP
+uses the listen POST response stream directly and does not use sessions, GET,
+DELETE, or `Last-Event-ID`. After an abrupt transport close, call `listen`
+again; subscription state is not resumed across HTTP or stdio reconnects.
+
+See the
+[modern subscription server](examples/servers/src/subscriptions_streamhttp.rs)
+and [client](examples/clients/src/subscriptions_streamhttp.rs) examples.
 
 ---
 

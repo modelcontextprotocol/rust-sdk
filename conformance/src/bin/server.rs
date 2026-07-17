@@ -1,10 +1,16 @@
 #![allow(deprecated)]
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::*,
-    service::RequestContext,
+    service::{RequestContext, SubscriptionContext, SubscriptionSink},
     transport::{
         StreamableHttpServerConfig, StreamableHttpService,
         streamable_http_server::session::local::LocalSessionManager,
@@ -48,7 +54,9 @@ const REQUEST_STATE_KEY: &[u8] = b"rust-sdk-conformance-request-state-key!!";
 
 #[derive(Clone)]
 struct ConformanceServer {
-    subscriptions: Arc<Mutex<HashSet<String>>>,
+    legacy_resource_subscriptions: Arc<Mutex<HashSet<String>>>,
+    subscriptions: Arc<Mutex<HashMap<u64, SubscriptionSink>>>,
+    next_subscription: Arc<AtomicU64>,
     log_level: Arc<Mutex<LoggingLevel>>,
     request_state_codec: RequestStateCodec,
 }
@@ -56,7 +64,9 @@ struct ConformanceServer {
 impl ConformanceServer {
     fn new() -> Self {
         Self {
-            subscriptions: Arc::new(Mutex::new(HashSet::new())),
+            legacy_resource_subscriptions: Arc::new(Mutex::new(HashSet::new())),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
+            next_subscription: Arc::new(AtomicU64::new(0)),
             log_level: Arc::new(Mutex::new(LoggingLevel::Debug)),
             request_state_codec: RequestStateCodec::new(REQUEST_STATE_KEY),
         }
@@ -379,22 +389,51 @@ impl ServerHandler for ConformanceServer {
         (name == "test_custom_header").then(custom_header_tool)
     }
 
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_prompts()
+                .enable_prompts_list_changed()
+                .enable_resources()
+                .enable_resources_subscribe()
+                .enable_resources_list_changed()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .enable_logging()
+                .build(),
+        )
+        .with_server_info(Implementation::new("rust-conformance-server", "0.1.0"))
+        .with_instructions("Rust MCP conformance test server")
+    }
+
     async fn initialize(
         &self,
         request: InitializeRequestParams,
         _cx: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
-        Ok(InitializeResult::new(
-            ServerCapabilities::builder()
-                .enable_prompts()
-                .enable_resources()
-                .enable_tools()
-                .enable_logging()
-                .build(),
-        )
-        .with_protocol_version(request.protocol_version)
-        .with_server_info(Implementation::new("rust-conformance-server", "0.1.0"))
-        .with_instructions("Rust MCP conformance test server"))
+        let info = self.get_info();
+        Ok(InitializeResult::new(info.capabilities)
+            .with_protocol_version(request.protocol_version)
+            .with_server_info(info.server_info)
+            .with_instructions(info.instructions.unwrap_or_default()))
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.supported_by(&self.get_info().capabilities))
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        let key = self.next_subscription.fetch_add(1, Ordering::Relaxed);
+        self.subscriptions
+            .lock()
+            .await
+            .insert(key, context.sink().clone());
+        context.cancelled().await;
+        self.subscriptions.lock().await.remove(&key);
+        Ok(())
     }
 
     async fn ping(&self, _cx: RequestContext<RoleServer>) -> Result<(), ErrorData> {
@@ -540,6 +579,46 @@ impl ServerHandler for ConformanceServer {
                 })),
             ),
             custom_header_tool(),
+            Tool::new(
+                "test_trigger_tool_change",
+                "Triggers a tools/list_changed notification on matching subscriptions",
+                json_object(json!({
+                    "type": "object",
+                    "properties": {}
+                })),
+            ),
+            Tool::new(
+                "test_trigger_prompt_change",
+                "Triggers a prompts/list_changed notification on matching subscriptions",
+                json_object(json!({
+                    "type": "object",
+                    "properties": {}
+                })),
+            ),
+            Tool::new(
+                "test_missing_capability",
+                "Requires the sampling client capability",
+                json_object(json!({
+                    "type": "object",
+                    "properties": {}
+                })),
+            ),
+            Tool::new(
+                "test_streaming_elicitation",
+                "Returns an input_required result containing an elicitation request",
+                json_object(json!({
+                    "type": "object",
+                    "properties": {}
+                })),
+            ),
+            Tool::new(
+                "test_logging_tool",
+                "Emits notifications/message only when logLevel is requested",
+                json_object(json!({
+                    "type": "object",
+                    "properties": {}
+                })),
+            ),
         ];
         // SEP-2322 MRTR test tools; all take no arguments.
         let mrtr_tools = [
@@ -922,6 +1001,81 @@ impl ServerHandler for ConformanceServer {
                 )]))
             }
 
+            "test_trigger_tool_change" => {
+                let subscriptions = self
+                    .subscriptions
+                    .lock()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for subscription in subscriptions {
+                    let _ = subscription.notify_tool_list_changed().await;
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    "Tool list change triggered",
+                )]))
+            }
+
+            "test_trigger_prompt_change" => {
+                let subscriptions = self
+                    .subscriptions
+                    .lock()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for subscription in subscriptions {
+                    let _ = subscription.notify_prompt_list_changed().await;
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    "Prompt list change triggered",
+                )]))
+            }
+
+            "test_missing_capability" => {
+                let capabilities = cx.meta.client_capabilities().unwrap_or_default();
+                if capabilities.sampling.is_none() {
+                    return Err(ErrorData::missing_required_client_capability(
+                        ClientCapabilities::builder().enable_sampling().build(),
+                    ));
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    "Required capability declared",
+                )]))
+            }
+
+            "test_streaming_elicitation" => {
+                let mut requests = InputRequests::new();
+                requests.insert(
+                    "streaming_elicitation".into(),
+                    mrtr_elicitation_request(
+                        "Provide a value",
+                        json!({ "value": { "type": "string" } }),
+                        json!(["value"]),
+                    ),
+                );
+                return Ok(InputRequiredResult::from_input_requests(requests).into());
+            }
+
+            "test_logging_tool" => {
+                if let Some(level) = cx.meta.log_level() {
+                    let _ = cx
+                        .peer
+                        .notify_logging_message(
+                            LoggingMessageNotificationParam::new(
+                                level,
+                                json!("logLevel was requested"),
+                            )
+                            .with_logger("conformance-server"),
+                        )
+                        .await;
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    "Logging tool completed",
+                )]))
+            }
+
             _ => Err(ErrorData::invalid_params(
                 format!("Unknown tool: {}", request.name),
                 None,
@@ -1029,7 +1183,7 @@ impl ServerHandler for ConformanceServer {
         request: SubscribeRequestParams,
         _cx: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        let mut subs = self.subscriptions.lock().await;
+        let mut subs = self.legacy_resource_subscriptions.lock().await;
         subs.insert(request.uri.to_string());
         Ok(())
     }
@@ -1039,7 +1193,7 @@ impl ServerHandler for ConformanceServer {
         request: UnsubscribeRequestParams,
         _cx: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
-        let mut subs = self.subscriptions.lock().await;
+        let mut subs = self.legacy_resource_subscriptions.lock().await;
         subs.remove(request.uri.as_str());
         Ok(())
     }

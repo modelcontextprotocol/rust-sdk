@@ -30,6 +30,7 @@ use crate::{
 };
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
+type SseTaskResult<E> = (Option<RequestId>, Result<(), StreamableHttpError<E>>);
 const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_request_headers(
@@ -683,7 +684,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     }
 
     fn spawn_common_stream(
-        streams: &mut tokio::task::JoinSet<Result<(), StreamableHttpError<C::Error>>>,
+        streams: &mut tokio::task::JoinSet<SseTaskResult<C::Error>>,
         client: C,
         session_id: Arc<str>,
         config: &StreamableHttpClientTransportConfig,
@@ -699,7 +700,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         let max_sse_event_size = config.max_sse_event_size;
 
         streams.spawn(async move {
-            match client
+            let result = match client
                 .get_stream_with_max_sse_event_size(
                     uri,
                     session_id.clone(),
@@ -739,7 +740,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                     tracing::error!("fail to get common stream: {error}");
                     Err(error)
                 }
-            }
+            };
+            (None, result)
         });
     }
 
@@ -887,7 +889,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 ));
             }
         };
-        let mut session_id: Option<Arc<str>> = if let Some(session_id) = session_id {
+        let mut uses_modern_http = !is_legacy_startup;
+        let mut session_id: Option<Arc<str>> = if uses_modern_http {
+            None
+        } else if let Some(session_id) = session_id {
             Some(session_id.into())
         } else {
             if !self.config.allow_stateless {
@@ -951,10 +956,14 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         enum Event<W: Worker, E: std::error::Error + Send + Sync + 'static> {
             ClientMessage(WorkerSendRequest<W>),
             ServerMessage(ServerJsonRpcMessage),
-            StreamResult(Result<(), StreamableHttpError<E>>),
+            StreamResult {
+                request_id: Option<RequestId>,
+                result: Result<(), StreamableHttpError<E>>,
+            },
         }
         let mut streams = tokio::task::JoinSet::new();
         let mut pending_stream_response_ids = HashSet::new();
+        let mut request_stream_cancellations = HashMap::<RequestId, CancellationToken>::new();
         let mut awaiting_fallback_initialized = false;
         if let Some(session_id) = &session_id {
             Self::spawn_common_stream(
@@ -990,7 +999,15 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 terminated_stream = streams.join_next(), if !streams.is_empty() => {
                     match terminated_stream {
                         Some(result) => {
-                            Event::StreamResult(result.map_err(StreamableHttpError::TokioJoinError).and_then(std::convert::identity))
+                            match result {
+                                Ok((request_id, result)) => {
+                                    Event::StreamResult { request_id, result }
+                                }
+                                Err(error) => Event::StreamResult {
+                                    request_id: None,
+                                    result: Err(StreamableHttpError::TokioJoinError(error)),
+                                },
+                            }
                         }
                         None => {
                             continue
@@ -1001,6 +1018,25 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             match event {
                 Event::ClientMessage(send_request) => {
                     let WorkerSendRequest { message, responder } = send_request;
+                    let cancellation_request_id = match &message {
+                        ClientJsonRpcMessage::Notification(notification) => {
+                            match &notification.notification {
+                                ClientNotification::CancelledNotification(cancelled) => {
+                                    cancelled.params.request_id.clone()
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if uses_modern_http && let Some(request_id) = cancellation_request_id {
+                        if let Some(stream_ct) = request_stream_cancellations.remove(&request_id) {
+                            stream_ct.cancel();
+                        }
+                        pending_stream_response_ids.remove(&request_id);
+                        let _ = responder.send(Ok(()));
+                        continue;
+                    }
                     let is_fallback_initialize = saved_init_request.is_none()
                         && matches!(
                             &message,
@@ -1021,6 +1057,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 && streams.is_empty(),
                             "discover bootstrap must not create session state"
                         );
+                        uses_modern_http = false;
 
                         let response = self
                             .client
@@ -1228,6 +1265,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 Ok(())
                                             }
                                             Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
+                                                let stream_request_id = request_id.clone();
                                                 Self::mark_stream_response_pending(
                                                     &mut pending_stream_response_ids,
                                                     request_id,
@@ -1242,12 +1280,24 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                     config.max_sse_event_size,
                                                     self.config.retry_config.clone(),
                                                 );
-                                                streams.spawn(Self::execute_sse_stream(
-                                                    sse_stream,
-                                                    sse_worker_tx.clone(),
-                                                    true,
-                                                    transport_task_ct.child_token(),
-                                                ));
+                                                let stream_ct = transport_task_ct.child_token();
+                                                if uses_modern_http
+                                                    && let Some(request_id) =
+                                                        stream_request_id.as_ref()
+                                                {
+                                                    request_stream_cancellations.insert(
+                                                        request_id.clone(),
+                                                        stream_ct.clone(),
+                                                    );
+                                                }
+                                                let stream_tx = sse_worker_tx.clone();
+                                                streams.spawn(async move {
+                                                    let result = Self::execute_sse_stream(
+                                                        sse_stream, stream_tx, true, stream_ct,
+                                                    )
+                                                    .await;
+                                                    (stream_request_id, result)
+                                                });
                                                 tracing::trace!("got new sse stream after re-init");
                                                 Ok(())
                                             }
@@ -1278,6 +1328,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             Ok(())
                         }
                         Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
+                            let stream_request_id = request_id.clone();
                             Self::mark_stream_response_pending(
                                 &mut pending_stream_response_ids,
                                 request_id,
@@ -1292,12 +1343,20 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 config.max_sse_event_size,
                                 self.config.retry_config.clone(),
                             );
-                            streams.spawn(Self::execute_sse_stream(
-                                sse_stream,
-                                sse_worker_tx.clone(),
-                                true,
-                                transport_task_ct.child_token(),
-                            ));
+                            let stream_ct = transport_task_ct.child_token();
+                            if uses_modern_http && let Some(request_id) = stream_request_id.as_ref()
+                            {
+                                request_stream_cancellations
+                                    .insert(request_id.clone(), stream_ct.clone());
+                            }
+                            let stream_tx = sse_worker_tx.clone();
+                            streams.spawn(async move {
+                                let result = Self::execute_sse_stream(
+                                    sse_stream, stream_tx, true, stream_ct,
+                                )
+                                .await;
+                                (stream_request_id, result)
+                            });
                             tracing::trace!("got new sse stream");
                             Ok(())
                         }
@@ -1322,6 +1381,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     let _ = responder.send(send_result);
                 }
                 Event::ServerMessage(mut json_rpc_message) => {
+                    if let Some(response_id) = Self::server_response_id(&json_rpc_message)
+                        && let Some(stream_ct) = request_stream_cancellations.remove(response_id)
+                    {
+                        stream_ct.cancel();
+                    }
                     Self::clear_stream_response_pending(
                         &mut pending_stream_response_ids,
                         &json_rpc_message,
@@ -1336,7 +1400,26 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         break 'main_loop Err(e);
                     }
                 }
-                Event::StreamResult(result) => {
+                Event::StreamResult { request_id, result } => {
+                    if let Some(request_id) = request_id {
+                        Self::drain_queued_stream_messages(
+                            &mut sse_worker_rx,
+                            &mut context,
+                            &mut pending_stream_response_ids,
+                        )
+                        .await?;
+                        request_stream_cancellations.remove(&request_id);
+                        if pending_stream_response_ids.remove(&request_id) {
+                            context
+                                .send_to_handler(ServerJsonRpcMessage::error(
+                                    ErrorData::transport_closed(
+                                        "streamable HTTP response stream closed before its final response",
+                                    ),
+                                    Some(request_id),
+                                ))
+                                .await?;
+                        }
+                    }
                     if result.is_err() {
                         tracing::warn!(
                             "sse client event stream terminated with error: {:?}",

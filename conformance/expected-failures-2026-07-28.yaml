@@ -10,12 +10,6 @@
 # `conformance list --spec-version 2026-07-28` and update #977.
 
 server:
-  # SEP-2575 stateless lifecycle gaps: discover capability declaration,
-  # missing-capability rejection, HTTP 404 for removed methods, and
-  # diagnostic tools (test_missing_capability, test_streaming_elicitation,
-  # test_logging_tool) not yet implemented.
-  # tracked in #1004
-  - server-stateless
   # SEP-2106: composition/conditional/$anchor keywords are stripped from
   # published tool input schemas.
   # tracked in #1003

@@ -27,6 +27,13 @@ A server using streamable HTTP transport for MCP communication, with axum.
 - Provides counter tools via HTTP streaming
 - Demonstrates streamable HTTP transport configuration
 
+### Modern Subscription Server (`subscriptions_streamhttp.rs`)
+
+A stateless `2026-07-28` server that opens `subscriptions/listen` response
+streams, acknowledges the accepted filter, and emits tagged tool-list changes.
+
+- Run with `cargo run -p mcp-server-examples --example servers_subscriptions_streamhttp`
+
 ### Counter Streamable HTTP Server with Hyper (`counter_hyper_streamable_http.rs`)
 
 A server using streamable HTTP transport for MCP communication, with hyper.

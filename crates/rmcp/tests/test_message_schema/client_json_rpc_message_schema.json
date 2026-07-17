@@ -1161,19 +1161,22 @@
           "$ref": "#/definitions/Request9"
         },
         {
-          "$ref": "#/definitions/RequestOptionalParam4"
-        },
-        {
           "$ref": "#/definitions/Request10"
         },
         {
-          "$ref": "#/definitions/RequestOptionalParam5"
+          "$ref": "#/definitions/RequestOptionalParam4"
         },
         {
           "$ref": "#/definitions/Request11"
         },
         {
+          "$ref": "#/definitions/RequestOptionalParam5"
+        },
+        {
           "$ref": "#/definitions/Request12"
+        },
+        {
+          "$ref": "#/definitions/Request13"
         },
         {
           "$ref": "#/definitions/CustomRequest"
@@ -1571,6 +1574,22 @@
       "type": "object",
       "properties": {
         "method": {
+          "$ref": "#/definitions/CallToolRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/CallToolRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request11": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
           "$ref": "#/definitions/GetTaskMethod"
         },
         "params": {
@@ -1582,7 +1601,7 @@
         "params"
       ]
     },
-    "Request11": {
+    "Request12": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1598,7 +1617,7 @@
         "params"
       ]
     },
-    "Request12": {
+    "Request13": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1699,10 +1718,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/SubscribeRequestMethod"
+          "$ref": "#/definitions/SubscriptionsListenRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SubscribeRequestParams"
+          "$ref": "#/definitions/SubscriptionsListenRequestParams"
         }
       },
       "required": [
@@ -1715,10 +1734,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/UnsubscribeRequestMethod"
+          "$ref": "#/definitions/SubscribeRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/UnsubscribeRequestParams"
+          "$ref": "#/definitions/SubscribeRequestParams"
         }
       },
       "required": [
@@ -1731,10 +1750,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/CallToolRequestMethod"
+          "$ref": "#/definitions/UnsubscribeRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/CallToolRequestParams"
+          "$ref": "#/definitions/UnsubscribeRequestParams"
         }
       },
       "required": [
@@ -2301,6 +2320,77 @@
       },
       "required": [
         "uri"
+      ]
+    },
+    "SubscriptionFilter": {
+      "description": "Notification categories a client opts in to on a `subscriptions/listen` stream.",
+      "type": "object",
+      "properties": {
+        "promptsListChanged": {
+          "type": "boolean"
+        },
+        "resourceSubscriptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resourcesListChanged": {
+          "type": "boolean"
+        },
+        "toolsListChanged": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SubscriptionsListenRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "subscriptions/listen"
+    },
+    "SubscriptionsListenRequestParams": {
+      "description": "Parameters for opening a long-lived notification subscription.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata. Required by the draft wire schema.",
+          "type": "object",
+          "properties": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "$ref": "#/definitions/ClientCapabilities"
+            },
+            "io.modelcontextprotocol/clientInfo": {
+              "$ref": "#/definitions/Implementation"
+            },
+            "io.modelcontextprotocol/logLevel": {
+              "$ref": "#/definitions/LoggingLevel"
+            },
+            "io.modelcontextprotocol/protocolVersion": {
+              "type": "string"
+            },
+            "progressToken": {
+              "$ref": "#/definitions/ProgressToken"
+            }
+          },
+          "additionalProperties": true,
+          "required": [
+            "io.modelcontextprotocol/protocolVersion",
+            "io.modelcontextprotocol/clientInfo",
+            "io.modelcontextprotocol/clientCapabilities"
+          ]
+        },
+        "notifications": {
+          "description": "Notification categories requested for this stream.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubscriptionFilter"
+            }
+          ]
+        }
+      },
+      "required": [
+        "_meta",
+        "notifications"
       ]
     },
     "TaskMetadata": {

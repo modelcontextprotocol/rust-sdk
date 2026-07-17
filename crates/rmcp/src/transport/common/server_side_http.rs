@@ -6,7 +6,7 @@ use http::Response;
 use http_body::Body;
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use sse_stream::{KeepAlive, Sse, SseBody};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::http_header::EVENT_STREAM_MIME_TYPE;
 use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
@@ -54,6 +54,25 @@ impl sse_stream::Timer for TokioTimer {
     fn reset(self: std::pin::Pin<&mut Self>, when: std::time::Instant) {
         let this = self.project();
         this.sleep.reset(tokio::time::Instant::from_std(when));
+    }
+}
+
+pin_project_lite::pin_project! {
+    struct CancelOnDropStream<S> {
+        #[pin]
+        inner: S,
+        _drop_guard: DropGuard,
+    }
+}
+
+impl<S: futures::Stream> futures::Stream for CancelOnDropStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.project().inner.poll_next(cx)
     }
 }
 
@@ -108,6 +127,7 @@ pub(crate) fn sse_stream_response(
     ct: CancellationToken,
 ) -> Response<BoxBody<Bytes, Infallible>> {
     use futures::StreamExt;
+    let cancelled = ct.clone();
     let stream = stream
         .map(|message| {
             let mut sse = if let Some(ref msg) = message.message {
@@ -126,7 +146,11 @@ pub(crate) fn sse_stream_response(
 
             Result::<Sse, Infallible>::Ok(sse)
         })
-        .take_until(async move { ct.cancelled().await });
+        .take_until(async move { cancelled.cancelled().await });
+    let stream = CancelOnDropStream {
+        inner: stream,
+        _drop_guard: ct.drop_guard(),
+    };
     let stream = SseBody::new(stream);
 
     let stream = match keep_alive {
@@ -140,6 +164,7 @@ pub(crate) fn sse_stream_response(
         .status(http::StatusCode::OK)
         .header(http::header::CONTENT_TYPE, EVENT_STREAM_MIME_TYPE)
         .header(http::header::CACHE_CONTROL, "no-cache")
+        .header("X-Accel-Buffering", "no")
         .body(stream)
         .expect("valid response")
 }

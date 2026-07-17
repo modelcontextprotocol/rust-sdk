@@ -118,3 +118,7 @@ path = "src/task_stdio.rs"
 [[example]]
 name = "servers_mrtr"
 path = "src/mrtr.rs"
+
+[[example]]
+name = "servers_subscriptions_streamhttp"
+path = "src/subscriptions_streamhttp.rs"

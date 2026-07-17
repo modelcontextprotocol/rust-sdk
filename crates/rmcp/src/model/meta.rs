@@ -197,6 +197,7 @@ variant_extension! {
         ListResourcesRequest
         ListResourceTemplatesRequest
         ReadResourceRequest
+        SubscriptionsListenRequest
         SubscribeRequest
         UnsubscribeRequest
         CallToolRequest
@@ -239,6 +240,7 @@ variant_extension! {
         ResourceListChangedNotification
         ToolListChangedNotification
         PromptListChangedNotification
+        SubscriptionsAcknowledgedNotification
         TaskStatusNotification
         CustomNotification
     }

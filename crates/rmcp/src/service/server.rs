@@ -1,8 +1,8 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
-use std::borrow::Cow;
 #[cfg(feature = "elicitation")]
 use std::collections::HashSet;
+use std::{borrow::Cow, sync::Arc};
 
 use thiserror::Error;
 #[cfg(feature = "elicitation")]
@@ -20,7 +20,8 @@ use crate::{
         ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
         ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
         ResourceUpdatedNotificationParam, ServerInfo, ServerNotification, ServerRequest,
-        ServerResult, ToolListChangedNotification,
+        ServerResult, SubscriptionFilter, SubscriptionsAcknowledgedNotification,
+        SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
     },
     transport::DynamicTransportError,
 };
@@ -41,6 +42,13 @@ impl ServiceRole for RoleServer {
 
     type InitializeError = ServerInitializeError;
     const IS_CLIENT: bool = false;
+
+    fn peer_cancelled_params(notification: &Self::PeerNot) -> Option<&CancelledNotificationParam> {
+        match notification {
+            ClientNotification::CancelledNotification(notification) => Some(&notification.params),
+            _ => None,
+        }
+    }
 }
 
 /// It represents the error that may occur when serving the server.
@@ -97,6 +105,284 @@ impl ServerInitializeError {
     }
 }
 pub type ClientSink = Peer<RoleServer>;
+
+/// Failure to send a notification through a [`SubscriptionSink`].
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SubscriptionSendError {
+    #[error("subscription is no longer active")]
+    SubscriptionClosed,
+    #[error("notification is not allowed on a subscription stream: {0}")]
+    UnsupportedNotification(&'static str),
+    #[error("notification was not accepted for this subscription: {0}")]
+    NotificationNotAccepted(&'static str),
+    #[error(transparent)]
+    Service(#[from] ServiceError),
+}
+
+/// A server-side notification sink scoped to one `subscriptions/listen` request.
+///
+/// The sink applies the accepted filter and adds the subscription request ID to
+/// every notification it sends.
+#[derive(Debug, Clone)]
+pub struct SubscriptionSink {
+    peer: Peer<RoleServer>,
+    id: RequestId,
+    accepted: Arc<SubscriptionFilter>,
+    active: CancellationToken,
+}
+
+impl SubscriptionSink {
+    fn new(
+        peer: Peer<RoleServer>,
+        id: RequestId,
+        accepted: Arc<SubscriptionFilter>,
+        active: CancellationToken,
+    ) -> Self {
+        Self {
+            peer,
+            id,
+            accepted,
+            active,
+        }
+    }
+
+    /// Return the JSON-RPC ID of the originating listen request.
+    pub fn id(&self) -> &RequestId {
+        &self.id
+    }
+
+    /// Return the filter accepted for this subscription.
+    pub fn accepted(&self) -> &SubscriptionFilter {
+        self.accepted.as_ref()
+    }
+
+    /// Send an allowed change notification with subscription metadata attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubscriptionSendError::SubscriptionClosed`] after the request
+    /// ends, a filter error for disallowed notifications, or a transport error.
+    pub async fn send(
+        &self,
+        mut notification: ServerNotification,
+    ) -> Result<(), SubscriptionSendError> {
+        if self.active.is_cancelled() {
+            return Err(SubscriptionSendError::SubscriptionClosed);
+        }
+        match &notification {
+            ServerNotification::ToolListChangedNotification(_) => {
+                if self.accepted.tools_list_changed != Some(true) {
+                    return Err(SubscriptionSendError::NotificationNotAccepted(
+                        "notifications/tools/list_changed",
+                    ));
+                }
+            }
+            ServerNotification::PromptListChangedNotification(_) => {
+                if self.accepted.prompts_list_changed != Some(true) {
+                    return Err(SubscriptionSendError::NotificationNotAccepted(
+                        "notifications/prompts/list_changed",
+                    ));
+                }
+            }
+            ServerNotification::ResourceListChangedNotification(_) => {
+                if self.accepted.resources_list_changed != Some(true) {
+                    return Err(SubscriptionSendError::NotificationNotAccepted(
+                        "notifications/resources/list_changed",
+                    ));
+                }
+            }
+            ServerNotification::ResourceUpdatedNotification(update) => {
+                let accepted = self
+                    .accepted
+                    .resource_subscriptions
+                    .as_ref()
+                    .is_some_and(|uris| uris.contains(&update.params.uri));
+                if !accepted {
+                    return Err(SubscriptionSendError::NotificationNotAccepted(
+                        "notifications/resources/updated",
+                    ));
+                }
+            }
+            ServerNotification::SubscriptionsAcknowledgedNotification(_) => {
+                return Err(SubscriptionSendError::UnsupportedNotification(
+                    "notifications/subscriptions/acknowledged",
+                ));
+            }
+            ServerNotification::CancelledNotification(_) => {
+                return Err(SubscriptionSendError::UnsupportedNotification(
+                    "notifications/cancelled",
+                ));
+            }
+            ServerNotification::ProgressNotification(_) => {
+                return Err(SubscriptionSendError::UnsupportedNotification(
+                    "notifications/progress",
+                ));
+            }
+            ServerNotification::LoggingMessageNotification(_) => {
+                return Err(SubscriptionSendError::UnsupportedNotification(
+                    "notifications/message",
+                ));
+            }
+            ServerNotification::TaskStatusNotification(_) => {
+                return Err(SubscriptionSendError::UnsupportedNotification(
+                    "notifications/tasks/status",
+                ));
+            }
+            ServerNotification::CustomNotification(_) => {
+                return Err(SubscriptionSendError::UnsupportedNotification(
+                    "custom notification",
+                ));
+            }
+        }
+
+        notification
+            .get_meta_mut()
+            .set_subscription_id(self.id.clone());
+        self.peer.send_notification(notification).await?;
+        Ok(())
+    }
+
+    /// Send `notifications/tools/list_changed`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::send`].
+    pub async fn notify_tool_list_changed(&self) -> Result<(), SubscriptionSendError> {
+        self.send(ServerNotification::ToolListChangedNotification(
+            ToolListChangedNotification {
+                method: Default::default(),
+                extensions: Default::default(),
+            },
+        ))
+        .await
+    }
+
+    /// Send `notifications/prompts/list_changed`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::send`].
+    pub async fn notify_prompt_list_changed(&self) -> Result<(), SubscriptionSendError> {
+        self.send(ServerNotification::PromptListChangedNotification(
+            PromptListChangedNotification {
+                method: Default::default(),
+                extensions: Default::default(),
+            },
+        ))
+        .await
+    }
+
+    /// Send `notifications/resources/list_changed`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::send`].
+    pub async fn notify_resource_list_changed(&self) -> Result<(), SubscriptionSendError> {
+        self.send(ServerNotification::ResourceListChangedNotification(
+            ResourceListChangedNotification {
+                method: Default::default(),
+                extensions: Default::default(),
+            },
+        ))
+        .await
+    }
+
+    /// Send `notifications/resources/updated` for an accepted URI.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::send`].
+    pub async fn notify_resource_updated(
+        &self,
+        uri: impl Into<String>,
+    ) -> Result<(), SubscriptionSendError> {
+        self.send(ServerNotification::ResourceUpdatedNotification(
+            ResourceUpdatedNotification::new(ResourceUpdatedNotificationParam::new(uri)),
+        ))
+        .await
+    }
+}
+
+/// Context for one established server-side notification subscription.
+///
+/// The acknowledgment has already been sent before this context is handed to
+/// [`ServerHandler::listen`](crate::ServerHandler::listen).
+#[derive(Debug)]
+pub struct SubscriptionContext {
+    request: RequestContext<RoleServer>,
+    requested: SubscriptionFilter,
+    accepted: Arc<SubscriptionFilter>,
+    sink: SubscriptionSink,
+    _active_guard: DropGuard,
+}
+
+impl SubscriptionContext {
+    pub(crate) async fn establish(
+        request: RequestContext<RoleServer>,
+        requested: SubscriptionFilter,
+        accepted: SubscriptionFilter,
+    ) -> Result<Self, ErrorData> {
+        let active = request.ct.child_token();
+        let accepted = Arc::new(accepted);
+        let sink = SubscriptionSink::new(
+            request.peer.clone(),
+            request.id.clone(),
+            accepted.clone(),
+            active.clone(),
+        );
+        let mut acknowledgment = SubscriptionsAcknowledgedNotification::new(
+            SubscriptionsAcknowledgedNotificationParams::new(accepted.as_ref().clone()),
+        );
+        let mut meta = NotificationMetaObject::new();
+        meta.set_subscription_id(request.id.clone());
+        acknowledgment.extensions.insert(meta);
+        request
+            .peer
+            .send_notification(ServerNotification::SubscriptionsAcknowledgedNotification(
+                acknowledgment,
+            ))
+            .await
+            .map_err(|error| {
+                ErrorData::internal_error(
+                    format!("failed to acknowledge subscription: {error}"),
+                    None,
+                )
+            })?;
+        Ok(Self {
+            request,
+            requested,
+            accepted,
+            sink,
+            _active_guard: active.drop_guard(),
+        })
+    }
+
+    /// Return the filter requested by the client.
+    pub fn requested(&self) -> &SubscriptionFilter {
+        &self.requested
+    }
+
+    /// Return the subset accepted by the server.
+    pub fn accepted(&self) -> &SubscriptionFilter {
+        self.accepted.as_ref()
+    }
+
+    /// Return a cloneable, filter-enforcing notification sink.
+    pub fn sink(&self) -> &SubscriptionSink {
+        &self.sink
+    }
+
+    /// Wait until the subscription request is cancelled.
+    pub async fn cancelled(&self) {
+        self.request.ct.cancelled().await;
+    }
+
+    /// Access the underlying request context.
+    pub fn request_context(&self) -> &RequestContext<RoleServer> {
+        &self.request
+    }
+}
 
 impl<S: Service<RoleServer>> ServiceExt<RoleServer> for S {
     fn serve_with_ct<T, E, A>(

@@ -65,3 +65,7 @@ path = "src/auth/client_credentials.rs"
 [[example]]
 name = "clients_task_stdio"
 path = "src/task_stdio.rs"
+
+[[example]]
+name = "clients_subscriptions_streamhttp"
+path = "src/subscriptions_streamhttp.rs"

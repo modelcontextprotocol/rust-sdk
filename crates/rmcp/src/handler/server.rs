@@ -7,7 +7,7 @@ use crate::{
     model::{TaskSupport, *},
     service::{
         MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service, ServiceRole,
-        negotiate_protocol_version,
+        SubscriptionContext, negotiate_protocol_version,
     },
 };
 
@@ -79,7 +79,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::DiscoverResult),
             ClientRequest::PingRequest(_request) => {
-                self.ping(context).await.map(ServerResult::empty)
+                if mrtr_supported {
+                    Err(McpError::method_not_found::<PingRequestMethod>())
+                } else {
+                    self.ping(context).await.map(ServerResult::empty)
+                }
             }
             ClientRequest::CompleteRequest(request) => self
                 .complete(request.params, context)
@@ -109,14 +113,60 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .read_resource(request.params, context)
                 .await
                 .map(ServerResult::from),
-            ClientRequest::SubscribeRequest(request) => self
-                .subscribe(request.params, context)
-                .await
-                .map(ServerResult::empty),
-            ClientRequest::UnsubscribeRequest(request) => self
-                .unsubscribe(request.params, context)
-                .await
-                .map(ServerResult::empty),
+            ClientRequest::SubscriptionsListenRequest(request) => {
+                if !mrtr_supported {
+                    Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>())
+                } else {
+                    let requested = request.params.notifications;
+                    let Some(candidate) = self.accepted_subscription_filter(&requested) else {
+                        return Err(
+                            McpError::method_not_found::<SubscriptionsListenRequestMethod>(),
+                        );
+                    };
+                    let advertised = requested.supported_by(&self.get_info().capabilities);
+                    let handler_accepted = requested.intersection(&candidate);
+                    let accepted = handler_accepted.intersection(&advertised);
+                    if accepted != handler_accepted {
+                        tracing::debug!(
+                            requested_resource_count = requested
+                                .resource_subscriptions
+                                .as_ref()
+                                .map_or(0, Vec::len),
+                            accepted_resource_count =
+                                accepted.resource_subscriptions.as_ref().map_or(0, Vec::len),
+                            "subscription filter reduced to advertised server capabilities"
+                        );
+                    }
+                    let subscription_id = context.id.clone();
+                    let subscription =
+                        SubscriptionContext::establish(context, requested, accepted).await?;
+                    // The integrated draft schema defines a final result for graceful
+                    // server teardown; explicit stdio cancellation remains a notification.
+                    self.listen(subscription).await.map(|()| {
+                        ServerResult::SubscriptionsListenResult(
+                            SubscriptionsListenResult::complete(subscription_id),
+                        )
+                    })
+                }
+            }
+            ClientRequest::SubscribeRequest(request) => {
+                if mrtr_supported {
+                    Err(McpError::method_not_found::<SubscribeRequestMethod>())
+                } else {
+                    self.subscribe(request.params, context)
+                        .await
+                        .map(ServerResult::empty)
+                }
+            }
+            ClientRequest::UnsubscribeRequest(request) => {
+                if mrtr_supported {
+                    Err(McpError::method_not_found::<UnsubscribeRequestMethod>())
+                } else {
+                    self.unsubscribe(request.params, context)
+                        .await
+                        .map(ServerResult::empty)
+                }
+            }
             ClientRequest::CallToolRequest(request) => {
                 let is_task = request.params.task.is_some();
 
@@ -335,6 +385,36 @@ macro_rules! server_handler_methods {
                 McpError::method_not_found::<ReadResourceRequestMethod>(),
             ))
         }
+        /// Return the subset of a requested notification filter this server accepts.
+        ///
+        /// Returning `None` leaves `subscriptions/listen` unimplemented. The SDK
+        /// intersects the returned filter with both `requested` and the notification
+        /// capabilities advertised by [`Self::get_info`] before acknowledging it.
+        /// Categories that were not requested or advertised are always removed.
+        fn accepted_subscription_filter(
+            &self,
+            requested: &SubscriptionFilter,
+        ) -> Option<SubscriptionFilter> {
+            None
+        }
+        /// Run one established subscription until it is cancelled or closed gracefully.
+        ///
+        /// The SDK sends the acknowledgment before invoking this method. Returning
+        /// `Ok(())` sends the final [`SubscriptionsListenResult`] defined by the
+        /// integrated draft schema, marking graceful server teardown. Explicit
+        /// stdio cancellation uses `notifications/cancelled` instead.
+        fn listen(
+            &self,
+            context: SubscriptionContext,
+        ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
+            async move {
+                context.cancelled().await;
+                Ok(())
+            }
+        }
+        #[deprecated(
+            note = "resources/subscribe is legacy-only; implement accepted_subscription_filter and listen for protocol version 2026-07-28"
+        )]
         fn subscribe(
             &self,
             request: SubscribeRequestParams,
@@ -342,6 +422,9 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
             std::future::ready(Err(McpError::method_not_found::<SubscribeRequestMethod>()))
         }
+        #[deprecated(
+            note = "resources/unsubscribe is legacy-only; subscriptions/listen is cancelled through its request lifecycle"
+        )]
         fn unsubscribe(
             &self,
             request: UnsubscribeRequestParams,
@@ -602,6 +685,20 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<ReadResourceResponse, McpError>> + MaybeSendFuture + '_ {
                 (**self).read_resource(request, context)
+            }
+
+            fn accepted_subscription_filter(
+                &self,
+                requested: &SubscriptionFilter,
+            ) -> Option<SubscriptionFilter> {
+                (**self).accepted_subscription_filter(requested)
+            }
+
+            fn listen(
+                &self,
+                context: SubscriptionContext,
+            ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
+                (**self).listen(context)
             }
 
             fn subscribe(

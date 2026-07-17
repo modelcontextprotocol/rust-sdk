@@ -16,6 +16,13 @@ A client that communicates with a Git-related MCP server using standard input/ou
 
 A client that communicates with an MCP server using HTTP streaming transport.
 - Connects to an MCP server running at `http://localhost:8000`
+
+### Modern Subscription Client (`subscriptions_streamhttp.rs`)
+
+Uses modern discovery and `subscriptions/listen`, prints the accepted filter,
+and consumes tagged notifications until graceful closure or cancellation.
+
+- Run with `cargo run -p mcp-client-examples --example clients_subscriptions_streamhttp`
 - Retrieves server information and list of available tools
 - Calls a tool named "increment"
 

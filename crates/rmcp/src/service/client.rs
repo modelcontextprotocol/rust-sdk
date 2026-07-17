@@ -1,6 +1,6 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use thiserror::Error;
 
@@ -21,8 +21,9 @@ use crate::{
         ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
         Reference, RequestId, RequestMetaObject, RootsListChangedNotification, ServerInfo,
         ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult, SetLevelRequest,
-        SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams, UnsubscribeRequest,
-        UnsubscribeRequestParams,
+        SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams, SubscriptionFilter,
+        SubscriptionsListenRequest, SubscriptionsListenRequestParams, SubscriptionsListenResult,
+        UnsubscribeRequest, UnsubscribeRequestParams,
     },
     transport::DynamicTransportError,
 };
@@ -184,9 +185,297 @@ impl ServiceRole for RoleClient {
     type PeerInfo = ServerInfo;
     type InitializeError = ClientInitializeError;
     const IS_CLIENT: bool = true;
+
+    fn configure_direct_peer(peer: &Peer<Self>, info: &Self::Info) {
+        let Some(server_info) = peer.peer_info() else {
+            return;
+        };
+        if server_info.protocol_version.as_str() < ProtocolVersion::V_2026_07_28.as_str() {
+            return;
+        }
+        peer.set_client_request_metadata(ClientRequestMetadata {
+            protocol_version: server_info.protocol_version.clone(),
+            client_info: info.client_info.clone(),
+            client_capabilities: info.capabilities.clone(),
+        });
+    }
+
+    fn peer_cancelled_params(notification: &Self::PeerNot) -> Option<&CancelledNotificationParam> {
+        match notification {
+            ServerNotification::CancelledNotification(notification) => Some(&notification.params),
+            _ => None,
+        }
+    }
 }
 
 pub type ServerSink = Peer<RoleClient>;
+
+/// Default number of notifications buffered for one subscription.
+pub const DEFAULT_SUBSCRIPTION_CHANNEL_CAPACITY: usize = 64;
+
+/// How a client-side subscription stream ended.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum SubscriptionEnd {
+    /// The server returned a final `SubscriptionsListenResult`.
+    Graceful(SubscriptionsListenResult),
+    /// The transport closed without a final result. Call `Peer::listen` again
+    /// after reconnecting; subscription streams are not resumable.
+    Abrupt,
+    /// The subscription was explicitly cancelled by either peer.
+    Cancelled,
+    /// The consumer did not drain notifications before the channel filled.
+    Lagged { capacity: usize },
+}
+
+/// Handle for one active `subscriptions/listen` request.
+#[derive(Debug)]
+pub struct Subscription {
+    id: RequestId,
+    acknowledged: SubscriptionFilter,
+    notifications: tokio::sync::mpsc::Receiver<ServerNotification>,
+    request: Option<RequestHandle<RoleClient>>,
+    end: Option<SubscriptionEnd>,
+}
+
+type SubscriptionResponse =
+    Result<Result<ServerResult, ServiceError>, tokio::sync::oneshot::error::RecvError>;
+
+struct PendingSubscriptionRequest {
+    handle: Option<RequestHandle<RoleClient>>,
+}
+
+impl PendingSubscriptionRequest {
+    fn new(handle: RequestHandle<RoleClient>) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    async fn recv(&mut self) -> Option<SubscriptionResponse> {
+        let handle = self.handle.as_mut()?;
+        Some((&mut handle.rx).await)
+    }
+
+    fn take(&mut self) -> Option<RequestHandle<RoleClient>> {
+        self.handle.take()
+    }
+
+    fn unregister(&self, id: &RequestId) {
+        if let Some(handle) = self.handle.as_ref() {
+            handle.peer.unregister_subscription(id);
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.handle.take();
+    }
+
+    async fn cancel(&mut self, reason: &'static str) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.cancel(Some(reason.to_owned())).await;
+        }
+    }
+}
+
+impl Drop for PendingSubscriptionRequest {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        handle.peer.unregister_subscription(&handle.id);
+        handle.peer.try_cancel_request(
+            handle.id,
+            Some("subscription establishment cancelled".to_owned()),
+        );
+    }
+}
+
+impl Subscription {
+    /// Return the originating listen request ID.
+    pub fn id(&self) -> &RequestId {
+        &self.id
+    }
+
+    /// Return the notification filter accepted by the server.
+    pub fn acknowledged(&self) -> &SubscriptionFilter {
+        &self.acknowledged
+    }
+
+    /// Return the terminal state after this subscription has ended.
+    pub fn end(&self) -> Option<&SubscriptionEnd> {
+        self.end.as_ref()
+    }
+
+    /// Receive the next notification, or `None` after the subscription ends.
+    ///
+    /// A graceful final result and an abrupt transport close are distinguished
+    /// through [`Self::end`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a service or protocol error when the stream carries an invalid
+    /// message, an unexpected final result, or another request failure.
+    pub async fn next(&mut self) -> Result<Option<ServerNotification>, ServiceError> {
+        if self.end.is_some() {
+            return Ok(None);
+        }
+        let Some(request) = self.request.as_mut() else {
+            self.end = Some(SubscriptionEnd::Abrupt);
+            return Ok(None);
+        };
+
+        tokio::select! {
+            biased;
+            notification = self.notifications.recv() => {
+                let Some(notification) = notification else {
+                    let response = (&mut request.rx).await;
+                    return self.handle_response(response);
+                };
+                if let ServerNotification::CancelledNotification(cancelled) = &notification {
+                    if cancelled.params.request_id.as_ref() != Some(&self.id) {
+                        self.cancel_as_abrupt("subscription cancellation ID mismatch")
+                            .await;
+                        return Err(ServiceError::UnexpectedResponse);
+                    }
+                    self.finish(SubscriptionEnd::Cancelled);
+                    return Ok(None);
+                }
+                if notification.get_meta().subscription_id().as_ref() != Some(&self.id) {
+                    self.cancel_as_abrupt("subscription notification ID mismatch")
+                        .await;
+                    return Err(ServiceError::UnexpectedResponse);
+                }
+                if !self.accepts(&notification) {
+                    self.cancel_as_abrupt(
+                        "subscription notification was outside the acknowledged filter",
+                    )
+                    .await;
+                    return Err(ServiceError::UnexpectedResponse);
+                }
+                Ok(Some(notification))
+            }
+            response = &mut request.rx => {
+                self.handle_response(response)
+            }
+        }
+    }
+
+    /// Cancel this subscription.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error when the cancellation signal cannot be sent.
+    pub async fn cancel(&mut self) -> Result<(), ServiceError> {
+        self.cancel_with_reason(None).await
+    }
+
+    /// Cancel this subscription with a diagnostic reason.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport error when the cancellation signal cannot be sent.
+    pub async fn cancel_with_reason(&mut self, reason: Option<String>) -> Result<(), ServiceError> {
+        let Some(request) = self.request.take() else {
+            return Ok(());
+        };
+        request.cancel(reason).await?;
+        self.end = Some(SubscriptionEnd::Cancelled);
+        Ok(())
+    }
+
+    fn finish(&mut self, end: SubscriptionEnd) {
+        if let Some(request) = self.request.take() {
+            request.peer.unregister_subscription(&self.id);
+        }
+        self.end = Some(end);
+    }
+
+    async fn cancel_as_abrupt(&mut self, reason: &'static str) {
+        if let Some(request) = self.request.take() {
+            let _ = request.cancel(Some(reason.to_owned())).await;
+        }
+        self.end = Some(SubscriptionEnd::Abrupt);
+    }
+
+    fn accepts(&self, notification: &ServerNotification) -> bool {
+        match notification {
+            ServerNotification::ToolListChangedNotification(_) => {
+                self.acknowledged.tools_list_changed == Some(true)
+            }
+            ServerNotification::PromptListChangedNotification(_) => {
+                self.acknowledged.prompts_list_changed == Some(true)
+            }
+            ServerNotification::ResourceListChangedNotification(_) => {
+                self.acknowledged.resources_list_changed == Some(true)
+            }
+            ServerNotification::ResourceUpdatedNotification(update) => self
+                .acknowledged
+                .resource_subscriptions
+                .as_ref()
+                .is_some_and(|uris| uris.contains(&update.params.uri)),
+            ServerNotification::SubscriptionsAcknowledgedNotification(_)
+            | ServerNotification::CancelledNotification(_)
+            | ServerNotification::ProgressNotification(_)
+            | ServerNotification::LoggingMessageNotification(_)
+            | ServerNotification::TaskStatusNotification(_)
+            | ServerNotification::CustomNotification(_) => false,
+        }
+    }
+
+    fn handle_response(
+        &mut self,
+        response: SubscriptionResponse,
+    ) -> Result<Option<ServerNotification>, ServiceError> {
+        let response = match response {
+            Ok(response) => response,
+            Err(_) => {
+                self.finish(SubscriptionEnd::Abrupt);
+                return Ok(None);
+            }
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(ServiceError::TransportClosed) => {
+                self.finish(SubscriptionEnd::Abrupt);
+                return Ok(None);
+            }
+            Err(ServiceError::SubscriptionLagged { capacity }) => {
+                self.finish(SubscriptionEnd::Lagged { capacity });
+                return Ok(None);
+            }
+            Err(error) => {
+                self.finish(SubscriptionEnd::Abrupt);
+                return Err(error);
+            }
+        };
+        let ServerResult::SubscriptionsListenResult(result) = response else {
+            self.finish(SubscriptionEnd::Abrupt);
+            return Err(ServiceError::UnexpectedResponse);
+        };
+        if !result.result_type.is_complete()
+            || result.meta.subscription_id().as_ref() != Some(&self.id)
+        {
+            self.finish(SubscriptionEnd::Abrupt);
+            return Err(ServiceError::UnexpectedResponse);
+        }
+        self.finish(SubscriptionEnd::Graceful(result));
+        Ok(None)
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        let Some(request) = self.request.take() else {
+            return;
+        };
+        request.peer.unregister_subscription(&self.id);
+        request.peer.try_cancel_request(
+            self.id.clone(),
+            Some("subscription handle dropped".to_owned()),
+        );
+    }
+}
 
 /// Selects how a client establishes its MCP lifecycle.
 ///
@@ -621,6 +910,106 @@ macro_rules! method {
 }
 
 impl Peer<RoleClient> {
+    /// Open a long-lived notification subscription and wait for its acknowledgment.
+    ///
+    /// Notifications routed to the returned [`Subscription`] are not also
+    /// delivered through [`ClientHandler`](crate::ClientHandler) callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a service, transport, or protocol error when the request cannot
+    /// be established or the acknowledgment is invalid.
+    pub async fn listen(
+        &self,
+        notifications: SubscriptionFilter,
+    ) -> Result<Subscription, ServiceError> {
+        self.listen_with_channel_capacity_inner(
+            notifications,
+            DEFAULT_SUBSCRIPTION_CHANNEL_CAPACITY,
+        )
+        .await
+    }
+
+    /// Open a subscription with an explicit notification buffer capacity.
+    ///
+    /// Notifications routed to the returned [`Subscription`] are not also
+    /// delivered through [`ClientHandler`](crate::ClientHandler) callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a service, transport, or protocol error when the request cannot
+    /// be established or the acknowledgment is invalid.
+    pub async fn listen_with_capacity(
+        &self,
+        notifications: SubscriptionFilter,
+        channel_capacity: NonZeroUsize,
+    ) -> Result<Subscription, ServiceError> {
+        self.listen_with_channel_capacity_inner(notifications, channel_capacity.get())
+            .await
+    }
+
+    async fn listen_with_channel_capacity_inner(
+        &self,
+        notifications: SubscriptionFilter,
+        channel_capacity: usize,
+    ) -> Result<Subscription, ServiceError> {
+        let request = ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
+            SubscriptionsListenRequestParams::new(notifications.clone()),
+        ));
+        let (handle, mut subscription_notifications) = self
+            .send_subscription_request(request, PeerRequestOptions::no_options(), channel_capacity)
+            .await?;
+        let id = handle.id.clone();
+        let mut pending = PendingSubscriptionRequest::new(handle);
+
+        tokio::select! {
+            biased;
+            notification = subscription_notifications.recv() => {
+                let Some(notification) = notification else {
+                    pending.cancel("subscription stream closed before acknowledgment").await;
+                    return Err(ServiceError::TransportClosed);
+                };
+                if notification.get_meta().subscription_id().as_ref() != Some(&id) {
+                    pending.cancel("subscription acknowledgment ID mismatch").await;
+                    return Err(ServiceError::UnexpectedResponse);
+                }
+                let ServerNotification::SubscriptionsAcknowledgedNotification(
+                    acknowledgment,
+                ) = notification else {
+                    pending.cancel("notification received before subscription acknowledgment").await;
+                    return Err(ServiceError::UnexpectedResponse);
+                };
+                let accepted = acknowledgment.params.notifications;
+                if !accepted.is_subset_of(&notifications) {
+                    pending.cancel("subscription acknowledged an unrequested filter").await;
+                    return Err(ServiceError::UnexpectedResponse);
+                }
+                let Some(handle) = pending.take() else {
+                    return Err(ServiceError::TransportClosed);
+                };
+                Ok(Subscription {
+                    id,
+                    acknowledged: accepted,
+                    notifications: subscription_notifications,
+                    request: Some(handle),
+                    end: None,
+                })
+            }
+            response = pending.recv() => {
+                pending.unregister(&id);
+                pending.disarm();
+                let Some(response) = response else {
+                    return Err(ServiceError::TransportClosed);
+                };
+                match response {
+                    Ok(Err(error)) => Err(error),
+                    Ok(Ok(_)) => Err(ServiceError::UnexpectedResponse),
+                    Err(_) => Err(ServiceError::TransportClosed),
+                }
+            }
+        }
+    }
+
     /// Discover the server's supported protocol versions and capabilities.
     ///
     /// The high-level client currently exposes this peer only after initialization;
@@ -716,8 +1105,18 @@ impl Peer<RoleClient> {
     method!(peer_req list_resources ListResourcesRequest(PaginatedRequestParams)? => ListResourcesResult);
     method!(peer_req list_resource_templates ListResourceTemplatesRequest(PaginatedRequestParams)? => ListResourceTemplatesResult);
     method!(peer_req read_resource ReadResourceRequest(ReadResourceRequestParams) => ReadResourceResult);
-    method!(peer_req subscribe SubscribeRequest(SubscribeRequestParams) );
-    method!(peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParams));
+    method!(
+        #[deprecated(
+            note = "resources/subscribe is legacy-only; use Peer::listen for protocol version 2026-07-28"
+        )]
+        peer_req subscribe SubscribeRequest(SubscribeRequestParams)
+    );
+    method!(
+        #[deprecated(
+            note = "resources/unsubscribe is legacy-only; cancel the Subscription handle instead"
+        )]
+        peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParams)
+    );
     method!(peer_req call_tool CallToolRequest(CallToolRequestParams) => CallToolResult);
     method!(peer_req list_tools ListToolsRequest(PaginatedRequestParams)? => ListToolsResult);
 

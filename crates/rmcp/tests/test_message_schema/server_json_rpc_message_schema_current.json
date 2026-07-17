@@ -1651,6 +1651,9 @@
           "$ref": "#/definitions/Notification5"
         },
         {
+          "$ref": "#/definitions/Notification6"
+        },
+        {
           "$ref": "#/definitions/CustomNotification"
         }
       ],
@@ -2222,6 +2225,21 @@
       ]
     },
     "Notification5": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SubscriptionsAcknowledgedNotificationMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SubscriptionsAcknowledgedNotificationParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Notification6": {
       "type": "object",
       "properties": {
         "method": {
@@ -3296,6 +3314,9 @@
           "$ref": "#/definitions/ReadResourceResult"
         },
         {
+          "$ref": "#/definitions/SubscriptionsListenResult"
+        },
+        {
           "$ref": "#/definitions/ListToolsResult"
         },
         {
@@ -3437,6 +3458,75 @@
       "type": "string",
       "format": "const",
       "const": "string"
+    },
+    "SubscriptionFilter": {
+      "description": "Notification categories a client opts in to on a `subscriptions/listen` stream.",
+      "type": "object",
+      "properties": {
+        "promptsListChanged": {
+          "type": "boolean"
+        },
+        "resourceSubscriptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resourcesListChanged": {
+          "type": "boolean"
+        },
+        "toolsListChanged": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SubscriptionsAcknowledgedNotificationMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "notifications/subscriptions/acknowledged"
+    },
+    "SubscriptionsAcknowledgedNotificationParams": {
+      "description": "Parameters reporting the accepted subset of a subscription filter.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/definitions/NotificationMetaObject"
+        },
+        "notifications": {
+          "$ref": "#/definitions/SubscriptionFilter"
+        }
+      },
+      "required": [
+        "notifications"
+      ]
+    },
+    "SubscriptionsListenResult": {
+      "description": "Final response indicating that a subscription ended gracefully.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/definitions/SubscriptionsListenResultMeta"
+        },
+        "resultType": {
+          "$ref": "#/definitions/ResultType"
+        }
+      },
+      "required": [
+        "resultType",
+        "_meta"
+      ]
+    },
+    "SubscriptionsListenResultMeta": {
+      "type": "object",
+      "properties": {
+        "io.modelcontextprotocol/subscriptionId": {
+          "$ref": "#/definitions/NumberOrString"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "io.modelcontextprotocol/subscriptionId"
+      ]
     },
     "Task": {
       "description": "Primary Task object that surfaces metadata during the task lifecycle.\n\nPer spec, `lastUpdatedAt` and `ttl` are required fields.\n`ttl` is nullable (`null` means unlimited retention).",

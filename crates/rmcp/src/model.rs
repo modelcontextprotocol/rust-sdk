@@ -3,8 +3,10 @@
 #![expect(deprecated)]
 use std::{
     borrow::Cow,
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hasher},
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 mod annotated;
 mod capabilities;
@@ -558,6 +560,8 @@ pub struct ErrorData {
 }
 
 impl ErrorData {
+    const TRANSPORT_CLOSED_MARKER: &str = "io.modelcontextprotocol/transportClosed";
+
     pub fn new(
         code: ErrorCode,
         message: impl Into<Cow<'static, str>>,
@@ -615,6 +619,33 @@ impl ErrorData {
     }
     pub fn internal_error(message: impl Into<Cow<'static, str>>, data: Option<Value>) -> Self {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
+    }
+
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) fn transport_closed(message: impl Into<Cow<'static, str>>) -> Self {
+        let mut data = JsonObject::new();
+        data.insert(
+            Self::TRANSPORT_CLOSED_MARKER.to_owned(),
+            Value::from(Self::transport_closed_token()),
+        );
+        Self::internal_error(message, Some(Value::Object(data)))
+    }
+
+    pub(crate) fn is_transport_closed(&self) -> bool {
+        self.data
+            .as_ref()
+            .and_then(|data| data.get(Self::TRANSPORT_CLOSED_MARKER))
+            .and_then(Value::as_u64)
+            == Some(Self::transport_closed_token())
+    }
+
+    fn transport_closed_token() -> u64 {
+        static TOKEN: OnceLock<u64> = OnceLock::new();
+        *TOKEN.get_or_init(|| {
+            let mut hasher = RandomState::new().build_hasher();
+            hasher.write(b"rmcp transport-closed marker");
+            hasher.finish()
+        })
     }
 }
 
@@ -1661,6 +1692,9 @@ impl RequestParamsMeta for SubscribeRequestParams {
 pub type SubscribeRequestParam = SubscribeRequestParams;
 
 /// Request to subscribe to resource updates
+#[deprecated(
+    note = "resources/subscribe is legacy-only; use subscriptions/listen for protocol version 2026-07-28"
+)]
 pub type SubscribeRequest = Request<SubscribeRequestMethod, SubscribeRequestParams>;
 
 const_string!(UnsubscribeRequestMethod = "resources/unsubscribe");
@@ -1701,6 +1735,9 @@ impl RequestParamsMeta for UnsubscribeRequestParams {
 pub type UnsubscribeRequestParam = UnsubscribeRequestParams;
 
 /// Request to unsubscribe from resource updates
+#[deprecated(
+    note = "resources/unsubscribe is legacy-only; cancel the subscriptions/listen request for protocol version 2026-07-28"
+)]
 pub type UnsubscribeRequest = Request<UnsubscribeRequestMethod, UnsubscribeRequestParams>;
 
 const_string!(ResourceUpdatedNotificationMethod = "notifications/resources/updated");
@@ -1729,6 +1766,390 @@ impl ResourceUpdatedNotificationParam {
 /// Notification sent when a subscribed resource is updated
 pub type ResourceUpdatedNotification =
     Notification<ResourceUpdatedNotificationMethod, ResourceUpdatedNotificationParam>;
+
+// =============================================================================
+// SUBSCRIPTIONS
+// =============================================================================
+
+/// Notification categories a client opts in to on a `subscriptions/listen` stream.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct SubscriptionFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
+    pub tools_list_changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
+    pub prompts_list_changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
+    pub resources_list_changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "Vec<String>"))]
+    pub resource_subscriptions: Option<Vec<String>>,
+}
+
+impl SubscriptionFilter {
+    /// Create an empty filter that opts in to no notifications.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a builder for a subscription filter.
+    pub fn builder() -> SubscriptionFilterBuilder {
+        SubscriptionFilterBuilder::default()
+    }
+
+    /// Return the subset present in both filters.
+    pub fn intersection(&self, other: &Self) -> Self {
+        let resource_subscriptions = self
+            .resource_subscriptions
+            .as_ref()
+            .and_then(|requested| {
+                other.resource_subscriptions.as_ref().map(|accepted| {
+                    requested
+                        .iter()
+                        .filter(|uri| accepted.contains(uri))
+                        .cloned()
+                        .collect()
+                })
+            })
+            .filter(|uris: &Vec<String>| !uris.is_empty());
+        Self {
+            tools_list_changed: (self.tools_list_changed == Some(true)
+                && other.tools_list_changed == Some(true))
+            .then_some(true),
+            prompts_list_changed: (self.prompts_list_changed == Some(true)
+                && other.prompts_list_changed == Some(true))
+            .then_some(true),
+            resources_list_changed: (self.resources_list_changed == Some(true)
+                && other.resources_list_changed == Some(true))
+            .then_some(true),
+            resource_subscriptions,
+        }
+    }
+
+    /// Return whether this filter accepts only notifications requested by `other`.
+    pub fn is_subset_of(&self, other: &Self) -> bool {
+        let booleans_are_subset = [
+            (self.tools_list_changed, other.tools_list_changed),
+            (self.prompts_list_changed, other.prompts_list_changed),
+            (self.resources_list_changed, other.resources_list_changed),
+        ]
+        .into_iter()
+        .all(|(accepted, requested)| accepted != Some(true) || requested == Some(true));
+        let resources_are_subset = self.resource_subscriptions.as_ref().is_none_or(|accepted| {
+            accepted.iter().all(|uri| {
+                other
+                    .resource_subscriptions
+                    .as_ref()
+                    .is_some_and(|requested| requested.contains(uri))
+            })
+        });
+        booleans_are_subset && resources_are_subset
+    }
+
+    /// Return the requested notification types advertised by server capabilities.
+    pub fn supported_by(&self, capabilities: &ServerCapabilities) -> Self {
+        Self {
+            tools_list_changed: (self.tools_list_changed == Some(true)
+                && capabilities
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.list_changed == Some(true)))
+            .then_some(true),
+            prompts_list_changed: (self.prompts_list_changed == Some(true)
+                && capabilities
+                    .prompts
+                    .as_ref()
+                    .is_some_and(|prompts| prompts.list_changed == Some(true)))
+            .then_some(true),
+            resources_list_changed: (self.resources_list_changed == Some(true)
+                && capabilities
+                    .resources
+                    .as_ref()
+                    .is_some_and(|resources| resources.list_changed == Some(true)))
+            .then_some(true),
+            resource_subscriptions: capabilities
+                .resources
+                .as_ref()
+                .is_some_and(|resources| resources.subscribe == Some(true))
+                .then(|| self.resource_subscriptions.clone())
+                .flatten(),
+        }
+    }
+}
+
+/// Builder for [`SubscriptionFilter`].
+#[derive(Debug, Default)]
+#[non_exhaustive]
+pub struct SubscriptionFilterBuilder {
+    filter: SubscriptionFilter,
+}
+
+impl SubscriptionFilterBuilder {
+    /// Opt in to `notifications/tools/list_changed`.
+    pub fn tools_list_changed(mut self) -> Self {
+        self.filter.tools_list_changed = Some(true);
+        self
+    }
+
+    /// Opt in to `notifications/prompts/list_changed`.
+    pub fn prompts_list_changed(mut self) -> Self {
+        self.filter.prompts_list_changed = Some(true);
+        self
+    }
+
+    /// Opt in to `notifications/resources/list_changed`.
+    pub fn resources_list_changed(mut self) -> Self {
+        self.filter.resources_list_changed = Some(true);
+        self
+    }
+
+    /// Opt in to updates for all supplied resource URIs.
+    pub fn resource_subscriptions(
+        mut self,
+        uris: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.filter.resource_subscriptions = Some(uris.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Add one resource URI to the update subscription set.
+    pub fn resource_subscription(mut self, uri: impl Into<String>) -> Self {
+        self.filter
+            .resource_subscriptions
+            .get_or_insert_default()
+            .push(uri.into());
+        self
+    }
+
+    /// Build the filter.
+    pub fn build(self) -> SubscriptionFilter {
+        self.filter
+    }
+}
+
+const_string!(SubscriptionsListenRequestMethod = "subscriptions/listen");
+
+#[cfg(feature = "schemars")]
+fn subscriptions_listen_request_meta_schema(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let progress_token = generator.subschema_for::<ProgressToken>();
+    let client_info = generator.subschema_for::<Implementation>();
+    let client_capabilities = generator.subschema_for::<ClientCapabilities>();
+    let log_level = generator.subschema_for::<LoggingLevel>();
+    schemars::json_schema!({
+        "type": "object",
+        "properties": {
+            "progressToken": progress_token,
+            "io.modelcontextprotocol/protocolVersion": {
+                "type": "string",
+            },
+            "io.modelcontextprotocol/clientInfo": client_info,
+            "io.modelcontextprotocol/clientCapabilities": client_capabilities,
+            "io.modelcontextprotocol/logLevel": log_level,
+        },
+        "required": RequestMetaObject::DRAFT_REQUIRED_KEYS,
+        "additionalProperties": true,
+    })
+}
+
+/// Parameters for opening a long-lived notification subscription.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct SubscriptionsListenRequestParams {
+    /// Protocol-level metadata. Required by the draft wire schema.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schemars",
+        schemars(required, schema_with = "subscriptions_listen_request_meta_schema")
+    )]
+    pub meta: Option<RequestMetaObject>,
+    /// Notification categories requested for this stream.
+    pub notifications: SubscriptionFilter,
+}
+
+impl SubscriptionsListenRequestParams {
+    /// Create listen parameters for a notification filter.
+    pub fn new(notifications: SubscriptionFilter) -> Self {
+        Self {
+            meta: None,
+            notifications,
+        }
+    }
+
+    /// Set protocol-level request metadata.
+    pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+impl RequestParamsMeta for SubscriptionsListenRequestParams {
+    fn meta(&self) -> Option<&RequestMetaObject> {
+        self.meta.as_ref()
+    }
+
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
+        &mut self.meta
+    }
+}
+
+/// Request that opens a long-lived notification subscription.
+pub type SubscriptionsListenRequest =
+    Request<SubscriptionsListenRequestMethod, SubscriptionsListenRequestParams>;
+
+const SUBSCRIPTION_ID_META_KEY: &str = "io.modelcontextprotocol/subscriptionId";
+
+/// Metadata on the final result of a `subscriptions/listen` request.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(transparent)]
+#[non_exhaustive]
+pub struct SubscriptionsListenResultMeta(MetaObject);
+
+impl SubscriptionsListenResultMeta {
+    /// Create result metadata for the originating listen request.
+    pub fn new(subscription_id: RequestId) -> Self {
+        let mut meta = MetaObject::new();
+        meta.insert(
+            SUBSCRIPTION_ID_META_KEY.to_owned(),
+            subscription_id.into_json_value(),
+        );
+        Self(meta)
+    }
+
+    /// Return the originating listen request ID, if the metadata remains valid.
+    pub fn subscription_id(&self) -> Option<RequestId> {
+        self.0
+            .get(SUBSCRIPTION_ID_META_KEY)
+            .and_then(|value| RequestId::deserialize(value).ok())
+    }
+
+    /// Replace the originating listen request ID.
+    pub fn set_subscription_id(&mut self, subscription_id: RequestId) {
+        self.0.insert(
+            SUBSCRIPTION_ID_META_KEY.to_owned(),
+            subscription_id.into_json_value(),
+        );
+    }
+}
+
+impl<'de> Deserialize<'de> for SubscriptionsListenResultMeta {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let meta = MetaObject::deserialize(deserializer)?;
+        let Some(value) = meta.get(SUBSCRIPTION_ID_META_KEY) else {
+            return Err(serde::de::Error::missing_field(SUBSCRIPTION_ID_META_KEY));
+        };
+        RequestId::deserialize(value).map_err(serde::de::Error::custom)?;
+        Ok(Self(meta))
+    }
+}
+
+impl std::ops::Deref for SubscriptionsListenResultMeta {
+    type Target = MetaObject;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SubscriptionsListenResultMeta {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[cfg(feature = "schemars")]
+impl schemars::JsonSchema for SubscriptionsListenResultMeta {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("SubscriptionsListenResultMeta")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let subscription_id = generator.subschema_for::<RequestId>();
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {
+                "io.modelcontextprotocol/subscriptionId": subscription_id,
+            },
+            "required": ["io.modelcontextprotocol/subscriptionId"],
+            "additionalProperties": true,
+        })
+    }
+}
+
+/// Final response indicating that a subscription ended gracefully.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct SubscriptionsListenResult {
+    pub result_type: ResultType,
+    #[serde(rename = "_meta")]
+    pub meta: SubscriptionsListenResultMeta,
+}
+
+impl SubscriptionsListenResult {
+    /// Create a completed subscription result.
+    pub fn new(meta: SubscriptionsListenResultMeta) -> Self {
+        Self {
+            result_type: ResultType::COMPLETE,
+            meta,
+        }
+    }
+
+    /// Create a completed result for the originating listen request.
+    pub fn complete(subscription_id: RequestId) -> Self {
+        Self::new(SubscriptionsListenResultMeta::new(subscription_id))
+    }
+}
+
+const_string!(
+    SubscriptionsAcknowledgedNotificationMethod = "notifications/subscriptions/acknowledged"
+);
+
+/// Parameters reporting the accepted subset of a subscription filter.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct SubscriptionsAcknowledgedNotificationParams {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "NotificationMetaObject"))]
+    pub meta: Option<NotificationMetaObject>,
+    pub notifications: SubscriptionFilter,
+}
+
+impl SubscriptionsAcknowledgedNotificationParams {
+    /// Create acknowledgment parameters for the accepted filter.
+    pub fn new(notifications: SubscriptionFilter) -> Self {
+        Self {
+            meta: None,
+            notifications,
+        }
+    }
+
+    /// Set notification metadata.
+    pub fn with_meta(mut self, meta: NotificationMetaObject) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+/// First notification sent on an established subscription stream.
+pub type SubscriptionsAcknowledgedNotification = Notification<
+    SubscriptionsAcknowledgedNotificationMethod,
+    SubscriptionsAcknowledgedNotificationParams,
+>;
 
 // =============================================================================
 // PROMPT MANAGEMENT
@@ -3937,6 +4358,7 @@ ts_union!(
     | ListResourcesRequest
     | ListResourceTemplatesRequest
     | ReadResourceRequest
+    | SubscriptionsListenRequest
     | SubscribeRequest
     | UnsubscribeRequest
     | CallToolRequest
@@ -3961,6 +4383,7 @@ impl ClientRequest {
             ClientRequest::ListResourcesRequest(r) => r.method.as_str(),
             ClientRequest::ListResourceTemplatesRequest(r) => r.method.as_str(),
             ClientRequest::ReadResourceRequest(r) => r.method.as_str(),
+            ClientRequest::SubscriptionsListenRequest(r) => r.method.as_str(),
             ClientRequest::SubscribeRequest(r) => r.method.as_str(),
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
@@ -4019,6 +4442,7 @@ ts_union!(
     | ResourceListChangedNotification
     | ToolListChangedNotification
     | PromptListChangedNotification
+    | SubscriptionsAcknowledgedNotification
     | TaskStatusNotification
     | CustomNotification;
 );
@@ -4033,6 +4457,7 @@ ts_union!(
     | ListResourcesResult
     | ListResourceTemplatesResult
     | ReadResourceResult
+    | SubscriptionsListenResult
     | ListToolsResult
     | ElicitResult
     | CreateTaskResult
@@ -4094,6 +4519,19 @@ mod tests {
         let _: CreateElicitationResult = ElicitResult::new(ElicitationAction::Accept);
         let _: GetTaskResultParams = GetTaskPayloadParams::new("task-1");
         let _: ResourceReference = ResourceTemplateReference::new("res://x");
+    }
+
+    #[cfg(feature = "transport-streamable-http-client")]
+    #[test]
+    fn transport_closed_marker_accepts_only_the_process_local_token() {
+        let local = ErrorData::transport_closed("closed");
+        let spoofed = ErrorData::internal_error(
+            "spoofed",
+            Some(json!({ "io.modelcontextprotocol/transportClosed": true })),
+        );
+
+        assert!(local.is_transport_closed());
+        assert!(!spoofed.is_transport_closed());
     }
 
     #[test]

@@ -281,9 +281,9 @@ fn client_info(protocol_version: ProtocolVersion) -> ClientInfo {
     .with_protocol_version(protocol_version)
 }
 
-fn server_info_2026() -> ServerInfo {
+fn server_info(protocol_version: ProtocolVersion) -> ServerInfo {
     let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
-    info.protocol_version = ProtocolVersion::V_2026_07_28;
+    info.protocol_version = protocol_version;
     info
 }
 
@@ -302,6 +302,7 @@ where
         .run_until(async move {
             let (server_transport, client_transport) = tokio::io::duplex(8192);
             let server_peer_info = client_info(client_protocol);
+            let client_peer_info = server_info(server_peer_info.protocol_version.clone());
             let server_task = tokio::task::spawn_local(async move {
                 let running = serve_directly::<RoleServer, _, _, _, _>(
                     server,
@@ -315,7 +316,7 @@ where
             let client = serve_directly::<RoleClient, _, _, _, _>(
                 MrtrClient,
                 client_transport,
-                Some(server_info_2026()),
+                Some(client_peer_info),
             );
 
             let result = body(client).await;
@@ -579,7 +580,7 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
             let client = serve_directly::<RoleClient, _, _, _, _>(
                 MrtrClient,
                 client_transport,
-                Some(server_info_2026()),
+                Some(server_info(ProtocolVersion::V_2026_07_28)),
             );
 
             let result = client
