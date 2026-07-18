@@ -110,14 +110,29 @@ transport.
 
 ### 3. Start authorization with OAuthState
 
-The `OAuthState` state machine manages the full authorization lifecycle. When no
-scopes are provided, the SDK automatically selects scopes from the server's
-WWW-Authenticate header, Protected Resource Metadata, or AS metadata.
+The `OAuthState` state machine manages the full authorization lifecycle.
+`start_authorization` accepts an `AuthorizationRequest` describing the client
+identity material you have available, and selects a client registration
+mechanism following the [spec's priority order](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration):
+
+1. **Pre-registered client information** (`with_preregistered_client`), when
+   the client already holds a `client_id` issued out of band
+2. **Client ID Metadata Documents** (SEP-991, `with_client_metadata_url`), when
+   the authorization server advertises `client_id_metadata_document_supported`
+3. **Dynamic Client Registration**, as a fallback when the authorization server
+   advertises a `registration_endpoint`
+
+When no scopes are provided, the SDK automatically selects scopes from the
+server's WWW-Authenticate header, Protected Resource Metadata, or AS metadata.
 
 ```rust ignore
-// start authorization - pass empty scopes to let the SDK auto-select
+use rmcp::transport::auth::AuthorizationRequest;
+
+// start authorization - pass no scopes to let the SDK auto-select
 oauth_state
-    .start_authorization(&[], MCP_REDIRECT_URI, Some("My MCP Client"))
+    .start_authorization(
+        AuthorizationRequest::new(MCP_REDIRECT_URI).with_client_name("My MCP Client"),
+    )
     .await
     .context("Failed to start authorization")?;
 ```
@@ -126,7 +141,40 @@ If you know the scopes you need, you can still pass them explicitly:
 
 ```rust ignore
 oauth_state
-    .start_authorization(&["mcp", "profile"], MCP_REDIRECT_URI, Some("My MCP Client"))
+    .start_authorization(
+        AuthorizationRequest::new(MCP_REDIRECT_URI)
+            .with_scopes(["mcp", "profile"])
+            .with_client_name("My MCP Client"),
+    )
+    .await
+    .context("Failed to start authorization")?;
+```
+
+If the client hosts a Client ID Metadata Document (SEP-991), pass its URL; the
+SDK uses it when the server supports CIMD and falls back to dynamic
+registration otherwise:
+
+```rust ignore
+oauth_state
+    .start_authorization(
+        AuthorizationRequest::new(MCP_REDIRECT_URI)
+            .with_client_name("My MCP Client")
+            .with_client_metadata_url("https://example.com/client-metadata.json"),
+    )
+    .await
+    .context("Failed to start authorization")?;
+```
+
+If the client was registered with the authorization server out of band, provide
+the pre-registered credentials; they take priority over every other mechanism:
+
+```rust ignore
+oauth_state
+    .start_authorization(
+        AuthorizationRequest::new(MCP_REDIRECT_URI)
+            .with_preregistered_client("my-client-id")
+            .with_client_secret("my-client-secret"),
+    )
     .await
     .context("Failed to start authorization")?;
 ```

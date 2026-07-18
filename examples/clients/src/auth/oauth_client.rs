@@ -12,7 +12,7 @@ use rmcp::{
     model::ClientInfo,
     transport::{
         StreamableHttpClientTransport,
-        auth::{AuthClient, OAuthState},
+        auth::{AuthClient, AuthorizationRequest, OAuthState},
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
@@ -128,14 +128,13 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to initialize oauth state machine")?;
     // use CIMD (SEP-991) with client metadata URL.
-    // passing empty scopes lets the SDK auto-select from the server's
+    // passing no scopes lets the SDK auto-select from the server's
     // WWW-Authenticate header, Protected Resource Metadata, or AS metadata.
     oauth_state
-        .start_authorization_with_metadata_url(
-            &[],
-            MCP_REDIRECT_URI,
-            Some("Test MCP Client"),
-            Some(&client_metadata_url),
+        .start_authorization(
+            AuthorizationRequest::new(MCP_REDIRECT_URI)
+                .with_client_name("Test MCP Client")
+                .with_client_metadata_url(&client_metadata_url),
         )
         .await
         .context("Failed to start authorization")?;

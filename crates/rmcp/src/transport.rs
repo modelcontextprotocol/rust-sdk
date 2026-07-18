@@ -99,11 +99,12 @@ pub mod auth;
 pub use auth::JwtSigningAlgorithm;
 #[cfg(feature = "auth")]
 pub use auth::{
-    AuthClient, AuthError, AuthorizationManager, AuthorizationSession, AuthorizedHttpClient,
-    ClientCredentialsConfig, CredentialStore, EXTENSION_OAUTH_CLIENT_CREDENTIALS,
-    InMemoryCredentialStore, InMemoryStateStore, OAuthHttpClient, OAuthHttpClientError,
-    OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
-    StateStore, StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
+    AuthClient, AuthError, AuthorizationManager, AuthorizationRequest, AuthorizationSession,
+    AuthorizedHttpClient, ClientCredentialsConfig, CredentialStore,
+    EXTENSION_OAUTH_CLIENT_CREDENTIALS, InMemoryCredentialStore, InMemoryStateStore,
+    OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy,
+    OAuthHttpRequest, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, StoredCredentials,
+    WWWAuthenticateParams,
 };
 
 // #[cfg(feature = "transport-ws")]
