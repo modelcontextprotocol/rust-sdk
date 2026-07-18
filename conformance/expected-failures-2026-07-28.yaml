@@ -23,6 +23,3 @@ client:
   # Auth feature gaps in the 2026-07-28 auth scenarios.
   # tracked in #1002
   - auth/scope-step-up
-  # SEP-2352: SDK lacks issuer-stamped credential storage (#879), so the
-  # sep-2352-reregister-on-as-change check fails.
-  - auth/authorization-server-migration

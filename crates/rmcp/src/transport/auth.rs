@@ -1088,7 +1088,8 @@ impl AuthorizationManager {
     /// Initialize from stored credentials if available
     ///
     /// This will load credentials from the credential store and configure
-    /// the client if credentials are found.
+    /// the client if credentials are found. Returns `false` when credentials
+    /// are absent or discarded after an authorization-server change.
     pub async fn initialize_from_store(&mut self) -> Result<bool, AuthError> {
         if let Some(stored) = self.credential_store.load().await? {
             if stored.token_response.is_some() {
@@ -1133,10 +1134,7 @@ impl AuthorizationManager {
                             "authorization server issuer changed; clearing stored credentials bound to the previous issuer"
                         );
                         self.credential_store.clear().await?;
-                        return Err(AuthError::AuthorizationServerMismatch {
-                            expected_issuer: stored_issuer.to_string(),
-                            received_issuer: current_issuer.to_string(),
-                        });
+                        return Ok(false);
                     }
                 }
 
@@ -3549,9 +3547,9 @@ mod tests {
 
     use super::{
         AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
-        InMemoryStateStore, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
-        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
-        StateStore, StoredAuthorizationState, is_https_url,
+        CredentialStore, InMemoryCredentialStore, InMemoryStateStore, OAuthClientConfig,
+        OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy,
+        OAuthHttpRequest, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -5132,6 +5130,34 @@ mod tests {
             ..Default::default()
         }));
         mgr
+    }
+
+    #[tokio::test]
+    async fn initialize_from_store_clears_dcr_credentials_when_issuer_changes() {
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(StoredCredentials {
+                client_id: "dcr-client".to_string(),
+                token_response: Some(make_token_response("old-token", Some(3600))),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+                issuer: Some("https://old.example.com".to_string()),
+            })
+            .await
+            .unwrap();
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://new.example.com/authorize".to_string(),
+            token_endpoint: "https://new.example.com/token".to_string(),
+            issuer: Some("https://new.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.set_credential_store(store.clone());
+
+        let initialized = manager.initialize_from_store().await.unwrap();
+        let credentials_cleared = store.load().await.unwrap().is_none();
+
+        assert_eq!((initialized, credentials_cleared), (false, true));
     }
 
     fn test_client_config() -> OAuthClientConfig {
