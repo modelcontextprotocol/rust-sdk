@@ -1006,25 +1006,49 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Running scenario '{}' against {}", scenario, server_url);
 
-    match scenario.as_str() {
+    // Safety net: some harness servers intentionally misbehave (e.g. reply
+    // with an id-less error instead of answering a request), which would
+    // leave the client waiting forever. Exit on our own before the harness's
+    // 30s client timeout so it never has to kill us (which has been observed
+    // to wedge the harness process in CI).
+    let timeout_secs: u64 = std::env::var("MCP_CONFORMANCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(25);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        run_scenario(&scenario, &server_url, &ctx),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Scenario '{scenario}' timed out after {timeout_secs}s"))??;
+
+    Ok(())
+}
+
+async fn run_scenario(
+    scenario: &str,
+    server_url: &str,
+    ctx: &ConformanceContext,
+) -> anyhow::Result<()> {
+    match scenario {
         // Non-auth scenarios
-        "initialize" => run_basic_client(&server_url).await?,
+        "initialize" => run_basic_client(server_url).await?,
         // SEP-2106: the scenario serves a tool whose schema carries a network
         // `$ref`; the check passes when the client lists tools without
         // dereferencing (fetching) that URL. A plain connect → list_tools →
         // close is sufficient; the scenario's mock server does not implement
         // the discover lifecycle, so `run_discover_client` hangs against it.
-        "json-schema-ref-no-deref" => run_basic_client(&server_url).await?,
-        "tools_call" => run_tools_call_client(&server_url, &ctx).await?,
+        "json-schema-ref-no-deref" => run_basic_client(server_url).await?,
+        "tools_call" => run_tools_call_client(server_url, ctx).await?,
         "elicitation-sep1034-client-defaults" => {
-            run_elicitation_defaults_client(&server_url).await?
+            run_elicitation_defaults_client(server_url).await?
         }
-        "sse-retry" => run_sse_retry_client(&server_url).await?,
+        "sse-retry" => run_sse_retry_client(server_url).await?,
         "request-metadata" | "sep-2322-client-request-state" => {
-            run_discover_client(&server_url).await?
+            run_discover_client(server_url).await?
         }
         "http-standard-headers" | "http-custom-headers" | "http-invalid-tool-headers" => {
-            run_discover_tools_call_client(&server_url, &ctx).await?
+            run_discover_tools_call_client(server_url, ctx).await?
         }
 
         // Auth scenarios - standard OAuth flow
@@ -1056,34 +1080,26 @@ async fn main() -> anyhow::Result<()> {
         | "auth/iss-wrong-issuer"
         | "auth/iss-unexpected"
         | "auth/iss-normalized"
-        | "auth/metadata-issuer-mismatch"
-        | "auth/metadata-issuer-mismatch"
-        // SEP-2352: PRM `authorization_servers` switches between calls; a
-        // compliant client re-registers at the new AS. Known partial failure:
-        // the SDK lacks issuer-stamped credential storage (#879), so the
-        // `sep-2352-reregister-on-as-change` check fails. Left on the standard
-        // flow rather than fixture-orchestrated re-registration so the
-        // conformance result reflects real SDK behavior.
-        | "auth/authorization-server-migration" => run_auth_client(&server_url, &ctx).await?,
+        | "auth/metadata-issuer-mismatch" => run_auth_client(server_url, ctx).await?,
 
         // Auth - scope step-up
-        "auth/scope-step-up" => run_auth_scope_step_up_client(&server_url, &ctx).await?,
+        "auth/scope-step-up" => run_auth_scope_step_up_client(server_url, ctx).await?,
 
         // Auth - scope retry limit
-        "auth/scope-retry-limit" => run_auth_scope_retry_limit_client(&server_url, &ctx).await?,
+        "auth/scope-retry-limit" => run_auth_scope_retry_limit_client(server_url, ctx).await?,
 
         // Auth - authorization server migration (SEP-2352)
         "auth/authorization-server-migration" => {
-            run_auth_server_migration_client(&server_url, &ctx).await?
+            run_auth_server_migration_client(server_url, ctx).await?
         }
 
         // Auth - pre-registration
-        "auth/pre-registration" => run_auth_preregistered_client(&server_url, &ctx).await?,
+        "auth/pre-registration" => run_auth_preregistered_client(server_url, ctx).await?,
 
         // Auth - resource mismatch (should fail to auth → pass)
         "auth/resource-mismatch" => {
             // Try to auth; it should fail because PRM resource doesn't match
-            match run_auth_client(&server_url, &ctx).await {
+            match run_auth_client(server_url, ctx).await {
                 Ok(_) => {
                     tracing::warn!("Auth succeeded despite resource mismatch!");
                 }
@@ -1094,12 +1110,12 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // Auth - client credentials
-        "auth/client-credentials-basic" => run_client_credentials_basic(&server_url, &ctx).await?,
-        "auth/client-credentials-jwt" => run_client_credentials_jwt(&server_url, &ctx).await?,
+        "auth/client-credentials-basic" => run_client_credentials_basic(server_url, ctx).await?,
+        "auth/client-credentials-jwt" => run_client_credentials_jwt(server_url, ctx).await?,
 
         // Auth - cross-app access
         "auth/cross-app-access-complete-flow" => {
-            run_cross_app_access_client(&server_url, &ctx).await?
+            run_cross_app_access_client(server_url, ctx).await?
         }
 
         unknown => anyhow::bail!("Unsupported conformance scenario: {unknown}"),

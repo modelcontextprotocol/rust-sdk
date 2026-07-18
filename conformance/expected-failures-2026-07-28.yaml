@@ -1,0 +1,34 @@
+# Known failures for the pinned 2026-07-28 draft conformance suite
+# (@modelcontextprotocol/conformance DRAFT_CONFORMANCE_VERSION).
+#
+# The full suites run in CI with `--expected-failures` pointing at this file:
+# - a scenario failing that is NOT listed here fails the build
+# - a scenario listed here that starts passing also fails the build (stale entry),
+#   so remove it from this list when the underlying issue is fixed.
+#
+# When bumping DRAFT_CONFORMANCE_VERSION, diff
+# `conformance list --spec-version 2026-07-28` and update #977.
+
+server:
+  # SEP-2575 stateless lifecycle gaps: discover capability declaration,
+  # missing-capability rejection, HTTP 404 for removed methods, and
+  # diagnostic tools (test_missing_capability, test_streaming_elicitation,
+  # test_logging_tool) not yet implemented.
+  # tracked in #1004
+  - server-stateless
+  # SEP-2106: composition/conditional/$anchor keywords are stripped from
+  # published tool input schemas.
+  # tracked in #1003
+  - json-schema-2020-12
+
+client:
+  # Client does not yet send MCP-Protocol-Version header pre-initialize as
+  # required by the 2026-07-28 stateless lifecycle.
+  # tracked in #1002
+  - tools_call
+  # Auth feature gaps in the 2026-07-28 auth scenarios.
+  # tracked in #1002
+  - auth/scope-step-up
+  # SEP-2352: SDK lacks issuer-stamped credential storage (#879), so the
+  # sep-2352-reregister-on-as-change check fails.
+  - auth/authorization-server-migration

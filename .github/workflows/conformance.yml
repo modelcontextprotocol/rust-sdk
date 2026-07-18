@@ -14,11 +14,15 @@ concurrency:
 env:
   # Pinned for reproducible runs; bump deliberately when the suite updates.
   CONFORMANCE_VERSION: "0.1.16"
+  # When updating DRAFT_CONFORMANCE_VERSION, diff
+  #   `conformance list --spec-version 2026-07-28`
+  # and update #977
   DRAFT_CONFORMANCE_VERSION: "0.2.0-alpha.9"
 
 jobs:
   server:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -81,7 +85,9 @@ jobs:
           echo "draft conformance server did not become ready" >&2
           exit 1
 
-      # Run discovery separately until #985 enables the full draft suite.
+      # useful for enforcing partial conformance for SEP-2575.
+      # when `server-stateless` is removed from `expected-failures-2026-07-28.yaml`,
+      # this step can be removed.
       - name: Run SEP-2575 discovery contract
         run: |
           endpoint=http://127.0.0.1:8002/mcp
@@ -91,6 +97,8 @@ jobs:
             -H "Mcp-Method: server/discover"
           )
 
+          # The stateless server streams responses as SSE, so unwrap the
+          # `data:` payload before parsing as JSON.
           discover_response="$(
             curl --fail-with-body --silent --show-error \
               "${common_headers[@]}" \
@@ -110,7 +118,8 @@ jobs:
                   }
                 }
               }' \
-              "$endpoint"
+              "$endpoint" \
+              | sed -n 's/^data: //p'
           )"
           jq -e '
             .result.resultType == "complete" and
@@ -152,35 +161,14 @@ jobs:
             (.error.data.supported | index("2026-07-28") != null)
           ' /tmp/unsupported-version.json
 
-      # Keep this explicit list until the full draft suite is enabled by #985.
-      - name: Run supported draft server scenarios
+      - name: Run 2026-07-28 server suite
         run: |
-          for scenario in \
-            sep-2164-resource-not-found \
-            caching \
-            http-header-validation \
-            http-custom-header-server-validation \
-            input-required-result-basic-elicitation \
-            input-required-result-basic-sampling \
-            input-required-result-basic-list-roots \
-            input-required-result-request-state \
-            input-required-result-multiple-input-requests \
-            input-required-result-multi-round \
-            input-required-result-missing-input-response \
-            input-required-result-non-tool-request \
-            input-required-result-result-type \
-            input-required-result-unsupported-methods \
-            input-required-result-tampered-state \
-            input-required-result-capability-check \
-            input-required-result-ignore-extra-params \
-            input-required-result-validate-input \
-          ; do
-            npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
-              --url http://127.0.0.1:8002/mcp \
-              --scenario "$scenario" \
-              --spec-version draft \
-              -o conformance-results
-          done
+          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
+            --url http://127.0.0.1:8002/mcp \
+            --suite all \
+            --spec-version 2026-07-28 \
+            --expected-failures conformance/expected-failures-2026-07-28.yaml \
+            -o conformance-results
 
       - name: Stop conformance servers
         if: always()
@@ -197,6 +185,7 @@ jobs:
 
   client:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -218,21 +207,14 @@ jobs:
             --spec-version 2025-11-25 \
             -o conformance-client-results/full
 
-      # SEP-2322 MRTR client scenario (spec 2026-07-28).
-      - name: Run draft SEP-2322 client scenario
+      - name: Run 2026-07-28 client suite
         run: |
           npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
             --command "$(pwd)/target/debug/conformance-client" \
-            --scenario sep-2322-client-request-state \
-            -o conformance-client-results/mrtr
-
-      - name: Run draft SEP-2575 client scenario
-        run: |
-          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
-            --command "$(pwd)/target/debug/conformance-client" \
-            --scenario request-metadata \
-            --spec-version draft \
-            -o conformance-client-results/sep-2575
+            --suite all \
+            --spec-version 2026-07-28 \
+            --expected-failures conformance/expected-failures-2026-07-28.yaml \
+            -o conformance-client-results/draft
 
       - name: Upload results
         if: always()
