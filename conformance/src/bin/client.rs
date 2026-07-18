@@ -286,7 +286,17 @@ async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    // The 2026-07-28 auth mocks require the modern per-request lifecycle
+    // (MCP-Protocol-Version header on every request), so negotiate via the
+    // discover lifecycle rather than the legacy initialize handshake.
+    let client = BasicClientHandler
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: preferred_protocol_versions(),
+            },
+        )
+        .await?;
     tracing::debug!("Connected (authenticated)");
 
     let tools = client.list_tools(Default::default()).await?;
@@ -839,15 +849,22 @@ fn conformance_protocol_version() -> ProtocolVersion {
         .unwrap_or(ProtocolVersion::V_2026_07_28)
 }
 
-/// Runs draft stateless scenarios through the public discover lifecycle and
-/// Streamable HTTP transport.
-async fn run_discover_client(server_url: &str) -> anyhow::Result<()> {
+/// Preferred protocol versions for discover-lifecycle negotiation: the
+/// runner-provided version first, then all other known versions newest-first.
+fn preferred_protocol_versions() -> Vec<ProtocolVersion> {
     let mut preferred_versions = vec![conformance_protocol_version()];
     for version in ProtocolVersion::KNOWN_VERSIONS.iter().rev() {
         if !preferred_versions.contains(version) {
             preferred_versions.push(version.clone());
         }
     }
+    preferred_versions
+}
+
+/// Runs draft stateless scenarios through the public discover lifecycle and
+/// Streamable HTTP transport.
+async fn run_discover_client(server_url: &str) -> anyhow::Result<()> {
+    let preferred_versions = preferred_protocol_versions();
     let transport = StreamableHttpClientTransport::from_uri(server_url);
     let client = FullClientHandler
         .serve_with_lifecycle(
@@ -908,7 +925,12 @@ async fn main() -> anyhow::Result<()> {
     match scenario.as_str() {
         // Non-auth scenarios
         "initialize" => run_basic_client(&server_url).await?,
-        "json-schema-ref-no-deref" => run_discover_client(&server_url).await?,
+        // SEP-2106: the scenario serves a tool whose schema carries a network
+        // `$ref`; the check passes when the client lists tools without
+        // dereferencing (fetching) that URL. A plain connect → list_tools →
+        // close is sufficient; the scenario's mock server does not implement
+        // the discover lifecycle, so `run_discover_client` hangs against it.
+        "json-schema-ref-no-deref" => run_basic_client(&server_url).await?,
         "tools_call" => run_tools_call_client(&server_url, &ctx).await?,
         "elicitation-sep1034-client-defaults" => {
             run_elicitation_defaults_client(&server_url).await?
@@ -934,7 +956,31 @@ async fn main() -> anyhow::Result<()> {
         | "auth/token-endpoint-auth-post"
         | "auth/token-endpoint-auth-none"
         | "auth/2025-03-26-oauth-metadata-backcompat"
-        | "auth/2025-03-26-oauth-endpoint-fallback" => run_auth_client(&server_url, &ctx).await?,
+        | "auth/2025-03-26-oauth-endpoint-fallback"
+        // Offline access scope handling: positive/negative variants both run
+        // the well-behaved flow; the referee inspects the requested scopes.
+        | "auth/offline-access-scope"
+        | "auth/offline-access-not-supported"
+        // SEP-2468 (RFC 9207 iss / RFC 8414 §3.3 issuer-echo). The client
+        // captures `iss` from the authorization redirect and passes it to the
+        // callback handler; the SDK validates internally. Positive scenarios
+        // proceed to the token endpoint; negative scenarios error out (the
+        // referee sets `allowClientError`).
+        | "auth/iss-supported"
+        | "auth/iss-not-advertised"
+        | "auth/iss-supported-missing"
+        | "auth/iss-wrong-issuer"
+        | "auth/iss-unexpected"
+        | "auth/iss-normalized"
+        | "auth/metadata-issuer-mismatch"
+        | "auth/metadata-issuer-mismatch"
+        // SEP-2352: PRM `authorization_servers` switches between calls; a
+        // compliant client re-registers at the new AS. Known partial failure:
+        // the SDK lacks issuer-stamped credential storage (#879), so the
+        // `sep-2352-reregister-on-as-change` check fails. Left on the standard
+        // flow rather than fixture-orchestrated re-registration so the
+        // conformance result reflects real SDK behavior.
+        | "auth/authorization-server-migration" => run_auth_client(&server_url, &ctx).await?,
 
         // Auth - scope step-up
         "auth/scope-step-up" => run_auth_scope_step_up_client(&server_url, &ctx).await?,
