@@ -22,7 +22,7 @@ struct ConformanceToolCall {
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct ConformanceContext {
-    #[serde(default)]
+    #[serde(default, alias = "toolCalls")]
     tool_calls: Vec<ConformanceToolCall>,
     #[serde(default)]
     client_id: Option<String>,
@@ -859,8 +859,32 @@ async fn run_basic_client(server_url: &str) -> anyhow::Result<()> {
 }
 
 async fn run_tools_call_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::Result<()> {
+    run_tools_call_client_with_lifecycle(server_url, ctx, ClientLifecycleMode::Initialize).await
+}
+
+async fn run_discover_tools_call_client(
+    server_url: &str,
+    ctx: &ConformanceContext,
+) -> anyhow::Result<()> {
+    run_tools_call_client_with_lifecycle(
+        server_url,
+        ctx,
+        ClientLifecycleMode::Discover {
+            preferred_versions: preferred_protocol_versions(),
+        },
+    )
+    .await
+}
+
+async fn run_tools_call_client_with_lifecycle(
+    server_url: &str,
+    ctx: &ConformanceContext,
+    lifecycle: ClientLifecycleMode,
+) -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_uri(server_url);
-    let client = FullClientHandler.serve(transport).await?;
+    let client = FullClientHandler
+        .serve_with_lifecycle(transport, lifecycle)
+        .await?;
     let tools = client.list_tools(Default::default()).await?;
 
     if ctx.tool_calls.is_empty() {
@@ -1000,7 +1024,7 @@ async fn main() -> anyhow::Result<()> {
             run_discover_client(&server_url).await?
         }
         "http-standard-headers" | "http-custom-headers" | "http-invalid-tool-headers" => {
-            run_tools_call_client(&server_url, &ctx).await?
+            run_discover_tools_call_client(&server_url, &ctx).await?
         }
 
         // Auth scenarios - standard OAuth flow
@@ -1082,4 +1106,31 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conformance_context_accepts_camel_case_tool_calls() {
+        let context: ConformanceContext = serde_json::from_value(json!({
+            "toolCalls": [{
+                "name": "test_custom_headers",
+                "arguments": { "region": "us-west1" }
+            }]
+        }))
+        .expect("valid conformance context");
+
+        assert_eq!(
+            context.tool_calls.first().map(|tool_call| (
+                tool_call.name.as_str(),
+                tool_call
+                    .arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.get("region")),
+            )),
+            Some(("test_custom_headers", Some(&json!("us-west1"))))
+        );
+    }
 }

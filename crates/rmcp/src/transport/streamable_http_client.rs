@@ -83,19 +83,24 @@ fn request_version_headers(
 
 fn cache_tools_from_response(
     cache: &mut HashMap<String, Arc<JsonObject>>,
-    message: &ServerJsonRpcMessage,
+    message: &mut ServerJsonRpcMessage,
+    protocol_version: &ProtocolVersion,
 ) {
+    if protocol_version < &ProtocolVersion::STANDARD_HEADERS {
+        return;
+    }
     if let ServerJsonRpcMessage::Response(response) = message {
-        if let ServerResult::ListToolsResult(list) = &response.result {
-            for tool in &list.tools {
-                if let Err(reason) =
+        if let ServerResult::ListToolsResult(list) = &mut response.result {
+            list.tools.retain(|tool| {
+                let Err(reason) =
                     mcp_headers::validate_param_header_annotations(&tool.input_schema)
-                {
-                    tracing::warn!(tool = %tool.name, "ignoring x-mcp-header annotations: {reason}");
-                    continue;
-                }
-                cache.insert(tool.name.to_string(), tool.input_schema.clone());
-            }
+                else {
+                    cache.insert(tool.name.to_string(), tool.input_schema.clone());
+                    return true;
+                };
+                tracing::warn!(tool = %tool.name, "rejecting invalid x-mcp-header annotations: {reason}");
+                false
+            });
         }
     }
 }
@@ -1213,10 +1218,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 );
                                                 Ok(())
                                             }
-                                            Ok(StreamableHttpPostResponse::Json(msg, ..)) => {
+                                            Ok(StreamableHttpPostResponse::Json(mut msg, ..)) => {
                                                 cache_tools_from_response(
                                                     &mut tool_header_cache,
-                                                    &msg,
+                                                    &mut msg,
+                                                    &negotiated_version,
                                                 );
                                                 context.send_to_handler(msg).await?;
                                                 Ok(())
@@ -1262,8 +1268,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             tracing::trace!("client message accepted");
                             Ok(())
                         }
-                        Ok(StreamableHttpPostResponse::Json(message, ..)) => {
-                            cache_tools_from_response(&mut tool_header_cache, &message);
+                        Ok(StreamableHttpPostResponse::Json(mut message, ..)) => {
+                            cache_tools_from_response(
+                                &mut tool_header_cache,
+                                &mut message,
+                                &negotiated_version,
+                            );
                             context.send_to_handler(message).await?;
                             Ok(())
                         }
@@ -1311,12 +1321,16 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     }
                     let _ = responder.send(send_result);
                 }
-                Event::ServerMessage(json_rpc_message) => {
+                Event::ServerMessage(mut json_rpc_message) => {
                     Self::clear_stream_response_pending(
                         &mut pending_stream_response_ids,
                         &json_rpc_message,
                     );
-                    cache_tools_from_response(&mut tool_header_cache, &json_rpc_message);
+                    cache_tools_from_response(
+                        &mut tool_header_cache,
+                        &mut json_rpc_message,
+                        &negotiated_version,
+                    );
                     // send the message to the handler
                     if let Err(e) = context.send_to_handler(json_rpc_message).await {
                         break 'main_loop Err(e);
@@ -1667,5 +1681,88 @@ impl Default for StreamableHttpClientTransportConfig {
             max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
             reinit_on_expired_session: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::model::{ListToolsResult, NumberOrString, ServerResult, Tool};
+
+    fn tool(name: &'static str, annotation: serde_json::Value) -> Tool {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "value": annotation,
+            },
+        });
+        Tool::new(
+            name,
+            name,
+            Arc::new(schema.as_object().expect("object schema").clone()),
+        )
+    }
+
+    #[test]
+    fn cache_tools_removes_invalid_header_annotations() {
+        let valid = tool(
+            "valid",
+            json!({ "type": "string", "x-mcp-header": "Value" }),
+        );
+        let invalid = tool("invalid", json!({ "type": "string", "x-mcp-header": "" }));
+        let mut message = ServerJsonRpcMessage::response(
+            ServerResult::ListToolsResult(ListToolsResult::with_all_items(vec![valid, invalid])),
+            NumberOrString::Number(1),
+        );
+        let mut cache = HashMap::new();
+
+        cache_tools_from_response(&mut cache, &mut message, &ProtocolVersion::V_2026_07_28);
+
+        let ServerJsonRpcMessage::Response(response) = &mut message else {
+            panic!("expected tools/list response");
+        };
+        let ServerResult::ListToolsResult(result) = &mut response.result else {
+            panic!("expected tools/list result");
+        };
+        assert_eq!(
+            (
+                result
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_ref())
+                    .collect::<Vec<_>>(),
+                cache.keys().map(String::as_str).collect::<Vec<_>>(),
+            ),
+            (vec!["valid"], vec!["valid"])
+        );
+    }
+
+    #[test]
+    fn cache_tools_preserves_pre_standard_header_results() {
+        let invalid = tool("legacy", json!({ "type": "string", "x-mcp-header": "" }));
+        let mut message = ServerJsonRpcMessage::response(
+            ServerResult::ListToolsResult(ListToolsResult::with_all_items(vec![invalid])),
+            NumberOrString::Number(1),
+        );
+        let mut cache = HashMap::new();
+
+        cache_tools_from_response(&mut cache, &mut message, &ProtocolVersion::V_2025_11_25);
+
+        let ServerJsonRpcMessage::Response(response) = message else {
+            panic!("expected tools/list response");
+        };
+        let ServerResult::ListToolsResult(result) = response.result else {
+            panic!("expected tools/list result");
+        };
+        assert_eq!(
+            result
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["legacy"]
+        );
     }
 }
