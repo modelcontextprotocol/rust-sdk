@@ -189,6 +189,7 @@ impl ClientHandler for FullClientHandler {
 
 const CIMD_CLIENT_METADATA_URL: &str = "https://conformance-test.local/client-metadata.json";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
+const SCOPE_STEP_UP_INITIAL_SCOPES: &[&str] = &["mcp:basic"];
 const SCOPE_STEP_UP_ESCALATED_SCOPES: &[&str] = &["mcp:basic", "mcp:write"];
 
 /// Perform the headless OAuth authorization-code flow.
@@ -286,16 +287,8 @@ async fn run_auth_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    // The 2026-07-28 auth mocks require the modern per-request lifecycle
-    // (MCP-Protocol-Version header on every request), so negotiate via the
-    // discover lifecycle rather than the legacy initialize handshake.
     let client = BasicClientHandler
-        .serve_with_lifecycle(
-            transport,
-            ClientLifecycleMode::Discover {
-                preferred_versions: preferred_protocol_versions(),
-            },
-        )
+        .serve_with_lifecycle(transport, conformance_client_lifecycle())
         .await?;
     tracing::debug!("Connected (authenticated)");
 
@@ -324,7 +317,7 @@ async fn run_auth_scope_step_up_client(
     let mut oauth = OAuthState::new(server_url, None).await?;
     oauth
         .start_authorization_with_metadata_url(
-            &[],
+            SCOPE_STEP_UP_INITIAL_SCOPES,
             REDIRECT_URI,
             Some("conformance-client"),
             Some(CIMD_CLIENT_METADATA_URL),
@@ -351,7 +344,9 @@ async fn run_auth_scope_step_up_client(
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let client = BasicClientHandler
+        .serve_with_lifecycle(transport, conformance_client_lifecycle())
+        .await?;
 
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
@@ -398,7 +393,9 @@ async fn run_auth_scope_step_up_client(
                     auth_client2,
                     StreamableHttpClientTransportConfig::with_uri(server_url),
                 );
-                let client2 = BasicClientHandler.serve(transport2).await?;
+                let client2 = BasicClientHandler
+                    .serve_with_lifecycle(transport2, conformance_client_lifecycle())
+                    .await?;
                 let _ = client2
                     .call_tool(call_tool_params(tool.name.clone(), args))
                     .await;
@@ -860,7 +857,9 @@ async fn run_basic_client(server_url: &str) -> anyhow::Result<()> {
 
 async fn run_tools_call_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_uri(server_url);
-    let client = FullClientHandler.serve(transport).await?;
+    let client = FullClientHandler
+        .serve_with_lifecycle(transport, conformance_client_lifecycle())
+        .await?;
     let tools = client.list_tools(Default::default()).await?;
 
     if ctx.tool_calls.is_empty() {
@@ -903,22 +902,88 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
 }
 
 fn conformance_protocol_version() -> ProtocolVersion {
+    runner_protocol_version().unwrap_or(ProtocolVersion::V_2026_07_28)
+}
+
+fn runner_protocol_version() -> Option<ProtocolVersion> {
     std::env::var("MCP_CONFORMANCE_PROTOCOL_VERSION")
         .ok()
         .and_then(|version| serde_json::from_value(Value::String(version)).ok())
-        .unwrap_or(ProtocolVersion::V_2026_07_28)
+}
+
+/// Select the lifecycle required by the runner's protocol version.
+///
+/// The 2026-07-28 protocol is stateless and requires per-request metadata and
+/// an `MCP-Protocol-Version` header, both configured by the discover lifecycle.
+/// Earlier runners do not provide a protocol-version environment variable and
+/// still use the legacy initialize handshake.
+fn conformance_client_lifecycle() -> ClientLifecycleMode {
+    client_lifecycle_for_protocol_version(runner_protocol_version())
+}
+
+fn client_lifecycle_for_protocol_version(
+    protocol_version: Option<ProtocolVersion>,
+) -> ClientLifecycleMode {
+    match protocol_version {
+        Some(protocol_version)
+            if protocol_version.as_str() >= ProtocolVersion::V_2026_07_28.as_str() =>
+        {
+            ClientLifecycleMode::Discover {
+                preferred_versions: preferred_protocol_versions_for(protocol_version),
+            }
+        }
+        _ => ClientLifecycleMode::Initialize,
+    }
 }
 
 /// Preferred protocol versions for discover-lifecycle negotiation: the
 /// runner-provided version first, then all other known versions newest-first.
 fn preferred_protocol_versions() -> Vec<ProtocolVersion> {
-    let mut preferred_versions = vec![conformance_protocol_version()];
+    preferred_protocol_versions_for(conformance_protocol_version())
+}
+
+fn preferred_protocol_versions_for(protocol_version: ProtocolVersion) -> Vec<ProtocolVersion> {
+    let mut preferred_versions = vec![protocol_version];
     for version in ProtocolVersion::KNOWN_VERSIONS.iter().rev() {
         if !preferred_versions.contains(version) {
             preferred_versions.push(version.clone());
         }
     }
     preferred_versions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_initialize_lifecycle_when_runner_omits_version() {
+        assert_eq!(
+            client_lifecycle_for_protocol_version(None),
+            ClientLifecycleMode::Initialize
+        );
+    }
+
+    #[test]
+    fn uses_initialize_lifecycle_before_2026_07_28() {
+        assert_eq!(
+            client_lifecycle_for_protocol_version(Some(ProtocolVersion::V_2025_11_25)),
+            ClientLifecycleMode::Initialize
+        );
+    }
+
+    #[test]
+    fn uses_discover_lifecycle_from_2026_07_28() {
+        let lifecycle = client_lifecycle_for_protocol_version(Some(ProtocolVersion::V_2026_07_28));
+
+        let ClientLifecycleMode::Discover { preferred_versions } = lifecycle else {
+            panic!("expected discover lifecycle");
+        };
+        assert_eq!(
+            preferred_versions.first(),
+            Some(&ProtocolVersion::V_2026_07_28)
+        );
+    }
 }
 
 /// Runs draft stateless scenarios through the public discover lifecycle and
