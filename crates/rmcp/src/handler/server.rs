@@ -7,7 +7,7 @@ use crate::{
     model::{TaskSupport, *},
     service::{
         MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service, ServiceRole,
-        SubscriptionContext, negotiate_protocol_version,
+        SubscriptionContext, negotiate_protocol_version, uses_legacy_lifecycle,
     },
 };
 
@@ -69,6 +69,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 ));
             }
         }
+        let legacy_request =
+            uses_legacy_lifecycle(protocol_version.as_ref(), requires_request_metadata);
         let result = match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
@@ -79,7 +81,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::DiscoverResult),
             ClientRequest::PingRequest(_request) => {
-                if mrtr_supported {
+                if !legacy_request {
                     Err(McpError::method_not_found::<PingRequestMethod>())
                 } else {
                     self.ping(context).await.map(ServerResult::empty)
@@ -114,7 +116,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::from),
             ClientRequest::SubscriptionsListenRequest(request) => {
-                if !mrtr_supported {
+                if legacy_request {
                     Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>())
                 } else {
                     let requested = request.params.notifications;
@@ -150,7 +152,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 }
             }
             ClientRequest::SubscribeRequest(request) => {
-                if mrtr_supported {
+                if !legacy_request {
                     Err(McpError::method_not_found::<SubscribeRequestMethod>())
                 } else {
                     self.subscribe(request.params, context)
@@ -159,7 +161,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 }
             }
             ClientRequest::UnsubscribeRequest(request) => {
-                if mrtr_supported {
+                if !legacy_request {
                     Err(McpError::method_not_found::<UnsubscribeRequestMethod>())
                 } else {
                     self.unsubscribe(request.params, context)

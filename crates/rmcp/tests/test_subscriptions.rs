@@ -478,6 +478,34 @@ async fn typed_subscription_notifications_do_not_reach_handler_callbacks() -> an
 }
 
 #[tokio::test]
+async fn discover_lifecycle_allows_subscriptions_with_older_application_version()
+-> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+    tokio::spawn(async move {
+        let server = ToolsOnlyServer.serve(server_transport).await?;
+        server.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = ()
+        .serve_with_lifecycle(
+            client_transport,
+            rmcp::ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2025_11_25],
+            },
+        )
+        .await?;
+    let mut subscription = client
+        .listen(SubscriptionFilter::builder().tools_list_changed().build())
+        .await?;
+
+    assert!(subscription.next().await?.is_some());
+    assert!(subscription.next().await?.is_none());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_subscriptions_are_demultiplexed_by_request_id() -> anyhow::Result<()> {
     let client = modern_client(ToolsAndPromptsServer).await?;
     let (tools, prompts) = tokio::join!(

@@ -138,6 +138,14 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     }
 }
 
+pub(crate) fn uses_legacy_lifecycle(
+    protocol_version: Option<&ProtocolVersion>,
+    uses_discover_lifecycle: bool,
+) -> bool {
+    !uses_discover_lifecycle
+        && protocol_version.is_none_or(|version| version < &ProtocolVersion::V_2026_07_28)
+}
+
 pub type TxJsonRpcMessage<R> =
     JsonRpcMessage<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
 pub type RxJsonRpcMessage<R> = JsonRpcMessage<

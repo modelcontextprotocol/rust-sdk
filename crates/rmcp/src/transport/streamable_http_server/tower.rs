@@ -30,7 +30,7 @@ use crate::{
         ProtocolVersion, RequestId, ServerJsonRpcMessage,
     },
     serve_server,
-    service::serve_directly_with_ct,
+    service::{serve_directly_with_ct, uses_legacy_lifecycle},
     transport::{
         OneshotTransport, TransportAdapterIdentity,
         common::{
@@ -259,8 +259,9 @@ fn message_has_per_request_protocol_version(message: &ClientJsonRpcMessage) -> b
     clippy::result_large_err,
     reason = "BoxResponse is intentionally large; matches other handlers in this file"
 )]
-// SEP-2567: sessions are removed from 2026-07-28; older versions are legacy.
-// Validates protocol-version consistency and returns `Ok(true)` only for a valid legacy request.
+// SEP-2567: sessions are removed from the discover lifecycle. Validate
+// protocol-version consistency, then classify the request with the shared
+// lifecycle helper.
 fn is_legacy_request(
     message: Option<&ClientJsonRpcMessage>,
     headers: &HeaderMap,
@@ -280,6 +281,17 @@ fn is_legacy_request(
         validate_request_protocol_version_meta(headers, message)?;
     }
 
+    let uses_discover_lifecycle = matches!(
+        message,
+        Some(ClientJsonRpcMessage::Request(req))
+            if !matches!(&req.request, ClientRequest::InitializeRequest(_))
+                && req
+                    .request
+                    .get_meta()
+                    .missing_required_keys(&ProtocolVersion::V_2026_07_28)
+                    .is_empty()
+    );
+
     let from_body = match message {
         Some(ClientJsonRpcMessage::Request(req)) => match &req.request {
             ClientRequest::InitializeRequest(init) => Some(init.params.protocol_version.clone()),
@@ -295,7 +307,10 @@ fn is_legacy_request(
                 .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
         })
         .unwrap_or(ProtocolVersion::V_2025_03_26);
-    Ok(version < ProtocolVersion::V_2026_07_28)
+    Ok(uses_legacy_lifecycle(
+        Some(&version),
+        uses_discover_lifecycle,
+    ))
 }
 
 fn method_not_allowed_response() -> BoxResponse {
