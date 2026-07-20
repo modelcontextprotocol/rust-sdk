@@ -816,6 +816,8 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// resource indicator from protected resource metadata, used for RFC 8707 `resource`
+    discovered_resource: RwLock<Option<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
 }
@@ -1050,6 +1052,7 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            discovered_resource: RwLock::new(None),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
         };
 
@@ -1428,7 +1431,7 @@ impl AuthorizationManager {
         let mut auth_request = oauth_client
             .authorize_url(CsrfToken::new_random)
             .set_pkce_challenge(pkce_challenge)
-            .add_extra_param("resource", self.base_url.to_string());
+            .add_extra_param("resource", self.oauth_resource().await);
 
         // add request scopes
         for scope in scopes {
@@ -1464,6 +1467,14 @@ impl AuthorizationManager {
             .await?;
 
         Ok(auth_url.to_string())
+    }
+
+    async fn oauth_resource(&self) -> String {
+        self.discovered_resource
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| self.base_url.to_string())
     }
 
     /// get the current granted scopes
@@ -1709,7 +1720,7 @@ impl AuthorizationManager {
         let token_result = match oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
-            .add_extra_param("resource", self.base_url.to_string())
+            .add_extra_param("resource", self.oauth_resource().await)
             .request_async(&OAuth2HttpClient {
                 client: self.http_client.as_ref(),
                 redirect_policy: OAuthHttpRedirectPolicy::Stop,
@@ -2099,6 +2110,11 @@ impl AuthorizationManager {
 
         self.validate_resource_metadata_resource(&resource_metadata)?;
 
+        self.discovered_resource
+            .write()
+            .await
+            .replace(resource_metadata.resource.clone().unwrap_or_default());
+
         // store scopes_supported from protected resource metadata for select_scopes()
         if let Some(scopes) = resource_metadata.scopes_supported {
             if !scopes.is_empty() {
@@ -2162,9 +2178,21 @@ impl AuthorizationManager {
             ));
         };
 
-        if !Self::resource_identifiers_match(self.base_url.as_str(), resource) {
+        let Some(resource_url) = Url::parse(resource).ok() else {
+            return Err(AuthError::MetadataError(
+                "Protected resource metadata resource field is not a valid URL".to_string(),
+            ));
+        };
+
+        if resource_url.fragment().is_some() {
+            return Err(AuthError::MetadataError(
+                "Protected resource metadata resource does not permit fragment in URL as specified by RFC 8707".to_string()
+            ));
+        }
+
+        if !Self::is_resource_identifier_valid(&self.base_url, &resource_url) {
             return Err(AuthError::MetadataError(format!(
-                "Protected resource metadata resource mismatch: expected '{}', got '{}'",
+                "Protected resource metadata resource mismatch: reference '{}', permitted '{}'",
                 self.base_url, resource
             )));
         }
@@ -2172,33 +2200,29 @@ impl AuthorizationManager {
         Ok(())
     }
 
-    fn resource_identifiers_match(expected: &str, actual: &str) -> bool {
-        expected == actual
-            || (Self::is_root_resource_identifier(expected)
-                && actual == expected.trim_end_matches('/'))
-            || (Self::is_root_resource_identifier(actual)
-                && expected == actual.trim_end_matches('/'))
-            || Self::root_resource_identifier_covers_path(actual, expected)
-    }
+    fn is_resource_identifier_valid(expected: &Url, actual: &Url) -> bool {
+        if expected == actual {
+            return true;
+        }
 
-    fn is_root_resource_identifier(value: &str) -> bool {
-        Url::parse(value)
-            .is_ok_and(|url| url.path() == "/" && url.query().is_none() && url.fragment().is_none())
-    }
-
-    fn root_resource_identifier_covers_path(root_resource: &str, path_resource: &str) -> bool {
-        let Ok(root_resource) = Url::parse(root_resource) else {
+        if expected.scheme() != actual.scheme()
+            || expected.host_str() != actual.host_str()
+            || expected.port_or_known_default() != actual.port_or_known_default()
+        {
             return false;
-        };
-        let Ok(path_resource) = Url::parse(path_resource) else {
-            return false;
-        };
+        }
 
-        root_resource.path() == "/"
-            && root_resource.query().is_none()
-            && root_resource.fragment().is_none()
-            && path_resource.path() != "/"
-            && Self::is_same_origin(&root_resource, &path_resource)
+        let expected_path = expected.path();
+        let actual_path = actual.path();
+
+        // URL query part supported, even if it is discouraged in RFC 8707
+        if expected_path == actual_path && expected.query() == actual.query() {
+            return true;
+        }
+
+        expected_path.starts_with(actual_path)
+            && expected.query().is_none()
+            && actual.query().is_none()
     }
 
     async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
@@ -3634,7 +3658,7 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
-                    "resource": "https://mcp.example.com/mcp",
+                    "resource": "https://mcp.example.com",
                     "authorization_servers": ["https://auth.example.com"]
                 }),
             ),
@@ -3657,6 +3681,10 @@ mod tests {
         let metadata = manager.discover_metadata().await.unwrap();
 
         assert_eq!(metadata.token_endpoint, "https://auth.example.com/token");
+        assert_eq!(
+            manager.discovered_resource.read().await.as_deref(),
+            Some("https://mcp.example.com")
+        );
         assert_eq!(
             client.requests(),
             vec![
@@ -4428,35 +4456,51 @@ mod tests {
     }
 
     #[test]
-    fn resource_identifier_matching_allows_only_root_trailing_slash_difference() {
-        assert!(AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/",
-            "https://mcp.example.com"
+    fn resource_identifier_matching_allows_matching_host_or_parent_path() {
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/").unwrap(),
+            &Url::parse("https://mcp.example.com").unwrap()
         ));
-        assert!(AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com",
-            "https://mcp.example.com/"
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com").unwrap(),
+            &Url::parse("https://mcp.example.com/").unwrap()
         ));
-        assert!(AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://mcp.example.com"
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp/tools").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?query=param").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=param").unwrap()
         ));
 
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://mcp.example.com/mcp/"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp/").unwrap()
         ));
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://real.example.com/mcp"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp-tools").unwrap()
         ));
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://real.example.com"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp/tools").unwrap()
         ));
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://mcp.example.com?resource=mcp"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://real.example.com/mcp").unwrap()
+        ));
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
+        ));
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value2").unwrap()
         ));
     }
 
@@ -5386,6 +5430,64 @@ mod tests {
             .unwrap_or_default();
         assert!(scope.contains("read"));
         assert!(scope.contains("write"));
+    }
+
+    #[tokio::test]
+    async fn authorization_url_uses_discovered_resource() {
+        let base_url = "https://mcp.example.com/mcp";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+        *manager.discovered_resource.write().await = Some("https://mcp.example.com".to_string());
+
+        let auth_url = manager.get_authorization_url(&["read"]).await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        assert_eq!(
+            params.get("resource").map(|v| v.as_ref()),
+            Some("https://mcp.example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn authorization_url_uses_default_resource_without_protected_resource_document() {
+        let base_url = "https://mcp.example.com/mcp";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager.get_authorization_url(&["read"]).await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        assert_eq!(params.get("resource").map(|v| v.as_ref()), Some(base_url));
     }
 
     #[test]
