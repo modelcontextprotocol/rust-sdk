@@ -255,8 +255,31 @@ fn message_has_per_request_protocol_version(message: &ClientJsonRpcMessage) -> b
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "BoxResponse is intentionally large; matches other handlers in this file"
+)]
 // SEP-2567: sessions are removed from 2026-07-28; older versions are legacy.
-fn is_legacy_request(message: Option<&ClientJsonRpcMessage>, headers: &HeaderMap) -> bool {
+// Validates protocol-version consistency and returns `Ok(true)` only for a valid legacy request.
+fn is_legacy_request(
+    message: Option<&ClientJsonRpcMessage>,
+    headers: &HeaderMap,
+) -> Result<bool, BoxResponse> {
+    let has_per_request_version = message.is_some_and(message_has_per_request_protocol_version);
+    validate_protocol_version_header(headers, has_per_request_version)?;
+    if let Some(message) = message {
+        if let ClientJsonRpcMessage::Request(req) = message {
+            if let ClientRequest::InitializeRequest(init) = &req.request {
+                validate_header_matches_init_body(
+                    headers,
+                    init.params.protocol_version.as_str(),
+                    Some(req.id.clone()),
+                )?;
+            }
+        }
+        validate_request_protocol_version_meta(headers, message)?;
+    }
+
     let from_body = match message {
         Some(ClientJsonRpcMessage::Request(req)) => match &req.request {
             ClientRequest::InitializeRequest(init) => Some(init.params.protocol_version.clone()),
@@ -272,7 +295,7 @@ fn is_legacy_request(message: Option<&ClientJsonRpcMessage>, headers: &HeaderMap
                 .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
         })
         .unwrap_or(ProtocolVersion::V_2025_03_26);
-    version < ProtocolVersion::V_2026_07_28
+    Ok(version < ProtocolVersion::V_2026_07_28)
 }
 
 fn method_not_allowed_response() -> BoxResponse {
@@ -1220,6 +1243,9 @@ where
         B: Body + Send + 'static,
         B::Error: Display,
     {
+        if !is_legacy_request(None, request.headers())? {
+            return Ok(method_not_allowed_response());
+        }
         // check accept header
         if !request
             .headers()
@@ -1236,9 +1262,6 @@ where
                     .boxed(),
                 )
                 .expect("valid response"));
-        }
-        if !is_legacy_request(None, request.headers()) {
-            return Ok(method_not_allowed_response());
         }
         // check session id
         let session_id = request
@@ -1377,7 +1400,7 @@ where
         };
 
         let use_session =
-            self.config.legacy_session_mode && is_legacy_request(Some(&message), &part.headers);
+            self.config.legacy_session_mode && is_legacy_request(Some(&message), &part.headers)?;
 
         if use_session {
             // do we have a session id?
@@ -1712,7 +1735,7 @@ where
         B: Body + Send + 'static,
         B::Error: Display,
     {
-        if !is_legacy_request(None, request.headers()) {
+        if !is_legacy_request(None, request.headers())? {
             return Ok(method_not_allowed_response());
         }
         // check session id
