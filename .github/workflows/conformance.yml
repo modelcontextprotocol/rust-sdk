@@ -97,8 +97,6 @@ jobs:
             -H "Mcp-Method: server/discover"
           )
 
-          # The stateless server streams responses as SSE, so unwrap the
-          # `data:` payload before parsing as JSON.
           discover_response="$(
             curl --fail-with-body --silent --show-error \
               "${common_headers[@]}" \
@@ -118,8 +116,7 @@ jobs:
                   }
                 }
               }' \
-              "$endpoint" \
-              | sed -n 's/^data: //p'
+              "$endpoint"
           )"
           jq -e '
             .result.resultType == "complete" and
