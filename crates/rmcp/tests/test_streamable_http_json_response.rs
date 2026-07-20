@@ -182,7 +182,7 @@ async fn stateless_negotiated_terminal_response_returns_application_json() -> an
     let ct = CancellationToken::new();
     let (client, url, ct) = spawn_progress_server(
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_sse_keep_alive(None)
             .with_cancellation_token(ct.child_token()),
@@ -277,7 +277,7 @@ async fn stateless_negotiated_json_response_falls_back_to_sse_for_progress() -> 
     let ct = CancellationToken::new();
     let (client, url, ct) = spawn_progress_server(
         StreamableHttpServerConfig::default()
-            .with_stateful_mode(false)
+            .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_sse_keep_alive(None)
             .with_cancellation_token(ct.child_token()),
