@@ -1184,6 +1184,15 @@
           "format": "uint64",
           "minimum": 0
         },
+        "resultType": {
+          "description": "Result type discriminator. `tasks/get` responses are standard results:\n`\"complete\"` (SEP-2322). Absent values deserialize as `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ],
+          "default": "complete"
+        },
         "status": {
           "description": "Current task status.",
           "allOf": [
@@ -3233,6 +3242,9 @@
           "$ref": "#/definitions/InputRequiredResult"
         },
         {
+          "$ref": "#/definitions/TaskAckResult"
+        },
+        {
           "$ref": "#/definitions/EmptyObject"
         },
         {
@@ -3415,6 +3427,33 @@
       "additionalProperties": true,
       "required": [
         "io.modelcontextprotocol/subscriptionId"
+      ]
+    },
+    "TaskAckResult": {
+      "description": "Empty acknowledgement for `tasks/update` and `tasks/cancel` (SEP-2663).\n\nThe spec requires these acks to be empty results carrying the SEP-2322\n`resultType: \"complete\"` discriminator; task state changes are observed\nvia the next `tasks/get`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resultType": {
+          "description": "Always `\"complete\"`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resultType"
       ]
     },
     "TaskStatus": {

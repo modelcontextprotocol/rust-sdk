@@ -4405,6 +4405,10 @@ ts_union!(
     | GetTaskResult
     | CallToolResult
     | InputRequiredResult
+    // TaskAckResult must come after CallToolResult/InputRequiredResult in this
+    // untagged union: it only carries `resultType`, so it would otherwise
+    // shadow any result that includes `resultType: "complete"`.
+    | TaskAckResult
     | EmptyResult
     | CustomResult
     ;
@@ -4413,6 +4417,12 @@ ts_union!(
 impl ServerResult {
     pub fn empty(_: ()) -> ServerResult {
         ServerResult::EmptyResult(EmptyResult {})
+    }
+
+    /// Empty `tasks/update` / `tasks/cancel` acknowledgement carrying the
+    /// SEP-2322 `resultType: "complete"` discriminator (SEP-2663).
+    pub fn task_ack(_: ()) -> ServerResult {
+        ServerResult::TaskAckResult(TaskAckResult::new())
     }
 }
 

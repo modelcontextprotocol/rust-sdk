@@ -219,13 +219,13 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 validate_tasks_capability::<UpdateTaskMethod, _>(self, &context)?;
                 self.update_task(request.params, context)
                     .await
-                    .map(ServerResult::empty)
+                    .map(ServerResult::task_ack)
             }
             ClientRequest::CancelTaskRequest(request) => {
                 validate_tasks_capability::<CancelTaskMethod, _>(self, &context)?;
                 self.cancel_task(request.params, context)
                     .await
-                    .map(ServerResult::empty)
+                    .map(ServerResult::task_ack)
             }
         };
         let result = result.and_then(|result| {

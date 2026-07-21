@@ -12,19 +12,11 @@
 # When bumping DRAFT_CONFORMANCE_VERSION, review the available extension and
 # pending scenarios and update this file deliberately.
 
-server:
-  # SEP-2663 Tasks Extension, tracked in #868.
-  # `tasks-status-notifications` is intentionally absent: the upstream check is
-  # currently skipped, and CI should fail if it becomes active but does not pass.
-  - tasks-lifecycle
-  - tasks-capability-negotiation
-  - tasks-wire-fields
-  - tasks-request-state-removal
-  - tasks-mrtr-input
-  - tasks-request-headers
-  - tasks-dispatch-and-envelope
-  - tasks-required-task-error
-  - tasks-mrtr-composition
+# The SEP-2663 Tasks Extension server scenarios (tracked in #868) all pass and
+# were removed from this baseline. `tasks-status-notifications` remains
+# upstream-skipped pending the subscriptions/listen rewrite; CI will fail if it
+# becomes active but does not pass.
+server: []
 
 client:
   # Informational OAuth extension scenarios.

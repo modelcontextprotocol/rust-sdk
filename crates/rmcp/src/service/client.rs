@@ -1071,7 +1071,7 @@ impl Peer<RoleClient> {
             )))
             .await?;
         match result {
-            ServerResult::EmptyResult(_) => Ok(()),
+            ServerResult::TaskAckResult(_) | ServerResult::EmptyResult(_) => Ok(()),
             _ => Err(ServiceError::UnexpectedResponse),
         }
     }
@@ -1085,7 +1085,7 @@ impl Peer<RoleClient> {
             )))
             .await?;
         match result {
-            ServerResult::EmptyResult(_) => Ok(()),
+            ServerResult::TaskAckResult(_) | ServerResult::EmptyResult(_) => Ok(()),
             _ => Err(ServiceError::UnexpectedResponse),
         }
     }

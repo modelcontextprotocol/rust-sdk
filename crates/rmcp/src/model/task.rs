@@ -273,7 +273,7 @@ impl schemars::JsonSchema for DetailedTask {
 /// The embedded task is the seed state for the task; the client uses
 /// `task.task_id` for all subsequent `tasks/get`, `tasks/update`, and
 /// `tasks/cancel` calls.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -285,6 +285,39 @@ pub struct CreateTaskResult {
     pub task: Task,
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<MetaObject>,
+}
+
+// Custom deserializer that requires `resultType: "task"`. Without this,
+// `CreateTaskResult` would greedily match other task-shaped results (e.g.
+// `tasks/get` responses, which also carry `taskId`/`status` at the top level
+// but use `resultType: "complete"`) inside `#[serde(untagged)]` unions such
+// as `ServerResult`.
+impl<'de> Deserialize<'de> for CreateTaskResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Helper {
+            result_type: ResultType,
+            #[serde(flatten)]
+            task: Task,
+            #[serde(rename = "_meta", default)]
+            meta: Option<MetaObject>,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        if !helper.result_type.is_task() {
+            return Err(serde::de::Error::custom(
+                "CreateTaskResult requires resultType to be \"task\"",
+            ));
+        }
+        Ok(CreateTaskResult {
+            result_type: helper.result_type,
+            task: helper.task,
+            meta: helper.meta,
+        })
+    }
 }
 
 impl CreateTaskResult {
@@ -313,6 +346,10 @@ impl CreateTaskResult {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GetTaskResult {
+    /// Result type discriminator. `tasks/get` responses are standard results:
+    /// `"complete"` (SEP-2322). Absent values deserialize as `"complete"`.
+    #[serde(default)]
+    pub result_type: ResultType,
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<MetaObject>,
     /// The task with status-specific payload inlined.
@@ -322,7 +359,42 @@ pub struct GetTaskResult {
 
 impl GetTaskResult {
     pub fn new(task: DetailedTask) -> Self {
-        Self { meta: None, task }
+        Self {
+            result_type: ResultType::COMPLETE,
+            meta: None,
+            task,
+        }
+    }
+}
+
+/// Empty acknowledgement for `tasks/update` and `tasks/cancel` (SEP-2663).
+///
+/// The spec requires these acks to be empty results carrying the SEP-2322
+/// `resultType: "complete"` discriminator; task state changes are observed
+/// via the next `tasks/get`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TaskAckResult {
+    /// Always `"complete"`.
+    pub result_type: ResultType,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<MetaObject>,
+}
+
+impl Default for TaskAckResult {
+    fn default() -> Self {
+        Self {
+            result_type: ResultType::COMPLETE,
+            meta: None,
+        }
+    }
+}
+
+impl TaskAckResult {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
