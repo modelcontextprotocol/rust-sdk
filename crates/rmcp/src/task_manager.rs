@@ -151,6 +151,8 @@ struct TaskEntry {
     task: Task,
     /// Terminal payload, if the task has finished.
     terminal: Option<TaskPayload>,
+    /// When the task reached its terminal state; drives retention eviction.
+    terminal_at: Option<Instant>,
     /// Outstanding input requests keyed by their unique identifier.
     pending_inputs: HashMap<String, (InputRequest, oneshot::Sender<serde_json::Value>)>,
     /// Every key ever used, to enforce uniqueness across the task lifetime.
@@ -247,6 +249,18 @@ impl TaskOptions {
 /// Server-side task store and executor for the SEP-2663 Tasks extension.
 ///
 /// Cheaply cloneable; all clones share the same state.
+///
+/// # Retention
+///
+/// Entries are swept opportunistically on every `spawn` / `get_task` /
+/// `update_task` / `cancel_task` call: non-terminal tasks whose `ttl_ms` has
+/// elapsed are marked `failed` (their operation is aborted), and terminal
+/// tasks are evicted after being retained for one further `ttl_ms` window so
+/// pollers can observe the final state. Tasks with `ttl_ms: None` are
+/// retained for the lifetime of the manager (spec: unlimited retention) —
+/// bound task creation or call [`Self::shutdown`] yourself if you spawn such
+/// tasks in a long-lived server. There is no background sweeper; an idle
+/// manager holds its entries until the next call.
 #[derive(Clone, Default)]
 pub struct TaskManager {
     inner: Arc<Mutex<TaskManagerInner>>,
@@ -277,6 +291,7 @@ impl TaskManager {
         let entry = TaskEntry {
             task: task.clone(),
             terminal: None,
+            terminal_at: None,
             pending_inputs: HashMap::new(),
             used_input_keys: std::collections::HashSet::new(),
             cancel_requested: false,
@@ -284,11 +299,13 @@ impl TaskManager {
             created: Instant::now(),
             join_handle: None,
         };
-        self.inner
-            .lock()
-            .expect("task manager lock poisoned")
-            .tasks
-            .insert(task_id.clone(), entry);
+        {
+            let mut inner = self.inner.lock().expect("task manager lock poisoned");
+            // Opportunistic TTL sweep on every task creation, so terminal
+            // entries are evicted even if clients never poll again.
+            Self::sweep_expired(&mut inner);
+            inner.tasks.insert(task_id.clone(), entry);
+        }
 
         let context = TaskContext {
             task_id: task_id.clone(),
@@ -316,6 +333,7 @@ impl TaskManager {
                             }
                         }
                     });
+                    entry.terminal_at = Some(Instant::now());
                     entry.pending_inputs.clear();
                     entry.touch();
                     entry.task.status = entry.current_status();
@@ -337,7 +355,7 @@ impl TaskManager {
     /// Handle `tasks/get`: return the current [`DetailedTask`] state.
     pub fn get_task(&self, task_id: &str) -> Result<DetailedTask, McpError> {
         let mut inner = self.inner.lock().expect("task manager lock poisoned");
-        Self::expire_overdue(&mut inner);
+        Self::sweep_expired(&mut inner);
         let entry = inner
             .tasks
             .get_mut(task_id)
@@ -355,6 +373,7 @@ impl TaskManager {
         input_responses: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Result<(), McpError> {
         let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        Self::sweep_expired(&mut inner);
         let entry = inner
             .tasks
             .get_mut(task_id)
@@ -386,6 +405,7 @@ impl TaskManager {
     ///   "the task may still reach a non-`cancelled` terminal status".
     pub fn cancel_task(&self, task_id: &str) -> Result<(), McpError> {
         let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        Self::sweep_expired(&mut inner);
         let entry = inner
             .tasks
             .get_mut(task_id)
@@ -424,9 +444,21 @@ impl TaskManager {
         }
     }
 
-    /// Mark tasks whose TTL has elapsed as `failed` (spec: servers MAY fail
-    /// tasks any time after TTL expiry).
-    fn expire_overdue(inner: &mut TaskManagerInner) {
+    /// TTL sweep, run from every `TaskManager` entry point (SEP-2663: servers
+    /// MAY mark a task `failed` any time after its TTL elapses, and
+    /// subsequently delete it at any time; `ttl_ms: None` means unlimited
+    /// retention).
+    ///
+    /// Two phases per entry:
+    /// 1. A non-terminal task whose TTL has elapsed is marked `failed` (its
+    ///    operation is aborted — the TTL is the SDK's hard-stop safety valve,
+    ///    unlike cooperative `tasks/cancel`).
+    /// 2. A *terminal* task is evicted once it has been retained for a full
+    ///    TTL window after reaching its terminal state, so well-behaved
+    ///    pollers get a chance to observe the final status before late
+    ///    `tasks/get` calls start returning `-32602`.
+    fn sweep_expired(inner: &mut TaskManagerInner) {
+        // Phase 1: fail overdue non-terminal tasks.
         for entry in inner.tasks.values_mut() {
             if entry.terminal.is_none()
                 && let Some(ttl_ms) = entry.task.ttl_ms
@@ -441,11 +473,19 @@ impl TaskManager {
                         None,
                     )),
                 });
+                entry.terminal_at = Some(Instant::now());
                 entry.pending_inputs.clear();
                 entry.touch();
                 entry.task.status = TaskStatus::Failed;
             }
         }
+        // Phase 2: evict terminal tasks whose retention window has passed.
+        inner.tasks.retain(|_, entry| {
+            let (Some(ttl_ms), Some(terminal_at)) = (entry.task.ttl_ms, entry.terminal_at) else {
+                return true;
+            };
+            terminal_at.elapsed().as_millis() <= u128::from(ttl_ms)
+        });
     }
 }
 
@@ -617,11 +657,88 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_task_is_an_error() {
+    async fn unknown_task_is_invalid_params() {
+        // SEP-2663 §Protocol Errors: invalid or nonexistent taskId is -32602
+        // (Invalid params) — MUST for tasks/get, SHOULD for update/cancel.
         let manager = TaskManager::new();
-        assert!(manager.get_task("nope").is_err());
-        assert!(manager.cancel_task("nope").is_err());
-        assert!(manager.update_task("nope", []).is_err());
+        for err in [
+            manager.get_task("nope").unwrap_err(),
+            manager.cancel_task("nope").unwrap_err(),
+            manager.update_task("nope", []).unwrap_err(),
+        ] {
+            assert_eq!(err.code, crate::model::ErrorCode::INVALID_PARAMS);
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_tasks_are_evicted_after_retention_window() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(TaskOptions::new().with_ttl_ms(50), |_ctx| {
+            Box::pin(async { Ok(ok_result("fast")) })
+        });
+
+        // Wait for completion; the terminal state stays observable during
+        // the retention window.
+        let mut completed = false;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            if manager.get_task(&task.task_id).unwrap().status() == TaskStatus::Completed {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "task should have completed");
+
+        // After a full TTL window past terminal, the entry is evicted and
+        // late polls get -32602.
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let err = manager.get_task(&task.task_id).unwrap_err();
+        assert_eq!(err.code, crate::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(manager.running_task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn abandoned_tasks_are_swept_by_other_entry_points() {
+        // A task nobody ever polls again must still be failed + evicted; the
+        // sweep runs from spawn() too, so activity on *other* tasks is enough.
+        let manager = TaskManager::new();
+        let abandoned = manager.spawn(TaskOptions::new().with_ttl_ms(10), |_ctx| {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(ok_result("never"))
+            })
+        });
+
+        // Let TTL elapse (fails the task), then a second full window
+        // (evicts it), without ever calling get_task on the abandoned id.
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        let _ = manager.spawn(TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("other")) })
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        let _ = manager.spawn(TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("other2")) })
+        });
+
+        let err = manager.get_task(&abandoned.task_id).unwrap_err();
+        assert_eq!(err.code, crate::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn unlimited_ttl_tasks_are_retained() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(TaskOptions::new().with_ttl_ms(None), |_ctx| {
+            Box::pin(async { Ok(ok_result("kept")) })
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Sweeps triggered by other entry points must not evict it.
+        let _ = manager.spawn(TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("other")) })
+        });
+        assert_eq!(
+            manager.get_task(&task.task_id).unwrap().status(),
+            TaskStatus::Completed
+        );
     }
 
     #[tokio::test]
