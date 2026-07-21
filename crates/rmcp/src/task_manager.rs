@@ -470,7 +470,7 @@ impl TaskManager {
         for entry in inner.tasks.values_mut() {
             if entry.terminal.is_none()
                 && let Some(ttl_ms) = entry.task.ttl_ms
-                && entry.created.elapsed().as_millis() > u128::from(ttl_ms)
+                && entry.created.elapsed().as_millis() >= u128::from(ttl_ms)
             {
                 if let Some(handle) = entry.join_handle.take() {
                     handle.abort();
@@ -492,7 +492,7 @@ impl TaskManager {
             let (Some(ttl_ms), Some(terminal_at)) = (entry.task.ttl_ms, entry.terminal_at) else {
                 return true;
             };
-            terminal_at.elapsed().as_millis() <= u128::from(ttl_ms)
+            terminal_at.elapsed().as_millis() < u128::from(ttl_ms)
         });
     }
 }
