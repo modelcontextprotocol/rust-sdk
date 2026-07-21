@@ -189,6 +189,7 @@ impl ClientHandler for FullClientHandler {
 
 const CIMD_CLIENT_METADATA_URL: &str = "https://conformance-test.local/client-metadata.json";
 const REDIRECT_URI: &str = "http://localhost:3000/callback";
+const SCOPE_STEP_UP_INITIAL_SCOPES: &[&str] = &["mcp:basic"];
 const SCOPE_STEP_UP_ESCALATED_SCOPES: &[&str] = &["mcp:basic", "mcp:write"];
 
 /// Perform the headless OAuth authorization-code flow.
@@ -320,11 +321,10 @@ async fn run_auth_scope_step_up_client(
     server_url: &str,
     _ctx: &ConformanceContext,
 ) -> anyhow::Result<()> {
-    // First auth
     let mut oauth = OAuthState::new(server_url, None).await?;
     oauth
         .start_authorization_with_metadata_url(
-            &[],
+            SCOPE_STEP_UP_INITIAL_SCOPES,
             REDIRECT_URI,
             Some("conformance-client"),
             Some(CIMD_CLIENT_METADATA_URL),
@@ -351,7 +351,9 @@ async fn run_auth_scope_step_up_client(
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
-    let client = BasicClientHandler.serve(transport).await?;
+    let client = BasicClientHandler
+        .serve_with_lifecycle(transport, conformance_lifecycle())
+        .await?;
 
     let tools = client.list_tools(Default::default()).await?;
     tracing::debug!("Listed {} tools", tools.tools.len());
@@ -398,10 +400,12 @@ async fn run_auth_scope_step_up_client(
                     auth_client2,
                     StreamableHttpClientTransportConfig::with_uri(server_url),
                 );
-                let client2 = BasicClientHandler.serve(transport2).await?;
-                let _ = client2
+                let client2 = BasicClientHandler
+                    .serve_with_lifecycle(transport2, conformance_lifecycle())
+                    .await?;
+                client2
                     .call_tool(call_tool_params(tool.name.clone(), args))
-                    .await;
+                    .await?;
                 client2.cancel().await.ok();
                 return Ok(());
             }
@@ -859,7 +863,7 @@ async fn run_basic_client(server_url: &str) -> anyhow::Result<()> {
 }
 
 async fn run_tools_call_client(server_url: &str, ctx: &ConformanceContext) -> anyhow::Result<()> {
-    run_tools_call_client_with_lifecycle(server_url, ctx, ClientLifecycleMode::Initialize).await
+    run_tools_call_client_with_lifecycle(server_url, ctx, conformance_lifecycle()).await
 }
 
 async fn run_discover_tools_call_client(
@@ -930,7 +934,17 @@ fn conformance_protocol_version() -> ProtocolVersion {
     std::env::var("MCP_CONFORMANCE_PROTOCOL_VERSION")
         .ok()
         .and_then(|version| serde_json::from_value(Value::String(version)).ok())
-        .unwrap_or(ProtocolVersion::V_2026_07_28)
+        .unwrap_or(ProtocolVersion::V_2025_11_25)
+}
+
+fn conformance_lifecycle() -> ClientLifecycleMode {
+    if conformance_protocol_version().as_str() >= ProtocolVersion::V_2026_07_28.as_str() {
+        ClientLifecycleMode::Discover {
+            preferred_versions: preferred_protocol_versions(),
+        }
+    } else {
+        ClientLifecycleMode::Initialize
+    }
 }
 
 /// Preferred protocol versions for discover-lifecycle negotiation: the

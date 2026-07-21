@@ -91,7 +91,6 @@ jobs:
             --url http://127.0.0.1:8002/mcp \
             --suite all \
             --spec-version 2026-07-28 \
-            --expected-failures conformance/expected-failures-2026-07-28.yaml \
             -o conformance-results
 
       # Extension scenarios are excluded by the --spec-version filter and
@@ -165,7 +164,6 @@ jobs:
             --command "$(pwd)/target/debug/conformance-client" \
             --suite all \
             --spec-version 2026-07-28 \
-            --expected-failures conformance/expected-failures-2026-07-28.yaml \
             -o conformance-client-results/draft
 
       - name: Run extension client suite (informational)
