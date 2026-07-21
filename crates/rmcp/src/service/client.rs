@@ -8,22 +8,23 @@ use super::*;
 use crate::{
     model::{
         ArgumentInfo, CallToolRequest, CallToolRequestParams, CallToolResponse, CallToolResult,
-        CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
-        ClientNotification, ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams,
-        CompleteResult, CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS,
-        DiscoverRequest, DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta,
-        GetPromptRequest, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
-        InitializeRequest, InitializedNotification, InputRequest, InputRequiredResult,
-        InputResponses, JsonRpcResponse, ListPromptsRequest, ListPromptsResult,
-        ListResourceTemplatesRequest, ListResourceTemplatesResult, ListResourcesRequest,
-        ListResourcesResult, ListToolsRequest, ListToolsResult, NumberOrString,
-        PaginatedRequestParams, ProgressNotification, ProgressNotificationParam, ProtocolVersion,
-        ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-        Reference, RequestId, RequestMetaObject, RootsListChangedNotification, ServerInfo,
-        ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult, SetLevelRequest,
-        SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams, SubscriptionFilter,
-        SubscriptionsListenRequest, SubscriptionsListenRequestParams, SubscriptionsListenResult,
-        UnsubscribeRequest, UnsubscribeRequestParams,
+        CancelTaskParams, CancelTaskRequest, CancelledNotification, CancelledNotificationParam,
+        ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ClientResult,
+        CompleteRequest, CompleteRequestParams, CompleteResult, CompletionContext, CompletionInfo,
+        DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest, DiscoverRequestParams, DiscoverResult, ErrorData,
+        GetExtensions, GetMeta, GetPromptRequest, GetPromptRequestParams, GetPromptResponse,
+        GetPromptResult, GetTaskParams, GetTaskRequest, GetTaskResult, InitializeRequest,
+        InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
+        JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+        ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
+        ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotification,
+        ProgressNotificationParam, ProtocolVersion, ReadResourceRequest, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Reference, RequestId, RequestMetaObject,
+        RootsListChangedNotification, ServerInfo, ServerJsonRpcMessage, ServerNotification,
+        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SubscribeRequest,
+        SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
+        SubscriptionsListenRequestParams, SubscriptionsListenResult, UnsubscribeRequest,
+        UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
     transport::DynamicTransportError,
 };
@@ -1044,6 +1045,47 @@ impl Peer<RoleClient> {
             ServerResult::InputRequiredResult(result) => {
                 Ok(CallToolResponse::InputRequired(result))
             }
+            // SEP-2663 Tasks extension: the server materialized a task.
+            ServerResult::CreateTaskResult(result) => Ok(CallToolResponse::Task(result)),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// SEP-2663 `tasks/get`: poll the current state of a task.
+    pub async fn get_task(&self, params: GetTaskParams) -> Result<GetTaskResult, ServiceError> {
+        let result = self
+            .send_request(ClientRequest::GetTaskRequest(GetTaskRequest::new(params)))
+            .await?;
+        match result {
+            ServerResult::GetTaskResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// SEP-2663 `tasks/update`: deliver responses to outstanding in-task
+    /// input requests. The acknowledgement is eventually consistent.
+    pub async fn update_task(&self, params: UpdateTaskParams) -> Result<(), ServiceError> {
+        let result = self
+            .send_request(ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
+                params,
+            )))
+            .await?;
+        match result {
+            ServerResult::EmptyResult(_) => Ok(()),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// SEP-2663 `tasks/cancel`: signal intent to cancel a task. Cancellation
+    /// is cooperative; the ack does not guarantee the task stops.
+    pub async fn cancel_task(&self, params: CancelTaskParams) -> Result<(), ServiceError> {
+        let result = self
+            .send_request(ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
+                params,
+            )))
+            .await?;
+        match result {
+            ServerResult::EmptyResult(_) => Ok(()),
             _ => Err(ServiceError::UnexpectedResponse),
         }
     }
@@ -1209,7 +1251,7 @@ impl Peer<RoleClient> {
     ///
     /// # Arguments
     /// * `prompt_name` - Name of the prompt being completed
-    /// * `argument_name` - Name of the argument being completed  
+    /// * `argument_name` - Name of the argument being completed
     /// * `current_value` - Current partial value of the argument
     /// * `context` - Optional context with previously resolved arguments
     ///
@@ -1368,6 +1410,10 @@ where
                     params.input_responses = input_responses;
                     params.request_state = request_state;
                 }
+                // SEP-2663: this helper does not drive the task polling
+                // lifecycle. Callers that declare the tasks extension
+                // capability should use `call_tool_once` and poll `tasks/get`.
+                CallToolResponse::Task(_) => return Err(ServiceError::UnexpectedResponse),
             }
         }
         Err(ServiceError::InputRequiredRoundsExceeded { max_rounds })

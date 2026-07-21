@@ -9,7 +9,7 @@ use crate::{
         tool::schema_for_output,
         wrapper::{Json, Parameters},
     },
-    model::{Icon, JsonObject, MetaObject, ToolAnnotations, ToolExecution},
+    model::{Icon, JsonObject, MetaObject, ToolAnnotations},
     schemars::JsonSchema,
     service::{MaybeSend, MaybeSendFuture},
 };
@@ -71,9 +71,6 @@ pub trait ToolBase {
     fn annotations() -> Option<ToolAnnotations> {
         None
     }
-    fn execution() -> Option<ToolExecution> {
-        None
-    }
     fn icons() -> Option<Vec<Icon>> {
         None
     }
@@ -111,7 +108,6 @@ pub(crate) fn tool_attribute<T: ToolBase>() -> crate::model::Tool {
         input_schema: T::input_schema().unwrap_or_else(schema_for_empty_input),
         output_schema: T::output_schema(),
         annotations: T::annotations(),
-        execution: T::execution(),
         icons: T::icons(),
         meta: T::meta(),
     }

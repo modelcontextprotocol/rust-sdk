@@ -25,7 +25,6 @@ For **getting started** and **full MCP feature documentation**, see the [main RE
 | [`#[prompt]`][prompt] | Mark a function as an MCP prompt handler |
 | [`#[prompt_router]`][prompt_router] | Generate a prompt router from an impl block |
 | [`#[prompt_handler]`][prompt_handler] | Generate `get_prompt` and `list_prompts` handler methods |
-| [`#[task_handler]`][task_handler] | Wire up the task lifecycle on top of an `OperationProcessor` |
 
 [tool]: https://docs.rs/rmcp-macros/latest/rmcp_macros/attr.tool.html
 [tool_router]: https://docs.rs/rmcp-macros/latest/rmcp_macros/attr.tool_router.html
@@ -33,7 +32,6 @@ For **getting started** and **full MCP feature documentation**, see the [main RE
 [prompt]: https://docs.rs/rmcp-macros/latest/rmcp_macros/attr.prompt.html
 [prompt_router]: https://docs.rs/rmcp-macros/latest/rmcp_macros/attr.prompt_router.html
 [prompt_handler]: https://docs.rs/rmcp-macros/latest/rmcp_macros/attr.prompt_handler.html
-[task_handler]: https://docs.rs/rmcp-macros/latest/rmcp_macros/attr.task_handler.html
 
 ## Quick Example
 

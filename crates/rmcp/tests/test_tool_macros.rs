@@ -397,8 +397,8 @@ fn test_minimal_server_get_info_auto_generated() {
         "prompts should not be auto-enabled"
     );
     assert!(
-        info.capabilities.tasks.is_none(),
-        "tasks should not be auto-enabled"
+        !info.capabilities.supports_tasks(),
+        "tasks extension should not be auto-enabled"
     );
     assert!(
         !info.server_info.name.is_empty(),

@@ -110,13 +110,12 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
 pub(crate) enum CallerCapability {
     Tools,
     Prompts,
-    Tasks,
 }
 
 /// Build a `get_info()` method that returns `ServerInfo` with the appropriate capabilities.
 ///
 /// The caller declares its own capability via `caller`. Sibling handler attributes
-/// (`prompt_handler`, `task_handler`, `tool_handler`) are detected automatically
+/// (`prompt_handler`, `tool_handler`) are detected automatically
 /// and their capabilities are included.
 pub(crate) fn build_get_info(
     item_impl: &ItemImpl,
@@ -129,8 +128,6 @@ pub(crate) fn build_get_info(
         caller == CallerCapability::Tools || has_sibling_handler(item_impl, "tool_handler");
     let has_prompts =
         caller == CallerCapability::Prompts || has_sibling_handler(item_impl, "prompt_handler");
-    let has_tasks =
-        caller == CallerCapability::Tasks || has_sibling_handler(item_impl, "task_handler");
 
     let mut capability_calls = Vec::new();
     if has_tools {
@@ -139,10 +136,6 @@ pub(crate) fn build_get_info(
     if has_prompts {
         capability_calls.push(quote! { .enable_prompts() });
     }
-    if has_tasks {
-        capability_calls.push(quote! { .enable_tasks() });
-    }
-
     let server_info_expr = match (name, version) {
         (Some(n), Some(v)) => quote! { rmcp::model::Implementation::new(#n, #v) },
         (Some(n), None) => {

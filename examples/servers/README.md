@@ -71,13 +71,13 @@ A server demonstrating the prompt framework capabilities.
 
 ### Task Demo Server (`task_stdio.rs`)
 
-A minimal stdio server demonstrating task-based tool invocation per
-[SEP-1319](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks).
+A minimal stdio server demonstrating the MCP Tasks extension
+([SEP-2663](https://modelcontextprotocol.io/extensions/tasks/overview), `io.modelcontextprotocol/tasks`).
 
-- `slow_sum` is declared with `execution(task_support = "required")`, so clients MUST invoke it as a task
+- `slow_sum` is materialized as a task (`CreateTaskResult`, `resultType: "task"`) whenever the client declares the tasks extension capability; other clients get a normal synchronous response
 - `quick_echo` is a regular synchronous tool for contrast
-- Wires up `enqueue_task` / `tasks/get` / `tasks/result` / `tasks/cancel` via `#[task_handler]`
-- Pair with `examples/clients/src/task_stdio.rs` to see the full lifecycle (create → poll → fetch result)
+- Serves `tasks/get` / `tasks/update` / `tasks/cancel` via a `TaskManager`
+- Pair with `examples/clients/src/task_stdio.rs` to see the full lifecycle (create → poll → inline result)
 
 ### MRTR Demo (`mrtr.rs`)
 

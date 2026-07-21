@@ -7,7 +7,6 @@ mod common;
 mod prompt;
 mod prompt_handler;
 mod prompt_router;
-mod task_handler;
 mod tool;
 mod tool_handler;
 mod tool_router;
@@ -100,7 +99,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     impl MyToolHandler {
 ///         #[tool]
 ///         fn my_tool_a() {
-///             
+///
 ///         }
 ///     }
 /// }
@@ -110,7 +109,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     impl MyToolHandler {
 ///         #[tool]
 ///         fn my_tool_b() {
-///             
+///
 ///         }
 ///     }
 /// }
@@ -296,20 +295,6 @@ pub fn prompt_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
     prompt_handler::prompt_handler(attr.into(), input.into())
-        .unwrap_or_else(|err| err.to_compile_error())
-        .into()
-}
-
-/// # task_handler
-///
-/// Generates basic task-handling methods (`enqueue_task` and `list_tasks`) for a server handler
-/// using a shared \[`OperationProcessor`\]. The default processor expression assumes a
-/// `self.processor` field holding an `Arc<Mutex<OperationProcessor>>`, but it can be customized
-/// via `#[task_handler(processor = ...)]`. Because the macro captures `self` inside spawned
-/// futures, the handler type must implement [`Clone`].
-#[proc_macro_attribute]
-pub fn task_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
-    task_handler::task_handler(attr.into(), input.into())
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

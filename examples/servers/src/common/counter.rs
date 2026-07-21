@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -10,27 +10,10 @@ use rmcp::{
     model::*,
     prompt, prompt_handler, prompt_router, schemars,
     service::RequestContext,
-    task_handler,
-    task_manager::{OperationProcessor, OperationResultTransport},
     tool, tool_handler, tool_router,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
-
-struct ToolCallOperationResult {
-    id: String,
-    result: Result<CallToolResult, McpError>,
-}
-
-impl OperationResultTransport for ToolCallOperationResult {
-    fn operation_id(&self) -> &String {
-        &self.id
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct StructRequest {
@@ -78,7 +61,6 @@ pub struct Counter {
     counter: Arc<Mutex<i32>>,
     tool_router: ToolRouter<Counter>,
     prompt_router: PromptRouter<Counter>,
-    processor: Arc<Mutex<OperationProcessor>>,
 }
 
 #[tool_router]
@@ -89,7 +71,6 @@ impl Counter {
             counter: Arc::new(Mutex::new(0)),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
-            processor: Arc::new(Mutex::new(OperationProcessor::new())),
         }
     }
 
@@ -123,10 +104,7 @@ impl Counter {
         )]))
     }
 
-    #[tool(
-        description = "Long running task example",
-        execution(task_support = "optional")
-    )]
+    #[tool(description = "Long running task example")]
     async fn long_task(&self) -> Result<CallToolResult, McpError> {
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -227,7 +205,6 @@ impl Counter {
 
 #[tool_handler(meta = MetaObject(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
 #[prompt_handler(meta = MetaObject(rmcp::object!({"router_meta_key": "router_meta_value"})))]
-#[task_handler]
 impl ServerHandler for Counter {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
@@ -379,50 +356,5 @@ mod tests {
 
         let prompts = router.list_all();
         assert_eq!(prompts.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_client_enqueues_long_task() -> anyhow::Result<()> {
-        let counter = Counter::new();
-        let processor = counter.processor.clone();
-        let client = TestClient::default();
-
-        let (server_transport, client_transport) = tokio::io::duplex(4096);
-        let server_handle = tokio::spawn(async move {
-            let service = counter.serve(server_transport).await?;
-            service.waiting().await?;
-            anyhow::Ok(())
-        });
-
-        let client_service = client.serve(client_transport).await?;
-        let params = CallToolRequestParams::new("long_task").with_task(TaskMetadata::new());
-        let response = client_service
-            .send_request(ClientRequest::CallToolRequest(Request::new(params.clone())))
-            .await?;
-
-        let ServerResult::CreateTaskResult(info) = response else {
-            panic!("expected task creation result, got {response:?}");
-        };
-        let task = info.task;
-
-        assert_eq!(task.status, TaskStatus::Working);
-        // task list should show the task
-        let tasks = client_service
-            .send_request(ClientRequest::ListTasksRequest(
-                RequestOptionalParam::default(),
-            ))
-            .await
-            .unwrap();
-        let ServerResult::ListTasksResult(listed) = tasks else {
-            panic!("expected list tasks result, got {tasks:?}");
-        };
-        assert_eq!(listed.tasks[0].task_id, task.task_id);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let running = processor.lock().await.running_task_count();
-        assert_eq!(running, 1);
-
-        client_service.cancel().await?;
-        let _ = server_handle.await;
-        Ok(())
     }
 }

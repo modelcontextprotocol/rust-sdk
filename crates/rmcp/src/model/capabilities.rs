@@ -72,130 +72,6 @@ pub struct RootsCapabilities {
     pub list_changed: Option<bool>,
 }
 
-/// Task capabilities shared by client and server.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct TasksCapability {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requests: Option<TaskRequestsCapability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub list: Option<JsonObject>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cancel: Option<JsonObject>,
-}
-
-/// Request types that support task-augmented execution.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct TaskRequestsCapability {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sampling: Option<SamplingTaskCapability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub elicitation: Option<ElicitationTaskCapability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<ToolsTaskCapability>,
-}
-
-/// Sampling task capability. Deprecated by SEP-2577; remains functional and
-/// will be removed in a future release.
-/// See <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct SamplingTaskCapability {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub create_message: Option<JsonObject>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct ElicitationTaskCapability {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub create: Option<JsonObject>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct ToolsTaskCapability {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub call: Option<JsonObject>,
-}
-
-impl TasksCapability {
-    /// Default client tasks capability with sampling and elicitation support.
-    pub fn client_default() -> Self {
-        Self {
-            list: Some(JsonObject::new()),
-            cancel: Some(JsonObject::new()),
-            requests: Some(TaskRequestsCapability {
-                sampling: Some(SamplingTaskCapability {
-                    create_message: Some(JsonObject::new()),
-                }),
-                elicitation: Some(ElicitationTaskCapability {
-                    create: Some(JsonObject::new()),
-                }),
-                tools: None,
-            }),
-        }
-    }
-
-    /// Default server tasks capability with tools/call support.
-    pub fn server_default() -> Self {
-        Self {
-            list: Some(JsonObject::new()),
-            cancel: Some(JsonObject::new()),
-            requests: Some(TaskRequestsCapability {
-                sampling: None,
-                elicitation: None,
-                tools: Some(ToolsTaskCapability {
-                    call: Some(JsonObject::new()),
-                }),
-            }),
-        }
-    }
-
-    pub fn supports_list(&self) -> bool {
-        self.list.is_some()
-    }
-
-    pub fn supports_cancel(&self) -> bool {
-        self.cancel.is_some()
-    }
-
-    pub fn supports_tools_call(&self) -> bool {
-        self.requests
-            .as_ref()
-            .and_then(|r| r.tools.as_ref())
-            .and_then(|t| t.call.as_ref())
-            .is_some()
-    }
-
-    pub fn supports_sampling_create_message(&self) -> bool {
-        self.requests
-            .as_ref()
-            .and_then(|r| r.sampling.as_ref())
-            .and_then(|s| s.create_message.as_ref())
-            .is_some()
-    }
-
-    pub fn supports_elicitation_create(&self) -> bool {
-        self.requests
-            .as_ref()
-            .and_then(|r| r.elicitation.as_ref())
-            .and_then(|e| e.create.as_ref())
-            .is_some()
-    }
-}
-
 /// Capability for handling elicitation requests from servers.
 /// Elicitation allows servers to request interactive input from users during tool execution.
 /// This capability indicates that a client can handle elicitation requests and present
@@ -316,8 +192,16 @@ pub struct ClientCapabilities {
     /// Capability to handle elicitation requests from servers for interactive user input
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationCapability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<TasksCapability>,
+}
+
+impl ClientCapabilities {
+    /// Returns `true` if the `io.modelcontextprotocol/tasks` extension
+    /// (SEP-2663) is declared in [`Self::extensions`].
+    pub fn supports_tasks(&self) -> bool {
+        self.extensions
+            .as_ref()
+            .is_some_and(|e| e.contains_key(super::TASKS_EXTENSION_ID))
+    }
 }
 
 ///
@@ -356,8 +240,16 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<TasksCapability>,
+}
+
+impl ServerCapabilities {
+    /// Returns `true` if the `io.modelcontextprotocol/tasks` extension
+    /// (SEP-2663) is declared in [`Self::extensions`].
+    pub fn supports_tasks(&self) -> bool {
+        self.extensions
+            .as_ref()
+            .is_some_and(|e| e.contains_key(super::TASKS_EXTENSION_ID))
+    }
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
@@ -484,20 +376,12 @@ builder! {
         prompts: PromptsCapability,
         resources: ResourcesCapability,
         tools: ToolsCapability,
-        tasks: TasksCapability
     }
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
-impl<
-    const E: bool,
-    const EXT: bool,
-    const L: bool,
-    const C: bool,
-    const P: bool,
-    const R: bool,
-    const TASKS: bool,
-> ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, P, R, true, TASKS>>
+impl<const E: bool, const EXT: bool, const L: bool, const C: bool, const P: bool, const R: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, P, R, true>>
 {
     pub fn enable_tool_list_changed(mut self) -> Self {
         if let Some(c) = self.tools.as_mut() {
@@ -508,15 +392,8 @@ impl<
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
-impl<
-    const E: bool,
-    const EXT: bool,
-    const L: bool,
-    const C: bool,
-    const R: bool,
-    const T: bool,
-    const TASKS: bool,
-> ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, true, R, T, TASKS>>
+impl<const E: bool, const EXT: bool, const L: bool, const C: bool, const R: bool, const T: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, true, R, T>>
 {
     pub fn enable_prompts_list_changed(mut self) -> Self {
         if let Some(c) = self.prompts.as_mut() {
@@ -527,15 +404,8 @@ impl<
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
-impl<
-    const E: bool,
-    const EXT: bool,
-    const L: bool,
-    const C: bool,
-    const P: bool,
-    const T: bool,
-    const TASKS: bool,
-> ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, P, true, T, TASKS>>
+impl<const E: bool, const EXT: bool, const L: bool, const C: bool, const P: bool, const T: bool>
+    ServerCapabilitiesBuilder<ServerCapabilitiesBuilderState<E, EXT, L, C, P, true, T>>
 {
     pub fn enable_resources_list_changed(mut self) -> Self {
         if let Some(c) = self.resources.as_mut() {
@@ -548,6 +418,18 @@ impl<
         if let Some(c) = self.resources.as_mut() {
             c.subscribe = Some(true);
         }
+        self
+    }
+}
+
+#[cfg(any(feature = "server", feature = "macros"))]
+impl<S> ServerCapabilitiesBuilder<S> {
+    /// Declare support for the `io.modelcontextprotocol/tasks` extension
+    /// (SEP-2663) in the `extensions` capability map.
+    pub fn enable_tasks(mut self) -> Self {
+        self.extensions
+            .get_or_insert_with(ExtensionCapabilities::new)
+            .insert(super::TASKS_EXTENSION_ID.to_string(), JsonObject::new());
         self
     }
 }
@@ -568,13 +450,24 @@ builder! {
         )]
         sampling: SamplingCapability,
         elicitation: ElicitationCapability,
-        tasks: TasksCapability,
     }
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
-impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, true, S, EL, TASKS>>
+impl<S> ClientCapabilitiesBuilder<S> {
+    /// Declare support for the `io.modelcontextprotocol/tasks` extension
+    /// (SEP-2663) in the `extensions` capability map.
+    pub fn enable_tasks(mut self) -> Self {
+        self.extensions
+            .get_or_insert_with(ExtensionCapabilities::new)
+            .insert(super::TASKS_EXTENSION_ID.to_string(), JsonObject::new());
+        self
+    }
+}
+
+#[cfg(any(feature = "server", feature = "macros"))]
+impl<const E: bool, const EXT: bool, const S: bool, const EL: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, true, S, EL>>
 {
     #[deprecated(
         since = "1.8.0",
@@ -589,8 +482,8 @@ impl<const E: bool, const EXT: bool, const S: bool, const EL: bool, const TASKS:
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
-impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, true, EL, TASKS>>
+impl<const E: bool, const EXT: bool, const R: bool, const EL: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, true, EL>>
 {
     /// Enable tool calling in sampling requests
     #[deprecated(
@@ -618,8 +511,8 @@ impl<const E: bool, const EXT: bool, const R: bool, const EL: bool, const TASKS:
 }
 
 #[cfg(all(feature = "elicitation", any(feature = "server", feature = "macros")))]
-impl<const E: bool, const EXT: bool, const R: bool, const S: bool, const TASKS: bool>
-    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, S, true, TASKS>>
+impl<const E: bool, const EXT: bool, const R: bool, const S: bool>
+    ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, S, true>>
 {
     /// Enable JSON Schema validation for elicitation responses in form mode.
     /// When enabled, the client will validate user input against the requested_schema
@@ -679,66 +572,23 @@ mod test {
     }
 
     #[test]
-    fn test_task_capabilities_deserialization() {
-        // Test deserializing from the MCP spec format
-        let json = serde_json::json!({
-            "list": {},
-            "cancel": {},
-            "requests": {
-                "tools": { "call": {} }
-            }
-        });
-
-        let tasks: TasksCapability = serde_json::from_value(json).unwrap();
-        assert!(tasks.list.is_some());
-        assert!(tasks.cancel.is_some());
-        assert!(tasks.requests.is_some());
-        let requests = tasks.requests.unwrap();
-        assert!(requests.tools.is_some());
-        assert!(requests.tools.unwrap().call.is_some());
-    }
-
-    #[test]
-    fn test_tasks_capability_client_default() {
-        let tasks = TasksCapability::client_default();
-
-        // Verify structure
-        assert!(tasks.supports_list());
-        assert!(tasks.supports_cancel());
-        assert!(tasks.supports_sampling_create_message());
-        assert!(tasks.supports_elicitation_create());
-        assert!(!tasks.supports_tools_call());
-
-        // Verify serialization matches expected format
-        let json = serde_json::to_value(&tasks).unwrap();
-        assert_eq!(json["list"], serde_json::json!({}));
-        assert_eq!(json["cancel"], serde_json::json!({}));
+    fn test_tasks_extension_capability() {
+        // SEP-2663: tasks are declared via the extensions map.
+        let capabilities = ClientCapabilities::builder().enable_tasks().build();
+        assert!(capabilities.supports_tasks());
+        let json = serde_json::to_value(&capabilities).unwrap();
         assert_eq!(
-            json["requests"]["sampling"]["createMessage"],
+            json["extensions"][crate::model::TASKS_EXTENSION_ID],
             serde_json::json!({})
         );
+
+        let server = ServerCapabilities::builder().enable_tasks().build();
+        assert!(server.supports_tasks());
+        let json = serde_json::to_value(&server).unwrap();
         assert_eq!(
-            json["requests"]["elicitation"]["create"],
+            json["extensions"][crate::model::TASKS_EXTENSION_ID],
             serde_json::json!({})
         );
-    }
-
-    #[test]
-    fn test_tasks_capability_server_default() {
-        let tasks = TasksCapability::server_default();
-
-        // Verify structure
-        assert!(tasks.supports_list());
-        assert!(tasks.supports_cancel());
-        assert!(tasks.supports_tools_call());
-        assert!(!tasks.supports_sampling_create_message());
-        assert!(!tasks.supports_elicitation_create());
-
-        // Verify serialization matches expected format
-        let json = serde_json::to_value(&tasks).unwrap();
-        assert_eq!(json["list"], serde_json::json!({}));
-        assert_eq!(json["cancel"], serde_json::json!({}));
-        assert_eq!(json["requests"]["tools"]["call"], serde_json::json!({}));
     }
 
     #[test]

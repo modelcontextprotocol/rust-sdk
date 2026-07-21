@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::{
     ClientCapabilities, ClientNotification, ClientRequest, CustomNotification, CustomRequest,
     Extensions, Implementation, JsonObject, JsonRpcMessage, LoggingLevel, ProgressToken,
-    ProtocolVersion, RequestId, ServerNotification, ServerRequest, TaskMetadata,
+    ProtocolVersion, RequestId, ServerNotification, ServerRequest,
 };
 
 /// Access to the metadata carried by a message envelope's [`Extensions`].
@@ -91,21 +91,6 @@ pub trait RequestParamsMeta {
     /// Get a mutable reference to meta, inserting an empty one if absent.
     fn meta_or_default(&mut self) -> &mut RequestMetaObject {
         self.meta_mut().get_or_insert_with(RequestMetaObject::new)
-    }
-}
-
-/// Trait for task-augmented request params that contain both `_meta` and `task` fields.
-///
-/// Per the MCP 2025-11-25 spec, certain requests (like `tools/call` and `sampling/createMessage`)
-/// can include a `task` field to signal that the caller wants task-augmented execution.
-pub trait TaskAugmentedRequestParamsMeta: RequestParamsMeta {
-    /// Get a reference to the task field
-    fn task(&self) -> Option<&TaskMetadata>;
-    /// Get a mutable reference to the task field
-    fn task_mut(&mut self) -> &mut Option<TaskMetadata>;
-    /// Set the task field
-    fn set_task(&mut self, task: TaskMetadata) {
-        *self.task_mut() = Some(task);
     }
 }
 
@@ -204,8 +189,7 @@ variant_extension! {
         ListToolsRequest
         CustomRequest
         GetTaskRequest
-        ListTasksRequest
-        GetTaskPayloadRequest
+        UpdateTaskRequest
         CancelTaskRequest
     }
 }
@@ -226,7 +210,6 @@ variant_extension! {
         ProgressNotification
         InitializedNotification
         RootsListChangedNotification
-        TaskStatusNotification
         CustomNotification
     }
 }

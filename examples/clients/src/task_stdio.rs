@@ -1,18 +1,20 @@
 //! Client for the task-demo server in `examples/servers/src/task_stdio.rs`.
 //!
-//! Walks through the task lifecycle (SEP-1319):
+//! Walks through the SEP-2663 Tasks extension lifecycle:
 //!   1. Call a regular tool (`quick_echo`) — synchronous response.
-//!   2. Call a task-required tool (`slow_sum`) by attaching `task: {}` to
-//!      the `tools/call` request. The server returns a `Task` with a `task_id`.
-//!   3. Poll `tasks/get` until status becomes `Completed`.
-//!   4. Fetch the underlying `CallToolResult` via `tasks/result`.
+//!   2. Call `slow_sum` while declaring the `io.modelcontextprotocol/tasks`
+//!      extension capability. The server decides to materialize a task and
+//!      returns a `CreateTaskResult` (`resultType: "task"`).
+//!   3. Poll `tasks/get` (honoring `pollIntervalMs`) until the task reaches a
+//!      terminal status; the final `CallToolResult` is inlined in the
+//!      `completed` task's `result` field.
 
 use anyhow::{Result, anyhow};
 use rmcp::{
     ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResult, ClientRequest, GetTaskParams, GetTaskPayloadParams,
-        Request, ServerResult, TaskMetadata, TaskStatus,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ClientCapabilities, GetTaskParams,
+        TaskPayload, TaskStatus,
     },
     object,
     transport::{ConfigureCommandExt, TokioChildProcess},
@@ -30,8 +32,14 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Declare the tasks extension in our client capabilities (SEP-2663).
+    let client_info = rmcp::model::ClientInfo::new(
+        ClientCapabilities::builder().enable_tasks().build(),
+        rmcp::model::Implementation::from_build_env(),
+    );
+
     // Spawn the task-demo server as a child process over stdio.
-    let client = ()
+    let client = client_info
         .serve(TokioChildProcess::new(Command::new("cargo").configure(
             |cmd| {
                 cmd.arg("run")
@@ -44,7 +52,7 @@ async fn main() -> Result<()> {
         ))?)
         .await?;
 
-    // 1) Synchronous call. `quick_echo` has the default task_support = forbidden.
+    // 1) Synchronous call.
     let echo = client
         .call_tool(
             CallToolRequestParams::new("quick_echo")
@@ -53,68 +61,63 @@ async fn main() -> Result<()> {
         .await?;
     tracing::info!("quick_echo -> {echo:#?}");
 
-    // 2) Task call. `slow_sum` is task_support = required, so we MUST attach
-    //    `task` metadata. An empty `TaskMetadata` is fine; use `.with_ttl(...)`
-    //    to set a retention window.
-    let create = client
-        .send_request(ClientRequest::CallToolRequest(Request::new(
-            CallToolRequestParams::new("slow_sum")
-                .with_arguments(object!({ "a": 40, "b": 2 }))
-                .with_task(TaskMetadata::new()),
-        )))
+    // 2) Task-eligible call. The server sees our tasks capability and
+    //    materializes a task instead of blocking.
+    let response = client
+        .call_tool_once(
+            CallToolRequestParams::new("slow_sum").with_arguments(object!({ "a": 40, "b": 2 })),
+        )
         .await?;
-    let ServerResult::CreateTaskResult(create) = create else {
-        return Err(anyhow!("expected CreateTaskResult, got {create:?}"));
+    let create = match response {
+        CallToolResponse::Task(create) => create,
+        CallToolResponse::Complete(result) => {
+            // The server is allowed to answer synchronously.
+            tracing::info!("slow_sum answered synchronously -> {result:#?}");
+            client.cancel().await?;
+            return Ok(());
+        }
+        other => return Err(anyhow!("unexpected response: {other:?}")),
     };
     let task_id = create.task.task_id.clone();
+    let poll_ms = create.task.poll_interval_ms.unwrap_or(500);
     tracing::info!(
-        "slow_sum enqueued as task {task_id} (status = {:?})",
+        "slow_sum materialized as task {task_id} (status = {:?})",
         create.task.status
     );
 
-    // 3) Poll `tasks/get` until the server reports a terminal status.
-    let final_status = loop {
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    // 3) Poll `tasks/get` until the task reaches a terminal status.
+    let final_task = loop {
+        tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
 
         let info = client
-            .send_request(ClientRequest::GetTaskRequest(Request::new(
-                GetTaskParams::new(task_id.clone()),
-            )))
+            .peer()
+            .get_task(GetTaskParams::new(task_id.clone()))
             .await?;
-        let ServerResult::GetTaskResult(info) = info else {
-            return Err(anyhow!("expected GetTaskResult, got {info:?}"));
-        };
-        tracing::info!("status = {:?}", info.task.status);
+        tracing::info!("status = {:?}", info.task.status());
 
-        match info.task.status {
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
-                break info.task.status;
-            }
-            _ => {}
+        if info.task.status().is_terminal() {
+            break info.task;
         }
     };
 
-    if final_status != TaskStatus::Completed {
-        return Err(anyhow!("task ended in {final_status:?}"));
+    // The completed task carries the final CallToolResult inline.
+    match &final_task.payload {
+        TaskPayload::Completed { result } => {
+            let call_result: CallToolResult =
+                serde_json::from_value(serde_json::Value::Object(result.clone()))?;
+            tracing::info!("slow_sum result -> {call_result:#?}");
+        }
+        TaskPayload::Failed { error } => {
+            return Err(anyhow!("task failed: {error:?}"));
+        }
+        other => {
+            return Err(anyhow!(
+                "task ended in unexpected state {:?}",
+                other.status()
+            ));
+        }
     }
-
-    // 4) Fetch the payload. The server-side handler returns a serialized
-    //    `CallToolResult`. On the wire the response is just a JSON value, and
-    //    `ServerResult` is `#[serde(untagged)]`, so the client decodes it as
-    //    whichever variant the JSON shape matches first — a `CallToolResult`
-    //    here. (For a non-tool task the same value would surface as
-    //    `ServerResult::CustomResult` and need manual `serde_json::from_value`.)
-    let payload = client
-        .send_request(ClientRequest::GetTaskPayloadRequest(Request::new(
-            GetTaskPayloadParams::new(task_id.clone()),
-        )))
-        .await?;
-    let call_result: CallToolResult = match payload {
-        ServerResult::CallToolResult(r) => r,
-        ServerResult::CustomResult(c) => serde_json::from_value(c.0)?,
-        other => return Err(anyhow!("unexpected task result: {other:?}")),
-    };
-    tracing::info!("slow_sum result -> {call_result:#?}");
+    debug_assert_eq!(final_task.status(), TaskStatus::Completed);
 
     client.cancel().await?;
     Ok(())

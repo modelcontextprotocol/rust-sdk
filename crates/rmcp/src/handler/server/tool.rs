@@ -38,7 +38,6 @@ pub struct ToolCallContext<'s, S> {
     pub service: &'s S,
     pub name: Cow<'static, str>,
     pub arguments: Option<JsonObject>,
-    pub task: Option<crate::model::TaskMetadata>,
 }
 
 impl<'s, S> ToolCallContext<'s, S> {
@@ -48,7 +47,6 @@ impl<'s, S> ToolCallContext<'s, S> {
             meta: _,
             name,
             arguments,
-            task,
             ..
         }: CallToolRequestParams,
         request_context: RequestContext<RoleServer>,
@@ -58,7 +56,6 @@ impl<'s, S> ToolCallContext<'s, S> {
             service,
             name,
             arguments,
-            task,
         }
     }
     pub fn name(&self) -> &str {
@@ -118,6 +115,10 @@ impl<T: IntoCallToolResult, E: IntoCallToolResult> IntoCallToolResult for Result
                 }
                 Ok(CallToolResponse::InputRequired(_)) => Err(crate::ErrorData::internal_error(
                     "InputRequiredResult cannot be returned from a tool error branch",
+                    None,
+                )),
+                Ok(CallToolResponse::Task(_)) => Err(crate::ErrorData::internal_error(
+                    "CreateTaskResult cannot be returned from a tool error branch",
                     None,
                 )),
                 Err(e) => Err(e),

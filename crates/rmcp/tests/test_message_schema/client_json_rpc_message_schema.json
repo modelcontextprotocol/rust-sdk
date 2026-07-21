@@ -126,7 +126,7 @@
       "const": "tools/call"
     },
     "CallToolRequestParams": {
-      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.\n\nThis implements `TaskAugmentedRequestParamsMeta` as tool calls can be\nlong-running and may benefit from task-based execution.",
+      "description": "Parameters for calling a tool provided by an MCP server.\n\nContains the tool name and optional arguments needed to execute\nthe tool operation.",
       "type": "object",
       "properties": {
         "_meta": {
@@ -165,17 +165,6 @@
           "type": [
             "string",
             "null"
-          ]
-        },
-        "task": {
-          "description": "Task metadata for async task management (SEP-1319)",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/TaskMetadata"
-            },
-            {
-              "type": "null"
-            }
           ]
         }
       },
@@ -299,16 +288,6 @@
           "anyOf": [
             {
               "$ref": "#/definitions/SamplingCapability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tasks": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/TasksCapability"
             },
             {
               "type": "null"
@@ -657,18 +636,6 @@
         }
       }
     },
-    "ElicitationTaskCapability": {
-      "type": "object",
-      "properties": {
-        "create": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      }
-    },
     "EmbeddedResource": {
       "description": "Embedded resource content (spec `EmbeddedResource`).",
       "type": "object",
@@ -815,7 +782,6 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Protocol-level metadata for this request (SEP-1319)",
           "anyOf": [
             {
               "$ref": "#/definitions/RequestMetaObject"
@@ -826,33 +792,7 @@
           ]
         },
         "taskId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "taskId"
-      ]
-    },
-    "GetTaskPayloadMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "tasks/result"
-    },
-    "GetTaskPayloadParams": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Protocol-level metadata for this request (SEP-1319)",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RequestMetaObject"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "taskId": {
+          "description": "Identifier of the task to query.",
           "type": "string"
         }
       },
@@ -1100,9 +1040,6 @@
           "$ref": "#/definitions/NotificationNoParam2"
         },
         {
-          "$ref": "#/definitions/Notification3"
-        },
-        {
           "$ref": "#/definitions/CustomNotification"
         }
       ],
@@ -1168,9 +1105,6 @@
         },
         {
           "$ref": "#/definitions/Request11"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam5"
         },
         {
           "$ref": "#/definitions/Request12"
@@ -1251,11 +1185,6 @@
         "roots"
       ]
     },
-    "ListTasksMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "tasks/list"
-    },
     "ListToolsRequestMethod": {
       "type": "string",
       "format": "const",
@@ -1304,21 +1233,6 @@
         },
         "params": {
           "$ref": "#/definitions/ProgressNotificationParam"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    "Notification3": {
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/TaskStatusNotificationMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/TaskStatusNotificationParam"
         }
       },
       "required": [
@@ -1606,10 +1520,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/GetTaskPayloadMethod"
+          "$ref": "#/definitions/UpdateTaskMethod"
         },
         "params": {
-          "$ref": "#/definitions/GetTaskPayloadParams"
+          "$ref": "#/definitions/UpdateTaskParams"
         }
       },
       "required": [
@@ -1862,27 +1776,6 @@
       "properties": {
         "method": {
           "$ref": "#/definitions/ListToolsRequestMethod"
-        },
-        "params": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PaginatedRequestParams"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "method"
-      ]
-    },
-    "RequestOptionalParam5": {
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ListTasksMethod"
         },
         "params": {
           "anyOf": [
@@ -2246,19 +2139,6 @@
         }
       ]
     },
-    "SamplingTaskCapability": {
-      "description": "Sampling task capability. Deprecated by SEP-2577; remains functional and\nwill be removed in a future release.\nSee <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.",
-      "type": "object",
-      "properties": {
-        "createMessage": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      }
-    },
     "SetLevelRequestMethod": {
       "type": "string",
       "format": "const",
@@ -2393,188 +2273,6 @@
         "notifications"
       ]
     },
-    "TaskMetadata": {
-      "description": "Metadata for augmenting a request with task execution (spec `TaskMetadata`).",
-      "type": "object",
-      "properties": {
-        "ttl": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        }
-      }
-    },
-    "TaskRequestsCapability": {
-      "description": "Request types that support task-augmented execution.",
-      "type": "object",
-      "properties": {
-        "elicitation": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ElicitationTaskCapability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sampling": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SamplingTaskCapability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "tools": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolsTaskCapability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    },
-    "TaskStatus": {
-      "description": "Canonical task lifecycle status as defined by SEP-1686.",
-      "oneOf": [
-        {
-          "description": "The receiver accepted the request and is currently working on it.",
-          "type": "string",
-          "const": "working"
-        },
-        {
-          "description": "The receiver requires additional input before work can continue.",
-          "type": "string",
-          "const": "input_required"
-        },
-        {
-          "description": "The underlying operation completed successfully and the result is ready.",
-          "type": "string",
-          "const": "completed"
-        },
-        {
-          "description": "The underlying operation failed and will not continue.",
-          "type": "string",
-          "const": "failed"
-        },
-        {
-          "description": "The task was cancelled and will not continue processing.",
-          "type": "string",
-          "const": "cancelled"
-        }
-      ]
-    },
-    "TaskStatusNotificationMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "notifications/tasks/status"
-    },
-    "TaskStatusNotificationParam": {
-      "description": "Parameters for a task status notification (spec `TaskStatusNotificationParams`).\n\nThe task fields are flattened at the top level: `NotificationParams & Task`.",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/NotificationMetaObject"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "createdAt": {
-          "description": "ISO-8601 creation timestamp.",
-          "type": "string"
-        },
-        "lastUpdatedAt": {
-          "description": "ISO-8601 timestamp for the most recent status change.",
-          "type": "string"
-        },
-        "pollInterval": {
-          "description": "Suggested polling interval (milliseconds).",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "status": {
-          "description": "Current lifecycle status (see [`TaskStatus`]).",
-          "allOf": [
-            {
-              "$ref": "#/definitions/TaskStatus"
-            }
-          ]
-        },
-        "statusMessage": {
-          "description": "Optional human-readable status message for UI surfaces.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "taskId": {
-          "description": "Unique task identifier generated by the receiver.",
-          "type": "string"
-        },
-        "ttl": {
-          "description": "Retention window in milliseconds that the receiver agreed to honor.\n`None` (serialized as `null`) means unlimited retention.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "taskId",
-        "status",
-        "createdAt",
-        "lastUpdatedAt"
-      ]
-    },
-    "TasksCapability": {
-      "description": "Task capabilities shared by client and server.",
-      "type": "object",
-      "properties": {
-        "cancel": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "list": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        },
-        "requests": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/TaskRequestsCapability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    },
     "TextContent": {
       "description": "Text content block (spec `TextContent`).",
       "type": "object",
@@ -2679,18 +2377,6 @@
         "input"
       ]
     },
-    "ToolsTaskCapability": {
-      "type": "object",
-      "properties": {
-        "call": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      }
-    },
     "UnsubscribeRequestMethod": {
       "type": "string",
       "format": "const",
@@ -2718,6 +2404,40 @@
       },
       "required": [
         "uri"
+      ]
+    },
+    "UpdateTaskMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "tasks/update"
+    },
+    "UpdateTaskParams": {
+      "description": "Parameters for `tasks/update` (SEP-2663): deliver responses to outstanding\nin-task server-to-client requests surfaced via `tasks/get` `inputRequests`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputResponses": {
+          "description": "Responses to outstanding `inputRequests` previously surfaced by the\nserver. Each key MUST correspond to a currently-outstanding\n`inputRequests` key.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "taskId": {
+          "description": "Identifier of the task to update.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "inputResponses"
       ]
     },
     "UrlElicitationCapability": {

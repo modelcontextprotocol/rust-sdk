@@ -25,6 +25,10 @@ const NAME_FROM_URI: &[&str] = &[
     "resources/subscribe",
     "resources/unsubscribe",
 ];
+/// Methods whose `Mcp-Name` is sourced from `params.taskId` (SEP-2663 Tasks
+/// extension): allows intermediaries to route task polling to the server
+/// instance holding the task's state.
+const NAME_FROM_TASK_ID: &[&str] = &["tasks/get", "tasks/update", "tasks/cancel"];
 
 /// Returns the `Mcp-Name` value for a request, if the method carries one.
 fn extract_name(method: &str, params: Option<&Value>) -> Option<String> {
@@ -33,6 +37,8 @@ fn extract_name(method: &str, params: Option<&Value>) -> Option<String> {
         "name"
     } else if NAME_FROM_URI.contains(&method) {
         "uri"
+    } else if NAME_FROM_TASK_ID.contains(&method) {
+        "taskId"
     } else {
         return None;
     };

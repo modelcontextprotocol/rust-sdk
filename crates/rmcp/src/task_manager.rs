@@ -1,307 +1,559 @@
-use std::{any::Any, collections::HashMap, pin::Pin};
+//! Server-side runtime for the MCP Tasks extension (SEP-2663,
+//! `io.modelcontextprotocol/tasks`).
+//!
+//! [`TaskManager`] owns the durable state for tasks a server has materialized
+//! in response to task-eligible requests (currently `tools/call`). It:
+//!
+//! - spawns the underlying operation and tracks its lifecycle as a
+//!   [`DetailedTask`] (`working` → terminal, optionally via `input_required`),
+//! - answers `tasks/get` with the current state (including in-flight
+//!   `inputRequests` and terminal `result`/`error` payloads),
+//! - accepts `tasks/update` `inputResponses` and routes them to the running
+//!   operation (ignoring unknown or already-answered keys per spec),
+//! - handles cooperative `tasks/cancel`,
+//! - enforces TTL-based expiry (`ttl_ms`), marking overdue tasks `failed`.
+//!
+//! Tasks are only durably observable once [`TaskManager::spawn`] returns,
+//! satisfying the spec requirement that a server not return `CreateTaskResult`
+//! before `tasks/get` for that id would resolve.
+
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use futures::Future;
-use tokio::{
-    sync::mpsc,
-    time::{Duration, timeout},
-};
+use tokio::sync::oneshot;
 
 use crate::{
-    RoleServer,
-    error::{ErrorData as McpError, RmcpError as Error},
-    model::{CallToolResult, ClientRequest},
-    service::RequestContext,
+    error::ErrorData as McpError,
+    model::{
+        CallToolResult, DetailedTask, InputRequest, InputRequests, JsonObject, Task, TaskPayload,
+        TaskStatus,
+    },
 };
 
-/// Boxed future that represents an asynchronous operation managed by the processor.
-pub type OperationFuture =
-    Pin<Box<dyn Future<Output = Result<Box<dyn OperationResultTransport>, Error>> + Send>>;
+/// Default TTL (5 minutes, in milliseconds) applied when none is specified.
+pub const DEFAULT_TASK_TTL_MS: u64 = 300_000;
 
-/// Describes metadata associated with an enqueued task.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct OperationDescriptor {
-    pub operation_id: String,
-    pub name: String,
-    pub client_request: Option<ClientRequest>,
-    pub context: Option<RequestContext<RoleServer>>,
-    pub ttl: Option<u64>,
-}
-
-impl OperationDescriptor {
-    pub fn new(operation_id: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            operation_id: operation_id.into(),
-            name: name.into(),
-            client_request: None,
-            context: None,
-            ttl: None,
-        }
-    }
-
-    pub fn with_client_request(mut self, request: ClientRequest) -> Self {
-        self.client_request = Some(request);
-        self
-    }
-
-    pub fn with_context(mut self, context: RequestContext<RoleServer>) -> Self {
-        self.context = Some(context);
-        self
-    }
-
-    /// Time-to-live in milliseconds, matching `TaskMetadata.ttl` from the MCP spec.
-    pub fn with_ttl(mut self, ttl: u64) -> Self {
-        self.ttl = Some(ttl);
-        self
-    }
-}
-
-/// Operation message describing a unit of asynchronous work.
-#[non_exhaustive]
-pub struct OperationMessage {
-    pub descriptor: OperationDescriptor,
-    pub future: OperationFuture,
-}
-
-impl OperationMessage {
-    pub fn new(descriptor: OperationDescriptor, future: OperationFuture) -> Self {
-        Self { descriptor, future }
-    }
-}
-
-/// Trait for operation result transport
-pub trait OperationResultTransport: Send + Sync + 'static {
-    fn operation_id(&self) -> &String;
-    fn as_any(&self) -> &dyn std::any::Any;
-}
-
-// ===== Operation Processor =====
-#[deprecated(note = "use DEFAULT_TASK_TIMEOUT_MS; ttl values are milliseconds per the MCP spec")]
-pub const DEFAULT_TASK_TIMEOUT_SECS: u64 = 300;
-/// Default execution timeout (5 minutes), in milliseconds, applied when a
-/// descriptor does not specify a `ttl`.
-pub const DEFAULT_TASK_TIMEOUT_MS: u64 = 300_000;
-/// Operation processor that coordinates extractors and handlers
-pub struct OperationProcessor {
-    /// Currently running tasks keyed by id
-    running_tasks: HashMap<String, RunningTask>,
-    /// Completed results waiting to be collected
-    completed_results: Vec<TaskResult>,
-    task_result_receiver: mpsc::UnboundedReceiver<TaskResult>,
-    task_result_sender: mpsc::UnboundedSender<TaskResult>,
-}
-
-struct RunningTask {
-    task_handle: tokio::task::JoinHandle<()>,
-    started_at: std::time::Instant,
-    timeout: Option<u64>,
-    descriptor: OperationDescriptor,
-}
-
-#[non_exhaustive]
-pub struct TaskResult {
-    pub descriptor: OperationDescriptor,
-    pub result: Result<Box<dyn OperationResultTransport>, Error>,
-}
+/// Default suggested polling interval, in milliseconds.
+pub const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 /// Helper to generate an ISO 8601 timestamp for task metadata.
 pub fn current_timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-/// Result transport for tool calls executed as tasks.
-pub struct ToolCallTaskResult {
-    id: String,
-    pub result: Result<CallToolResult, McpError>,
+/// Handle passed to a running task operation, allowing it to surface
+/// server-to-client requests (elicitation, sampling, roots) mid-task and
+/// await the client's `tasks/update` response.
+#[derive(Clone)]
+pub struct TaskContext {
+    task_id: String,
+    inner: Arc<Mutex<TaskManagerInner>>,
 }
 
-impl ToolCallTaskResult {
-    pub fn new(id: impl Into<String>, result: Result<CallToolResult, McpError>) -> Self {
+impl TaskContext {
+    /// The id of the task this context belongs to.
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    /// Surface a server-to-client request under `key` and wait for the
+    /// client's response delivered via `tasks/update`.
+    ///
+    /// While at least one request is outstanding the task reports
+    /// `input_required` from `tasks/get`, with all outstanding requests in
+    /// `inputRequests`. Keys must be unique over the lifetime of the task;
+    /// reusing a key returns an error.
+    pub async fn request_input(
+        &self,
+        key: impl Into<String>,
+        request: InputRequest,
+    ) -> Result<serde_json::Value, McpError> {
+        let key = key.into();
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut inner = self.inner.lock().expect("task manager lock poisoned");
+            let entry = inner.tasks.get_mut(&self.task_id).ok_or_else(|| {
+                McpError::internal_error("task no longer exists".to_string(), None)
+            })?;
+            if !entry.used_input_keys.insert(key.clone()) {
+                return Err(McpError::internal_error(
+                    format!("inputRequests key {key:?} was already used for this task"),
+                    None,
+                ));
+            }
+            entry.pending_inputs.insert(key.clone(), (request, tx));
+            entry.touch();
+        }
+        rx.await.map_err(|_| {
+            McpError::internal_error("task cancelled while awaiting input".to_string(), None)
+        })
+    }
+
+    /// Update the task's human-readable status message.
+    pub fn set_status_message(&self, message: impl Into<String>) {
+        let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        if let Some(entry) = inner.tasks.get_mut(&self.task_id) {
+            entry.task.status_message = Some(message.into());
+            entry.touch();
+        }
+    }
+
+    /// Returns `true` if `tasks/cancel` has been received for this task.
+    /// Cooperative: operations should check this and stop when set.
+    pub fn is_cancel_requested(&self) -> bool {
+        let inner = self.inner.lock().expect("task manager lock poisoned");
+        inner
+            .tasks
+            .get(&self.task_id)
+            .is_some_and(|e| e.cancel_requested)
+    }
+}
+
+/// Boxed future representing the async operation backing a task.
+pub type TaskFuture = Pin<Box<dyn Future<Output = Result<CallToolResult, McpError>> + Send>>;
+
+struct TaskEntry {
+    task: Task,
+    /// Terminal payload, if the task has finished.
+    terminal: Option<TaskPayload>,
+    /// Outstanding input requests keyed by their unique identifier.
+    pending_inputs: HashMap<String, (InputRequest, oneshot::Sender<serde_json::Value>)>,
+    /// Every key ever used, to enforce uniqueness across the task lifetime.
+    used_input_keys: std::collections::HashSet<String>,
+    cancel_requested: bool,
+    created: Instant,
+    join_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl TaskEntry {
+    fn touch(&mut self) {
+        self.task.last_updated_at = current_timestamp();
+    }
+
+    fn current_status(&self) -> TaskStatus {
+        match &self.terminal {
+            Some(payload) => payload.status(),
+            None if !self.pending_inputs.is_empty() => TaskStatus::InputRequired,
+            None => TaskStatus::Working,
+        }
+    }
+
+    fn detailed(&self) -> DetailedTask {
+        let payload = match &self.terminal {
+            Some(p) => p.clone(),
+            None if !self.pending_inputs.is_empty() => TaskPayload::InputRequired {
+                input_requests: self
+                    .pending_inputs
+                    .iter()
+                    .map(|(k, (req, _))| (k.clone(), req.clone()))
+                    .collect::<InputRequests>(),
+            },
+            None => TaskPayload::Working,
+        };
+        DetailedTask::new(self.task.clone(), payload)
+    }
+}
+
+#[derive(Default)]
+struct TaskManagerInner {
+    tasks: HashMap<String, TaskEntry>,
+}
+
+/// Options controlling a spawned task.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct TaskOptions {
+    /// TTL in milliseconds; `None` means unlimited retention.
+    pub ttl_ms: Option<u64>,
+    /// Suggested polling interval in milliseconds.
+    pub poll_interval_ms: Option<u64>,
+    /// Initial status message.
+    pub status_message: Option<String>,
+}
+
+impl Default for TaskOptions {
+    fn default() -> Self {
         Self {
-            id: id.into(),
-            result,
+            ttl_ms: Some(DEFAULT_TASK_TTL_MS),
+            poll_interval_ms: Some(DEFAULT_POLL_INTERVAL_MS),
+            status_message: None,
         }
     }
 }
 
-impl OperationResultTransport for ToolCallTaskResult {
-    fn operation_id(&self) -> &String {
-        &self.id
+impl TaskOptions {
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    fn as_any(&self) -> &dyn Any {
+    /// Set the TTL in milliseconds. `None` means unlimited retention.
+    pub fn with_ttl_ms(mut self, ttl_ms: impl Into<Option<u64>>) -> Self {
+        self.ttl_ms = ttl_ms.into();
+        self
+    }
+
+    /// Set the suggested polling interval in milliseconds.
+    pub fn with_poll_interval_ms(mut self, poll_interval_ms: u64) -> Self {
+        self.poll_interval_ms = Some(poll_interval_ms);
+        self
+    }
+
+    /// Set the initial status message.
+    pub fn with_status_message(mut self, message: impl Into<String>) -> Self {
+        self.status_message = Some(message.into());
         self
     }
 }
 
-impl Default for OperationProcessor {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Server-side task store and executor for the SEP-2663 Tasks extension.
+///
+/// Cheaply cloneable; all clones share the same state.
+#[derive(Clone, Default)]
+pub struct TaskManager {
+    inner: Arc<Mutex<TaskManagerInner>>,
 }
 
-impl OperationProcessor {
+impl TaskManager {
     pub fn new() -> Self {
-        let (task_result_sender, task_result_receiver) = mpsc::unbounded_channel();
-        Self {
-            running_tasks: HashMap::new(),
-            completed_results: Vec::new(),
-            task_result_receiver,
-            task_result_sender,
-        }
+        Self::default()
     }
 
-    /// Submit an operation for asynchronous execution.
-    #[allow(clippy::result_large_err)]
-    pub fn submit_operation(&mut self, message: OperationMessage) -> Result<(), Error> {
-        if self
-            .running_tasks
-            .contains_key(&message.descriptor.operation_id)
+    /// Spawn an operation as a task and return its seed [`Task`] state for a
+    /// `CreateTaskResult`. The task is durably observable via
+    /// [`Self::get_task`] before this method returns.
+    ///
+    /// `make_future` receives a [`TaskContext`] for mid-task input requests,
+    /// status messages, and cooperative cancellation checks.
+    pub fn spawn<F>(&self, options: TaskOptions, make_future: F) -> Task
+    where
+        F: FnOnce(TaskContext) -> TaskFuture,
+    {
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let now = current_timestamp();
+        let mut task = Task::new(task_id.clone(), TaskStatus::Working, now.clone(), now);
+        task.ttl_ms = options.ttl_ms;
+        task.poll_interval_ms = options.poll_interval_ms;
+        task.status_message = options.status_message;
+
+        let entry = TaskEntry {
+            task: task.clone(),
+            terminal: None,
+            pending_inputs: HashMap::new(),
+            used_input_keys: std::collections::HashSet::new(),
+            cancel_requested: false,
+            created: Instant::now(),
+            join_handle: None,
+        };
+        self.inner
+            .lock()
+            .expect("task manager lock poisoned")
+            .tasks
+            .insert(task_id.clone(), entry);
+
+        let context = TaskContext {
+            task_id: task_id.clone(),
+            inner: self.inner.clone(),
+        };
+        let future = make_future(context);
+        let inner = self.inner.clone();
+        let id_for_task = task_id.clone();
+        let handle = tokio::spawn(async move {
+            let result = future.await;
+            let mut inner = inner.lock().expect("task manager lock poisoned");
+            if let Some(entry) = inner.tasks.get_mut(&id_for_task) {
+                if entry.terminal.is_none() {
+                    entry.terminal = Some(match result {
+                        Ok(result) => TaskPayload::Completed {
+                            result: result_to_object(&result),
+                        },
+                        Err(error) => {
+                            if entry.cancel_requested {
+                                TaskPayload::Cancelled
+                            } else {
+                                TaskPayload::Failed {
+                                    error: error_to_object(&error),
+                                }
+                            }
+                        }
+                    });
+                    entry.pending_inputs.clear();
+                    entry.touch();
+                    entry.task.status = entry.current_status();
+                }
+            }
+        });
+        if let Some(entry) = self
+            .inner
+            .lock()
+            .expect("task manager lock poisoned")
+            .tasks
+            .get_mut(&task_id)
         {
-            return Err(Error::TaskError(format!(
-                "Operation with id {} is already running",
-                message.descriptor.operation_id
-            )));
+            entry.join_handle = Some(handle);
         }
-        self.spawn_async_task(message);
+        task
+    }
+
+    /// Handle `tasks/get`: return the current [`DetailedTask`] state.
+    pub fn get_task(&self, task_id: &str) -> Result<DetailedTask, McpError> {
+        let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        Self::expire_overdue(&mut inner);
+        let entry = inner
+            .tasks
+            .get_mut(task_id)
+            .ok_or_else(|| unknown_task(task_id))?;
+        entry.task.status = entry.current_status();
+        Ok(entry.detailed())
+    }
+
+    /// Handle `tasks/update`: deliver `inputResponses` to the running
+    /// operation. Unknown, already-answered, or superseded keys are ignored
+    /// per spec; a partial set of responses is accepted.
+    pub fn update_task(
+        &self,
+        task_id: &str,
+        input_responses: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Result<(), McpError> {
+        let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        let entry = inner
+            .tasks
+            .get_mut(task_id)
+            .ok_or_else(|| unknown_task(task_id))?;
+        for (key, value) in input_responses {
+            if let Some((_, tx)) = entry.pending_inputs.remove(&key) {
+                // Receiver dropped means the operation moved on; ignore.
+                let _ = tx.send(value);
+            }
+        }
+        entry.touch();
+        entry.task.status = entry.current_status();
         Ok(())
     }
 
-    fn spawn_async_task(&mut self, message: OperationMessage) {
-        let OperationMessage { descriptor, future } = message;
-        let task_id = descriptor.operation_id.clone();
-        let timeout_ms = descriptor.ttl.or(Some(DEFAULT_TASK_TIMEOUT_MS));
-        let sender = self.task_result_sender.clone();
-        let descriptor_for_result = descriptor.clone();
-
-        let timed_future = async move {
-            if let Some(ms) = timeout_ms {
-                match timeout(Duration::from_millis(ms), future).await {
-                    Ok(result) => result,
-                    Err(_) => Err(Error::TaskError("Operation timed out".to_string())),
-                }
-            } else {
-                future.await
+    /// Handle `tasks/cancel`: cooperative cancellation. Acknowledges
+    /// immediately; the operation is aborted and the task transitions to
+    /// `cancelled` unless it already reached a terminal state.
+    pub fn cancel_task(&self, task_id: &str) -> Result<(), McpError> {
+        let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        let entry = inner
+            .tasks
+            .get_mut(task_id)
+            .ok_or_else(|| unknown_task(task_id))?;
+        entry.cancel_requested = true;
+        if entry.terminal.is_none() {
+            if let Some(handle) = entry.join_handle.take() {
+                handle.abort();
             }
-        };
+            entry.terminal = Some(TaskPayload::Cancelled);
+            entry.pending_inputs.clear();
+            entry.touch();
+            entry.task.status = TaskStatus::Cancelled;
+        }
+        Ok(())
+    }
 
-        let handle = tokio::spawn(async move {
-            let result = timed_future.await;
-            let task_result = TaskResult {
-                descriptor: descriptor_for_result,
-                result,
-            };
-            let _ = sender.send(task_result);
+    /// Number of tasks currently in a non-terminal state.
+    pub fn running_task_count(&self) -> usize {
+        let inner = self.inner.lock().expect("task manager lock poisoned");
+        inner
+            .tasks
+            .values()
+            .filter(|e| e.terminal.is_none())
+            .count()
+    }
+
+    /// Abort all running tasks and clear all task state.
+    pub fn shutdown(&self) {
+        let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        for (_, mut entry) in inner.tasks.drain() {
+            if let Some(handle) = entry.join_handle.take() {
+                handle.abort();
+            }
+        }
+    }
+
+    /// Mark tasks whose TTL has elapsed as `failed` (spec: servers MAY fail
+    /// tasks any time after TTL expiry).
+    fn expire_overdue(inner: &mut TaskManagerInner) {
+        for entry in inner.tasks.values_mut() {
+            if entry.terminal.is_none()
+                && let Some(ttl_ms) = entry.task.ttl_ms
+                && entry.created.elapsed().as_millis() > u128::from(ttl_ms)
+            {
+                if let Some(handle) = entry.join_handle.take() {
+                    handle.abort();
+                }
+                entry.terminal = Some(TaskPayload::Failed {
+                    error: error_to_object(&McpError::internal_error(
+                        "task expired: TTL elapsed before completion".to_string(),
+                        None,
+                    )),
+                });
+                entry.pending_inputs.clear();
+                entry.touch();
+                entry.task.status = TaskStatus::Failed;
+            }
+        }
+    }
+}
+
+fn unknown_task(task_id: &str) -> McpError {
+    McpError::invalid_params(format!("unknown task: {task_id}"), None)
+}
+
+fn result_to_object(result: &CallToolResult) -> JsonObject {
+    match serde_json::to_value(result) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => JsonObject::new(),
+    }
+}
+
+fn error_to_object(error: &McpError) -> JsonObject {
+    match serde_json::to_value(error) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => JsonObject::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ContentBlock;
+
+    fn ok_result(text: &str) -> CallToolResult {
+        CallToolResult::success(vec![ContentBlock::text(text.to_string())])
+    }
+
+    #[tokio::test]
+    async fn task_completes_and_result_is_inlined() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(ok_result("42")) })
         });
-        let running_task = RunningTask {
-            task_handle: handle,
-            started_at: std::time::Instant::now(),
-            timeout: timeout_ms,
-            descriptor,
-        };
-        self.running_tasks.insert(task_id, running_task);
-    }
+        assert_eq!(task.status, TaskStatus::Working);
 
-    /// Collect completed results from running tasks and remove them from the running tasks map.
-    fn collect_completed_results(&mut self) {
-        while let Ok(result) = self.task_result_receiver.try_recv() {
-            self.running_tasks.remove(&result.descriptor.operation_id);
-            self.completed_results.push(result);
-        }
-    }
+        // Durable immediately.
+        manager.get_task(&task.task_id).unwrap();
 
-    /// Check for tasks that have exceeded their timeout and handle them appropriately.
-    pub fn check_timeouts(&mut self) {
-        self.collect_completed_results();
-        let now = std::time::Instant::now();
-        let mut timed_out_tasks = Vec::new();
-
-        for (task_id, task) in &self.running_tasks {
-            if let Some(timeout_duration) = task.timeout {
-                if now.duration_since(task.started_at).as_millis() > u128::from(timeout_duration) {
-                    task.task_handle.abort();
-                    timed_out_tasks.push(task_id.clone());
+        // Wait for completion.
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let detailed = manager.get_task(&task.task_id).unwrap();
+            if detailed.status() == TaskStatus::Completed {
+                match detailed.payload {
+                    TaskPayload::Completed { result } => {
+                        assert!(result.contains_key("content"));
+                        return;
+                    }
+                    other => panic!("unexpected payload: {other:?}"),
                 }
             }
         }
+        panic!("task did not complete");
+    }
 
-        for task_id in timed_out_tasks {
-            if let Some(task) = self.running_tasks.remove(&task_id) {
-                let timeout_result = TaskResult {
-                    descriptor: task.descriptor,
-                    result: Err(Error::TaskError("Operation timed out".to_string())),
-                };
-                self.completed_results.push(timeout_result);
+    #[tokio::test]
+    async fn cancel_marks_task_cancelled() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(TaskOptions::default(), |_ctx| {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(ok_result("never"))
+            })
+        });
+        manager.cancel_task(&task.task_id).unwrap();
+        let detailed = manager.get_task(&task.task_id).unwrap();
+        assert_eq!(detailed.status(), TaskStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn unknown_task_is_an_error() {
+        let manager = TaskManager::new();
+        assert!(manager.get_task("nope").is_err());
+        assert!(manager.cancel_task("nope").is_err());
+        assert!(manager.update_task("nope", []).is_err());
+    }
+
+    #[tokio::test]
+    async fn ttl_expiry_fails_task() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(
+            TaskOptions {
+                ttl_ms: Some(10),
+                ..Default::default()
+            },
+            |_ctx| {
+                Box::pin(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    Ok(ok_result("never"))
+                })
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let detailed = manager.get_task(&task.task_id).unwrap();
+        assert_eq!(detailed.status(), TaskStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn input_required_roundtrip() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(TaskOptions::default(), |ctx| {
+            Box::pin(async move {
+                let request: InputRequest = serde_json::from_value(serde_json::json!({
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "What is your name?",
+                        "requestedSchema": {"type": "object", "properties": {}}
+                    }
+                }))
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                let response = ctx.request_input("name-1", request).await?;
+                let name = response
+                    .get("content")
+                    .and_then(|c| c.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                Ok(ok_result(&format!("hello {name}")))
+            })
+        });
+
+        // Wait for the task to surface the input request.
+        let mut saw_input_required = false;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let detailed = manager.get_task(&task.task_id).unwrap();
+            if let TaskPayload::InputRequired { input_requests } = &detailed.payload {
+                assert!(input_requests.contains_key("name-1"));
+                saw_input_required = true;
+                break;
             }
         }
-    }
+        assert!(saw_input_required, "task never reached input_required");
 
-    /// Get the number of running tasks.
-    pub fn running_task_count(&mut self) -> usize {
-        self.collect_completed_results();
-        self.running_tasks.len()
-    }
+        // Respond via tasks/update.
+        manager
+            .update_task(
+                &task.task_id,
+                [(
+                    "name-1".to_string(),
+                    serde_json::json!({"action": "accept", "content": {"name": "Ada"}}),
+                )],
+            )
+            .unwrap();
 
-    /// Cancel all running tasks.
-    pub fn cancel_all_tasks(&mut self) {
-        for (_, task) in self.running_tasks.drain() {
-            task.task_handle.abort();
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let detailed = manager.get_task(&task.task_id).unwrap();
+            if detailed.status() == TaskStatus::Completed {
+                return;
+            }
         }
-        while self.task_result_receiver.try_recv().is_ok() {}
-        self.completed_results.clear();
-    }
-
-    /// List running task ids.
-    pub fn list_running(&mut self) -> Vec<String> {
-        self.collect_completed_results();
-        self.running_tasks.keys().cloned().collect()
-    }
-
-    /// Returns a snapshot of completed task results.
-    pub fn peek_completed(&mut self) -> &[TaskResult] {
-        self.collect_completed_results();
-        &self.completed_results
-    }
-
-    /// Fetch the metadata for a running or recently completed task.
-    pub fn task_descriptor(&self, task_id: &str) -> Option<&OperationDescriptor> {
-        if let Some(task) = self.running_tasks.get(task_id) {
-            return Some(&task.descriptor);
-        }
-        self.completed_results
-            .iter()
-            .rev()
-            .find(|result| result.descriptor.operation_id == task_id)
-            .map(|result| &result.descriptor)
-    }
-
-    /// Attempt to cancel a running task.
-    pub fn cancel_task(&mut self, task_id: &str) -> bool {
-        self.collect_completed_results();
-        if let Some(task) = self.running_tasks.remove(task_id) {
-            task.task_handle.abort();
-            // Insert a cancelled result so callers can observe the terminal state.
-            let cancel_result = TaskResult {
-                descriptor: task.descriptor,
-                result: Err(Error::TaskError("Operation cancelled".to_string())),
-            };
-            self.completed_results.push(cancel_result);
-            return true;
-        }
-        false
-    }
-
-    /// Retrieve a completed task result if available.
-    pub fn take_completed_result(&mut self, task_id: &str) -> Option<TaskResult> {
-        self.collect_completed_results();
-        if let Some(position) = self
-            .completed_results
-            .iter()
-            .position(|result| result.descriptor.operation_id == task_id)
-        {
-            Some(self.completed_results.remove(position))
-        } else {
-            None
-        }
+        panic!("task did not complete after input response");
     }
 }

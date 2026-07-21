@@ -971,21 +971,34 @@ and [client](examples/clients/src/subscriptions_streamhttp.rs) examples.
 
 ## Tasks (long-running tool invocations)
 
-`rmcp` supports the [task-based tool invocation](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)
-flow defined in SEP-1319. Annotate a tool with `execution(task_support = "required" | "optional")`
-and add `#[task_handler]` to your `ServerHandler` impl — `enqueue_task`, `tasks/list`, `tasks/get`,
-`tasks/result`, and `tasks/cancel` are generated for you on top of an `OperationProcessor`.
+`rmcp` implements the [MCP Tasks extension](https://modelcontextprotocol.io/extensions/tasks/overview)
+(SEP-2663, `io.modelcontextprotocol/tasks`). A client declares the extension in its
+capabilities; the server then decides per request whether to materialize a `tools/call`
+as a task, returning a `CreateTaskResult` (`resultType: "task"`). The client polls
+`tasks/get`, answers in-task input requests via `tasks/update`, and may request
+cooperative cancellation via `tasks/cancel`. Use `rmcp::task_manager::TaskManager`
+to manage task lifecycles server-side.
 
 ```rust, ignore
-#[tool(
-    description = "Sum two numbers after a 2-second delay",
-    execution(task_support = "required")
-)]
-async fn slow_sum(/* ... */) -> Result<CallToolResult, McpError> { /* ... */ }
+// Client: declare the tasks extension capability.
+let caps = ClientCapabilities::builder().enable_tasks().build();
 
-#[tool_handler]
-#[task_handler]
-impl ServerHandler for TaskDemo {}
+// Server: decide per request whether to materialize a task.
+async fn call_tool(&self, request: CallToolRequestParams, context: RequestContext<RoleServer>)
+    -> Result<CallToolResponse, McpError>
+{
+    let client_supports_tasks = context
+        .meta
+        .client_capabilities()
+        .is_some_and(|caps| caps.supports_tasks());
+    if client_supports_tasks {
+        let task = self.tasks.spawn(TaskOptions::default(), move |_ctx| {
+            Box::pin(async move { /* long-running work -> Ok(CallToolResult) */ })
+        });
+        return Ok(CallToolResponse::Task(CreateTaskResult::new(task)));
+    }
+    // ... fall back to synchronous execution
+}
 ```
 
 See [`servers_task_stdio`](examples/servers/src/task_stdio.rs) and the matching

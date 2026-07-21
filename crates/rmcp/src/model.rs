@@ -783,6 +783,8 @@ pub struct ResultType(Cow<'static, str>);
 impl ResultType {
     pub const COMPLETE: Self = Self(Cow::Borrowed("complete"));
     pub const INPUT_REQUIRED: Self = Self(Cow::Borrowed("input_required"));
+    /// SEP-2663 Tasks extension: the result is a task handle ([`CreateTaskResult`]).
+    pub const TASK: Self = Self(Cow::Borrowed("task"));
 
     pub fn as_str(&self) -> &str {
         &self.0
@@ -796,6 +798,11 @@ impl ResultType {
     /// Returns `true` if this is `"complete"`.
     pub fn is_complete(&self) -> bool {
         self.0 == "complete"
+    }
+
+    /// Returns `true` if this is `"task"` (SEP-2663 Tasks extension).
+    pub fn is_task(&self) -> bool {
+        self.0 == "task"
     }
 }
 
@@ -2740,9 +2747,6 @@ pub struct CreateMessageRequestParams {
     /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<RequestMetaObject>,
-    /// Task metadata for async task management (SEP-1319)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<TaskMetadata>,
     /// The conversation history and current messages
     pub messages: Vec<SamplingMessage>,
     /// Preferences for model selection and behavior
@@ -2782,21 +2786,11 @@ impl RequestParamsMeta for CreateMessageRequestParams {
     }
 }
 
-impl TaskAugmentedRequestParamsMeta for CreateMessageRequestParams {
-    fn task(&self) -> Option<&TaskMetadata> {
-        self.task.as_ref()
-    }
-    fn task_mut(&mut self) -> &mut Option<TaskMetadata> {
-        &mut self.task
-    }
-}
-
 impl CreateMessageRequestParams {
     /// Create a new CreateMessageRequestParams with required fields.
     pub fn new(messages: Vec<SamplingMessage>, max_tokens: u32) -> Self {
         Self {
             meta: None,
-            task: None,
             messages,
             model_preferences: None,
             system_prompt: None,
@@ -3917,9 +3911,6 @@ const_string!(CallToolRequestMethod = "tools/call");
 ///
 /// Contains the tool name and optional arguments needed to execute
 /// the tool operation.
-///
-/// This implements `TaskAugmentedRequestParamsMeta` as tool calls can be
-/// long-running and may benefit from task-based execution.
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -3933,9 +3924,6 @@ pub struct CallToolRequestParams {
     /// Arguments to pass to the tool (must match the tool's input schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<JsonObject>,
-    /// Task metadata for async task management (SEP-1319)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task: Option<TaskMetadata>,
     /// Client responses to server-initiated input requests from a previous
     /// [`InputRequiredResult`]. Present only when retrying after an incomplete result.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3953,7 +3941,6 @@ impl CallToolRequestParams {
             meta: None,
             name: name.into(),
             arguments: None,
-            task: None,
             input_responses: None,
             request_state: None,
         }
@@ -3962,12 +3949,6 @@ impl CallToolRequestParams {
     /// Sets the arguments for this tool call.
     pub fn with_arguments(mut self, arguments: JsonObject) -> Self {
         self.arguments = Some(arguments);
-        self
-    }
-
-    /// Sets the task metadata for this tool call.
-    pub fn with_task(mut self, task: TaskMetadata) -> Self {
-        self.task = Some(task);
         self
     }
 
@@ -3990,15 +3971,6 @@ impl RequestParamsMeta for CallToolRequestParams {
     }
     fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
         &mut self.meta
-    }
-}
-
-impl TaskAugmentedRequestParamsMeta for CallToolRequestParams {
-    fn task(&self) -> Option<&TaskMetadata> {
-        self.task.as_ref()
-    }
-    fn task_mut(&mut self) -> &mut Option<TaskMetadata> {
-        &mut self.task
     }
 }
 
@@ -4103,25 +4075,20 @@ impl GetPromptResult {
 }
 
 // =============================================================================
-// TASK MANAGEMENT
+// TASK MANAGEMENT (SEP-2663 Tasks extension: `io.modelcontextprotocol/tasks`)
 // =============================================================================
 
 const_string!(GetTaskMethod = "tasks/get");
 pub type GetTaskRequest = Request<GetTaskMethod, GetTaskParams>;
-
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskMethod")]
-pub type GetTaskInfoMethod = GetTaskMethod;
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskRequest")]
-pub type GetTaskInfoRequest = GetTaskRequest;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GetTaskParams {
-    /// Protocol-level metadata for this request (SEP-1319)
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<RequestMetaObject>,
+    /// Identifier of the task to query.
     pub task_id: String,
 }
 
@@ -4143,44 +4110,37 @@ impl RequestParamsMeta for GetTaskParams {
     }
 }
 
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskParams")]
-pub type GetTaskInfoParams = GetTaskParams;
+const_string!(UpdateTaskMethod = "tasks/update");
+pub type UpdateTaskRequest = Request<UpdateTaskMethod, UpdateTaskParams>;
 
-#[deprecated(since = "0.13.0", note = "Use GetTaskParams instead")]
-pub type GetTaskInfoParam = GetTaskParams;
-
-const_string!(ListTasksMethod = "tasks/list");
-pub type ListTasksRequest = RequestOptionalParam<ListTasksMethod, PaginatedRequestParams>;
-
-const_string!(GetTaskPayloadMethod = "tasks/result");
-pub type GetTaskPayloadRequest = Request<GetTaskPayloadMethod, GetTaskPayloadParams>;
-
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadMethod")]
-pub type GetTaskResultMethod = GetTaskPayloadMethod;
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadRequest")]
-pub type GetTaskResultRequest = GetTaskPayloadRequest;
-
+/// Parameters for `tasks/update` (SEP-2663): deliver responses to outstanding
+/// in-task server-to-client requests surfaced via `tasks/get` `inputRequests`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
-pub struct GetTaskPayloadParams {
-    /// Protocol-level metadata for this request (SEP-1319)
+pub struct UpdateTaskParams {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<RequestMetaObject>,
+    /// Identifier of the task to update.
     pub task_id: String,
+    /// Responses to outstanding `inputRequests` previously surfaced by the
+    /// server. Each key MUST correspond to a currently-outstanding
+    /// `inputRequests` key.
+    pub input_responses: InputResponses,
 }
 
-impl GetTaskPayloadParams {
-    pub fn new(task_id: impl Into<String>) -> Self {
+impl UpdateTaskParams {
+    pub fn new(task_id: impl Into<String>, input_responses: InputResponses) -> Self {
         Self {
             meta: None,
             task_id: task_id.into(),
+            input_responses,
         }
     }
 }
 
-impl RequestParamsMeta for GetTaskPayloadParams {
+impl RequestParamsMeta for UpdateTaskParams {
     fn meta(&self) -> Option<&RequestMetaObject> {
         self.meta.as_ref()
     }
@@ -4188,11 +4148,6 @@ impl RequestParamsMeta for GetTaskPayloadParams {
         &mut self.meta
     }
 }
-
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadParams")]
-pub type GetTaskResultParams = GetTaskPayloadParams;
-#[deprecated(since = "2.0.0", note = "Renamed to GetTaskPayloadParams")]
-pub type GetTaskResultParam = GetTaskPayloadParams;
 
 const_string!(CancelTaskMethod = "tasks/cancel");
 pub type CancelTaskRequest = Request<CancelTaskMethod, CancelTaskParams>;
@@ -4226,31 +4181,29 @@ impl RequestParamsMeta for CancelTaskParams {
     }
 }
 
-/// Deprecated: Use [`CancelTaskParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CancelTaskParams instead")]
-pub type CancelTaskParam = CancelTaskParams;
-
 // ---------------------------------------------------------------------------
-// Task status notification (spec `notifications/tasks/status`)
+// Task status notification (SEP-2663 `notifications/tasks`)
 // ---------------------------------------------------------------------------
-const_string!(TaskStatusNotificationMethod = "notifications/tasks/status");
+const_string!(TaskStatusNotificationMethod = "notifications/tasks");
 
 /// Parameters for a task status notification (spec `TaskStatusNotificationParams`).
 ///
-/// The task fields are flattened at the top level: `NotificationParams & Task`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+/// Carries a complete [`DetailedTask`] for the current status, identical to
+/// what `tasks/get` would have returned at that moment. The task fields are
+/// flattened at the top level: `NotificationParams & Task`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
-pub struct TaskStatusNotificationParam {
+pub struct TaskStatusNotificationParams {
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<NotificationMetaObject>,
     #[serde(flatten)]
-    pub task: crate::model::Task,
+    pub task: crate::model::DetailedTask,
 }
 
-impl TaskStatusNotificationParam {
-    pub fn new(task: crate::model::Task) -> Self {
+impl TaskStatusNotificationParams {
+    pub fn new(task: crate::model::DetailedTask) -> Self {
         Self { meta: None, task }
     }
 
@@ -4260,53 +4213,28 @@ impl TaskStatusNotificationParam {
     }
 }
 
-impl From<crate::model::Task> for TaskStatusNotificationParam {
-    fn from(task: crate::model::Task) -> Self {
+impl From<crate::model::DetailedTask> for TaskStatusNotificationParams {
+    fn from(task: crate::model::DetailedTask) -> Self {
         Self::new(task)
     }
 }
 
-impl Deref for TaskStatusNotificationParam {
-    type Target = crate::model::Task;
+impl Deref for TaskStatusNotificationParams {
+    type Target = crate::model::DetailedTask;
 
     fn deref(&self) -> &Self::Target {
         &self.task
     }
 }
 
-impl DerefMut for TaskStatusNotificationParam {
+impl DerefMut for TaskStatusNotificationParams {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.task
     }
 }
 
 pub type TaskStatusNotification =
-    Notification<TaskStatusNotificationMethod, TaskStatusNotificationParam>;
-/// Deprecated: Use [`GetTaskResult`] instead (spec alignment).
-#[deprecated(since = "0.15.0", note = "Use GetTaskResult instead")]
-pub type GetTaskInfoResult = GetTaskResult;
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct ListTasksResult {
-    pub tasks: Vec<crate::model::Task>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<String>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<MetaObject>,
-}
-
-impl ListTasksResult {
-    pub fn new(tasks: Vec<crate::model::Task>) -> Self {
-        Self {
-            tasks,
-            next_cursor: None,
-            meta: None,
-        }
-    }
-}
+    Notification<TaskStatusNotificationMethod, TaskStatusNotificationParams>;
 
 // =============================================================================
 // MESSAGE TYPE UNIONS
@@ -4380,8 +4308,7 @@ ts_union!(
     | CallToolRequest
     | ListToolsRequest
     | GetTaskRequest
-    | ListTasksRequest
-    | GetTaskPayloadRequest
+    | UpdateTaskRequest
     | CancelTaskRequest
     | CustomRequest;
 );
@@ -4405,8 +4332,7 @@ impl ClientRequest {
             ClientRequest::CallToolRequest(r) => r.method.as_str(),
             ClientRequest::ListToolsRequest(r) => r.method.as_str(),
             ClientRequest::GetTaskRequest(r) => r.method.as_str(),
-            ClientRequest::ListTasksRequest(r) => r.method.as_str(),
-            ClientRequest::GetTaskPayloadRequest(r) => r.method.as_str(),
+            ClientRequest::UpdateTaskRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
@@ -4419,7 +4345,6 @@ ts_union!(
     | ProgressNotification
     | InitializedNotification
     | RootsListChangedNotification
-    | TaskStatusNotification
     | CustomNotification;
 );
 
@@ -4477,12 +4402,9 @@ ts_union!(
     | ListToolsResult
     | ElicitResult
     | CreateTaskResult
-    | ListTasksResult
     | GetTaskResult
-    | CancelTaskResult
     | CallToolResult
     | InputRequiredResult
-    | GetTaskPayloadResult
     | EmptyResult
     | CustomResult
     ;
@@ -4533,7 +4455,6 @@ mod tests {
     fn deprecated_aliases_still_resolve() {
         // 하위호환: 구 이름이 새 타입으로 여전히 resolve되는지 확인.
         let _: CreateElicitationResult = ElicitResult::new(ElicitationAction::Accept);
-        let _: GetTaskResultParams = GetTaskPayloadParams::new("task-1");
         let _: ResourceReference = ResourceTemplateReference::new("res://x");
     }
 

@@ -1,27 +1,26 @@
-//! Minimal example of a tool that supports task-based invocation (SEP-1319).
+//! Minimal example of a server that supports the MCP Tasks extension
+//! (SEP-2663, `io.modelcontextprotocol/tasks`).
 //!
-//! - `slow_sum` is marked `task_support = "required"`, so the client MUST invoke
-//!   it as a task. The server enqueues the call into an `OperationProcessor`,
-//!   returns a task id immediately, and the client polls `tasks/get` and
-//!   fetches the payload via `tasks/result`.
-//! - `quick_echo` is a regular synchronous tool for contrast (the default,
-//!   `task_support = "forbidden"`).
+//! - `slow_sum` is executed as a task whenever the client declares the tasks
+//!   extension capability: the server returns a `CreateTaskResult`
+//!   (`resultType: "task"`) immediately and the client polls `tasks/get`.
+//!   Clients that do not declare the extension get a normal synchronous
+//!   response.
+//! - `quick_echo` is a regular synchronous tool for contrast.
 //!
 //! See `examples/clients/src/task_stdio.rs` for the matching client.
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock},
-    schemars, task_handler,
-    task_manager::OperationProcessor,
-    tool, tool_handler, tool_router,
+    model::*,
+    schemars,
+    service::{RequestContext, RoleServer},
+    task_manager::{TaskManager, TaskOptions},
+    tool, tool_router,
 };
-use tokio::sync::Mutex;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SumArgs {
@@ -34,13 +33,10 @@ pub struct EchoArgs {
     pub message: String,
 }
 
-/// Server state. The `processor` field is required by `#[task_handler]`:
-/// the macro generates `enqueue_task` / `tasks/*` handlers that submit and
-/// poll operations through it.
 #[derive(Clone)]
 pub struct TaskDemo {
     tool_router: ToolRouter<TaskDemo>,
-    processor: Arc<Mutex<OperationProcessor>>,
+    tasks: TaskManager,
 }
 
 impl Default for TaskDemo {
@@ -54,17 +50,12 @@ impl TaskDemo {
     pub fn new() -> Self {
         Self {
             tool_router: Self::tool_router(),
-            processor: Arc::new(Mutex::new(OperationProcessor::new())),
+            tasks: TaskManager::new(),
         }
     }
 
-    /// Long-running tool. The `execution(task_support = "required")` attribute
-    /// tells clients they MUST call this tool as a task; the server returns
-    /// `-32601` if they don't.
-    #[tool(
-        description = "Sum two numbers after a 2-second delay",
-        execution(task_support = "required")
-    )]
+    /// Long-running tool. Run as a task when the client supports tasks.
+    #[tool(description = "Sum two numbers after a 2-second delay")]
     async fn slow_sum(
         &self,
         Parameters(SumArgs { a, b }): Parameters<SumArgs>,
@@ -75,7 +66,7 @@ impl TaskDemo {
         )]))
     }
 
-    /// Synchronous tool with the default `task_support = "forbidden"`.
+    /// Synchronous tool.
     #[tool(description = "Echo a message back immediately")]
     async fn quick_echo(
         &self,
@@ -85,9 +76,85 @@ impl TaskDemo {
     }
 }
 
-/// `#[task_handler]` reads `self.processor` (configurable via the macro's
-/// `processor = ...` argument) and synthesizes `enqueue_task`, `list_tasks`,
-/// `get_task_info`, `get_task_result`, and `cancel_task` for us.
-#[tool_handler]
-#[task_handler]
-impl ServerHandler for TaskDemo {}
+impl ServerHandler for TaskDemo {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        // SEP-2663: the server decides per-request whether to materialize a
+        // task, but MUST NOT return one unless the request declared the tasks
+        // extension capability.
+        let client_supports_tasks = context
+            .meta
+            .client_capabilities()
+            .is_some_and(|caps| caps.supports_tasks());
+
+        if request.name == "slow_sum" && client_supports_tasks {
+            let params: SumArgs = serde_json::from_value(serde_json::Value::Object(
+                request.arguments.clone().unwrap_or_default(),
+            ))
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+            let task = self.tasks.spawn(TaskOptions::default(), move |_ctx| {
+                Box::pin(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    Ok(CallToolResult::success(vec![ContentBlock::text(
+                        (params.a + params.b).to_string(),
+                    )]))
+                })
+            });
+            return Ok(CallToolResponse::Task(CreateTaskResult::new(task)));
+        }
+
+        // Fall back to synchronous execution via the tool router.
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, McpError> {
+        Ok(GetTaskResult::new(self.tasks.get_task(&request.task_id)?))
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        self.tasks
+            .update_task(&request.task_id, request.input_responses)
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        self.tasks.cancel_task(&request.task_id)
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
+        .with_instructions(
+            "Task demo server (SEP-2663). `slow_sum` runs as a task for \
+             clients that declare the tasks extension."
+                .to_string(),
+        )
+    }
+}

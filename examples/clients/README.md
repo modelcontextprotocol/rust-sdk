@@ -69,12 +69,13 @@ A client demonstrating how to use the sampling tool.
 
 ### Task Standard I/O Client (`task_stdio.rs`)
 
-A client that exercises the task lifecycle against `servers_task_stdio`
-(per [SEP-1319](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks)).
+A client that exercises the SEP-2663 Tasks extension lifecycle against `servers_task_stdio`
+([SEP-2663](https://modelcontextprotocol.io/extensions/tasks/overview), `io.modelcontextprotocol/tasks`).
 
 - Spawns `servers_task_stdio` as a child process over stdio
+- Declares the tasks extension in its client capabilities
 - Calls `quick_echo` synchronously
-- Calls `slow_sum` as a task via `CallToolRequestParams::with_task(...)`, polls `tasks/get` until completion, then fetches the result via `tasks/result`
+- Calls `slow_sum`, receives a `CreateTaskResult` (`resultType: "task"`), polls `tasks/get` honoring `pollIntervalMs`, and reads the final `CallToolResult` inlined in the completed task
 
 ### Progress Test Client (`progress_client.rs`)
 

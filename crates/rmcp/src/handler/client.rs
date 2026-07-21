@@ -251,7 +251,7 @@ pub trait ClientHandler: Sized + Send + Sync + 'static {
 
     fn on_task_status(
         &self,
-        params: TaskStatusNotificationParam,
+        params: TaskStatusNotificationParams,
         context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
         std::future::ready(())
@@ -386,7 +386,7 @@ macro_rules! impl_client_handler_for_wrapper {
 
             fn on_task_status(
                 &self,
-                params: TaskStatusNotificationParam,
+                params: TaskStatusNotificationParams,
                 context: NotificationContext<RoleClient>,
             ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_task_status(params, context)
