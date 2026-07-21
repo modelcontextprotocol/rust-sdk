@@ -1,7 +1,11 @@
 # Known failures for the pinned 2026-07-28 draft conformance suite
 # (@modelcontextprotocol/conformance DRAFT_CONFORMANCE_VERSION).
 #
-# The full suites run in CI with `--expected-failures` pointing at this file:
+# The full versioned-spec suites run in CI with `--expected-failures` pointing
+# at this file. Extension scenarios are filtered out by `--spec-version` and
+# tracked separately in `expected-failures-extensions.yaml`.
+#
+# Within the versioned-spec suites:
 # - a scenario failing that is NOT listed here fails the build
 # - a scenario listed here that starts passing also fails the build (stale entry),
 #   so remove it from this list when the underlying issue is fixed.

@@ -85,7 +85,7 @@ jobs:
           echo "draft conformance server did not become ready" >&2
           exit 1
 
-      - name: Run 2026-07-28 server suite
+      - name: Run 2026-07-28 versioned-spec server suite
         run: |
           npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
             --url http://127.0.0.1:8002/mcp \
@@ -93,6 +93,32 @@ jobs:
             --spec-version 2026-07-28 \
             --expected-failures conformance/expected-failures-2026-07-28.yaml \
             -o conformance-results
+
+      # Extension scenarios are excluded by the --spec-version filter and
+      # are informational for tiering. Run them explicitly so their gaps remain
+      # visible and newly passing scenarios make the strict baseline fail stale.
+      - name: Run Tasks extension server suite (informational)
+        run: |
+          scenarios=(
+            tasks-lifecycle
+            tasks-capability-negotiation
+            tasks-wire-fields
+            tasks-request-state-removal
+            tasks-mrtr-input
+            tasks-request-headers
+            tasks-dispatch-and-envelope
+            tasks-status-notifications
+            tasks-required-task-error
+            tasks-mrtr-composition
+          )
+
+          for scenario in "${scenarios[@]}"; do
+            npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
+              --url http://127.0.0.1:8002/mcp \
+              --scenario "$scenario" \
+              --expected-failures conformance/expected-failures-extensions.yaml \
+              -o conformance-extension-results
+          done
 
       - name: Stop conformance servers
         if: always()
@@ -105,7 +131,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: conformance-server-results
-          path: conformance-results
+          path: |
+            conformance-results
+            conformance-extension-results
 
   client:
     runs-on: ubuntu-latest
@@ -131,7 +159,7 @@ jobs:
             --spec-version 2025-11-25 \
             -o conformance-client-results/full
 
-      - name: Run 2026-07-28 client suite
+      - name: Run 2026-07-28 versioned-spec client suite
         run: |
           npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
             --command "$(pwd)/target/debug/conformance-client" \
@@ -139,6 +167,14 @@ jobs:
             --spec-version 2026-07-28 \
             --expected-failures conformance/expected-failures-2026-07-28.yaml \
             -o conformance-client-results/draft
+
+      - name: Run extension client suite (informational)
+        run: |
+          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
+            --command "$(pwd)/target/debug/conformance-client" \
+            --suite extensions \
+            --expected-failures conformance/expected-failures-extensions.yaml \
+            -o conformance-client-results/extensions
 
       - name: Upload results
         if: always()

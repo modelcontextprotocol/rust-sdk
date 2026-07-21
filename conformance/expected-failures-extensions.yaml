@@ -1,0 +1,32 @@
+# Known failures for informational extension scenarios in
+# @modelcontextprotocol/conformance DRAFT_CONFORMANCE_VERSION.
+#
+# Extensions are not selected by a `--spec-version` run and do not count toward
+# SDK tiering. CI runs them separately so a green versioned-spec suite does not
+# hide extension gaps.
+#
+# This is a strict baseline:
+# - an unlisted failure fails the build
+# - a listed scenario that starts passing fails the build as a stale entry
+#
+# When bumping DRAFT_CONFORMANCE_VERSION, review the available extension and
+# pending scenarios and update this file deliberately.
+
+server:
+  # SEP-2663 Tasks Extension, tracked in #868.
+  # `tasks-status-notifications` is intentionally absent: the upstream check is
+  # currently skipped, and CI should fail if it becomes active but does not pass.
+  - tasks-lifecycle
+  - tasks-capability-negotiation
+  - tasks-wire-fields
+  - tasks-request-state-removal
+  - tasks-mrtr-input
+  - tasks-request-headers
+  - tasks-dispatch-and-envelope
+  - tasks-required-task-error
+  - tasks-mrtr-composition
+
+client:
+  # Informational OAuth extension scenarios.
+  - auth/client-credentials-jwt
+  - auth/enterprise-managed-authorization

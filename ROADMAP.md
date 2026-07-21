@@ -3,7 +3,10 @@
 This roadmap tracks the path to SEP-1730 Tier 1 for the Rust MCP SDK.
 
 Spec 2025-11-25 (suite 0.1.16): Server 100% (30/30) · Client 100% (18/18)
-Spec 2026-07-28 (suite 0.2.0-alpha.9): Server 92.5% (37/40) · Client 75.0% (24/32)
+Spec 2026-07-28 (suite 0.2.0-alpha.9): Server 97.5% (39/40) · Client 90.6% (29/32)
+
+Extension scenarios are reported separately below because they are
+informational and do not count toward SDK tiering.
 
 ---
 
@@ -14,11 +17,20 @@ All 2026-07-28 work carries the `2026-07-28` label and the
 Per-scenario conformance status is tracked in the epic issue:
 [#977 — Tracking: 2026-07-28 spec conformance](https://github.com/modelcontextprotocol/rust-sdk/issues/977).
 
-### Conformance (baseline 2026-07-13, suite `0.2.0-alpha.9`)
+### Versioned-spec conformance (baseline 2026-07-21, suite `0.2.0-alpha.9`)
 
-- Server: 3 scenarios (`tools-call-with-progress` stateless behavior, SEP-2243 server-side custom headers, and `server-stateless` — the SEP-2575 discovery/negotiation suite at 2/28 checks)
-- Client: 8 scenarios (SEP-2243 headers ×3, `request-metadata`, and 4 single-check auth failures: SEP-2350 step-up, pre-registration, SEP-2352 AS migration, SEP-2468 issuer validation); fixes for SEP-2350 (#888) and SEP-2352 (#965) are already in review
-- CI: run the full `--spec-version 2026-07-28` suites (stateless server) instead of hand-picked scenario lists; re-baseline on each draft-suite bump
+- Server: 1 expected failure: `json-schema-2020-12`
+- Client: 3 expected failures: `tools_call`, `auth/scope-step-up`, and `auth/authorization-server-migration`
+- CI: runs the complete `2026-07-28` versioned-spec suites with a strict baseline; an unlisted failure or a listed scenario that starts passing fails the build
+
+### Extension conformance (informational)
+
+Extension-tagged scenarios are excluded by `--spec-version` filters, so CI
+runs them in separate server and client steps with
+`conformance/expected-failures-extensions.yaml`.
+
+- SEP-2663 Tasks server: 9 expected failures; `tasks-status-notifications` is currently skipped by the upstream harness; tracked in #868
+- Client extensions: `auth/client-credentials-basic` passes; `auth/client-credentials-jwt` and `auth/enterprise-managed-authorization` are expected failures
 
 ### Spec features without conformance scenarios
 
@@ -100,5 +112,5 @@ These extension scenarios are tracked but do not count toward tier advancement:
 |---|---|---|
 | `auth/client-credentials-jwt` | extension | ❌ Failed — JWT `aud` claim verification error |
 | `auth/client-credentials-basic` | extension | ✅ Passed |
-| `auth/cross-app-access-complete-flow` | extension | ❌ Failed — sends `authorization_code` grant instead of `jwt-bearer` |
-| `tasks-*` | extension | Not yet attempted |
+| `auth/enterprise-managed-authorization` | extension | ❌ Failed — scenario is not implemented by the conformance client |
+| `tasks-*` | extension | ❌ 9 expected failures · ⏭️ 1 upstream-skipped scenario |
