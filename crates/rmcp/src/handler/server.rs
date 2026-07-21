@@ -19,6 +19,34 @@ pub mod tool;
 pub mod tool_name_validation;
 pub mod wrapper;
 
+/// SEP-2663: gate `tasks/*` methods on the client's declared tasks-extension
+/// capability.
+///
+/// - If the server does not advertise the tasks extension, the methods are
+///   simply unimplemented: `-32601` Method not found.
+/// - If the server advertises it but the client did not declare it (either in
+///   the request's `_meta` per-request capabilities or, for session-mode
+///   peers, at `initialize` time), the spec requires `-32021` Missing
+///   Required Client Capability with the required capability in `data`.
+fn validate_tasks_capability<M: ConstString, H: ServerHandler>(
+    handler: &H,
+    context: &RequestContext<RoleServer>,
+) -> Result<(), McpError> {
+    if !handler.get_info().capabilities.supports_tasks() {
+        return Err(McpError::method_not_found::<M>());
+    }
+    let client_declared = context
+        .client_capabilities()
+        .is_some_and(|caps| caps.supports_tasks());
+    if client_declared {
+        Ok(())
+    } else {
+        Err(McpError::missing_required_client_capability(
+            ClientCapabilities::builder().enable_tasks().build(),
+        ))
+    }
+}
+
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,
@@ -181,18 +209,24 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .on_custom_request(request, context)
                 .await
                 .map(ServerResult::CustomResult),
-            ClientRequest::GetTaskRequest(request) => self
-                .get_task(request.params, context)
-                .await
-                .map(ServerResult::GetTaskResult),
-            ClientRequest::UpdateTaskRequest(request) => self
-                .update_task(request.params, context)
-                .await
-                .map(ServerResult::empty),
-            ClientRequest::CancelTaskRequest(request) => self
-                .cancel_task(request.params, context)
-                .await
-                .map(ServerResult::empty),
+            ClientRequest::GetTaskRequest(request) => {
+                validate_tasks_capability::<GetTaskMethod, _>(self, &context)?;
+                self.get_task(request.params, context)
+                    .await
+                    .map(ServerResult::GetTaskResult)
+            }
+            ClientRequest::UpdateTaskRequest(request) => {
+                validate_tasks_capability::<UpdateTaskMethod, _>(self, &context)?;
+                self.update_task(request.params, context)
+                    .await
+                    .map(ServerResult::empty)
+            }
+            ClientRequest::CancelTaskRequest(request) => {
+                validate_tasks_capability::<CancelTaskMethod, _>(self, &context)?;
+                self.cancel_task(request.params, context)
+                    .await
+                    .map(ServerResult::empty)
+            }
         };
         let result = result.and_then(|result| {
             if matches!(result, ServerResult::InputRequiredResult(_)) && !mrtr_supported {

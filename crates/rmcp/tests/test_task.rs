@@ -246,6 +246,106 @@ async fn no_task_without_extension_capability() {
     server.abort();
 }
 
+#[tokio::test]
+async fn tasks_methods_without_capability_return_missing_capability_error() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let service = TaskServer::new().serve(server_transport).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    // Plain client: no tasks extension declared. tasks/* must be rejected
+    // with -32021 Missing Required Client Capability (SEP-2663), not -32601.
+    let client = ().serve(client_transport).await.unwrap();
+    let err = client
+        .peer()
+        .get_task(GetTaskParams::new("whatever"))
+        .await
+        .unwrap_err();
+    match err {
+        rmcp::ServiceError::McpError(e) => {
+            assert_eq!(e.code, ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY);
+            let data = e.data.expect("error data should be present");
+            assert!(
+                data["requiredCapabilities"]["extensions"]
+                    .as_object()
+                    .is_some_and(|ext| ext.contains_key("io.modelcontextprotocol/tasks")),
+                "error data should name the tasks extension: {data}"
+            );
+        }
+        other => panic!("expected McpError, got {other:?}"),
+    }
+
+    let err = client
+        .peer()
+        .cancel_task(CancelTaskParams::new("whatever"))
+        .await
+        .unwrap_err();
+    match err {
+        rmcp::ServiceError::McpError(e) => {
+            assert_eq!(e.code, ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY);
+        }
+        other => panic!("expected McpError, got {other:?}"),
+    }
+
+    client.cancel().await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn unknown_task_id_returns_invalid_params() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let service = TaskServer::new().serve(server_transport).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = tasks_client_info().serve(client_transport).await.unwrap();
+    let err = client
+        .peer()
+        .get_task(GetTaskParams::new("no-such-task"))
+        .await
+        .unwrap_err();
+    match err {
+        rmcp::ServiceError::McpError(e) => {
+            // SEP-2663: unknown taskId is -32602 Invalid params.
+            assert_eq!(e.code, ErrorCode::INVALID_PARAMS);
+        }
+        other => panic!("expected McpError, got {other:?}"),
+    }
+
+    client.cancel().await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn legacy_task_param_is_ignored() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let service = TaskServer::new().serve(server_transport).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    // Plain client sending a legacy 2025-11-25 `task: {...}` param: it must
+    // be silently ignored and the call answered synchronously (SEP-2663).
+    let client = ().serve(client_transport).await.unwrap();
+    let params: CallToolRequestParams = serde_json::from_value(json!({
+        "name": "sum",
+        "arguments": {"a": 2, "b": 3},
+        "task": {"ttl": 60000}
+    }))
+    .expect("legacy task param must not break deserialization");
+    let result = client.call_tool(params).await.unwrap();
+    let text = result.content[0].as_text().unwrap();
+    assert_eq!(text.text, "5");
+
+    client.cancel().await.unwrap();
+    server.abort();
+}
+
 #[test]
 fn task_status_notification_params_preserve_meta() {
     let raw = json!({
