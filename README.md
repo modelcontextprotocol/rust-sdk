@@ -988,7 +988,6 @@ async fn call_tool(&self, request: CallToolRequestParams, context: RequestContex
     -> Result<CallToolResponse, McpError>
 {
     let client_supports_tasks = context
-        .meta
         .client_capabilities()
         .is_some_and(|caps| caps.supports_tasks());
     if client_supports_tasks {

@@ -86,7 +86,6 @@ impl ServerHandler for TaskDemo {
         // task, but MUST NOT return one unless the request declared the tasks
         // extension capability.
         let client_supports_tasks = context
-            .meta
             .client_capabilities()
             .is_some_and(|caps| caps.supports_tasks());
 

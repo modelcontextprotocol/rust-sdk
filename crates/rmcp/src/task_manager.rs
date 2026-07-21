@@ -338,6 +338,9 @@ impl TaskManager {
                     entry.touch();
                     entry.task.status = entry.current_status();
                 }
+                // The operation has finished; drop the JoinHandle so it is
+                // not retained for the rest of the retention window.
+                entry.join_handle = None;
             }
         });
         if let Some(entry) = self
@@ -347,7 +350,12 @@ impl TaskManager {
             .tasks
             .get_mut(&task_id)
         {
-            entry.join_handle = Some(handle);
+            // Only store the handle while the operation is still running: if
+            // it already settled, the completion path above ran first and a
+            // stored handle would never be cleared.
+            if entry.terminal.is_none() {
+                entry.join_handle = Some(handle);
+            }
         }
         task
     }

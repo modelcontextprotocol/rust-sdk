@@ -51,15 +51,8 @@ impl ServerHandler for TaskServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let client_supports_tasks = context
-            .meta
             .client_capabilities()
-            .map(|caps| caps.supports_tasks())
-            .unwrap_or_else(|| {
-                context
-                    .peer
-                    .peer_info()
-                    .is_some_and(|info| info.capabilities.supports_tasks())
-            });
+            .is_some_and(|caps| caps.supports_tasks());
 
         if request.name == "sum" && client_supports_tasks {
             let args: SumArgs = serde_json::from_value(serde_json::Value::Object(
