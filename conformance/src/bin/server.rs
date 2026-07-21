@@ -556,6 +556,7 @@ impl ServerHandler for ConformanceServer {
                     "type": "object",
                     "$defs": {
                         "address": {
+                            "$anchor": "address",
                             "type": "object",
                             "properties": {
                                 "street": { "type": "string" },
@@ -567,6 +568,19 @@ impl ServerHandler for ConformanceServer {
                         "name": { "type": "string" },
                         "address": { "$ref": "#/$defs/address" }
                     },
+                    "allOf": [{
+                        "anyOf": [
+                            { "required": ["name"] },
+                            { "required": ["address"] }
+                        ]
+                    }],
+                    "if": { "required": ["address"] },
+                    "then": {
+                        "properties": {
+                            "address": { "required": ["street"] }
+                        }
+                    },
+                    "else": { "required": ["name"] },
                     "additionalProperties": false
                 })),
             ),

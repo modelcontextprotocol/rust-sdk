@@ -9,11 +9,7 @@
 # When bumping DRAFT_CONFORMANCE_VERSION, diff
 # `conformance list --spec-version 2026-07-28` and update #977.
 
-server:
-  # SEP-2106: composition/conditional/$anchor keywords are stripped from
-  # published tool input schemas.
-  # tracked in #1003
-  - json-schema-2020-12
+server: []
 
 client:
   # Client does not yet send MCP-Protocol-Version header pre-initialize as
