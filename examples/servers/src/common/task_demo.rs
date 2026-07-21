@@ -95,12 +95,21 @@ impl ServerHandler for TaskDemo {
                 request.arguments.clone().unwrap_or_default(),
             ))
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-            let task = self.tasks.spawn(TaskOptions::default(), move |_ctx| {
+            let task = self.tasks.spawn(TaskOptions::default(), move |ctx| {
                 Box::pin(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    Ok(CallToolResult::success(vec![ContentBlock::text(
-                        (params.a + params.b).to_string(),
-                    )]))
+                    // Cancellation is cooperative (SEP-2663): honor
+                    // tasks/cancel by exiting early with an error, which the
+                    // manager records as terminal `cancelled`.
+                    tokio::select! {
+                        _ = ctx.cancelled() => {
+                            Err(McpError::internal_error("slow_sum cancelled", None))
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                            Ok(CallToolResult::success(vec![ContentBlock::text(
+                                (params.a + params.b).to_string(),
+                            )]))
+                        }
+                    }
                 })
             });
             return Ok(CallToolResponse::Task(CreateTaskResult::new(task)));

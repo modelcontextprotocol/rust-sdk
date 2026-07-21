@@ -240,19 +240,32 @@ impl ConformanceServer {
                     .and_then(Value::as_str)
                     .unwrap_or("compute")
                     .to_string();
-                let work = move || async move {
+                if create_task {
+                    // The lifecycle scenario requires slow_compute to settle
+                    // to `cancelled` when tasks/cancel arrives while running;
+                    // cancellation is cooperative, so honor it explicitly.
+                    let task = self.tasks.spawn(TaskOptions::default(), move |ctx| {
+                        Box::pin(async move {
+                            tokio::select! {
+                                _ = ctx.cancelled() => Err(ErrorData::internal_error(
+                                    "slow_compute cancelled",
+                                    None,
+                                )),
+                                _ = tokio::time::sleep(
+                                    std::time::Duration::from_secs_f64(seconds),
+                                ) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                                    format!("slow_compute({label}) done after {seconds}s"),
+                                )])),
+                            }
+                        })
+                    });
+                    Ok(CreateTaskResult::new(task).into())
+                } else {
                     tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
                     Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "slow_compute({label}) done after {seconds}s"
-                    ))]))
-                };
-                if create_task {
-                    let task = self
-                        .tasks
-                        .spawn(TaskOptions::default(), move |_ctx| Box::pin(work()));
-                    Ok(CreateTaskResult::new(task).into())
-                } else {
-                    Ok(work().await?.into())
+                    ))])
+                    .into())
                 }
             }
 

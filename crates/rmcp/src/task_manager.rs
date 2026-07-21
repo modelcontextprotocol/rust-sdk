@@ -112,6 +112,36 @@ impl TaskContext {
             .get(&self.task_id)
             .is_some_and(|e| e.cancel_requested)
     }
+
+    /// Resolves once `tasks/cancel` has been received for this task (or
+    /// immediately, if it already has). Cooperative: pair with
+    /// `tokio::select!` around long-running work to implement a cancellation
+    /// exit path.
+    ///
+    /// An operation that stops in response should return an error — the
+    /// manager records a post-cancel error as terminal `cancelled` rather
+    /// than `failed`. An operation that finishes its work anyway settles as
+    /// `completed`; per SEP-2663 cancellation is cooperative and a task may
+    /// reach a non-`cancelled` terminal status.
+    pub async fn cancelled(&self) {
+        let mut rx = {
+            let inner = self.inner.lock().expect("task manager lock poisoned");
+            let Some(entry) = inner.tasks.get(&self.task_id) else {
+                return;
+            };
+            if entry.cancel_requested {
+                return;
+            }
+            entry.cancel_signal.subscribe()
+        };
+        // Wait until the watch flips to true; a closed channel means the
+        // manager dropped the entry, which also unblocks the operation.
+        while !*rx.borrow_and_update() {
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    }
 }
 
 /// Boxed future representing the async operation backing a task.
@@ -126,6 +156,10 @@ struct TaskEntry {
     /// Every key ever used, to enforce uniqueness across the task lifetime.
     used_input_keys: std::collections::HashSet<String>,
     cancel_requested: bool,
+    /// Signals the running operation that cancellation was requested
+    /// (`true` once `tasks/cancel` arrives). Cooperative: the operation
+    /// decides whether and how to stop.
+    cancel_signal: tokio::sync::watch::Sender<bool>,
     created: Instant,
     join_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -246,6 +280,7 @@ impl TaskManager {
             pending_inputs: HashMap::new(),
             used_input_keys: std::collections::HashSet::new(),
             cancel_requested: false,
+            cancel_signal: tokio::sync::watch::channel(false).0,
             created: Instant::now(),
             join_handle: None,
         };
@@ -335,17 +370,20 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Handle `tasks/cancel`: cooperative cancellation.
+    /// Handle `tasks/cancel`: cooperative cancellation (SEP-2663).
     ///
-    /// Acknowledges immediately and transitions the *observable* task state to
-    /// `cancelled` (unless already terminal), but does **not** abort the
-    /// underlying future: the operation keeps running so it can perform
-    /// cleanup, observing cancellation via
-    /// [`TaskContext::is_cancel_requested`] or via the error returned from a
-    /// pending [`TaskContext::request_input`] call (whose response channel is
-    /// dropped here). Whatever the future eventually produces is discarded —
-    /// the terminal `cancelled` state has already been recorded, matching the
-    /// spec's eventually-consistent cancellation semantics.
+    /// Records the cancellation *intent* and acknowledges immediately, but
+    /// does **not** abort the underlying future or force a terminal state.
+    /// The operation observes cancellation via
+    /// [`TaskContext::is_cancel_requested`] / [`TaskContext::cancelled`], or
+    /// via the error returned from a pending [`TaskContext::request_input`]
+    /// call (whose response channel is dropped here), and decides its own
+    /// terminal status:
+    ///
+    /// - stops with an error → recorded as `cancelled` (post-cancel errors
+    ///   are treated as honoring the request, not `failed`),
+    /// - finishes its work anyway → recorded as `completed` — per the spec,
+    ///   "the task may still reach a non-`cancelled` terminal status".
     pub fn cancel_task(&self, task_id: &str) -> Result<(), McpError> {
         let mut inner = self.inner.lock().expect("task manager lock poisoned");
         let entry = inner
@@ -353,13 +391,15 @@ impl TaskManager {
             .get_mut(task_id)
             .ok_or_else(|| unknown_task(task_id))?;
         entry.cancel_requested = true;
+        let _ = entry.cancel_signal.send(true);
         if entry.terminal.is_none() {
-            entry.terminal = Some(TaskPayload::Cancelled);
-            // Dropping the response senders wakes any `request_input` await
-            // with an error, giving parked operations a cooperative exit path.
+            // Wake any operation parked on `request_input`: dropping the
+            // response senders resolves those awaits with an error, giving
+            // parked operations a cooperative exit path. The task leaves
+            // `input_required` and reports `working` until it settles.
             entry.pending_inputs.clear();
             entry.touch();
-            entry.task.status = TaskStatus::Cancelled;
+            entry.task.status = entry.current_status();
         }
         Ok(())
     }
@@ -465,17 +505,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_marks_task_cancelled() {
+    async fn cancel_settles_to_cancelled_when_operation_honors_it() {
         let manager = TaskManager::new();
-        let task = manager.spawn(TaskOptions::default(), |_ctx| {
-            Box::pin(async {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                Ok(ok_result("never"))
+        let task = manager.spawn(TaskOptions::default(), |ctx| {
+            Box::pin(async move {
+                tokio::select! {
+                    _ = ctx.cancelled() => Err(McpError::internal_error("cancelled", None)),
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                        Ok(ok_result("never"))
+                    }
+                }
             })
         });
         manager.cancel_task(&task.task_id).unwrap();
-        let detailed = manager.get_task(&task.task_id).unwrap();
-        assert_eq!(detailed.status(), TaskStatus::Cancelled);
+
+        // The ack is immediate but the terminal state is set by the
+        // operation; poll until it settles.
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let detailed = manager.get_task(&task.task_id).unwrap();
+            if detailed.status().is_terminal() {
+                assert_eq!(detailed.status(), TaskStatus::Cancelled);
+                return;
+            }
+        }
+        panic!("task did not settle after cancel");
     }
 
     #[tokio::test]
@@ -484,35 +538,41 @@ mod tests {
         let (cleanup_tx, cleanup_rx) = oneshot::channel::<&'static str>();
         let task = manager.spawn(TaskOptions::default(), |ctx| {
             Box::pin(async move {
-                // Poll cancellation cooperatively, then run cleanup.
-                for _ in 0..500 {
-                    if ctx.is_cancel_requested() {
-                        let _ = cleanup_tx.send("cleaned up");
-                        return Ok(ok_result("cancelled cooperatively"));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-                Ok(ok_result("never cancelled"))
+                // Wait for cancellation, then run cleanup and finish the
+                // work anyway (spec: a task may still reach a
+                // non-`cancelled` terminal status).
+                ctx.cancelled().await;
+                let _ = cleanup_tx.send("cleaned up");
+                Ok(ok_result("finished despite cancel"))
             })
         });
 
         manager.cancel_task(&task.task_id).unwrap();
 
-        // Observable state is cancelled immediately (ack + tasks/get)...
+        // The ack is immediate and does not force a terminal state.
         let detailed = manager.get_task(&task.task_id).unwrap();
-        assert_eq!(detailed.status(), TaskStatus::Cancelled);
+        assert!(
+            !detailed.status().is_terminal(),
+            "cancel must not force terminal state"
+        );
 
-        // ...but the operation keeps running and gets to perform cleanup.
+        // The operation observes the cancel and performs cleanup.
         let cleanup = tokio::time::timeout(std::time::Duration::from_secs(5), cleanup_rx)
             .await
             .expect("cleanup should not time out")
             .expect("cleanup channel should not be dropped");
         assert_eq!(cleanup, "cleaned up");
 
-        // The late result is discarded; the terminal state stays cancelled.
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let detailed = manager.get_task(&task.task_id).unwrap();
-        assert_eq!(detailed.status(), TaskStatus::Cancelled);
+        // The operation chose to complete: the task settles as `completed`.
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let detailed = manager.get_task(&task.task_id).unwrap();
+            if detailed.status().is_terminal() {
+                assert_eq!(detailed.status(), TaskStatus::Completed);
+                return;
+            }
+        }
+        panic!("task did not settle after cancel");
     }
 
     #[tokio::test]

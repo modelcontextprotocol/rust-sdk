@@ -224,9 +224,14 @@ impl SubscriptionSink {
                     "notifications/message",
                 ));
             }
+            // SEP-2663 task status notifications are not yet routable through
+            // `subscriptions/listen`: `SubscriptionFilter` has no `taskIds`
+            // field yet (the upstream conformance check for this flow is also
+            // still skipped, pending the subscriptions/listen rewrite).
+            // Clients currently observe task state by polling `tasks/get`.
             ServerNotification::TaskStatusNotification(_) => {
                 return Err(SubscriptionSendError::UnsupportedNotification(
-                    "notifications/tasks/status",
+                    "notifications/tasks",
                 ));
             }
             ServerNotification::CustomNotification(_) => {

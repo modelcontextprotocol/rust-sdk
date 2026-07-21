@@ -66,16 +66,22 @@ impl ServerHandler for TaskServer {
                 request.arguments.clone().unwrap_or_default(),
             ))
             .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
-            let task =
-                self.tasks
-                    .spawn(TaskOptions::new().with_poll_interval_ms(10), move |_ctx| {
-                        Box::pin(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                            Ok(CallToolResult::success(vec![ContentBlock::text(
-                                (args.a + args.b).to_string(),
-                            )]))
-                        })
-                    });
+            let task = self
+                .tasks
+                .spawn(TaskOptions::new().with_poll_interval_ms(10), move |ctx| {
+                    Box::pin(async move {
+                        tokio::select! {
+                            _ = ctx.cancelled() => {
+                                Err(McpError::internal_error("cancelled", None))
+                            }
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                                Ok(CallToolResult::success(vec![ContentBlock::text(
+                                    (args.a + args.b).to_string(),
+                                )]))
+                            }
+                        }
+                    })
+                });
             return Ok(CallToolResponse::Task(CreateTaskResult::new(task)));
         }
 
@@ -210,12 +216,22 @@ async fn task_cancel_acknowledged() {
         .await
         .unwrap();
 
-    let info = client
-        .peer()
-        .get_task(GetTaskParams::new(create.task.task_id.clone()))
-        .await
-        .unwrap();
-    assert_eq!(info.task.status(), TaskStatus::Cancelled);
+    // Cancellation is cooperative (SEP-2663): the ack is immediate, and the
+    // operation settles the terminal status; poll until it does.
+    let mut final_status = None;
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let info = client
+            .peer()
+            .get_task(GetTaskParams::new(create.task.task_id.clone()))
+            .await
+            .unwrap();
+        if info.task.status().is_terminal() {
+            final_status = Some(info.task.status());
+            break;
+        }
+    }
+    assert_eq!(final_status, Some(TaskStatus::Cancelled));
 
     client.cancel().await.unwrap();
     server.abort();
