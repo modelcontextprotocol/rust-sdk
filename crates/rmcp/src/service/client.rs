@@ -687,7 +687,7 @@ where
     let (response, response_id) =
         expect_response(transport, "initialize response", service, peer.clone()).await?;
 
-    if id != response_id {
+    if !id.matches_response_id(&response_id) {
         return Err(ClientInitializeError::ConflictInitResponseId(
             id,
             response_id,
@@ -753,7 +753,7 @@ where
 
         match expect_response(transport, "discover response", service, peer.clone()).await {
             Ok((ServerResult::DiscoverResult(result), response_id)) => {
-                if response_id != id {
+                if !id.matches_response_id(&response_id) {
                     return Err(ClientInitializeError::ConflictInitResponseId(
                         id,
                         response_id,

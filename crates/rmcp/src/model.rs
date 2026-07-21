@@ -240,6 +240,22 @@ impl NumberOrString {
             NumberOrString::String(s) => Value::String(s.to_string()),
         }
     }
+
+    pub(crate) fn numeric_string_value(&self) -> Option<i64> {
+        match self {
+            Self::String(id) => id.parse().ok(),
+            Self::Number(_) => None,
+        }
+    }
+
+    pub(crate) fn matches_response_id(&self, response_id: &Self) -> bool {
+        self == response_id
+            || matches!(
+                self,
+                Self::Number(request_id)
+                    if response_id.numeric_string_value() == Some(*request_id)
+            )
+    }
 }
 
 impl std::fmt::Display for NumberOrString {

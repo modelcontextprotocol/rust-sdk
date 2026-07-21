@@ -499,8 +499,14 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         pending_stream_response_ids: &mut HashSet<RequestId>,
         message: &ServerJsonRpcMessage,
     ) {
-        if let Some(id) = Self::server_response_id(message) {
-            pending_stream_response_ids.remove(id);
+        let Some(response_id) = Self::server_response_id(message) else {
+            return;
+        };
+        if pending_stream_response_ids.remove(response_id) {
+            return;
+        }
+        if let Some(id) = response_id.numeric_string_value() {
+            pending_stream_response_ids.remove(&RequestId::Number(id));
         }
     }
 
@@ -1382,7 +1388,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 }
                 Event::ServerMessage(mut json_rpc_message) => {
                     if let Some(response_id) = Self::server_response_id(&json_rpc_message)
-                        && let Some(stream_ct) = request_stream_cancellations.remove(response_id)
+                        && let Some(stream_ct) = crate::service::remove_pending_request(
+                            &mut request_stream_cancellations,
+                            response_id,
+                        )
                     {
                         stream_ct.cancel();
                     }
@@ -1847,5 +1856,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["legacy"]
         );
+    }
+
+    #[cfg(feature = "transport-streamable-http-client-reqwest")]
+    #[test]
+    fn clear_stream_response_pending_accepts_stringified_numeric_id() {
+        let mut pending = HashSet::from([NumberOrString::Number(1)]);
+        let response = ServerJsonRpcMessage::response(
+            ServerResult::ListToolsResult(ListToolsResult::default()),
+            NumberOrString::String("1".into()),
+        );
+
+        StreamableHttpClientWorker::<reqwest::Client>::clear_stream_response_pending(
+            &mut pending,
+            &response,
+        );
+
+        assert!(pending.is_empty());
+    }
+
+    #[cfg(feature = "transport-streamable-http-client-reqwest")]
+    #[test]
+    fn clear_stream_response_pending_prefers_exact_string_id() {
+        let string_id = NumberOrString::String("1".into());
+        let mut pending = HashSet::from([NumberOrString::Number(1), string_id.clone()]);
+        let response = ServerJsonRpcMessage::response(
+            ServerResult::ListToolsResult(ListToolsResult::default()),
+            string_id,
+        );
+
+        StreamableHttpClientWorker::<reqwest::Client>::clear_stream_response_pending(
+            &mut pending,
+            &response,
+        );
+
+        assert_eq!(pending, HashSet::from([NumberOrString::Number(1)]));
     }
 }

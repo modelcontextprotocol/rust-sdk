@@ -305,6 +305,17 @@ pub trait ProgressTokenProvider: Send + Sync + 'static {
 pub type AtomicU32RequestIdProvider = AtomicU32Provider;
 pub type AtomicU32ProgressTokenProvider = AtomicU32Provider;
 
+pub(crate) fn remove_pending_request<T>(
+    pending_requests: &mut HashMap<RequestId, T>,
+    response_id: &RequestId,
+) -> Option<T> {
+    pending_requests.remove(response_id).or_else(|| {
+        response_id
+            .numeric_string_value()
+            .and_then(|id| pending_requests.remove(&RequestId::Number(id)))
+    })
+}
+
 #[derive(Debug, Default)]
 pub struct AtomicU32Provider {
     id: AtomicU64,
@@ -1481,7 +1492,9 @@ where
                     id,
                     ..
                 })) => {
-                    if let Some(responder) = local_responder_pool.remove(&id) {
+                    if let Some(responder) =
+                        remove_pending_request(&mut local_responder_pool, &id)
+                    {
                         let response_result = responder.send(Ok(result));
                         if let Err(_error) = response_result {
                             tracing::warn!(%id, "Error sending response");
@@ -1495,7 +1508,9 @@ where
                         tracing::debug!(?error, "received id-less peer error");
                         continue;
                     };
-                    if let Some(responder) = local_responder_pool.remove(&id) {
+                    if let Some(responder) =
+                        remove_pending_request(&mut local_responder_pool, &id)
+                    {
                         let service_error = if error.is_transport_closed() {
                             ServiceError::TransportClosed
                         } else {

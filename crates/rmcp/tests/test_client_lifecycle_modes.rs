@@ -4,7 +4,7 @@ use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
         ClientJsonRpcMessage, ClientRequest, DiscoverResult, ErrorCode, ErrorData, GetMeta,
-        Implementation, InitializeResult, ProtocolVersion, ServerCapabilities,
+        Implementation, InitializeResult, ProtocolVersion, RequestId, ServerCapabilities,
         ServerJsonRpcMessage, ServerResult,
     },
     service::PeerRequestOptions,
@@ -20,6 +20,45 @@ impl ClientHandler for DiscoverClient {}
 struct StatelessServer;
 
 impl ServerHandler for StatelessServer {}
+
+#[tokio::test]
+async fn discover_startup_accepts_stringified_numeric_response_id() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(request) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        let RequestId::Number(response_id) = request.id else {
+            panic!("expected a numeric request ID");
+        };
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::DiscoverResult(DiscoverResult::new(
+                    vec![ProtocolVersion::V_2026_07_28],
+                    ServerCapabilities::default(),
+                    Implementation::new("discover-server", "1.0.0"),
+                )),
+                RequestId::String(response_id.to_string().into()),
+            ))
+            .await
+            .expect("send discover response");
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("client should accept stringified discover response ID");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
 
 #[tokio::test]
 async fn high_level_server_accepts_discover_startup_without_initialize() {
