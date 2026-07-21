@@ -185,6 +185,7 @@ impl DetailedTask {
 // Wire shape helper: base Task fields + optional payload fields, all flattened.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 struct DetailedTaskWire {
     #[serde(flatten)]
     task: Task,
@@ -262,8 +263,9 @@ impl schemars::JsonSchema for DetailedTask {
         "DetailedTask".into()
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // Approximate with the wire shape (base Task + optional payload fields).
-        <Task as schemars::JsonSchema>::json_schema(generator)
+        // The actual wire shape: base Task fields plus the optional
+        // status-specific payload fields (inputRequests / result / error).
+        <DetailedTaskWire as schemars::JsonSchema>::json_schema(generator)
     }
 }
 

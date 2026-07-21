@@ -1171,6 +1171,22 @@
           "description": "ISO 8601 timestamp when the task was created.",
           "type": "string"
         },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "inputRequests": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/InputRequest"
+          }
+        },
         "lastUpdatedAt": {
           "description": "ISO 8601 timestamp when the task was last updated.",
           "type": "string"
@@ -1183,6 +1199,13 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "result": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         },
         "resultType": {
           "description": "Result type discriminator. `tasks/get` responses are standard results:\n`\"complete\"` (SEP-2322). Absent values deserialize as `\"complete\"`.",
@@ -3509,6 +3532,22 @@
           "description": "ISO 8601 timestamp when the task was created.",
           "type": "string"
         },
+        "error": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "inputRequests": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/InputRequest"
+          }
+        },
         "lastUpdatedAt": {
           "description": "ISO 8601 timestamp when the task was last updated.",
           "type": "string"
@@ -3521,6 +3560,13 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "result": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         },
         "status": {
           "description": "Current task status.",

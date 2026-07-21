@@ -335,9 +335,17 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Handle `tasks/cancel`: cooperative cancellation. Acknowledges
-    /// immediately; the operation is aborted and the task transitions to
-    /// `cancelled` unless it already reached a terminal state.
+    /// Handle `tasks/cancel`: cooperative cancellation.
+    ///
+    /// Acknowledges immediately and transitions the *observable* task state to
+    /// `cancelled` (unless already terminal), but does **not** abort the
+    /// underlying future: the operation keeps running so it can perform
+    /// cleanup, observing cancellation via
+    /// [`TaskContext::is_cancel_requested`] or via the error returned from a
+    /// pending [`TaskContext::request_input`] call (whose response channel is
+    /// dropped here). Whatever the future eventually produces is discarded —
+    /// the terminal `cancelled` state has already been recorded, matching the
+    /// spec's eventually-consistent cancellation semantics.
     pub fn cancel_task(&self, task_id: &str) -> Result<(), McpError> {
         let mut inner = self.inner.lock().expect("task manager lock poisoned");
         let entry = inner
@@ -346,10 +354,9 @@ impl TaskManager {
             .ok_or_else(|| unknown_task(task_id))?;
         entry.cancel_requested = true;
         if entry.terminal.is_none() {
-            if let Some(handle) = entry.join_handle.take() {
-                handle.abort();
-            }
             entry.terminal = Some(TaskPayload::Cancelled);
+            // Dropping the response senders wakes any `request_input` await
+            // with an error, giving parked operations a cooperative exit path.
             entry.pending_inputs.clear();
             entry.touch();
             entry.task.status = TaskStatus::Cancelled;
@@ -469,6 +476,84 @@ mod tests {
         manager.cancel_task(&task.task_id).unwrap();
         let detailed = manager.get_task(&task.task_id).unwrap();
         assert_eq!(detailed.status(), TaskStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cancel_is_cooperative_and_lets_the_operation_clean_up() {
+        let manager = TaskManager::new();
+        let (cleanup_tx, cleanup_rx) = oneshot::channel::<&'static str>();
+        let task = manager.spawn(TaskOptions::default(), |ctx| {
+            Box::pin(async move {
+                // Poll cancellation cooperatively, then run cleanup.
+                for _ in 0..500 {
+                    if ctx.is_cancel_requested() {
+                        let _ = cleanup_tx.send("cleaned up");
+                        return Ok(ok_result("cancelled cooperatively"));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                Ok(ok_result("never cancelled"))
+            })
+        });
+
+        manager.cancel_task(&task.task_id).unwrap();
+
+        // Observable state is cancelled immediately (ack + tasks/get)...
+        let detailed = manager.get_task(&task.task_id).unwrap();
+        assert_eq!(detailed.status(), TaskStatus::Cancelled);
+
+        // ...but the operation keeps running and gets to perform cleanup.
+        let cleanup = tokio::time::timeout(std::time::Duration::from_secs(5), cleanup_rx)
+            .await
+            .expect("cleanup should not time out")
+            .expect("cleanup channel should not be dropped");
+        assert_eq!(cleanup, "cleaned up");
+
+        // The late result is discarded; the terminal state stays cancelled.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let detailed = manager.get_task(&task.task_id).unwrap();
+        assert_eq!(detailed.status(), TaskStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cancel_wakes_parked_input_requests() {
+        let manager = TaskManager::new();
+        let (exit_tx, exit_rx) = oneshot::channel::<&'static str>();
+        let task = manager.spawn(TaskOptions::default(), |ctx| {
+            Box::pin(async move {
+                let request: InputRequest = serde_json::from_value(serde_json::json!({
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "Waiting forever",
+                        "requestedSchema": {"type": "object", "properties": {}}
+                    }
+                }))
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                // Parked on input; cancel must wake this await with an error.
+                let err = ctx.request_input("k1", request).await.unwrap_err();
+                let _ = exit_tx.send("woken");
+                Err(err)
+            })
+        });
+
+        // Wait until the task is parked on the input request.
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if manager.get_task(&task.task_id).unwrap().status() == TaskStatus::InputRequired {
+                break;
+            }
+        }
+
+        manager.cancel_task(&task.task_id).unwrap();
+        let woken = tokio::time::timeout(std::time::Duration::from_secs(5), exit_rx)
+            .await
+            .expect("parked operation should be woken by cancel")
+            .expect("exit channel should not be dropped");
+        assert_eq!(woken, "woken");
+        assert_eq!(
+            manager.get_task(&task.task_id).unwrap().status(),
+            TaskStatus::Cancelled
+        );
     }
 
     #[tokio::test]
