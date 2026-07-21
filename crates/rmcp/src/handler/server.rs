@@ -197,10 +197,22 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                         .map(ServerResult::empty)
                 }
             }
-            ClientRequest::CallToolRequest(request) => self
-                .call_tool(request.params, context)
-                .await
-                .map(ServerResult::from),
+            ClientRequest::CallToolRequest(request) => {
+                let client_declared_tasks = context
+                    .client_capabilities()
+                    .is_some_and(|caps| caps.supports_tasks());
+                let response = self.call_tool(request.params, context).await?;
+                // SEP-2663: the server MUST NOT return CreateTaskResult unless
+                // the request declared the tasks extension capability. Guard
+                // against handlers that fail to check before materializing a
+                // task; such clients cannot parse a task handle.
+                if matches!(response, CallToolResponse::Task(_)) && !client_declared_tasks {
+                    return Err(McpError::missing_required_client_capability(
+                        ClientCapabilities::builder().enable_tasks().build(),
+                    ));
+                }
+                Ok(ServerResult::from(response))
+            }
             ClientRequest::ListToolsRequest(request) => self
                 .list_tools(request.params, context)
                 .await

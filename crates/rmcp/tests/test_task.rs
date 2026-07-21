@@ -255,6 +255,67 @@ async fn no_task_without_extension_capability() {
     server.abort();
 }
 
+/// A misbehaving handler that materializes a task without checking the
+/// client's capabilities. The SDK dispatch must catch this and reject with
+/// -32021 rather than sending a task handle the client cannot parse.
+#[derive(Clone)]
+struct AlwaysTaskServer {
+    tasks: TaskManager,
+}
+
+impl ServerHandler for AlwaysTaskServer {
+    async fn call_tool(
+        &self,
+        _request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        let task = self.tasks.spawn(TaskOptions::default(), |_ctx| {
+            Box::pin(async { Ok(CallToolResult::success(vec![ContentBlock::text("late")])) })
+        });
+        Ok(CallToolResponse::Task(CreateTaskResult::new(task)))
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
+    }
+}
+
+#[tokio::test]
+async fn dispatch_rejects_task_result_for_non_declaring_client() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move {
+        let service = AlwaysTaskServer {
+            tasks: TaskManager::new(),
+        }
+        .serve(server_transport)
+        .await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    // Plain client: no tasks extension declared. The handler tries to return
+    // a CreateTaskResult anyway; dispatch must reject with -32021.
+    let client = ().serve(client_transport).await.unwrap();
+    let err = client
+        .call_tool(CallToolRequestParams::new("anything"))
+        .await
+        .unwrap_err();
+    match err {
+        rmcp::ServiceError::McpError(e) => {
+            assert_eq!(e.code, ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY);
+        }
+        other => panic!("expected McpError, got {other:?}"),
+    }
+
+    client.cancel().await.unwrap();
+    server.abort();
+}
+
 #[tokio::test]
 async fn tasks_methods_without_capability_return_missing_capability_error() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
