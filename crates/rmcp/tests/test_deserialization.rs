@@ -94,6 +94,38 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn result_type_bearing_objects_do_not_match_task_ack() {
+        // TaskAckResult carries only `resultType` (+ optional `_meta`), so it
+        // must not greedily swallow arbitrary results that happen to include
+        // a `resultType` key inside the untagged ServerResult union.
+        let result = parse_result(wrap_response(json!({
+            "resultType": "weird-custom",
+            "payload": { "a": 1 }
+        })));
+        assert!(
+            matches!(result, ServerResult::CustomResult(_)),
+            "expected CustomResult, got {result:?}"
+        );
+
+        let result = parse_result(wrap_response(json!({
+            "resultType": "complete",
+            "customField": 42
+        })));
+        assert!(
+            matches!(result, ServerResult::CustomResult(_)),
+            "expected CustomResult, got {result:?}"
+        );
+
+        // A bare complete ack (the actual tasks/update / tasks/cancel ack
+        // shape) still parses as TaskAckResult.
+        let result = parse_result(wrap_response(json!({ "resultType": "complete" })));
+        assert!(
+            matches!(result, ServerResult::TaskAckResult(_)),
+            "expected TaskAckResult, got {result:?}"
+        );
+    }
+
+    #[test]
     fn arbitrary_json_value_falls_through_to_custom_result() {
         // Any bare JSON value must fall through to CustomResult.
         for value in [json!(42), json!("hello"), json!(null), json!([1, 2, 3])] {

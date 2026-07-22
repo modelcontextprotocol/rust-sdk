@@ -374,7 +374,7 @@ impl GetTaskResult {
 /// The spec requires these acks to be empty results carrying the SEP-2322
 /// `resultType: "complete"` discriminator; task state changes are observed
 /// via the next `tasks/get`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -383,6 +383,35 @@ pub struct TaskAckResult {
     pub result_type: ResultType,
     #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<MetaObject>,
+}
+
+// Custom deserializer that requires `resultType: "complete"` and rejects any
+// other fields. Without this, `TaskAckResult` would greedily match arbitrary
+// result objects carrying a `resultType` key inside `#[serde(untagged)]`
+// unions such as `ServerResult`, shadowing `CustomResult` and losing data.
+impl<'de> Deserialize<'de> for TaskAckResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Helper {
+            result_type: ResultType,
+            #[serde(rename = "_meta", default)]
+            meta: Option<MetaObject>,
+        }
+        let helper = Helper::deserialize(deserializer)?;
+        if !helper.result_type.is_complete() {
+            return Err(serde::de::Error::custom(
+                "TaskAckResult requires resultType to be \"complete\"",
+            ));
+        }
+        Ok(TaskAckResult {
+            result_type: helper.result_type,
+            meta: helper.meta,
+        })
+    }
 }
 
 impl Default for TaskAckResult {

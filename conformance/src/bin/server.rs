@@ -100,10 +100,19 @@ const TASK_SUPPORTING_TOOLS: &[&str] = &[
     "test_tool_with_task",
 ];
 
-/// Tools whose registration declares task support as *required*: calling them
-/// without the tasks extension capability is rejected with -32021 before the
-/// handler runs (SEP-2663 §Required Capabilities).
-const TASK_REQUIRED_TOOLS: &[&str] = &["failing_job", "test_tool_with_task"];
+/// Tools that cannot be serviced without returning a `CreateTaskResult`:
+/// calling them from a client that did not declare the tasks extension is
+/// rejected with -32021 before the tool body runs (SEP-2663 §Required
+/// Capabilities). `failing_job` and `test_tool_with_task` are registered
+/// this way for the required-task-error and MRTR-composition scenarios;
+/// `confirm_delete` and `multi_input` must park on in-task elicitation, so
+/// they have no synchronous fallback either.
+const TASK_REQUIRED_TOOLS: &[&str] = &[
+    "failing_job",
+    "test_tool_with_task",
+    "confirm_delete",
+    "multi_input",
+];
 
 fn task_fixture_tool(name: &str) -> Tool {
     let (description, schema) = match name {
@@ -314,11 +323,6 @@ impl ConformanceServer {
                     .and_then(Value::as_str)
                     .unwrap_or("file.txt")
                     .to_string();
-                if !create_task {
-                    return Err(ErrorData::missing_required_client_capability(
-                        ClientCapabilities::builder().enable_tasks().build(),
-                    ));
-                }
                 let task = self.tasks.spawn(TaskOptions::default(), move |ctx| {
                     Box::pin(async move {
                         let response = ctx
@@ -345,11 +349,6 @@ impl ConformanceServer {
             }
 
             "multi_input" => {
-                if !create_task {
-                    return Err(ErrorData::missing_required_client_capability(
-                        ClientCapabilities::builder().enable_tasks().build(),
-                    ));
-                }
                 let task = self.tasks.spawn(TaskOptions::default(), move |ctx| {
                     Box::pin(async move {
                         // Fan out two elicitation requests in parallel so two
