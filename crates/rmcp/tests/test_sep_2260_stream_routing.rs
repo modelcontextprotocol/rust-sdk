@@ -1,12 +1,7 @@
 //! SEP-2260 end-to-end: a server→client request issued while handling a
 //! client request is delivered on the originating POST's SSE stream, and the
 //! standalone GET stream never carries it.
-#![cfg(all(
-    not(feature = "local"),
-    feature = "server",
-    feature = "elicitation",
-    feature = "transport-streamable-http-server"
-))]
+#![cfg(not(feature = "local"))]
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -15,8 +10,7 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequestParams,
-        ElicitationSchema, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
-        Tool,
+        ElicitationSchema, ServerCapabilities, ServerInfo,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -32,24 +26,6 @@ struct ElicitingServer;
 impl ServerHandler for ElicitingServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult {
-            tools: vec![Tool::new(
-                "ask",
-                "asks the user",
-                serde_json::from_value::<rmcp::model::JsonObject>(
-                    json!({"type": "object", "properties": {}}),
-                )
-                .unwrap(),
-            )],
-            ..Default::default()
-        })
     }
 
     async fn call_tool(
