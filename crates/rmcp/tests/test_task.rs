@@ -7,7 +7,7 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     service::{RequestContext, RoleServer},
-    task_manager::{TaskManager, TaskOptions},
+    task_manager::{TaskExit, TaskManager, TaskOptions},
     tool, tool_router,
 };
 use serde_json::json;
@@ -65,7 +65,7 @@ impl ServerHandler for TaskServer {
                     Box::pin(async move {
                         tokio::select! {
                             _ = ctx.cancelled() => {
-                                Err(McpError::internal_error("cancelled", None))
+                                Err(TaskExit::Cancelled)
                             }
                             _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
                                 Ok(CallToolResult::success(vec![ContentBlock::text(

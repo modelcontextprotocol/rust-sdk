@@ -11,7 +11,7 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::*,
     service::{RequestContext, SubscriptionContext, SubscriptionSink},
-    task_manager::{TaskManager, TaskOptions},
+    task_manager::{TaskExit, TaskManager, TaskOptions},
     transport::{
         StreamableHttpServerConfig, StreamableHttpService,
         streamable_http_server::session::local::LocalSessionManager,
@@ -256,10 +256,7 @@ impl ConformanceServer {
                     let task = self.tasks.spawn(TaskOptions::default(), move |ctx| {
                         Box::pin(async move {
                             tokio::select! {
-                                _ = ctx.cancelled() => Err(ErrorData::internal_error(
-                                    "slow_compute cancelled",
-                                    None,
-                                )),
+                                _ = ctx.cancelled() => Err(TaskExit::Cancelled),
                                 _ = tokio::time::sleep(
                                     std::time::Duration::from_secs_f64(seconds),
                                 ) => Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -288,9 +285,9 @@ impl ConformanceServer {
                     )]))
                 };
                 if create_task {
-                    let task = self
-                        .tasks
-                        .spawn(TaskOptions::default(), move |_ctx| Box::pin(work()));
+                    let task = self.tasks.spawn(TaskOptions::default(), move |_ctx| {
+                        Box::pin(async move { work().await.map_err(TaskExit::Error) })
+                    });
                     Ok(CreateTaskResult::new(task).into())
                 } else {
                     Ok(work().await?.into())
@@ -308,9 +305,9 @@ impl ConformanceServer {
                     ))
                 };
                 if create_task {
-                    let task = self
-                        .tasks
-                        .spawn(TaskOptions::default(), move |_ctx| Box::pin(work()));
+                    let task = self.tasks.spawn(TaskOptions::default(), move |_ctx| {
+                        Box::pin(async move { work().await.map_err(TaskExit::Error) })
+                    });
                     Ok(CreateTaskResult::new(task).into())
                 } else {
                     work().await.map(CallToolResponse::from)

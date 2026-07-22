@@ -72,26 +72,28 @@ impl TaskContext {
         &self,
         key: impl Into<String>,
         request: InputRequest,
-    ) -> Result<serde_json::Value, McpError> {
+    ) -> Result<serde_json::Value, TaskExit> {
         let key = key.into();
         let (tx, rx) = oneshot::channel();
         {
             let mut inner = self.inner.lock().expect("task manager lock poisoned");
             let entry = inner.tasks.get_mut(&self.task_id).ok_or_else(|| {
-                McpError::internal_error("task no longer exists".to_string(), None)
+                TaskExit::Error(McpError::internal_error(
+                    "task no longer exists".to_string(),
+                    None,
+                ))
             })?;
             if !entry.used_input_keys.insert(key.clone()) {
-                return Err(McpError::internal_error(
+                return Err(TaskExit::Error(McpError::internal_error(
                     format!("inputRequests key {key:?} was already used for this task"),
                     None,
-                ));
+                )));
             }
             entry.pending_inputs.insert(key.clone(), (request, tx));
             entry.touch();
         }
-        rx.await.map_err(|_| {
-            McpError::internal_error("task cancelled while awaiting input".to_string(), None)
-        })
+        // The sender is dropped when `tasks/cancel` clears pending inputs.
+        rx.await.map_err(|_| TaskExit::Cancelled)
     }
 
     /// Update the task's human-readable status message.
@@ -118,11 +120,11 @@ impl TaskContext {
     /// `tokio::select!` around long-running work to implement a cancellation
     /// exit path.
     ///
-    /// An operation that stops in response should return an error — the
-    /// manager records a post-cancel error as terminal `cancelled` rather
-    /// than `failed`. An operation that finishes its work anyway settles as
-    /// `completed`; per SEP-2663 cancellation is cooperative and a task may
-    /// reach a non-`cancelled` terminal status.
+    /// An operation that stops in response should return
+    /// [`TaskExit::Cancelled`] so the task settles as `cancelled`. Returning
+    /// [`TaskExit::Error`] settles as `failed`, and finishing the work
+    /// anyway settles as `completed` — per SEP-2663 cancellation is
+    /// cooperative and a task may reach a non-`cancelled` terminal status.
     pub async fn cancelled(&self) {
         let mut rx = {
             let inner = self.inner.lock().expect("task manager lock poisoned");
@@ -144,8 +146,25 @@ impl TaskContext {
     }
 }
 
+/// How a task operation finished without producing a result.
+#[derive(Debug)]
+pub enum TaskExit {
+    /// The operation is exiting in response to a cancellation request;
+    /// the task settles as terminal `cancelled`.
+    Cancelled,
+    /// A real failure; the task settles as terminal `failed` with the
+    /// error inlined, even after `tasks/cancel` was received.
+    Error(McpError),
+}
+
+impl From<McpError> for TaskExit {
+    fn from(error: McpError) -> Self {
+        TaskExit::Error(error)
+    }
+}
+
 /// Boxed future representing the async operation backing a task.
-pub type TaskFuture = Pin<Box<dyn Future<Output = Result<CallToolResult, McpError>> + Send>>;
+pub type TaskFuture = Pin<Box<dyn Future<Output = Result<CallToolResult, TaskExit>> + Send>>;
 
 struct TaskEntry {
     task: Task,
@@ -323,15 +342,10 @@ impl TaskManager {
                         Ok(result) => TaskPayload::Completed {
                             result: result_to_object(&result),
                         },
-                        Err(error) => {
-                            if entry.cancel_requested {
-                                TaskPayload::Cancelled
-                            } else {
-                                TaskPayload::Failed {
-                                    error: error_to_object(&error),
-                                }
-                            }
-                        }
+                        Err(TaskExit::Cancelled) => TaskPayload::Cancelled,
+                        Err(TaskExit::Error(error)) => TaskPayload::Failed {
+                            error: error_to_object(&error),
+                        },
                     });
                     entry.terminal_at = Some(Instant::now());
                     entry.pending_inputs.clear();
@@ -407,8 +421,9 @@ impl TaskManager {
     /// call (whose response channel is dropped here), and decides its own
     /// terminal status:
     ///
-    /// - stops with an error → recorded as `cancelled` (post-cancel errors
-    ///   are treated as honoring the request, not `failed`),
+    /// - stops with [`TaskExit::Cancelled`] → recorded as `cancelled`,
+    /// - stops with [`TaskExit::Error`] → recorded as `failed` with the
+    ///   error inlined (a real failure after a cancel request is not masked),
     /// - finishes its work anyway → recorded as `completed` — per the spec,
     ///   "the task may still reach a non-`cancelled` terminal status".
     pub fn cancel_task(&self, task_id: &str) -> Result<(), McpError> {
@@ -558,7 +573,7 @@ mod tests {
         let task = manager.spawn(TaskOptions::default(), |ctx| {
             Box::pin(async move {
                 tokio::select! {
-                    _ = ctx.cancelled() => Err(McpError::internal_error("cancelled", None)),
+                    _ = ctx.cancelled() => Err(TaskExit::Cancelled),
                     _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
                         Ok(ok_result("never"))
                     }
@@ -574,6 +589,44 @@ mod tests {
             let detailed = manager.get_task(&task.task_id).unwrap();
             if detailed.status().is_terminal() {
                 assert_eq!(detailed.status(), TaskStatus::Cancelled);
+                return;
+            }
+        }
+        panic!("task did not settle after cancel");
+    }
+
+    #[tokio::test]
+    async fn post_cancel_unrelated_error_settles_as_failed() {
+        let manager = TaskManager::new();
+        let task = manager.spawn(TaskOptions::default(), |ctx| {
+            Box::pin(async move {
+                // Fail for an unrelated reason after observing the cancel:
+                // must be recorded as `failed`, not masked as `cancelled`.
+                ctx.cancelled().await;
+                Err(TaskExit::Error(McpError::internal_error(
+                    "database write failed",
+                    None,
+                )))
+            })
+        });
+        manager.cancel_task(&task.task_id).unwrap();
+
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let detailed = manager.get_task(&task.task_id).unwrap();
+            if detailed.status().is_terminal() {
+                assert_eq!(detailed.status(), TaskStatus::Failed);
+                match detailed.payload {
+                    TaskPayload::Failed { error } => {
+                        assert!(
+                            error.get("message").is_some_and(|m| m
+                                .as_str()
+                                .is_some_and(|s| s.contains("database write failed"))),
+                            "error payload should be preserved: {error:?}"
+                        );
+                    }
+                    other => panic!("unexpected payload: {other:?}"),
+                }
                 return;
             }
         }
