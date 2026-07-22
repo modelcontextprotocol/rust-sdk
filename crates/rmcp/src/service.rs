@@ -176,6 +176,23 @@ pub(crate) fn in_request_handler_scope() -> bool {
     ORIGINATING_REQUEST.try_with(|_| ()).is_ok()
 }
 
+/// Marker stored in an outbound request's [`Extensions`](crate::model::Extensions)
+/// identifying the in-flight peer request it was issued from (SEP-2260).
+///
+/// Attached automatically whenever a request is sent from within a request
+/// handler. The streamable HTTP server uses it to deliver server-initiated
+/// requests on the originating client request's SSE stream.
+///
+/// # In-memory only
+///
+/// `Extensions` are never serialized, so this marker does not appear on the
+/// wire (SEP-2260 defines no wire field). Session managers that serialize
+/// messages between processes lose it; such requests fall back to the
+/// standalone stream (logged as a warning).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+pub struct OriginatingRequestId(pub RequestId);
+
 pub type TxJsonRpcMessage<R> =
     JsonRpcMessage<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
 pub type RxJsonRpcMessage<R> = JsonRpcMessage<
@@ -747,6 +764,11 @@ impl<R: ServiceRole> Peer<R> {
             self.peer_info().as_deref(),
             in_request_handler_scope(),
         )?;
+        if let Ok(originating) = ORIGINATING_REQUEST.try_with(|id| id.clone()) {
+            request
+                .extensions_mut()
+                .insert(OriginatingRequestId(originating));
+        }
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
         if let Some(metadata) = self.client_request_metadata.get() {
@@ -1629,5 +1651,53 @@ where
         handle: Some(handle),
         cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod sep2260_marker_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::{PingRequest, RequestId, ServerRequest};
+
+    fn ping() -> ServerRequest {
+        ServerRequest::PingRequest(PingRequest {
+            method: Default::default(),
+            extensions: Default::default(),
+        })
+    }
+
+    async fn send_and_capture(scope: Option<RequestId>) -> <RoleServer as ServiceRole>::Req {
+        // peer_info None => enforce_request_association is non-strict, so the
+        // send is accepted regardless of scope; we only inspect the sink message.
+        let (peer, mut rx) =
+            Peer::<RoleServer>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
+        let send = peer.send_request_with_option(ping(), PeerRequestOptions::no_options());
+        let _handle = match scope {
+            Some(id) => ORIGINATING_REQUEST.scope(id, send).await.unwrap(),
+            None => send.await.unwrap(),
+        };
+        let PeerSinkMessage::Request { request, .. } = rx.recv().await.expect("sink message")
+        else {
+            panic!("expected a request sink message");
+        };
+        request
+    }
+
+    #[tokio::test]
+    async fn outbound_request_carries_originating_id_when_in_scope() {
+        let request = send_and_capture(Some(RequestId::Number(7))).await;
+        let marker = request
+            .extensions()
+            .get::<OriginatingRequestId>()
+            .expect("marker attached");
+        assert_eq!(marker.0, RequestId::Number(7));
+    }
+
+    #[tokio::test]
+    async fn outbound_request_has_no_marker_outside_scope() {
+        let request = send_and_capture(None).await;
+        assert!(request.extensions().get::<OriginatingRequestId>().is_none());
     }
 }
