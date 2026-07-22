@@ -49,6 +49,31 @@ impl ServiceRole for RoleServer {
             _ => None,
         }
     }
+
+    fn enforce_request_association(
+        request: &Self::Req,
+        peer_info: Option<&Self::PeerInfo>,
+        in_request_handler_scope: bool,
+    ) -> Result<(), ServiceError> {
+        let restricted = matches!(
+            request,
+            ServerRequest::CreateMessageRequest(_)
+                | ServerRequest::ListRootsRequest(_)
+                | ServerRequest::ElicitRequest(_)
+        );
+        if !restricted {
+            return Ok(());
+        }
+        let strict =
+            peer_info.is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
+        if strict && !in_request_handler_scope {
+            return Err(ServiceError::McpError(ErrorData::invalid_request(
+                "SEP-2260: server-to-client requests must be associated with an originating client request",
+                None,
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// It represents the error that may occur when serving the server.

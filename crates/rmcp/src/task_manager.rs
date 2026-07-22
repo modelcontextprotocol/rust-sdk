@@ -349,8 +349,11 @@ impl TaskManager {
         let future = make_future(context);
         let inner = self.inner.clone();
         let id_for_task = task_id.clone();
+        let originating_request = crate::service::ORIGINATING_REQUEST
+            .try_with(|id| id.clone())
+            .ok();
         let handle = tokio::spawn(async move {
-            let result = future.await;
+            let result = run_task_operation(originating_request, future).await;
             let mut inner = inner.lock().expect("task manager lock poisoned");
             if let Some(entry) = inner.tasks.get_mut(&id_for_task) {
                 if entry.terminal.is_none() {
@@ -536,6 +539,16 @@ impl TaskManager {
 
 fn unknown_task(task_id: &str) -> McpError {
     McpError::invalid_params(format!("unknown task: {task_id}"), None)
+}
+
+async fn run_task_operation(
+    originating_request: Option<crate::model::RequestId>,
+    future: TaskFuture,
+) -> Result<CallToolResult, TaskExit> {
+    match originating_request {
+        Some(id) => crate::service::ORIGINATING_REQUEST.scope(id, future).await,
+        None => future.await,
+    }
 }
 
 fn result_to_object(result: &CallToolResult) -> JsonObject {
@@ -916,5 +929,70 @@ mod tests {
             }
         }
         panic!("task did not complete after input response");
+    }
+
+    #[tokio::test]
+    async fn task_operation_reestablishes_request_association_scope() {
+        use crate::{
+            model::RequestId,
+            service::{ORIGINATING_REQUEST, in_request_handler_scope},
+        };
+
+        let manager = TaskManager::new();
+        let observed = Arc::new(Mutex::new(None::<bool>));
+        let observed_in_task = observed.clone();
+
+        ORIGINATING_REQUEST
+            .scope(RequestId::Number(7), async {
+                manager.spawn(TaskOptions::default(), move |_ctx| {
+                    let observed_in_task = observed_in_task.clone();
+                    Box::pin(async move {
+                        *observed_in_task.lock().unwrap() = Some(in_request_handler_scope());
+                        Ok(ok_result("done"))
+                    })
+                })
+            })
+            .await;
+
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if let Some(scoped) = *observed.lock().unwrap() {
+                assert!(
+                    scoped,
+                    "task operation must run inside the originating request's association scope"
+                );
+                return;
+            }
+        }
+        panic!("task operation did not run");
+    }
+
+    #[tokio::test]
+    async fn task_operation_without_originating_request_is_unscoped() {
+        use crate::service::in_request_handler_scope;
+
+        let manager = TaskManager::new();
+        let observed = Arc::new(Mutex::new(None::<bool>));
+        let observed_in_task = observed.clone();
+
+        manager.spawn(TaskOptions::default(), move |_ctx| {
+            let observed_in_task = observed_in_task.clone();
+            Box::pin(async move {
+                *observed_in_task.lock().unwrap() = Some(in_request_handler_scope());
+                Ok(ok_result("done"))
+            })
+        });
+
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            if let Some(scoped) = *observed.lock().unwrap() {
+                assert!(
+                    !scoped,
+                    "task operation started without an originating request must remain unscoped"
+                );
+                return;
+            }
+        }
+        panic!("task operation did not run");
     }
 }

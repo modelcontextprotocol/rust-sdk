@@ -149,6 +149,15 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     ) -> impl Future<Output = ()> + MaybeSendFuture {
         async {}
     }
+
+    #[doc(hidden)]
+    fn enforce_request_association(
+        _request: &Self::Req,
+        _peer_info: Option<&Self::PeerInfo>,
+        _in_request_handler_scope: bool,
+    ) -> Result<(), ServiceError> {
+        Ok(())
+    }
 }
 
 pub(crate) fn uses_legacy_lifecycle(
@@ -157,6 +166,14 @@ pub(crate) fn uses_legacy_lifecycle(
 ) -> bool {
     !uses_discover_lifecycle
         && protocol_version.is_none_or(|version| version < &ProtocolVersion::V_2026_07_28)
+}
+
+tokio::task_local! {
+    pub(crate) static ORIGINATING_REQUEST: RequestId;
+}
+
+pub(crate) fn in_request_handler_scope() -> bool {
+    ORIGINATING_REQUEST.try_with(|_| ()).is_ok()
 }
 
 pub type TxJsonRpcMessage<R> =
@@ -725,6 +742,11 @@ impl<R: ServiceRole> Peer<R> {
         options: PeerRequestOptions,
         subscription_sender: Option<SubscriptionChannel<R::PeerNot>>,
     ) -> Result<RequestHandle<R>, ServiceError> {
+        R::enforce_request_association(
+            &request,
+            self.peer_info().as_deref(),
+            in_request_handler_scope(),
+        )?;
         let id = self.request_id_provider.next_request_id();
         let progress_token = self.progress_token_provider.next_progress_token();
         if let Some(metadata) = self.client_request_metadata.get() {
@@ -1398,9 +1420,10 @@ where
                             extensions,
                         };
                         let current_span = tracing::Span::current();
+                        let handler_id = id.clone();
                         spawn_service_task(async move {
-                            let result = service
-                                .handle_request(request, context)
+                            let result = ORIGINATING_REQUEST
+                                .scope(handler_id, service.handle_request(request, context))
                                 .await;
                             let response = match result {
                                 Ok(result) => {
