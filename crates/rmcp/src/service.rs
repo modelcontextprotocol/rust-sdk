@@ -176,7 +176,7 @@ pub(crate) fn in_request_handler_scope() -> bool {
     ORIGINATING_REQUEST.try_with(|_| ()).is_ok()
 }
 
-/// Marker stored in an outbound request's [`Extensions`](crate::model::Extensions)
+/// Marker stored in an outbound request's [`Extensions`]
 /// identifying the in-flight peer request it was issued from (SEP-2260).
 ///
 /// Attached automatically whenever a request is sent from within a request
