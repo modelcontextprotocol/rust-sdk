@@ -147,6 +147,10 @@ impl TaskContext {
 }
 
 /// How a task operation finished without producing a result.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "error variant for task exit may only be due to error or cancellation"
+)]
 #[derive(Debug)]
 pub enum TaskExit {
     /// The operation is exiting in response to a cancellation request;
