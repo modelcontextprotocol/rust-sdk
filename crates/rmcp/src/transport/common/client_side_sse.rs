@@ -288,6 +288,7 @@ pin_project_lite::pin_project! {
     where R: SseStreamReconnect
      {
         retry_policy: Arc<dyn SseRetryPolicy>,
+        reconnect_only_after_event_id: bool,
         last_event_id: Option<String>,
         server_retry_interval: Option<Duration>,
         connector: R,
@@ -304,6 +305,22 @@ impl<R: SseStreamReconnect> SseAutoReconnectStream<R> {
     ) -> Self {
         Self {
             retry_policy,
+            reconnect_only_after_event_id: false,
+            last_event_id: None,
+            server_retry_interval: None,
+            connector,
+            state: SseAutoReconnectStreamState::Connected { stream },
+        }
+    }
+
+    pub fn new_after_event_id(
+        stream: BoxedSseResponse,
+        connector: R,
+        retry_policy: Arc<dyn SseRetryPolicy>,
+    ) -> Self {
+        Self {
+            retry_policy,
+            reconnect_only_after_event_id: true,
             last_event_id: None,
             server_retry_interval: None,
             connector,
@@ -317,6 +334,7 @@ impl<E: std::error::Error + Send> SseAutoReconnectStream<NeverReconnect<E>> {
     pub(crate) fn never_reconnect(stream: BoxedSseResponse, error_when_reconnect: E) -> Self {
         Self {
             retry_policy: Arc::new(NeverRetry),
+            reconnect_only_after_event_id: false,
             last_event_id: None,
             server_retry_interval: None,
             connector: NeverReconnect {
@@ -409,6 +427,10 @@ where
                             this.state.set(SseAutoReconnectStreamState::Terminated);
                             return Poll::Ready(this.connector.map_fatal_stream_error(e).map(Err));
                         }
+                        if *this.reconnect_only_after_event_id && this.last_event_id.is_none() {
+                            this.state.set(SseAutoReconnectStreamState::Terminated);
+                            return Poll::Ready(this.connector.map_fatal_stream_error(e).map(Err));
+                        }
                         this.connector
                             .handle_stream_error(&e, this.last_event_id.as_deref());
                         let retrying = this
@@ -420,6 +442,13 @@ where
                         }
                     }
                     None => {
+                        if *this.reconnect_only_after_event_id && this.last_event_id.is_none() {
+                            tracing::debug!(
+                                "sse response ended before an event ID was received; cannot resume"
+                            );
+                            this.state.set(SseAutoReconnectStreamState::Terminated);
+                            return Poll::Ready(None);
+                        }
                         // Per SEP-1699, a graceful stream close is
                         // reconnectable.  If the server sent a `retry` field
                         // we MUST wait that long before reconnecting.
@@ -685,5 +714,25 @@ mod tests {
             matches!(result, Some(Err(TestReconnectError::Sse(_))))
                 && attempts.load(Ordering::Relaxed) == 0
         );
+    }
+
+    #[tokio::test]
+    async fn response_without_event_id_does_not_reconnect() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let connector = CountingReconnect {
+            attempts: attempts.clone(),
+        };
+        let stream = SseAutoReconnectStream::new_after_event_id(
+            futures::stream::empty().boxed(),
+            connector,
+            Arc::new(FixedInterval {
+                max_times: Some(1),
+                duration: Duration::ZERO,
+            }),
+        );
+        let mut stream = std::pin::pin!(stream);
+
+        assert!(stream.next().await.is_none());
+        assert_eq!(attempts.load(Ordering::Relaxed), 0);
     }
 }

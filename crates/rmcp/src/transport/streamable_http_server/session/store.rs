@@ -1,4 +1,61 @@
-use crate::model::InitializeRequestParams;
+use std::pin::Pin;
+
+use futures::Stream;
+
+use crate::{
+    model::InitializeRequestParams, transport::common::server_side_http::ServerSseMessage,
+};
+
+/// An opaque identifier for a persisted SSE event.
+pub type EventId = String;
+
+/// An opaque identifier for an SSE stream.
+pub type StreamId = String;
+
+/// A stream of persisted SSE events in delivery order.
+pub type EventStream = Pin<Box<dyn Stream<Item = ServerSseMessage> + Send + Sync + 'static>>;
+
+/// Type alias for boxed event store errors.
+pub type EventStoreError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// Persistent storage for resumable Streamable HTTP events.
+///
+/// Implementations typically use a database or distributed log shared by all
+/// server instances. Event IDs must be globally unique across all streams, and
+/// events must be committed before [`EventStore::store_event`] returns so the
+/// returned ID is safe to send to a client.
+#[async_trait::async_trait]
+pub trait EventStore: Send + Sync + 'static {
+    /// Persist an event and return the opaque ID clients should receive.
+    ///
+    /// The store assigns a globally unique ID and must retain its association
+    /// with `stream_id` so a later replay only returns events from that stream.
+    async fn store_event(
+        &self,
+        stream_id: &str,
+        event: &ServerSseMessage,
+    ) -> Result<EventId, EventStoreError>;
+
+    /// Return events strictly after `last_event_id` in delivery order.
+    ///
+    /// Implementations must locate the stream from the globally unique event
+    /// ID and yield only later events from that stream, with their originally
+    /// assigned event IDs.
+    ///
+    /// A finite stream enables reconnect-and-poll behavior. Implementations
+    /// backed by a distributed log may keep the stream open to deliver new
+    /// events as they are appended by any server instance.
+    async fn replay_events_after(
+        &self,
+        last_event_id: &str,
+    ) -> Result<EventStream, EventStoreError>;
+}
+
+impl std::fmt::Debug for dyn EventStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<EventStore>")
+    }
+}
 
 /// State persisted to an external store for cross-instance session recovery.
 ///

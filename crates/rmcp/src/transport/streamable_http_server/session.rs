@@ -20,6 +20,8 @@
 //! Implement the [`SessionManager`] trait to back sessions with a database,
 //! Redis, or any other external store.
 
+use std::sync::Arc;
+
 use futures::Stream;
 
 pub use crate::transport::common::server_side_http::{ServerSseMessage, SessionId};
@@ -32,7 +34,10 @@ pub mod local;
 pub mod never;
 pub mod store;
 
-pub use store::{SessionState, SessionStore, SessionStoreError};
+pub use store::{
+    EventId, EventStore, EventStoreError, EventStream, SessionState, SessionStore,
+    SessionStoreError, StreamId,
+};
 
 /// Extension marker inserted into the `initialize` request extensions during a
 /// session restore replay. Handlers can check for its presence to distinguish a
@@ -150,5 +155,10 @@ pub trait SessionManager: Send + Sync + 'static {
         _id: SessionId,
     ) -> impl Future<Output = Result<RestoreOutcome<Self::Transport>, Self::Error>> + Send {
         futures::future::ready(Ok(RestoreOutcome::NotSupported))
+    }
+
+    /// Return the shared event store used for resumable SSE streams.
+    fn event_store(&self) -> Option<Arc<dyn EventStore>> {
+        None
     }
 }

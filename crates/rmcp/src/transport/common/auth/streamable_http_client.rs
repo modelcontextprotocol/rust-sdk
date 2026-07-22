@@ -31,7 +31,7 @@ where
     async fn get_stream(
         &self,
         uri: std::sync::Arc<str>,
-        session_id: std::sync::Arc<str>,
+        session_id: Option<std::sync::Arc<str>>,
         last_event_id: Option<String>,
         mut auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -50,7 +50,7 @@ where
     async fn get_stream_with_max_sse_event_size(
         &self,
         uri: std::sync::Arc<str>,
-        session_id: std::sync::Arc<str>,
+        session_id: Option<std::sync::Arc<str>>,
         last_event_id: Option<String>,
         mut auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,

@@ -348,10 +348,14 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> impl Future<Output = Result<(), StreamableHttpError<Self::Error>>> + Send + '_;
+    /// Open an SSE stream, optionally scoped to a legacy session.
+    ///
+    /// `session_id` is `None` when resuming a stateless response using only
+    /// `last_event_id`.
     fn get_stream(
         &self,
         uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -375,7 +379,7 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     fn get_stream_with_max_sse_event_size(
         &self,
         uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -399,7 +403,7 @@ pub struct RetryConfig {
 
 struct StreamableHttpClientReconnect<C> {
     pub client: C,
-    pub session_id: Arc<str>,
+    pub session_id: Option<Arc<str>>,
     pub uri: Arc<str>,
     pub auth_header: Option<String>,
     pub custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -550,37 +554,6 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         Ok(())
     }
 
-    /// Convert a raw SSE stream into a JSON-RPC message stream without
-    /// reconnection logic.
-    fn raw_sse_to_jsonrpc(
-        stream: BoxedSseStream,
-    ) -> impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> + Send + 'static
-    {
-        stream.filter_map(|event| async {
-            match event {
-                Err(e) => Some(Err(StreamableHttpError::Sse(e))),
-                Ok(sse) => {
-                    let is_message =
-                        matches!(sse.event.as_deref(), None | Some("") | Some("message"));
-                    if !is_message {
-                        return None;
-                    }
-                    let data = sse.data?;
-                    if data.trim().is_empty() {
-                        return None;
-                    }
-                    match serde_json::from_str::<ServerJsonRpcMessage>(&data) {
-                        Ok(msg) => Some(Ok(msg)),
-                        Err(e) => {
-                            tracing::debug!("failed to deserialize server message: {e}");
-                            None
-                        }
-                    }
-                }
-            }
-        })
-    }
-
     /// Convert an SSE stream into JSON-RPC messages with reconnect semantics.
     ///
     /// This is used for request-scoped SSE responses as well as the standalone
@@ -590,7 +563,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     fn reconnecting_sse_to_jsonrpc(
         stream: BoxedSseStream,
         client: C,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         uri: Arc<str>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -598,7 +571,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         retry_config: Arc<dyn SseRetryPolicy>,
     ) -> impl Stream<Item = Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> + Send + 'static
     {
-        SseAutoReconnectStream::new(
+        SseAutoReconnectStream::new_after_event_id(
             stream,
             StreamableHttpClientReconnect {
                 client,
@@ -614,10 +587,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 
     /// Convert a POST response SSE stream into JSON-RPC messages.
     ///
-    /// Stateful sessions can resume via GET when the response stream closes
-    /// before the server sends the matching JSON-RPC response. Stateless
-    /// transports do not have enough state to resume, so they keep the raw
-    /// SSE-to-JSON-RPC mapping.
+    /// Request-scoped streams resume via GET once the server has supplied an
+    /// event ID. The session header remains optional for stateless transports.
     fn response_sse_to_jsonrpc(
         stream: BoxedSseStream,
         session_id: Option<Arc<str>>,
@@ -628,20 +599,17 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         max_sse_event_size: usize,
         retry_config: Arc<dyn SseRetryPolicy>,
     ) -> BoxStream<'static, Result<ServerJsonRpcMessage, StreamableHttpError<C::Error>>> {
-        match session_id {
-            Some(session_id) => Self::reconnecting_sse_to_jsonrpc(
-                stream,
-                client,
-                session_id,
-                uri,
-                auth_header,
-                custom_headers,
-                max_sse_event_size,
-                retry_config,
-            )
-            .boxed(),
-            None => Self::raw_sse_to_jsonrpc(stream).boxed(),
-        }
+        Self::reconnecting_sse_to_jsonrpc(
+            stream,
+            client,
+            session_id,
+            uri,
+            auth_header,
+            custom_headers,
+            max_sse_event_size,
+            retry_config,
+        )
+        .boxed()
     }
 
     async fn execute_sse_stream(
@@ -709,7 +677,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             let result = match client
                 .get_stream_with_max_sse_event_size(
                     uri,
-                    session_id.clone(),
+                    Some(session_id.clone()),
                     None,
                     auth_header,
                     protocol_headers.clone(),
@@ -722,7 +690,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                         stream,
                         StreamableHttpClientReconnect {
                             client,
-                            session_id,
+                            session_id: Some(session_id),
                             uri: reconnect_uri,
                             auth_header: reconnect_auth_header,
                             custom_headers: protocol_headers,
@@ -1559,7 +1527,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 ///     async fn get_stream(
 ///         &self,
 ///         _uri: Arc<str>,
-///         _session_id: Arc<str>,
+///         _session_id: Option<Arc<str>>,
 ///         _last_event_id: Option<String>,
 ///         _auth_header: Option<String>,
 ///         _custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -1646,7 +1614,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
     ///     async fn get_stream(
     ///         &self,
     ///         _uri: Arc<str>,
-    ///         _session_id: Arc<str>,
+    ///         _session_id: Option<Arc<str>>,
     ///         _last_event_id: Option<String>,
     ///         _auth_header: Option<String>,
     ///         _custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -1778,10 +1746,109 @@ impl Default for StreamableHttpClientTransportConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use serde_json::json;
 
     use super::*;
     use crate::model::{ListToolsResult, NumberOrString, ServerResult, Tool};
+
+    type ReconnectAttempt = (Option<String>, Option<String>);
+
+    #[derive(Clone, Default)]
+    struct StatelessReconnectClient {
+        reconnects: Arc<Mutex<Vec<ReconnectAttempt>>>,
+    }
+
+    impl StreamableHttpClient for StatelessReconnectClient {
+        type Error = std::io::Error;
+
+        async fn post_message(
+            &self,
+            _uri: Arc<str>,
+            _message: ClientJsonRpcMessage,
+            _session_id: Option<Arc<str>>,
+            _auth_header: Option<String>,
+            _custom_headers: HashMap<HeaderName, HeaderValue>,
+        ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+            Err(StreamableHttpError::UnexpectedServerResponse(
+                "unexpected POST".into(),
+            ))
+        }
+
+        async fn delete_session(
+            &self,
+            _uri: Arc<str>,
+            _session_id: Arc<str>,
+            _auth_header: Option<String>,
+            _custom_headers: HashMap<HeaderName, HeaderValue>,
+        ) -> Result<(), StreamableHttpError<Self::Error>> {
+            Ok(())
+        }
+
+        async fn get_stream(
+            &self,
+            _uri: Arc<str>,
+            session_id: Option<Arc<str>>,
+            last_event_id: Option<String>,
+            _auth_header: Option<String>,
+            _custom_headers: HashMap<HeaderName, HeaderValue>,
+        ) -> Result<BoxedSseStream, StreamableHttpError<Self::Error>> {
+            self.reconnects
+                .lock()
+                .expect("lock reconnects")
+                .push((session_id.map(|id| id.to_string()), last_event_id));
+            let response = ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(ListToolsResult::default()),
+                NumberOrString::Number(1),
+            );
+            Ok(futures::stream::once(async move {
+                Ok(Sse {
+                    event: None,
+                    data: Some(serde_json::to_string(&response).expect("serialize response")),
+                    id: Some("event-1".into()),
+                    retry: None,
+                })
+            })
+            .boxed())
+        }
+    }
+
+    #[tokio::test]
+    async fn stateless_response_reconnects_with_last_event_id() {
+        let initial = futures::stream::iter([Ok(Sse {
+            event: None,
+            data: None,
+            id: Some("event-0".into()),
+            retry: Some(0),
+        })])
+        .boxed();
+        let client = StatelessReconnectClient::default();
+        let reconnects = client.reconnects.clone();
+        let stream =
+            StreamableHttpClientWorker::<StatelessReconnectClient>::response_sse_to_jsonrpc(
+                initial,
+                None,
+                client,
+                Arc::from("http://localhost/mcp"),
+                None,
+                HashMap::new(),
+                DEFAULT_MAX_SSE_EVENT_SIZE,
+                Arc::new(ExponentialBackoff {
+                    max_times: Some(1),
+                    base_duration: Duration::ZERO,
+                }),
+            );
+        let mut stream = std::pin::pin!(stream);
+
+        let message = stream.next().await.expect("replayed response").unwrap();
+
+        assert!(matches!(message, ServerJsonRpcMessage::Response(_)));
+        assert_eq!(
+            reconnects.lock().expect("lock reconnects").as_slice(),
+            &[(None, Some("event-0".into()))]
+        );
+    }
 
     fn tool(name: &'static str, annotation: serde_json::Value) -> Tool {
         let schema = json!({

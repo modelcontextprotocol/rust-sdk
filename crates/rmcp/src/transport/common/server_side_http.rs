@@ -119,6 +119,15 @@ impl ServerSseMessage {
             retry: Some(retry),
         }
     }
+
+    /// Create a retry hint without changing the client's last event ID.
+    pub fn retry(retry: Duration) -> Self {
+        Self {
+            event_id: None,
+            message: None,
+            retry: Some(retry),
+        }
+    }
 }
 
 pub(crate) fn sse_stream_response(

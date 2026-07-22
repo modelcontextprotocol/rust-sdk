@@ -160,7 +160,7 @@ impl StreamableHttpClient for ReinitDropsAcceptedResponseClient {
     async fn get_stream(
         &self,
         _uri: Arc<str>,
-        session_id: Arc<str>,
+        session_id: Option<Arc<str>>,
         _last_event_id: Option<String>,
         _auth_header: Option<String>,
         _custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -168,7 +168,7 @@ impl StreamableHttpClient for ReinitDropsAcceptedResponseClient {
         futures::stream::BoxStream<'static, Result<sse_stream::Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
-        if session_id.as_ref() == "session-1" {
+        if session_id.as_deref() == Some("session-1") {
             let cancel = self.stale_stream_cancelled.clone();
             Ok(Box::pin(stream::once(async move {
                 cancel.cancelled_owned().await;

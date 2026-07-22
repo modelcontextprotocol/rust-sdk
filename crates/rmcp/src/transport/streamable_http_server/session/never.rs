@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use futures::Stream;
 use thiserror::Error;
 
-use super::{ServerSseMessage, SessionId, SessionManager};
+use super::{EventStore, ServerSseMessage, SessionId, SessionManager};
 use crate::{
     RoleServer,
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
@@ -14,7 +16,17 @@ use crate::{
 pub struct ErrorSessionManagementNotSupported;
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub struct NeverSessionManager {}
+pub struct NeverSessionManager {
+    event_store: Option<Arc<dyn EventStore>>,
+}
+
+impl NeverSessionManager {
+    /// Configure resumable SSE storage without enabling sessions.
+    pub fn with_event_store(mut self, event_store: Arc<dyn EventStore>) -> Self {
+        self.event_store = Some(event_store);
+        self
+    }
+}
 #[non_exhaustive]
 pub enum NeverTransport {}
 impl Transport<RoleServer> for NeverTransport {
@@ -106,5 +118,9 @@ impl SessionManager for NeverSessionManager {
         _message: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         futures::future::ready(Err(ErrorSessionManagementNotSupported))
+    }
+
+    fn event_store(&self) -> Option<Arc<dyn EventStore>> {
+        self.event_store.clone()
     }
 }

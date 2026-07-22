@@ -19,7 +19,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 use super::session::{
-    RestoreOutcome, SessionId, SessionManager, SessionRestoreMarker, SessionState, SessionStore,
+    EventStore, EventStoreError, RestoreOutcome, SessionId, SessionManager, SessionRestoreMarker,
+    SessionState, SessionStore,
 };
 use crate::{
     RoleServer,
@@ -49,6 +50,7 @@ use crate::{
 
 /// Default maximum POST request body size (4 MiB).
 pub(crate) const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+const STATELESS_STREAM_CHANNEL_CAPACITY: usize = 16;
 
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -319,6 +321,21 @@ fn method_not_allowed_response() -> BoxResponse {
         .header(ALLOW, "POST")
         .body(Full::new(Bytes::from("Method Not Allowed")).boxed())
         .expect("valid response")
+}
+
+async fn persist_and_forward_event(
+    event_store: &dyn EventStore,
+    stream_id: &str,
+    mut event: ServerSseMessage,
+    output: &mut Option<tokio::sync::mpsc::Sender<ServerSseMessage>>,
+) -> Result<(), EventStoreError> {
+    event.event_id = Some(event_store.store_event(stream_id, &event).await?);
+    if let Some(sender) = output {
+        if sender.send(event).await.is_err() {
+            *output = None;
+        }
+    }
+    Ok(())
 }
 
 fn invalid_request_jsonrpc_response(
@@ -920,6 +937,98 @@ where
         (self.service_factory)()
     }
 
+    fn persisted_stateless_stream(
+        &self,
+        first: Option<ServerJsonRpcMessage>,
+        mut receiver: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
+        request_ct: CancellationToken,
+        event_store: Arc<dyn EventStore>,
+    ) -> ReceiverStream<ServerSseMessage> {
+        let (sender, output) = tokio::sync::mpsc::channel(STATELESS_STREAM_CHANNEL_CAPACITY);
+        let stream_id = uuid::Uuid::new_v4().to_string();
+        let retry = self.config.sse_retry;
+        let server_ct = self.config.cancellation_token.child_token();
+
+        tokio::spawn(async move {
+            let mut sender = Some(sender);
+            if let Some(retry) = retry {
+                if let Err(error) = persist_and_forward_event(
+                    event_store.as_ref(),
+                    &stream_id,
+                    ServerSseMessage::retry(retry),
+                    &mut sender,
+                )
+                .await
+                {
+                    tracing::error!(%stream_id, %error, "failed to persist SSE priming event");
+                    request_ct.cancel();
+                    return;
+                }
+            }
+
+            let mut first = first;
+            loop {
+                let message = if let Some(message) = first.take() {
+                    Some(message)
+                } else {
+                    tokio::select! {
+                        message = receiver.recv() => message,
+                        _ = server_ct.cancelled() => {
+                            request_ct.cancel();
+                            None
+                        }
+                    }
+                };
+                let Some(message) = message else {
+                    break;
+                };
+                tracing::trace!(?message);
+                if let Err(error) = persist_and_forward_event(
+                    event_store.as_ref(),
+                    &stream_id,
+                    ServerSseMessage::from_message(message),
+                    &mut sender,
+                )
+                .await
+                {
+                    tracing::error!(%stream_id, %error, "failed to persist SSE event");
+                    request_ct.cancel();
+                    break;
+                }
+            }
+        });
+
+        ReceiverStream::new(output)
+    }
+
+    fn stateless_sse_response(
+        &self,
+        first: Option<ServerJsonRpcMessage>,
+        receiver: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
+        request_ct: CancellationToken,
+    ) -> BoxResponse {
+        if let Some(event_store) = self.session_manager.event_store() {
+            let stream = self.persisted_stateless_stream(first, receiver, request_ct, event_store);
+            sse_stream_response(
+                stream,
+                self.config.sse_keep_alive,
+                self.config.cancellation_token.child_token(),
+            )
+        } else {
+            let stream = futures::stream::iter(first)
+                .chain(ReceiverStream::new(receiver))
+                .map(|message| {
+                    tracing::trace!(?message);
+                    ServerSseMessage::from_message(message)
+                });
+            sse_stream_response(
+                CancelOnDisconnect::new(stream, request_ct),
+                self.config.sse_keep_alive,
+                self.config.cancellation_token.child_token(),
+            )
+        }
+    }
+
     // The HTTP status must be known before opening an SSE stream.
     async fn serve_negotiated_request_directly(
         &self,
@@ -979,19 +1088,7 @@ where
             return jsonrpc_message_response(first, true);
         }
 
-        // The handler may still be streaming, so guard the response: dropping it
-        // (client disconnect) must cancel the handler.
-        let stream = futures::stream::once(async move { first })
-            .chain(ReceiverStream::new(receiver))
-            .map(|message| {
-                tracing::trace!(?message);
-                ServerSseMessage::from_message(message)
-            });
-        Ok(sse_stream_response(
-            CancelOnDisconnect::new(stream, request_ct),
-            self.config.sse_keep_alive,
-            self.config.cancellation_token.child_token(),
-        ))
+        Ok(self.stateless_sse_response(Some(first), receiver, request_ct))
     }
 
     /// Returns the cached input schema for `name`, constructing a service once
@@ -1235,15 +1332,18 @@ where
             return response;
         }
         let method = request.method().clone();
-        let allowed_methods = match self.config.legacy_session_mode {
-            true => "GET, POST, DELETE",
-            false => "POST",
+        let supports_stateless_replay = self.session_manager.event_store().is_some();
+        let allowed_methods = match (self.config.legacy_session_mode, supports_stateless_replay) {
+            (true, _) => "GET, POST, DELETE",
+            (false, true) => "GET, POST",
+            (false, false) => "POST",
         };
-        let result = match (method, self.config.legacy_session_mode) {
-            (Method::POST, _) => self.handle_post(request).await,
-            // if legacy session mode is disabled, we don't support GET or DELETE because there is no session
-            (Method::GET, true) => self.handle_get(request).await,
-            (Method::DELETE, true) => self.handle_delete(request).await,
+        let result = match method {
+            Method::POST => self.handle_post(request).await,
+            Method::GET if self.config.legacy_session_mode || supports_stateless_replay => {
+                self.handle_get(request).await
+            }
+            Method::DELETE if self.config.legacy_session_mode => self.handle_delete(request).await,
             _ => {
                 // Handle other methods or return an error
                 let response = Response::builder()
@@ -1264,9 +1364,6 @@ where
         B: Body + Send + 'static,
         B::Error: Display,
     {
-        if !is_legacy_request(None, request.headers())? {
-            return Ok(method_not_allowed_response());
-        }
         // check accept header
         if !request
             .headers()
@@ -1283,6 +1380,32 @@ where
                     .boxed(),
                 )
                 .expect("valid response"));
+        }
+        let request_uses_legacy_protocol = is_legacy_request(None, request.headers())?;
+        let legacy_request = self.config.legacy_session_mode && request_uses_legacy_protocol;
+        if !legacy_request {
+            let Some(last_event_id) = request
+                .headers()
+                .get(HEADER_LAST_EVENT_ID)
+                .and_then(|value| value.to_str().ok())
+            else {
+                return Ok(method_not_allowed_response());
+            };
+            let Some(event_store) = self.session_manager.event_store() else {
+                return Ok(method_not_allowed_response());
+            };
+            let stream = match event_store.replay_events_after(last_event_id).await {
+                Ok(stream) => stream,
+                Err(error) => {
+                    tracing::warn!(%error, "stateless SSE resume failed, returning empty stream");
+                    Box::pin(futures::stream::empty())
+                }
+            };
+            return Ok(sse_stream_response(
+                stream,
+                self.config.sse_keep_alive,
+                self.config.cancellation_token.child_token(),
+            ));
         }
         // check session id
         let session_id = request
@@ -1361,7 +1484,11 @@ where
             .await
             .map_err(internal_error_response("create standalone stream"))?;
         let stream = if let Some(retry) = self.config.sse_retry {
-            let priming = ServerSseMessage::priming("0", retry);
+            let priming = if self.session_manager.event_store().is_some() {
+                ServerSseMessage::retry(retry)
+            } else {
+                ServerSseMessage::priming("0", retry)
+            };
             futures::stream::once(async move { priming })
                 .chain(stream)
                 .left_stream()
@@ -1658,10 +1785,9 @@ where
                     request.request.extensions_mut().insert(part);
                     let (transport, mut receiver) =
                         OneshotTransport::<RoleServer>::new(ClientJsonRpcMessage::Request(request));
-                    // Give this stateless request its own cancellation token so a
-                    // client disconnect can cancel the in-flight handler (#857). A
-                    // stateless request is one-shot (no session, no resumption), so a
-                    // dropped response is terminal and safe to cancel.
+                    // Give this stateless request its own cancellation token so an
+                    // unpersisted response can cancel the in-flight handler on
+                    // disconnect (#857).
                     let request_ct = CancellationToken::new();
                     let service =
                         serve_directly_with_ct(service, transport, peer_info, request_ct.clone());
@@ -1710,35 +1836,10 @@ where
                                 .body(Full::new(Bytes::from(body)).boxed())
                                 .expect("valid response"))
                         } else {
-                            // The handler emitted an intermediate message and is still
-                            // running, so guard the streamed sequence too: dropping it
-                            // (client disconnect) must cancel the handler.
-                            let first = futures::stream::once(async move {
-                                ServerSseMessage::from_message(message)
-                            });
-                            let remaining = ReceiverStream::new(receiver).map(|message| {
-                                tracing::trace!(?message);
-                                ServerSseMessage::from_message(message)
-                            });
-                            Ok(sse_stream_response(
-                                CancelOnDisconnect::new(first.chain(remaining), request_ct),
-                                self.config.sse_keep_alive,
-                                self.config.cancellation_token.child_token(),
-                            ))
+                            Ok(self.stateless_sse_response(Some(message), receiver, request_ct))
                         }
                     } else {
-                        // SSE mode (default): cancel the handler if the client
-                        // disconnects (drops the response stream) before it completes.
-                        let stream = ReceiverStream::new(receiver).map(|message| {
-                            tracing::trace!(?message);
-                            ServerSseMessage::from_message(message)
-                        });
-                        let stream = CancelOnDisconnect::new(stream, request_ct);
-                        Ok(sse_stream_response(
-                            stream,
-                            self.config.sse_keep_alive,
-                            self.config.cancellation_token.child_token(),
-                        ))
+                        Ok(self.stateless_sse_response(None, receiver, request_ct))
                     }
                 }
                 ClientJsonRpcMessage::Notification(_notification) => {
@@ -1821,16 +1922,11 @@ where
 }
 
 pin_project! {
-    /// Wraps a stateless SSE response stream so a client disconnect cancels the
-    /// in-flight request.
+    /// Cancels an unpersisted stateless request when its response is dropped.
     ///
-    /// A stateless streamable-HTTP request is one-shot: it has no session and no
-    /// resumption, so a dropped response stream means the client is gone for
-    /// good. When the stream is dropped *before* it ends naturally, the request's
-    /// cancellation token is fired, which stops the dedicated `serve_directly`
-    /// loop and cancels the handler's `RequestContext::ct` (see #857). If the
-    /// stream ends naturally (the request completed), the guard is disarmed so
-    /// normal completion cancels nothing.
+    /// Persisted requests keep running so another connection can resume them.
+    /// Without an event store, dropping the stream fires the request's
+    /// cancellation token. Natural completion disarms the guard.
     struct CancelOnDisconnect<S> {
         #[pin]
         inner: S,
