@@ -136,6 +136,19 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     fn peer_cancelled_params(_notification: &Self::PeerNot) -> Option<&CancelledNotificationParam> {
         None
     }
+    /// Invalidate any response cache affected by an inbound peer notification.
+    ///
+    /// The serve loop calls this for every notification *before* subscription
+    /// routing, so cache invalidation still runs when a notification is
+    /// delivered through a `listen` subscription channel rather than the
+    /// [`Service::handle_notification`] callbacks.
+    #[doc(hidden)]
+    fn invalidate_response_cache(
+        _peer: &Peer<Self>,
+        _notification: &Self::PeerNot,
+    ) -> impl Future<Output = ()> + MaybeSendFuture {
+        async {}
+    }
 }
 
 pub(crate) fn uses_legacy_lifecycle(
@@ -571,6 +584,8 @@ pub struct Peer<R: ServiceRole> {
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
     request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
+    #[cfg(feature = "client")]
+    response_cache: client::cache::PeerResponseCache<R>,
 }
 
 impl<R: Clone + ServiceRole> Clone for Peer<R>
@@ -587,6 +602,8 @@ where
             client_request_metadata: self.client_request_metadata.clone(),
             request_metadata_required: self.request_metadata_required.clone(),
             subscription_channels: self.subscription_channels.clone(),
+            #[cfg(feature = "client")]
+            response_cache: self.response_cache.clone(),
         }
     }
 }
@@ -661,6 +678,8 @@ impl<R: ServiceRole> Peer<R> {
                 client_request_metadata: Default::default(),
                 request_metadata_required: Default::default(),
                 subscription_channels: Default::default(),
+                #[cfg(feature = "client")]
+                response_cache: Default::default(),
             },
             rx,
         )
@@ -1402,6 +1421,7 @@ where
                     ..
                 })) => {
                     tracing::info!(?notification, "received notification");
+                    R::invalidate_response_cache(&peer, &notification).await;
                     let cancellation_request_id =
                         if let Some(cancelled) = R::peer_cancelled_params(&notification) {
                             let request_id = cancelled.request_id.clone();

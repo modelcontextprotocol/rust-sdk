@@ -32,6 +32,7 @@ For the full MCP specification, see [modelcontextprotocol.io](https://modelconte
 - [Notifications](#notifications)
 - [Subscriptions](#subscriptions)
 - [Tasks](#tasks-long-running-tool-invocations)
+- [Caching](#caching)
 - [Examples](#examples)
 - [OAuth Support](#oauth-support)
 - [Related Resources](#related-resources)
@@ -1002,6 +1003,52 @@ async fn call_tool(&self, request: CallToolRequestParams, context: RequestContex
 
 See [`servers_task_stdio`](examples/servers/src/task_stdio.rs) and the matching
 [`clients_task_stdio`](examples/clients/src/task_stdio.rs) for a runnable end-to-end example.
+
+## Caching
+
+`rmcp` clients transparently cache responses that carry the
+[SEP-2549](https://modelcontextprotocol.io/specification/draft/server/utilities/caching)
+caching hints (`ttlMs` / `cacheScope`) for `server/discover`, `tools/list`,
+`prompts/list`, `resources/list`, `resources/templates/list`, and `resources/read`.
+
+Caching is on by default but only stores a response when the server sends a
+positive `ttlMs`, so servers that omit the hint behave exactly as before. Entries
+expire after their TTL, are partitioned by cache scope, and are invalidated
+automatically by the matching `list_changed` / `resource updated` notifications.
+
+No call-site changes are needed — existing calls benefit automatically:
+
+```rust, ignore
+let tools = peer.list_tools(None).await?;     // served from cache while fresh
+let res   = peer.read_resource(params).await?; // cached per-URI
+```
+
+Tune or disable it per connection via the `Peer`:
+
+```rust, ignore
+use std::time::Duration;
+use rmcp::ClientCacheConfig;
+
+// Customize behavior.
+peer.set_response_cache_config(
+    ClientCacheConfig::default()
+        .with_default_ttl(Duration::from_secs(30)) // TTL for servers that omit ttlMs
+        .with_max_ttl(Duration::from_secs(3600))   // upper bound on any TTL
+        .with_max_entries(1024)
+        .with_private_partition(user_id)            // separate private caches per principal
+        .with_serve_stale_on_error(false),          // surface errors instead of stale data
+).await;
+
+// Or turn it off entirely.
+peer.set_response_cache_config(ClientCacheConfig::disabled()).await;
+
+// Manually flush.
+peer.clear_response_cache().await;
+```
+
+> **Note:** with the default `serve_stale_on_error`, a failed re-fetch returns the
+> last cached response (even if expired) as `Ok(..)` instead of an error. Set
+> `with_serve_stale_on_error(false)` if callers must observe fetch failures.
 
 ## Examples
 
