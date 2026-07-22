@@ -1342,13 +1342,14 @@ impl Peer<RoleClient> {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if uses_cursor {
+                    self.invalidate_prompt_cache().await;
+                    return Err(error);
+                }
                 if let Some(ServerResult::ListPromptsResult(result)) =
                     self.stale_cached_response(&cache_key).await
                 {
                     return Ok(result);
-                }
-                if uses_cursor {
-                    self.invalidate_prompt_cache().await;
                 }
                 return Err(error);
             }
@@ -1391,14 +1392,15 @@ impl Peer<RoleClient> {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if uses_cursor {
+                    self.invalidate_cached_responses(RESOURCE_LIST_CACHE_PREFIX)
+                        .await;
+                    return Err(error);
+                }
                 if let Some(ServerResult::ListResourcesResult(result)) =
                     self.stale_cached_response(&cache_key).await
                 {
                     return Ok(result);
-                }
-                if uses_cursor {
-                    self.invalidate_cached_responses(RESOURCE_LIST_CACHE_PREFIX)
-                        .await;
                 }
                 return Err(error);
             }
@@ -1443,14 +1445,15 @@ impl Peer<RoleClient> {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if uses_cursor {
+                    self.invalidate_cached_responses(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX)
+                        .await;
+                    return Err(error);
+                }
                 if let Some(ServerResult::ListResourceTemplatesResult(result)) =
                     self.stale_cached_response(&cache_key).await
                 {
                     return Ok(result);
-                }
-                if uses_cursor {
-                    self.invalidate_cached_responses(RESOURCE_TEMPLATE_LIST_CACHE_PREFIX)
-                        .await;
                 }
                 return Err(error);
             }
@@ -1502,13 +1505,14 @@ impl Peer<RoleClient> {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if uses_cursor {
+                    self.invalidate_tool_cache().await;
+                    return Err(error);
+                }
                 if let Some(ServerResult::ListToolsResult(result)) =
                     self.stale_cached_response(&cache_key).await
                 {
                     return Ok(result);
-                }
-                if uses_cursor {
-                    self.invalidate_tool_cache().await;
                 }
                 return Err(error);
             }
@@ -2064,21 +2068,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_entries_are_isolated_between_client_peers() {
-        let first = disconnected_peer();
-        let second = disconnected_peer();
+    async fn private_entries_are_isolated_between_authorization_partitions() {
+        let peer = disconnected_peer();
         let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
-        first
-            .cache_response(
-                key.clone(),
-                ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Private))),
-                Some(5_000),
-                Some(CacheScope::Private),
-            )
-            .await;
 
-        assert!(first.cached_response(&key).await.is_some());
-        assert!(second.cached_response(&key).await.is_none());
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_private_partition("auth-a"),
+        )
+        .await;
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Private))),
+            Some(5_000),
+            Some(CacheScope::Private),
+        )
+        .await;
+        assert!(peer.cached_response(&key).await.is_some());
+
+        // Switching to a different authorization context must not expose the
+        // first partition's private entry.
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_private_partition("auth-b"),
+        )
+        .await;
+        assert!(peer.cached_response(&key).await.is_none());
     }
 
     #[tokio::test]
