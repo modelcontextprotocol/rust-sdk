@@ -1211,6 +1211,7 @@ where
             PeerMessage(RxJsonRpcMessage<R>),
             ToSink(TxJsonRpcMessage<R>),
             SendTaskResult(SendTaskResult),
+            ResponseSendTaskResult(Result<(), tokio::task::JoinError>),
         }
 
         let quit_reason = loop {
@@ -1256,6 +1257,11 @@ where
                             }
                         }
                     }
+                    result = response_send_tasks.join_next(), if !response_send_tasks.is_empty() => {
+                        Event::ResponseSendTaskResult(
+                            result.expect("non-empty response send task set")
+                        )
+                    }
                     _ = serve_loop_ct.cancelled() => {
                         tracing::info!("task cancelled");
                         break QuitReason::Cancelled
@@ -1292,6 +1298,11 @@ where
                                 }));
                             }
                         }
+                    }
+                }
+                Event::ResponseSendTaskResult(result) => {
+                    if let Err(error) = result {
+                        tracing::error!(%error, "response send task failed");
                     }
                 }
                 // response and error
