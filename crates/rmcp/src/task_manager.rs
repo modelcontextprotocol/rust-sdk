@@ -276,14 +276,26 @@ impl TaskOptions {
 /// # Retention
 ///
 /// Entries are swept opportunistically on every `spawn` / `get_task` /
-/// `update_task` / `cancel_task` call: non-terminal tasks whose `ttl_ms` has
-/// elapsed are marked `failed` (their operation is aborted), and terminal
-/// tasks are evicted after being retained for one further `ttl_ms` window so
-/// pollers can observe the final state. Tasks with `ttl_ms: None` are
-/// retained for the lifetime of the manager (spec: unlimited retention) —
-/// bound task creation or call [`Self::shutdown`] yourself if you spawn such
-/// tasks in a long-lived server. There is no background sweeper; an idle
-/// manager holds its entries until the next call.
+/// `update_task` / `cancel_task` / `running_task_count` call: non-terminal
+/// tasks whose `ttl_ms` has elapsed are marked `failed` (their operation is
+/// aborted), and terminal tasks are evicted after being retained for one
+/// further `ttl_ms` window past their terminal transition so pollers can
+/// observe the final state.
+///
+/// Note that the retention window intentionally extends past the
+/// creation-based lifetime that `ttl_ms` advertises on the wire: a task that
+/// runs to its TTL deadline is marked `failed` around `created + ttl_ms` and
+/// stays observable until roughly `created + 2 × ttl_ms`. This is compliant —
+/// SEP-2663 lets servers delete expired tasks *at any time* after the TTL,
+/// so retaining them longer as an observation grace period is a server-side
+/// policy choice, not a wire-contract change. Clients may treat the task as
+/// unusable after `createdAt + ttlMs` regardless.
+///
+/// Tasks with `ttl_ms: None` are retained for the lifetime of the manager
+/// (spec: unlimited retention) — bound task creation or call
+/// [`Self::shutdown`] yourself if you spawn such tasks in a long-lived
+/// server. There is no background sweeper; an idle manager holds its entries
+/// until the next call.
 #[derive(Clone, Default)]
 pub struct TaskManager {
     inner: Arc<Mutex<TaskManagerInner>>,
@@ -361,7 +373,7 @@ impl TaskManager {
                 entry.join_handle = None;
             }
         });
-        if let Some(entry) = self
+        match self
             .inner
             .lock()
             .expect("task manager lock poisoned")
@@ -371,9 +383,14 @@ impl TaskManager {
             // Only store the handle while the operation is still running: if
             // it already settled, the completion path above ran first and a
             // stored handle would never be cleared.
-            if entry.terminal.is_none() {
-                entry.join_handle = Some(handle);
+            Some(entry) => {
+                if entry.terminal.is_none() {
+                    entry.join_handle = Some(handle);
+                }
             }
+            // The entry is gone: shutdown() drained the map between the
+            // insert and here. Abort rather than leak a detached operation.
+            None => handle.abort(),
         }
         task
     }
@@ -453,7 +470,8 @@ impl TaskManager {
 
     /// Number of tasks currently in a non-terminal state.
     pub fn running_task_count(&self) -> usize {
-        let inner = self.inner.lock().expect("task manager lock poisoned");
+        let mut inner = self.inner.lock().expect("task manager lock poisoned");
+        Self::sweep_expired(&mut inner);
         inner
             .tasks
             .values()
@@ -787,6 +805,22 @@ mod tests {
 
         let err = manager.get_task(&abandoned.task_id).unwrap_err();
         assert_eq!(err.code, crate::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn running_task_count_sweeps_expired_tasks() {
+        let manager = TaskManager::new();
+        let _task = manager.spawn(TaskOptions::new().with_ttl_ms(10), |_ctx| {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(ok_result("never"))
+            })
+        });
+        assert_eq!(manager.running_task_count(), 1);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        // The count itself must sweep: the overdue task is failed, not
+        // reported as running.
+        assert_eq!(manager.running_task_count(), 0);
     }
 
     #[tokio::test]
