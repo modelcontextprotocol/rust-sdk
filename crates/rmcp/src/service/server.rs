@@ -769,6 +769,17 @@ impl Peer<RoleServer> {
         }
     }
 
+    /// # SEP-2260: request association
+    ///
+    /// From protocol version `2026-07-28`, this request must be issued while
+    /// handling a client request — call it on the [`Peer`] from a
+    /// [`RequestContext`], from the handler's
+    /// own task. Calling it outside a handler returns an
+    /// `invalid_request` error. Note that task-local association does not
+    /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+    /// outside the handler — use the task manager for long-running work.
+    /// Requests issued in-handler are delivered on the originating request's
+    /// SSE stream in the streamable HTTP transport.
     #[deprecated(
         since = "1.8.0",
         note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
@@ -803,6 +814,17 @@ impl Peer<RoleServer> {
         }
     }
     method!(
+        /// # SEP-2260: request association
+        ///
+        /// From protocol version `2026-07-28`, this request must be issued while
+        /// handling a client request — call it on the [`Peer`] from a
+        /// [`RequestContext`], from the handler's
+        /// own task. Calling it outside a handler returns an
+        /// `invalid_request` error. Note that task-local association does not
+        /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+        /// outside the handler — use the task manager for long-running work.
+        /// Requests issued in-handler are delivered on the originating request's
+        /// SSE stream in the streamable HTTP transport.
         #[deprecated(
             since = "1.8.0",
             note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
@@ -810,9 +832,35 @@ impl Peer<RoleServer> {
         peer_req list_roots ListRootsRequest() => ListRootsResult
     );
     #[cfg(feature = "elicitation")]
-    method!(peer_req create_elicitation ElicitRequest(ElicitRequestParams) => ElicitResult);
+    method!(
+        /// # SEP-2260: request association
+        ///
+        /// From protocol version `2026-07-28`, this request must be issued while
+        /// handling a client request — call it on the [`Peer`] from a
+        /// [`RequestContext`], from the handler's
+        /// own task. Calling it outside a handler returns an
+        /// `invalid_request` error. Note that task-local association does not
+        /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+        /// outside the handler — use the task manager for long-running work.
+        /// Requests issued in-handler are delivered on the originating request's
+        /// SSE stream in the streamable HTTP transport.
+        peer_req create_elicitation ElicitRequest(ElicitRequestParams) => ElicitResult
+    );
     #[cfg(feature = "elicitation")]
-    method!(peer_req_with_timeout create_elicitation_with_timeout ElicitRequest(ElicitRequestParams) => ElicitResult);
+    method!(
+        /// # SEP-2260: request association
+        ///
+        /// From protocol version `2026-07-28`, this request must be issued while
+        /// handling a client request — call it on the [`Peer`] from a
+        /// [`RequestContext`], from the handler's
+        /// own task. Calling it outside a handler returns an
+        /// `invalid_request` error. Note that task-local association does not
+        /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+        /// outside the handler — use the task manager for long-running work.
+        /// Requests issued in-handler are delivered on the originating request's
+        /// SSE stream in the streamable HTTP transport.
+        peer_req_with_timeout create_elicitation_with_timeout ElicitRequest(ElicitRequestParams) => ElicitResult
+    );
 
     method!(peer_not notify_cancelled CancelledNotification(CancelledNotificationParam));
     method!(peer_not notify_progress ProgressNotification(ProgressNotificationParam));
@@ -1039,6 +1087,18 @@ impl Peer<RoleServer> {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # SEP-2260: request association
+    ///
+    /// From protocol version `2026-07-28`, this request must be issued while
+    /// handling a client request — call it on the [`Peer`] from a
+    /// [`RequestContext`], from the handler's
+    /// own task. Calling it outside a handler returns an
+    /// `invalid_request` error. Note that task-local association does not
+    /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+    /// outside the handler — use the task manager for long-running work.
+    /// Requests issued in-handler are delivered on the originating request's
+    /// SSE stream in the streamable HTTP transport.
     #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Option<T>, ElicitationError>
     where
@@ -1100,6 +1160,18 @@ impl Peer<RoleServer> {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # SEP-2260: request association
+    ///
+    /// From protocol version `2026-07-28`, this request must be issued while
+    /// handling a client request — call it on the [`Peer`] from a
+    /// [`RequestContext`], from the handler's
+    /// own task. Calling it outside a handler returns an
+    /// `invalid_request` error. Note that task-local association does not
+    /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+    /// outside the handler — use the task manager for long-running work.
+    /// Requests issued in-handler are delivered on the originating request's
+    /// SSE stream in the streamable HTTP transport.
     #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit_with_timeout<T>(
         &self,
@@ -1195,6 +1267,18 @@ impl Peer<RoleServer> {
     ///  Ok(())
     /// }
     /// ```
+    ///
+    /// # SEP-2260: request association
+    ///
+    /// From protocol version `2026-07-28`, this request must be issued while
+    /// handling a client request — call it on the [`Peer`] from a
+    /// [`RequestContext`], from the handler's
+    /// own task. Calling it outside a handler returns an
+    /// `invalid_request` error. Note that task-local association does not
+    /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+    /// outside the handler — use the task manager for long-running work.
+    /// Requests issued in-handler are delivered on the originating request's
+    /// SSE stream in the streamable HTTP transport.
     #[cfg(feature = "elicitation")]
     pub async fn elicit_url(
         &self,
@@ -1246,6 +1330,18 @@ impl Peer<RoleServer> {
     ///  Ok(())
     /// }
     /// ```
+    ///
+    /// # SEP-2260: request association
+    ///
+    /// From protocol version `2026-07-28`, this request must be issued while
+    /// handling a client request — call it on the [`Peer`] from a
+    /// [`RequestContext`], from the handler's
+    /// own task. Calling it outside a handler returns an
+    /// `invalid_request` error. Note that task-local association does not
+    /// cross `tokio::spawn`: a task spawned inside a handler is treated as
+    /// outside the handler — use the task manager for long-running work.
+    /// Requests issued in-handler are delivered on the originating request's
+    /// SSE stream in the streamable HTTP transport.
     #[cfg(feature = "elicitation")]
     pub async fn elicit_url_with_timeout(
         &self,
