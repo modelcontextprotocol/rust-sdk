@@ -205,6 +205,28 @@ jobs:
     - name: Spell Check Repo
       uses: crate-ci/typos@master
 
+  msrv:
+    name: Check MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read MSRV from Cargo.toml
+        run: |
+          MSRV=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "rmcp") | .rust_version')
+          echo "MSRV=$MSRV" >> "$GITHUB_ENV"
+
+      - name: Install MSRV Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check default workspace members with MSRV
+        run: cargo +${{ env.MSRV }} check --all-targets --all-features
+
   test:
     name: Run Tests
     runs-on: ubuntu-latest
