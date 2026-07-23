@@ -3078,6 +3078,10 @@ impl AuthorizationSession {
             auth_manager.add_offline_access_if_supported(&mut request.scopes);
         }
 
+        if request.application_type.is_some() {
+            auth_manager.application_type = request.application_type.clone();
+        }
+
         let redirect_uri = request.redirect_uri.clone();
         let scopes = request.scopes.clone();
         let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
@@ -4408,6 +4412,40 @@ mod tests {
         let query = auth_url_query(&auth_url);
         assert_eq!(query.get("client_id").unwrap(), "dcr-client");
         assert!(matches!(state, super::OAuthState::Session(_)));
+    }
+
+    #[tokio::test]
+    async fn dcr_registration_uses_requested_application_type() {
+        let mut responses = preregistered_discovery_responses();
+        responses.push(http_response(
+            201,
+            serde_json::json!({
+                "client_id": "dcr-client",
+                "redirect_uris": ["http://localhost:8080/callback"]
+            }),
+        ));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_client_name("test-client")
+            .with_application_type("web")
+            .with_scopes(["read"]);
+        state.start_authorization(request).await.unwrap();
+
+        // SEP-837: the requested application_type must be sent in the DCR request
+        let requests = client.requests();
+        let registration = requests
+            .iter()
+            .find(|request| request.uri.contains("/register"))
+            .expect("registration endpoint should be called");
+        let body: serde_json::Value = serde_json::from_slice(&registration.body).unwrap();
+        assert_eq!(body.get("application_type").unwrap(), "web");
     }
 
     #[tokio::test]
