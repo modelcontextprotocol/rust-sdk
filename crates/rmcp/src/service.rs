@@ -554,11 +554,10 @@ impl<R: ServiceRole> RequestHandle<R> {
                         None => None,
                     }
                 }, if reset_timeout_on_progress && idle_sleep.is_some() && self.progress_reset_rx.is_some() => {
-                    if progress.is_some() {
-                        if let Some((timeout, sleep)) = idle_sleep.as_mut() {
+                    if progress.is_some()
+                        && let Some((timeout, sleep)) = idle_sleep.as_mut() {
                             sleep.as_mut().reset(tokio::time::Instant::now() + *timeout);
                         }
-                    }
                 }
             }
         }
@@ -1351,11 +1350,10 @@ where
             tracing::trace!(?evt, "new event");
             match evt {
                 Event::SendTaskResult(SendTaskResult::Request { id, result }) => {
-                    if let Err(e) = result {
-                        if let Some(responder) = local_responder_pool.remove(&id) {
+                    if let Err(e) = result
+                        && let Some(responder) = local_responder_pool.remove(&id) {
                             let _ = responder.send(Err(ServiceError::TransportSend(e)));
                         }
-                    }
                 }
                 Event::SendTaskResult(SendTaskResult::Notification {
                     responder,
@@ -1368,16 +1366,14 @@ where
                         Ok(())
                     };
                     let _ = responder.send(response);
-                    if let Some(param) = cancellation_param {
-                        if let Some(request_id) = &param.request_id {
-                            if let Some(responder) = local_responder_pool.remove(request_id) {
+                    if let Some(param) = cancellation_param
+                        && let Some(request_id) = &param.request_id
+                            && let Some(responder) = local_responder_pool.remove(request_id) {
                                 tracing::info!(id = %request_id, reason = param.reason, "cancelled");
                                 let _response_result = responder.send(Err(ServiceError::Cancelled {
                                     reason: param.reason.clone(),
                                 }));
                             }
-                        }
-                    }
                 }
                 Event::ResponseSendTaskResult(result) => {
                     if let Err(error) = result {

@@ -55,17 +55,15 @@ pub fn extract_doc_line(
 /// Returns the full Parameters<T> type if found
 pub fn find_parameters_type_in_sig(sig: &Signature) -> Option<Box<Type>> {
     sig.inputs.iter().find_map(|input| {
-        if let FnArg::Typed(pat_type) = input {
-            if let Type::Path(type_path) = &*pat_type.ty {
-                if type_path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|type_name| type_name.ident == "Parameters")
-                {
-                    return Some(pat_type.ty.clone());
-                }
-            }
+        if let FnArg::Typed(pat_type) = input
+            && let Type::Path(type_path) = &*pat_type.ty
+            && type_path
+                .path
+                .segments
+                .last()
+                .is_some_and(|type_name| type_name.ident == "Parameters")
+        {
+            return Some(pat_type.ty.clone());
         }
         None
     })

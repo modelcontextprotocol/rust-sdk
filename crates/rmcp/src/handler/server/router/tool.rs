@@ -550,10 +550,10 @@ where
     }
 
     fn notify_if_visible(&self, name: &str) {
-        if self.map.contains_key(name) {
-            if let Some(notifier) = &self.notifier {
-                notifier();
-            }
+        if self.map.contains_key(name)
+            && let Some(notifier) = &self.notifier
+        {
+            notifier();
         }
     }
 

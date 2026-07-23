@@ -178,36 +178,36 @@ impl StreamableHttpClient for reqwest::Client {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());
         }
         let response = request.json(&message).send().await?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let header = header
-                    .to_str()
-                    .map_err(|_| {
-                        StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                            "invalid www-authenticate header value",
-                        ))
-                    })?
-                    .to_string();
-                return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                    www_authenticate_header: header,
-                }));
-            }
-        }
-        if response.status() == reqwest::StatusCode::FORBIDDEN {
-            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let header_str = header.to_str().map_err(|_| {
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header = header
+                .to_str()
+                .map_err(|_| {
                     StreamableHttpError::UnexpectedServerResponse(Cow::from(
                         "invalid www-authenticate header value",
                     ))
-                })?;
-                let scope = extract_scope_from_header(header_str);
-                return Err(StreamableHttpError::InsufficientScope(
-                    InsufficientScopeError {
-                        www_authenticate_header: header_str.to_string(),
-                        required_scope: scope,
-                    },
-                ));
-            }
+                })?
+                .to_string();
+            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
+                www_authenticate_header: header,
+            }));
+        }
+        if response.status() == reqwest::StatusCode::FORBIDDEN
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header_str = header.to_str().map_err(|_| {
+                StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                    "invalid www-authenticate header value",
+                ))
+            })?;
+            let scope = extract_scope_from_header(header_str);
+            return Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError {
+                    www_authenticate_header: header_str.to_string(),
+                    required_scope: scope,
+                },
+            ));
         }
         let status = response.status();
         if matches!(

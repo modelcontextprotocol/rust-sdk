@@ -42,20 +42,20 @@ fn build_request_headers(
     use serde_json::Value;
 
     let mut headers = base.clone();
-    if *version >= ProtocolVersion::STANDARD_HEADERS {
-        if let Ok(value) = serde_json::to_value(message) {
-            let schema = value
-                .get("method")
-                .and_then(Value::as_str)
-                .filter(|method| *method == "tools/call")
-                .and_then(|_| value.get("params"))
-                .and_then(|params| params.get("name"))
-                .and_then(Value::as_str)
-                .and_then(|name| tool_cache.get(name))
-                .map(Arc::as_ref);
-            for (name, val) in mcp_headers::standard_request_headers(&value, schema) {
-                headers.insert(name, val);
-            }
+    if *version >= ProtocolVersion::STANDARD_HEADERS
+        && let Ok(value) = serde_json::to_value(message)
+    {
+        let schema = value
+            .get("method")
+            .and_then(Value::as_str)
+            .filter(|method| *method == "tools/call")
+            .and_then(|_| value.get("params"))
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+            .and_then(|name| tool_cache.get(name))
+            .map(Arc::as_ref);
+        for (name, val) in mcp_headers::standard_request_headers(&value, schema) {
+            headers.insert(name, val);
         }
     }
     headers
@@ -90,9 +90,10 @@ fn cache_tools_from_response(
     if protocol_version < &ProtocolVersion::STANDARD_HEADERS {
         return;
     }
-    if let ServerJsonRpcMessage::Response(response) = message {
-        if let ServerResult::ListToolsResult(list) = &mut response.result {
-            list.tools.retain(|tool| {
+    if let ServerJsonRpcMessage::Response(response) = message
+        && let ServerResult::ListToolsResult(list) = &mut response.result
+    {
+        list.tools.retain(|tool| {
                 let Err(reason) =
                     mcp_headers::validate_param_header_annotations(&tool.input_schema)
                 else {
@@ -102,7 +103,6 @@ fn cache_tools_from_response(
                 tracing::warn!(tool = %tool.name, "rejecting invalid x-mcp-header annotations: {reason}");
                 false
             });
-        }
     }
 }
 
@@ -112,13 +112,13 @@ fn negotiate_version_headers(
 ) -> (ProtocolVersion, HashMap<HeaderName, HeaderValue>) {
     let mut version = ProtocolVersion::default();
     let mut headers = base;
-    if let ServerJsonRpcMessage::Response(response) = init_response {
-        if let ServerResult::InitializeResult(init_result) = &response.result {
-            version = init_result.protocol_version.clone();
-            // HeaderName::from_static requires lowercase
-            if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
-                headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
-            }
+    if let ServerJsonRpcMessage::Response(response) = init_response
+        && let ServerResult::InitializeResult(init_result) = &response.result
+    {
+        version = init_result.protocol_version.clone();
+        // HeaderName::from_static requires lowercase
+        if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
+            headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
         }
     }
     (version, headers)

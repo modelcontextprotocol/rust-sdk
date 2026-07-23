@@ -132,13 +132,13 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
-            if let Some(receiver) = fn_item.sig.receiver() {
-                if let Some((_, receiver_lt)) = receiver.reference.as_ref() {
-                    if let Some(receiver_lt) = receiver_lt {
-                        lt = quote! { #receiver_lt };
-                    } else {
-                        lt = quote! { '_ };
-                    }
+            if let Some(receiver) = fn_item.sig.receiver()
+                && let Some((_, receiver_lt)) = receiver.reference.as_ref()
+            {
+                if let Some(receiver_lt) = receiver_lt {
+                    lt = quote! { #receiver_lt };
+                } else {
+                    lt = quote! { '_ };
                 }
             }
             match &fn_item.sig.output {

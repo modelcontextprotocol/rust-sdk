@@ -104,10 +104,10 @@ fn param_header_annotations(input_schema: &JsonObject) -> Vec<(String, String)> 
     let mut out = Vec::new();
     if let Some(Value::Object(props)) = input_schema.get("properties") {
         for (prop, schema) in props {
-            if let Some(Value::String(header)) = schema.get("x-mcp-header") {
-                if !header.is_empty() {
-                    out.push((prop.clone(), header.clone()));
-                }
+            if let Some(Value::String(header)) = schema.get("x-mcp-header")
+                && !header.is_empty()
+            {
+                out.push((prop.clone(), header.clone()));
             }
         }
     }
@@ -236,20 +236,18 @@ pub(crate) fn standard_request_headers(
         push(HEADER_MCP_NAME, &encode_header_value(&name));
     }
 
-    if method == "tools/call" {
-        if let (Some(schema), Some(arguments)) =
+    if method == "tools/call"
+        && let (Some(schema), Some(arguments)) =
             (tool_schema, params.and_then(|p| p.get("arguments")))
-        {
-            for (prop, header) in param_header_annotations(schema) {
-                let Some(arg) = arguments.get(&prop) else {
-                    continue;
-                };
-                let Some(encoded) = primitive_to_string(arg).map(|s| encode_header_value(&s))
-                else {
-                    continue;
-                };
-                push(&format!("{HEADER_MCP_PARAM_PREFIX}{header}"), &encoded);
-            }
+    {
+        for (prop, header) in param_header_annotations(schema) {
+            let Some(arg) = arguments.get(&prop) else {
+                continue;
+            };
+            let Some(encoded) = primitive_to_string(arg).map(|s| encode_header_value(&s)) else {
+                continue;
+            };
+            push(&format!("{HEADER_MCP_PARAM_PREFIX}{header}"), &encoded);
         }
     }
     out
@@ -296,33 +294,33 @@ pub(crate) fn validate_request_headers(
         }
     }
 
-    if method == "tools/call" {
-        if let Some(schema) = tool_schema {
-            let arguments = params.and_then(|p| p.get("arguments"));
-            for (prop, header) in param_header_annotations(schema) {
-                let full = format!("{HEADER_MCP_PARAM_PREFIX}{header}");
-                let header_value = header_str(headers, &full);
-                let arg = arguments.and_then(|a| a.get(&prop));
-                let body_value = arg.filter(|v| !v.is_null()).and_then(primitive_to_string);
+    if method == "tools/call"
+        && let Some(schema) = tool_schema
+    {
+        let arguments = params.and_then(|p| p.get("arguments"));
+        for (prop, header) in param_header_annotations(schema) {
+            let full = format!("{HEADER_MCP_PARAM_PREFIX}{header}");
+            let header_value = header_str(headers, &full);
+            let arg = arguments.and_then(|a| a.get(&prop));
+            let body_value = arg.filter(|v| !v.is_null()).and_then(primitive_to_string);
 
-                match (header_value, body_value) {
-                    (None, None) => {}
-                    (Some(_), None) => {
+            match (header_value, body_value) {
+                (None, None) => {}
+                (Some(_), None) => {
+                    return Err(format!(
+                        "unexpected {full} header for absent or null `{prop}`"
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(format!("missing {full} header for `{prop}`"));
+                }
+                (Some(raw), Some(expected)) => {
+                    let decoded = decode_header_value(raw)
+                        .ok_or_else(|| format!("{full} header is not valid Base64"))?;
+                    if decoded != expected {
                         return Err(format!(
-                            "unexpected {full} header for absent or null `{prop}`"
+                            "{full} header `{decoded}` does not match body value `{expected}`"
                         ));
-                    }
-                    (None, Some(_)) => {
-                        return Err(format!("missing {full} header for `{prop}`"));
-                    }
-                    (Some(raw), Some(expected)) => {
-                        let decoded = decode_header_value(raw)
-                            .ok_or_else(|| format!("{full} header is not valid Base64"))?;
-                        if decoded != expected {
-                            return Err(format!(
-                                "{full} header `{decoded}` does not match body value `{expected}`"
-                            ));
-                        }
                     }
                 }
             }

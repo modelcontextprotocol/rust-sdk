@@ -238,13 +238,13 @@ impl ClientHandler for MrtrClient {
         request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> Result<ElicitResult, ErrorData> {
-        if let ElicitRequestParams::FormElicitationParams { message, .. } = &request {
-            if message == "FAIL" {
-                return Err(ErrorData::internal_error(
-                    "elicitation handler failed",
-                    None,
-                ));
-            }
+        if let ElicitRequestParams::FormElicitationParams { message, .. } = &request
+            && message == "FAIL"
+        {
+            return Err(ErrorData::internal_error(
+                "elicitation handler failed",
+                None,
+            ));
         }
         Ok(ElicitResult::new(ElicitationAction::Accept).with_content(json!({ "name": "Ferris" })))
     }

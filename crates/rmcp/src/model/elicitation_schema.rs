@@ -983,17 +983,15 @@ impl EnumSchemaBuilder<MultiSelect> {
                 return Err("One of the provided default values is not in enum values".to_string());
             }
         }
-        if let Some(min) = self.min_items {
-            if (default_values.len() as u64) < min {
-                return Err("Number of provided default values is less than min_items".to_string());
-            }
+        if let Some(min) = self.min_items
+            && (default_values.len() as u64) < min
+        {
+            return Err("Number of provided default values is less than min_items".to_string());
         }
-        if let Some(max) = self.max_items {
-            if (default_values.len() as u64) > max {
-                return Err(
-                    "Number of provided default values is greater than max_items".to_string(),
-                );
-            }
+        if let Some(max) = self.max_items
+            && (default_values.len() as u64) > max
+        {
+            return Err("Number of provided default values is greater than max_items".to_string());
         }
         self.default = default_values;
         Ok(self)

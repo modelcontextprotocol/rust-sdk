@@ -226,37 +226,37 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         let status = response.status();
 
-        if status == StatusCode::UNAUTHORIZED {
-            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let www_authenticate_header = header
-                    .to_str()
-                    .map_err(|_| {
-                        StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                            "invalid www-authenticate header value",
-                        ))
-                    })?
-                    .to_string();
-                return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                    www_authenticate_header,
-                }));
-            }
-        }
-
-        if status == StatusCode::FORBIDDEN {
-            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let header_str = header.to_str().map_err(|_| {
+        if status == StatusCode::UNAUTHORIZED
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let www_authenticate_header = header
+                .to_str()
+                .map_err(|_| {
                     StreamableHttpError::UnexpectedServerResponse(Cow::from(
                         "invalid www-authenticate header value",
                     ))
-                })?;
-                let scope = extract_scope_from_header(header_str);
-                return Err(StreamableHttpError::InsufficientScope(
-                    InsufficientScopeError {
-                        www_authenticate_header: header_str.to_string(),
-                        required_scope: scope,
-                    },
-                ));
-            }
+                })?
+                .to_string();
+            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
+                www_authenticate_header,
+            }));
+        }
+
+        if status == StatusCode::FORBIDDEN
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header_str = header.to_str().map_err(|_| {
+                StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                    "invalid www-authenticate header value",
+                ))
+            })?;
+            let scope = extract_scope_from_header(header_str);
+            return Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError {
+                    www_authenticate_header: header_str.to_string(),
+                    required_scope: scope,
+                },
+            ));
         }
 
         if matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
@@ -438,37 +438,37 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
 
-        if response.status() == StatusCode::UNAUTHORIZED {
-            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let www_authenticate_header = header
-                    .to_str()
-                    .map_err(|_| {
-                        StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                            "invalid www-authenticate header value",
-                        ))
-                    })?
-                    .to_string();
-                return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                    www_authenticate_header,
-                }));
-            }
-        }
-
-        if response.status() == StatusCode::FORBIDDEN {
-            if let Some(header) = response.headers().get(WWW_AUTHENTICATE) {
-                let header_str = header.to_str().map_err(|_| {
+        if response.status() == StatusCode::UNAUTHORIZED
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let www_authenticate_header = header
+                .to_str()
+                .map_err(|_| {
                     StreamableHttpError::UnexpectedServerResponse(Cow::from(
                         "invalid www-authenticate header value",
                     ))
-                })?;
-                let scope = extract_scope_from_header(header_str);
-                return Err(StreamableHttpError::InsufficientScope(
-                    InsufficientScopeError {
-                        www_authenticate_header: header_str.to_string(),
-                        required_scope: scope,
-                    },
-                ));
-            }
+                })?
+                .to_string();
+            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
+                www_authenticate_header,
+            }));
+        }
+
+        if response.status() == StatusCode::FORBIDDEN
+            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
+        {
+            let header_str = header.to_str().map_err(|_| {
+                StreamableHttpError::UnexpectedServerResponse(Cow::from(
+                    "invalid www-authenticate header value",
+                ))
+            })?;
+            let scope = extract_scope_from_header(header_str);
+            return Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError {
+                    www_authenticate_header: header_str.to_string(),
+                    required_scope: scope,
+                },
+            ));
         }
 
         if !response.status().is_success() {

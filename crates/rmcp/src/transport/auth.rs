@@ -1248,56 +1248,56 @@ impl AuthorizationManager {
     /// the client if credentials are found. Returns `false` when credentials
     /// are absent or discarded after an authorization-server change.
     pub async fn initialize_from_store(&mut self) -> Result<bool, AuthError> {
-        if let Some(stored) = self.credential_store.load().await? {
-            if stored.token_response.is_some() {
-                if self.metadata.is_none() {
-                    let metadata = self.discover_metadata().await?;
-                    self.metadata = Some(metadata);
-                }
+        if let Some(stored) = self.credential_store.load().await?
+            && stored.token_response.is_some()
+        {
+            if self.metadata.is_none() {
+                let metadata = self.discover_metadata().await?;
+                self.metadata = Some(metadata);
+            }
 
-                if let (Some(stored_issuer), Some(current_issuer)) =
-                    (stored.issuer.as_deref(), self.metadata_issuer().as_deref())
-                {
-                    // A CIMD client ID is the client's metadata URL, so it is
-                    // portable across authorization servers and exempt here.
-                    if stored_issuer != current_issuer {
-                        if is_https_url(&stored.client_id) {
-                            // A CIMD client ID is the client's metadata URL, so it is
-                            // portable across authorization servers — but the tokens
-                            // were minted by the previous AS and must not be reused.
-                            tracing::warn!(
-                                stored_issuer,
-                                current_issuer,
-                                "authorization server issuer changed; discarding tokens but keeping portable CIMD client ID"
-                            );
-                            self.credential_store
-                                .save(
-                                    StoredCredentials::new(
-                                        stored.client_id.clone(),
-                                        None,
-                                        vec![],
-                                        None,
-                                    )
-                                    .with_issuer(self.metadata_issuer()),
-                                )
-                                .await?;
-                            self.configure_client_id(&stored.client_id)?;
-                            return Ok(false);
-                        }
-
+            if let (Some(stored_issuer), Some(current_issuer)) =
+                (stored.issuer.as_deref(), self.metadata_issuer().as_deref())
+            {
+                // A CIMD client ID is the client's metadata URL, so it is
+                // portable across authorization servers and exempt here.
+                if stored_issuer != current_issuer {
+                    if is_https_url(&stored.client_id) {
+                        // A CIMD client ID is the client's metadata URL, so it is
+                        // portable across authorization servers — but the tokens
+                        // were minted by the previous AS and must not be reused.
                         tracing::warn!(
                             stored_issuer,
                             current_issuer,
-                            "authorization server issuer changed; clearing stored credentials bound to the previous issuer"
+                            "authorization server issuer changed; discarding tokens but keeping portable CIMD client ID"
                         );
-                        self.credential_store.clear().await?;
+                        self.credential_store
+                            .save(
+                                StoredCredentials::new(
+                                    stored.client_id.clone(),
+                                    None,
+                                    vec![],
+                                    None,
+                                )
+                                .with_issuer(self.metadata_issuer()),
+                            )
+                            .await?;
+                        self.configure_client_id(&stored.client_id)?;
                         return Ok(false);
                     }
-                }
 
-                self.configure_client_id(&stored.client_id)?;
-                return Ok(true);
+                    tracing::warn!(
+                        stored_issuer,
+                        current_issuer,
+                        "authorization server issuer changed; clearing stored credentials bound to the previous issuer"
+                    );
+                    self.credential_store.clear().await?;
+                    return Ok(false);
+                }
             }
+
+            self.configure_client_id(&stored.client_id)?;
+            return Ok(true);
         }
         Ok(false)
     }
@@ -1425,10 +1425,10 @@ impl AuthorizationManager {
 
         // RFC 8414 RECOMMENDS response_types_supported in the metadata. This field is optional,
         // but if present and does not include the flow we use ("code"), bail out early with a clear error.
-        if let Some(response_types_supported) = metadata.response_types_supported.as_ref() {
-            if !response_types_supported.contains(&response_type.to_string()) {
-                return Err(AuthError::InvalidScope(response_type.to_string()));
-            }
+        if let Some(response_types_supported) = metadata.response_types_supported.as_ref()
+            && !response_types_supported.contains(&response_type.to_string())
+        {
+            return Err(AuthError::InvalidScope(response_type.to_string()));
         }
 
         // The client always sends an S256 challenge. A server that advertises
@@ -1713,12 +1713,11 @@ impl AuthorizationManager {
         }
 
         // nothing requested or challenged yet: seed from AS metadata, then caller defaults
-        if let Some(metadata) = &self.metadata {
-            if let Some(scopes_supported) = &metadata.scopes_supported {
-                if !scopes_supported.is_empty() {
-                    return scopes_supported.clone();
-                }
-            }
+        if let Some(metadata) = &self.metadata
+            && let Some(scopes_supported) = &metadata.scopes_supported
+            && !scopes_supported.is_empty()
+        {
+            return scopes_supported.clone();
         }
 
         default_scopes.iter().map(|s| s.to_string()).collect()
@@ -1730,12 +1729,11 @@ impl AuthorizationManager {
         if scopes.is_empty() || scopes.iter().any(|s| s == "offline_access") {
             return;
         }
-        if let Some(metadata) = &self.metadata {
-            if let Some(supported) = &metadata.scopes_supported {
-                if supported.iter().any(|s| s == "offline_access") {
-                    scopes.push("offline_access".to_string());
-                }
-            }
+        if let Some(metadata) = &self.metadata
+            && let Some(supported) = &metadata.scopes_supported
+            && supported.iter().any(|s| s == "offline_access")
+        {
+            scopes.push("offline_access".to_string());
         }
     }
 
@@ -2255,10 +2253,10 @@ impl AuthorizationManager {
         self.validate_resource_metadata_resource(&resource_metadata)?;
 
         // store scopes_supported from protected resource metadata for select_scopes()
-        if let Some(scopes) = resource_metadata.scopes_supported {
-            if !scopes.is_empty() {
-                *self.resource_scopes.write().await = scopes;
-            }
+        if let Some(scopes) = resource_metadata.scopes_supported
+            && !scopes.is_empty()
+        {
+            *self.resource_scopes.write().await = scopes;
         }
 
         let mut candidates = Vec::new();
@@ -2701,20 +2699,18 @@ impl AuthorizationManager {
         if let ClientCredentialsConfig::PrivateKeyJwt {
             signing_algorithm, ..
         } = config
-        {
-            if let Some(algs) = metadata
+            && let Some(algs) = metadata
                 .additional_fields
                 .get("token_endpoint_auth_signing_alg_values_supported")
                 .and_then(|v| v.as_array())
-            {
-                let alg_str = signing_algorithm.as_str();
-                if !algs.iter().any(|a| a.as_str() == Some(alg_str)) {
-                    let supported: Vec<&str> = algs.iter().filter_map(|a| a.as_str()).collect();
-                    return Err(AuthError::ClientCredentialsError(format!(
-                        "Authorization server does not support signing algorithm '{}'. Supported: {:?}",
-                        alg_str, supported
-                    )));
-                }
+        {
+            let alg_str = signing_algorithm.as_str();
+            if !algs.iter().any(|a| a.as_str() == Some(alg_str)) {
+                let supported: Vec<&str> = algs.iter().filter_map(|a| a.as_str()).collect();
+                return Err(AuthError::ClientCredentialsError(format!(
+                    "Authorization server does not support signing algorithm '{}'. Supported: {:?}",
+                    alg_str, supported
+                )));
             }
         }
 

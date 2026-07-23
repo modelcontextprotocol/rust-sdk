@@ -320,14 +320,12 @@ fn try_parse_with_compatibility<T: serde::de::DeserializeOwned>(
             Ok(item) => Ok(Some(item)),
             Err(e) => {
                 // Check if this is a notification that should be ignored for compatibility
-                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(line_str) {
-                    if let Some(method) =
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(line_str)
+                    && let Some(method) =
                         json_value.get("method").and_then(serde_json::Value::as_str)
-                    {
-                        if should_ignore_notification(&json_value, method) {
-                            return Ok(None);
-                        }
-                    }
+                    && should_ignore_notification(&json_value, method)
+                {
+                    return Ok(None);
                 }
 
                 tracing::debug!(

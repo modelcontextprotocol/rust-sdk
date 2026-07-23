@@ -7,16 +7,13 @@ use crate::common::extract_doc_line;
 
 /// Check if a type is Json<T> and extract the inner type T
 fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(last_segment) = type_path.path.segments.last() {
-            if last_segment.ident == "Json" {
-                if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
-                        return Some(inner_type);
-                    }
-                }
-            }
-        }
+    if let syn::Type::Path(type_path) = ty
+        && let Some(last_segment) = type_path.path.segments.last()
+        && last_segment.ident == "Json"
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+        && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+    {
+        return Some(inner_type);
     }
     None
 }
@@ -286,13 +283,13 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         let omit_send = cfg!(feature = "local") || attribute.local;
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
-            if let Some(receiver) = fn_item.sig.receiver() {
-                if let Some((_, receiver_lt)) = receiver.reference.as_ref() {
-                    if let Some(receiver_lt) = receiver_lt {
-                        lt = quote! { #receiver_lt };
-                    } else {
-                        lt = quote! { '_ };
-                    }
+            if let Some(receiver) = fn_item.sig.receiver()
+                && let Some((_, receiver_lt)) = receiver.reference.as_ref()
+            {
+                if let Some(receiver_lt) = receiver_lt {
+                    lt = quote! { #receiver_lt };
+                } else {
+                    lt = quote! { '_ };
                 }
             }
             match &fn_item.sig.output {
