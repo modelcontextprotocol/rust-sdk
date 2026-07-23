@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v2.2.0...rmcp-macros-v3.0.0) - 2026-07-23
+
+### Added
+
+- add client-side TTL-honoring response cache (SEP-2549) ([#1025](https://github.com/modelcontextprotocol/rust-sdk/pull/1025))
+- [**breaking**] Implement SEP-2663 Tasks Extension ([#1020](https://github.com/modelcontextprotocol/rust-sdk/pull/1020))
+- add subscription listen streams (SEP-2575) ([#1000](https://github.com/modelcontextprotocol/rust-sdk/pull/1000))
+- add modern client lifecycle modes (SEP-2575) ([#995](https://github.com/modelcontextprotocol/rust-sdk/pull/995))
+- [**breaking**] implement SEP-2549 cache hints ([#889](https://github.com/modelcontextprotocol/rust-sdk/pull/889))
+- [**breaking**] add MRTR behavior support (SEP-2322) ([#929](https://github.com/modelcontextprotocol/rust-sdk/pull/929))
+- relax outputSchema to accept non-object JSON Schema types (SEP-2106) ([#895](https://github.com/modelcontextprotocol/rust-sdk/pull/895))
+- [**breaking**] add MRTR model types (SEP-2322) ([#915](https://github.com/modelcontextprotocol/rust-sdk/pull/915))
+
+### Other
+
+- update for 2026-07-28 version ([#1032](https://github.com/modelcontextprotocol/rust-sdk/pull/1032))
+
 ## [2.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v1.8.0...rmcp-macros-v2.0.0) - 2026-06-27
 
 ### Added
