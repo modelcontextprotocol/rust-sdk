@@ -208,6 +208,8 @@ jobs:
   msrv:
     name: Check MSRV
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
