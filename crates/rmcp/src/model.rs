@@ -776,6 +776,13 @@ impl From<EmptyResult> for () {
 /// so unknown values are preserved rather than rejected. Servers implementing this
 /// protocol version MUST include `resultType` in every result. For backward
 /// compatibility, clients MUST treat an absent field as `"complete"`.
+///
+/// Ordinary results model the field as `Option<ResultType>`: `None` means the
+/// field is absent on the wire. Constructors default to `Some(COMPLETE)`, and
+/// the server handler strips the `"complete"` discriminator before responding
+/// to peers that negotiated a protocol version older than `2026-07-28`, so
+/// legacy sessions keep their historical wire shape (see
+/// [`ServerResult::strip_result_type_for_legacy_peer`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResultType(Cow<'static, str>);
@@ -1473,14 +1480,23 @@ macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
     }) => {
-        #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+        #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
         #[serde(rename_all = "camelCase")]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
         pub struct $t {
-            /// Result type discriminator. Absent values deserialize as `"complete"`.
-            #[serde(default)]
-            pub result_type: ResultType,
+            /// Result type discriminator (SEP-2322). Required by the [spec schema]
+            /// for servers implementing protocol version `2026-07-28`, but optional
+            /// here because this type also models results from older protocol
+            /// versions, which do not carry the field: `None` means absent on the
+            /// wire, and per the spec "the client MUST treat the absent field as
+            /// `"complete"`". Constructors default to `Some(ResultType::COMPLETE)`;
+            /// the server handler clears the field when responding to peers that
+            /// negotiated an older version.
+            ///
+            /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub result_type: Option<ResultType>,
             #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
             pub meta: Option<MetaObject>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1502,10 +1518,16 @@ macro_rules! paginated_result {
             pub $i_item: $t_item,
         }
 
+        impl Default for $t {
+            fn default() -> Self {
+                Self::with_all_items(Default::default())
+            }
+        }
+
         impl $t {
             pub fn with_all_items(items: $t_item) -> Self {
                 Self {
-                    result_type: ResultType::default(),
+                    result_type: Some(ResultType::COMPLETE),
                     meta: None,
                     next_cursor: None,
                     ttl_ms: None,
@@ -1621,9 +1643,18 @@ pub type ReadResourceRequestParam = ReadResourceRequestParams;
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ReadResourceResult {
-    /// Result type discriminator. Absent values deserialize as `"complete"`.
-    #[serde(default)]
-    pub result_type: ResultType,
+    /// Result type discriminator (SEP-2322). Required by the [spec schema]
+    /// for servers implementing protocol version `2026-07-28`, but optional
+    /// here because this type also models results from older protocol
+    /// versions, which do not carry the field: `None` means absent on the
+    /// wire, and per the spec "the client MUST treat the absent field as
+    /// `"complete"`". Constructors default to `Some(ResultType::COMPLETE)`;
+    /// the server handler clears the field when responding to peers that
+    /// negotiated an older version.
+    ///
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<ResultType>,
     /// Time, in milliseconds, that this result may be treated as fresh (SEP-2549).
     /// Required by spec version 2026-07-28, but optional here to maintain compatibility
     /// with older spec versions.
@@ -1648,7 +1679,7 @@ impl ReadResourceResult {
     /// Create a new ReadResourceResult with the given contents.
     pub fn new(contents: Vec<ResourceContents>) -> Self {
         Self {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             ttl_ms: None,
             cache_scope: None,
             contents,
@@ -3208,24 +3239,39 @@ impl CompletionInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct CompleteResult {
-    /// Result type discriminator. Absent values deserialize as `"complete"`.
-    #[serde(default)]
-    pub result_type: ResultType,
+    /// Result type discriminator (SEP-2322). Required by the [spec schema]
+    /// for servers implementing protocol version `2026-07-28`, but optional
+    /// here because this type also models results from older protocol
+    /// versions, which do not carry the field: `None` means absent on the
+    /// wire, and per the spec "the client MUST treat the absent field as
+    /// `"complete"`". Constructors default to `Some(ResultType::COMPLETE)`;
+    /// the server handler clears the field when responding to peers that
+    /// negotiated an older version.
+    ///
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<ResultType>,
     pub completion: CompletionInfo,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<MetaObject>,
+}
+
+impl Default for CompleteResult {
+    fn default() -> Self {
+        Self::new(CompletionInfo::default())
+    }
 }
 
 impl CompleteResult {
     /// Create a new CompleteResult with the given completion info.
     pub fn new(completion: CompletionInfo) -> Self {
         Self {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             completion,
             meta: None,
         }
@@ -3674,14 +3720,23 @@ pub type CreateElicitationRequest = ElicitRequest;
 ///
 /// Contains the content returned by the tool execution and an optional
 /// flag indicating whether the operation resulted in an error.
-#[derive(Default, Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct CallToolResult {
-    /// Result type discriminator. Absent values deserialize as `"complete"`.
-    #[serde(default)]
-    pub result_type: ResultType,
+    /// Result type discriminator (SEP-2322). Required by the [spec schema]
+    /// for servers implementing protocol version `2026-07-28`, but optional
+    /// here because this type also models results from older protocol
+    /// versions, which do not carry the field: `None` means absent on the
+    /// wire, and per the spec "the client MUST treat the absent field as
+    /// `"complete"`". Constructors default to `Some(ResultType::COMPLETE)`;
+    /// the server handler clears the field when responding to peers that
+    /// negotiated an older version.
+    ///
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<ResultType>,
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
     pub content: Vec<ContentBlock>,
@@ -3710,7 +3765,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
         #[serde(rename_all = "camelCase")]
         struct Helper {
             #[serde(default)]
-            result_type: ResultType,
+            result_type: Option<ResultType>,
             content: Option<Vec<ContentBlock>>,
             structured_content: Option<Value>,
             is_error: Option<bool>,
@@ -3741,11 +3796,23 @@ impl<'de> Deserialize<'de> for CallToolResult {
     }
 }
 
+impl Default for CallToolResult {
+    fn default() -> Self {
+        CallToolResult {
+            result_type: Some(ResultType::COMPLETE),
+            content: Vec::new(),
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        }
+    }
+}
+
 impl CallToolResult {
     /// Create a successful tool result with unstructured content
     pub fn success(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             content,
             structured_content: None,
             is_error: Some(false),
@@ -3803,7 +3870,7 @@ impl CallToolResult {
     /// ```
     pub fn error(content: Vec<ContentBlock>) -> Self {
         CallToolResult {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             content,
             structured_content: None,
             is_error: Some(true),
@@ -3826,7 +3893,7 @@ impl CallToolResult {
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
@@ -3853,7 +3920,7 @@ impl CallToolResult {
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             content: vec![ContentBlock::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
@@ -4041,14 +4108,23 @@ impl CreateMessageResult {
     }
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GetPromptResult {
-    /// Result type discriminator. Absent values deserialize as `"complete"`.
-    #[serde(default)]
-    pub result_type: ResultType,
+    /// Result type discriminator (SEP-2322). Required by the [spec schema]
+    /// for servers implementing protocol version `2026-07-28`, but optional
+    /// here because this type also models results from older protocol
+    /// versions, which do not carry the field: `None` means absent on the
+    /// wire, and per the spec "the client MUST treat the absent field as
+    /// `"complete"`". Constructors default to `Some(ResultType::COMPLETE)`;
+    /// the server handler clears the field when responding to peers that
+    /// negotiated an older version.
+    ///
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<ResultType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub messages: Vec<PromptMessage>,
@@ -4056,11 +4132,17 @@ pub struct GetPromptResult {
     pub meta: Option<MetaObject>,
 }
 
+impl Default for GetPromptResult {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 impl GetPromptResult {
     /// Create a new GetPromptResult with required fields.
     pub fn new(messages: Vec<PromptMessage>) -> Self {
         Self {
-            result_type: ResultType::default(),
+            result_type: Some(ResultType::COMPLETE),
             description: None,
             messages,
             meta: None,
@@ -4423,6 +4505,42 @@ impl ServerResult {
     /// SEP-2322 `resultType: "complete"` discriminator (SEP-2663).
     pub fn task_ack(_: ()) -> ServerResult {
         ServerResult::TaskAckResult(TaskAckResult::new())
+    }
+
+    /// Strip the SEP-2322 `resultType: "complete"` discriminator so the result
+    /// keeps the wire shape that predates protocol version `2026-07-28`.
+    ///
+    /// The server handler calls this before responding to a peer that
+    /// negotiated an older protocol version, where the field did not exist and
+    /// strict peers may reject it. Only the `"complete"` value is stripped:
+    /// results whose discriminator carries meaning (`"input_required"`,
+    /// `"task"`) are already gated to `2026-07-28`+ sessions, and custom
+    /// extension values are preserved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CallToolResult, ServerResult};
+    ///
+    /// let mut result = ServerResult::CallToolResult(CallToolResult::success(vec![]));
+    /// result.strip_result_type_for_legacy_peer();
+    ///
+    /// let json = serde_json::to_value(&result).unwrap();
+    /// assert!(json.get("resultType").is_none());
+    /// ```
+    pub fn strip_result_type_for_legacy_peer(&mut self) {
+        let result_type = match self {
+            ServerResult::CompleteResult(r) => &mut r.result_type,
+            ServerResult::GetPromptResult(r) => &mut r.result_type,
+            ServerResult::ListPromptsResult(r) => &mut r.result_type,
+            ServerResult::ListResourcesResult(r) => &mut r.result_type,
+            ServerResult::ListResourceTemplatesResult(r) => &mut r.result_type,
+            ServerResult::ReadResourceResult(r) => &mut r.result_type,
+            ServerResult::ListToolsResult(r) => &mut r.result_type,
+            ServerResult::CallToolResult(r) => &mut r.result_type,
+            _ => return,
+        };
+        result_type.take_if(|result_type| result_type.is_complete());
     }
 }
 
