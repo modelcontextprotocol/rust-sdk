@@ -744,6 +744,11 @@ impl AuthorizationRequest {
     }
 
     /// Set the client secret paired with a pre-registered client ID.
+    ///
+    /// Must be used together with
+    /// [`with_preregistered_client`](Self::with_preregistered_client);
+    /// authorization fails with [`AuthError::RegistrationFailed`] if a secret
+    /// is provided without a client ID.
     pub fn with_client_secret(mut self, client_secret: impl Into<String>) -> Self {
         self.client_secret = Some(client_secret.into());
         self
@@ -3072,6 +3077,17 @@ impl AuthorizationSession {
         mut auth_manager: AuthorizationManager,
         mut request: AuthorizationRequest,
     ) -> Result<Self, (AuthorizationManager, AuthError)> {
+        if request.client_secret.is_some() && request.client_id.is_none() {
+            return Err((
+                auth_manager,
+                AuthError::RegistrationFailed(
+                    "client_secret was provided without a pre-registered client_id; \
+                     pair with_client_secret with with_preregistered_client"
+                        .to_string(),
+                ),
+            ));
+        }
+
         if request.scopes.is_empty() {
             request.scopes = auth_manager.select_scopes(None, &[]);
         } else {
