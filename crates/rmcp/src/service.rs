@@ -158,6 +158,20 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     ) -> Result<(), ServiceError> {
         Ok(())
     }
+
+    /// Receive-side counterpart of [`Self::enforce_request_association`]:
+    /// SEP-2260 says clients receiving a server-to-client request with no
+    /// associated outbound request should reject it with invalid params. An
+    /// error return is sent back to the peer instead of dispatching to the
+    /// handler.
+    #[doc(hidden)]
+    fn enforce_peer_request_association(
+        _peer_request: &Self::PeerReq,
+        _peer_info: Option<&Self::PeerInfo>,
+        _has_pending_outbound_request: bool,
+    ) -> Result<(), McpError> {
+        Ok(())
+    }
 }
 
 pub(crate) fn uses_legacy_lifecycle(
@@ -1435,6 +1449,24 @@ where
                     ..
                 })) => {
                     tracing::debug!(%id, ?request, "received request");
+                    if let Err(error) = R::enforce_peer_request_association(
+                        &request,
+                        peer.peer_info().as_deref(),
+                        !local_responder_pool.is_empty(),
+                    ) {
+                        tracing::warn!(%id, message = %error.message, "rejected peer request");
+                        // send directly: the sink proxy path would drop the
+                        // error since the request was never registered in
+                        // local_ct_pool
+                        let send = transport.send(JsonRpcMessage::error(error, Some(id)));
+                        let current_span = tracing::Span::current();
+                        response_send_tasks.spawn(async move {
+                            if let Err(error) = send.await {
+                                tracing::error!(%error, "fail to send rejection error");
+                            }
+                        }.instrument(current_span));
+                        continue;
+                    }
                     {
                         let service = shared_service.clone();
                         let sink = sink_proxy_tx.clone();

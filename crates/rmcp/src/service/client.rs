@@ -213,6 +213,35 @@ impl ServiceRole for RoleClient {
         }
     }
 
+    // SEP-2260: with no outbound request in flight there is nothing the
+    // server request could be associated with, so reject it. With one in
+    // flight we cannot tell which request it belongs to (no wire field), so
+    // we accept — an under-approximation of the spec's SHOULD.
+    fn enforce_peer_request_association(
+        peer_request: &Self::PeerReq,
+        peer_info: Option<&Self::PeerInfo>,
+        has_pending_outbound_request: bool,
+    ) -> Result<(), ErrorData> {
+        let restricted = matches!(
+            peer_request,
+            ServerRequest::CreateMessageRequest(_)
+                | ServerRequest::ListRootsRequest(_)
+                | ServerRequest::ElicitRequest(_)
+        );
+        if !restricted {
+            return Ok(());
+        }
+        let strict =
+            peer_info.is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
+        if strict && !has_pending_outbound_request {
+            return Err(ErrorData::invalid_params(
+                "SEP-2260: server-to-client requests must be associated with an in-flight client request",
+                None,
+            ));
+        }
+        Ok(())
+    }
+
     async fn invalidate_response_cache(peer: &Peer<Self>, notification: &Self::PeerNot) {
         match notification {
             ServerNotification::ResourceUpdatedNotification(notification) => {
