@@ -11,7 +11,7 @@
 
 </div>
 
-The official Rust SDK for the [Model Context Protocol](https://modelcontextprotocol.io/specification/2025-11-25). Build MCP servers that expose tools, resources, and prompts to AI assistants — or build clients that connect to them.
+The official Rust SDK for the [Model Context Protocol](https://modelcontextprotocol.io/specification/draft). Build MCP servers that expose tools, resources, and prompts to AI assistants — or build clients that connect to them.
 
 For **getting started**, **usage guides**, and **full MCP feature documentation** (resources, prompts, sampling, roots, logging, completions, subscriptions, etc.), see the [main README](../../README.md).
 

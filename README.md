@@ -1,7 +1,3 @@
-<div align = "right">
-<a href="docs/readme/README.zh-cn.md">简体中文</a>
-</div>
-
 # RMCP
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
@@ -17,7 +13,13 @@ This repository contains the following crates:
 - [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation - see [rmcp](crates/rmcp/README.md)
 - [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations - see [rmcp-macros](crates/rmcp-macros/README.md)
 
-For the full MCP specification, see [modelcontextprotocol.io](https://modelcontextprotocol.io/specification/2025-11-25).
+This SDK tracks the MCP **`2026-07-28`** draft (the current development spec)
+while remaining fully compatible with the stable **`2025-11-25`** release and
+earlier versions. New `2026-07-28` features — server discovery & negotiation,
+transport-neutral subscriptions, long-running tasks, response caching,
+multi-round-trip requests, and standard HTTP routing headers — are documented
+below alongside the stable feature set. For the full MCP specification, see
+[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/draft).
 
 ## Table of Contents
 
@@ -31,8 +33,11 @@ For the full MCP specification, see [modelcontextprotocol.io](https://modelconte
 - [Completions](#completions)
 - [Notifications](#notifications)
 - [Subscriptions](#subscriptions)
+- [Multi-Round-Trip Requests](#multi-round-trip-requests)
 - [Tasks](#tasks-long-running-tool-invocations)
 - [Caching](#caching)
+- [Standard HTTP Headers](#standard-http-headers)
+- [Stateless Streamable HTTP](#stateless-streamable-http)
 - [Examples](#examples)
 - [OAuth Support](#oauth-support)
 - [Related Resources](#related-resources)
@@ -43,10 +48,16 @@ For the full MCP specification, see [modelcontextprotocol.io](https://modelconte
 
 ### Import the crate
 
-```toml
-rmcp = { version = "0.16.0", features = ["server"] }
-## or dev channel
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", branch = "main" }
+Add the latest published version with cargo:
+
+```sh
+cargo add rmcp --features server
+```
+
+Or use the dev channel:
+
+```sh
+cargo add rmcp --features server --git https://github.com/modelcontextprotocol/rust-sdk --branch main
 ```
 ### Third Dependencies
 
@@ -174,7 +185,7 @@ let quit_reason = server.cancel().await?;
 
 Tools let servers expose callable functions to clients. Each tool has a name, description, and a JSON Schema for its parameters. Clients discover tools via `list_tools` and invoke them via `call_tool`.
 
-**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
+**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/draft/server/tools)
 
 ### Server-side
 
@@ -209,6 +220,11 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 The generated tool `inputSchema` and `outputSchema` are derived from the fields of `T`. The type name and documentation on `T` are ignored; only field names, field types, and field documentation are used.
+
+> **`2026-07-28` (SEP-2106):** `outputSchema` may now be any JSON Schema type
+> (not just `object`), and a tool result's `structuredContent` may be any JSON
+> value (string, array, number, …) rather than only an object. Existing
+> object-typed tools are unaffected.
 
 When you need custom server metadata or multiple capabilities (tools + prompts), use explicit `#[tool_handler]`:
 
@@ -258,7 +274,7 @@ let result = client.call_tool(CallToolRequestParams::new("add")).await?;
 
 Resources let servers expose data (files, database records, API responses) that clients can read. Each resource is identified by a URI and returns content as text or binary (base64-encoded) data. Resource templates allow servers to declare URI patterns with dynamic parameters.
 
-**MCP Spec:** [Resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
+**MCP Spec:** [Resources](https://modelcontextprotocol.io/specification/draft/server/resources)
 
 ### Server-side
 
@@ -393,7 +409,7 @@ impl ClientHandler for MyClient {
 
 Prompts are reusable message templates that servers expose to clients. They accept typed arguments and return conversation messages. The `#[prompt]` macro handles argument validation and routing automatically.
 
-**MCP Spec:** [Prompts](https://modelcontextprotocol.io/specification/2025-11-25/server/prompts)
+**MCP Spec:** [Prompts](https://modelcontextprotocol.io/specification/draft/server/prompts)
 
 ### Server-side
 
@@ -507,7 +523,7 @@ context.peer.notify_prompt_list_changed().await?;
 
 Sampling flips the usual direction: the server asks the client to run an LLM completion. The server sends a `create_message` request, the client processes it through its LLM, and returns the result.
 
-**MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)
+**MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/draft/client/sampling)
 
 ### Server-side (requesting sampling)
 
@@ -579,7 +595,7 @@ impl ClientHandler for MyClient {
 
 Roots tell servers which directories or projects the client is working in. A root is a URI (typically `file://`) pointing to a workspace or repository. Servers can query roots to know where to look for files and how to scope their work.
 
-**MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/2025-11-25/client/roots)
+**MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/draft/client/roots)
 
 ### Server-side
 
@@ -644,7 +660,7 @@ client.notify_roots_list_changed().await?;
 
 Servers can send structured log messages to clients. The client sets a minimum severity level, and the server sends messages through the peer notification interface.
 
-**MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/logging)
+**MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/draft/server/utilities/logging)
 
 ### Server-side
 
@@ -717,7 +733,7 @@ client.set_level(SetLevelRequestParams::new(LoggingLevel::Warning)).await?;
 
 Completions give auto-completion suggestions for prompt or resource template arguments. As a user fills in arguments, the client can ask the server for suggestions based on what's already been entered.
 
-**MCP Spec:** [Completions](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/completion)
+**MCP Spec:** [Completions](https://modelcontextprotocol.io/specification/draft/server/utilities/completion)
 
 ### Server-side
 
@@ -799,7 +815,7 @@ let result = client.complete(CompleteRequestParams::new(
 
 Notifications are fire-and-forget messages -- no response is expected. They cover progress updates, cancellation, and lifecycle events. Both sides can send and receive them.
 
-**MCP Spec:** [Notifications](https://modelcontextprotocol.io/specification/2025-11-25/basic/notifications)
+**MCP Spec:** [Notifications](https://modelcontextprotocol.io/specification/draft/basic#notifications)
 
 ### Progress notifications
 
@@ -970,6 +986,81 @@ and [client](examples/clients/src/subscriptions_streamhttp.rs) examples.
 
 ---
 
+## Multi-Round-Trip Requests
+
+Protocol `2026-07-28` adds Multi-Round-Trip Requests (MRTR, SEP-2322): a server
+can answer a `tools/call`, `prompts/get`, or `resources/read` with an
+`InputRequiredResult` instead of a final result, asking the client to fulfill
+one or more embedded server requests (elicitation, sampling, or roots) and then
+retry. The exchange is stateless — the server carries its progress in an opaque
+`requestState` that the client echoes back verbatim.
+
+**MCP Spec:** [Multiple Round-Trip Requests](https://modelcontextprotocol.io/specification/draft/server/tools#multiple-round-trip-requests)
+
+### Server-side
+
+Return an `InputRequiredResult` via the outcome enum for the method
+(`CallToolResponse`, `GetPromptResponse`, or `ReadResourceResponse`). The SDK
+only forwards it to peers that negotiated `2026-07-28` or newer — older peers
+get a protocol error instead.
+
+```rust, ignore
+async fn call_tool(&self, request: CallToolRequestParams, _ctx: RequestContext<RoleServer>)
+    -> Result<CallToolResponse, ErrorData>
+{
+    match request.request_state {
+        // First round: ask the client for input, seal progress into requestState.
+        None => {
+            let mut input_requests = InputRequests::new();
+            input_requests.insert("city".into(), InputRequest::Elicitation(elicit_city()));
+            let sealed = self.codec.seal_json(&json!({ "awaiting": "city" }))?;
+            Ok(InputRequiredResult::new(Some(input_requests), Some(sealed)).into())
+        }
+        // Retry round: verify the echoed state, read the responses, finish.
+        Some(sealed) => {
+            let _state = self.codec.open_json(&sealed)
+                .map_err(|_| ErrorData::invalid_params("tampered request state", None))?;
+            let city = request.input_responses.as_ref()
+                .and_then(|r| r.get("city"));
+            Ok(CallToolResult::success(vec![ContentBlock::text("It is sunny.")]).into())
+        }
+    }
+}
+```
+
+> **`requestState` is untrusted.** The client echoes it back verbatim, so a
+> stateless server that stores meaningful data in it MUST verify integrity
+> first. Enable the `request-state` feature and use `RequestStateCodec` to seal
+> and open it (HMAC-tagged), or keep state server-side and use `requestState`
+> only as an opaque handle.
+
+### Client-side
+
+The high-level `call_tool`, `get_prompt`, and `read_resource` helpers drive MRTR
+automatically: they fulfill each embedded request through the local
+`ClientHandler` and retry, up to `DEFAULT_MRTR_MAX_ROUNDS` (10).
+
+```rust, ignore
+// Auto mode: the SDK fulfills embedded requests and retries for you.
+let result = client.call_tool(CallToolRequestParams::new("weather")).await?;
+
+// Choose a custom round cap.
+let result = client
+    .call_tool_with_mrtr_max_rounds(CallToolRequestParams::new("weather"), 3)
+    .await?;
+
+// Manual mode: get the intermediate InputRequiredResult and drive rounds yourself.
+match client.call_tool_once(CallToolRequestParams::new("weather")).await? {
+    CallToolResponse::InputRequired(input_required) => { /* fulfill + retry */ }
+    CallToolResponse::Complete(result) => { /* done */ }
+    _ => {}
+}
+```
+
+**Example:** [`examples/servers/src/mrtr.rs`](examples/servers/src/mrtr.rs) (end-to-end server + client)
+
+---
+
 ## Tasks (long-running tool invocations)
 
 `rmcp` implements the [MCP Tasks extension](https://modelcontextprotocol.io/extensions/tasks/overview)
@@ -1050,6 +1141,104 @@ peer.clear_response_cache().await;
 > last cached response (even if expired) as `Ok(..)` instead of an error. Set
 > `with_serve_stale_on_error(false)` if callers must observe fetch failures.
 
+## Standard HTTP Headers
+
+Protocol `2026-07-28` standardizes a set of Streamable HTTP request headers
+(SEP-2243) so proxies and gateways can route MCP traffic without parsing the
+JSON body: `Mcp-Method`, `Mcp-Name`, and `Mcp-Param-*`. `rmcp` emits and
+validates these automatically once a connection negotiates `2026-07-28` or
+newer — no call-site changes are required, and older negotiated versions are
+untouched.
+
+**MCP Spec:** [Header standardization](https://modelcontextprotocol.io/specification/draft/basic/transports#header)
+
+- `Mcp-Method` — the JSON-RPC method (e.g. `tools/call`).
+- `Mcp-Name` — the target name, sourced from `params.name` (`tools/call`,
+  `prompts/get`), `params.uri` (`resources/*`), or `params.taskId` (`tasks/*`).
+- `Mcp-Param-*` — selected `tools/call` arguments, promoted from the tool's
+  input schema.
+
+To promote a tool argument into a routing header, annotate the top-level schema
+property with `x-mcp-header`:
+
+```rust, ignore
+// A `region` argument surfaces as the `Mcp-Param-Region` request header.
+let schema = serde_json::json!({
+    "type": "object",
+    "properties": {
+        "region": { "type": "string", "x-mcp-header": "Region" }
+    }
+});
+```
+
+Annotations must be non-empty RFC 9110 tokens, case-insensitively unique, and
+applied only to top-level primitive (`string`/`integer`/`boolean`) properties.
+Values that cannot travel as a bare header (leading/trailing whitespace,
+control/non-ASCII characters) are transparently Base64-wrapped as
+`=?base64?<b64>?=`.
+
+---
+
+## Stateless Streamable HTTP
+
+Per SEP-2567, `rmcp` serves the `2026-07-28` draft statelessly **automatically**:
+no `Mcp-Session-Id`, no standalone GET/DELETE stream, and no `Last-Event-ID`
+resumption. The `legacy_session_mode` flag below only controls behavior for
+*legacy* protocol versions (`< 2026-07-28`).
+
+**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/draft/basic/transports)
+
+### Server-side
+
+A default server already serves `2026-07-28` clients statelessly. To also serve
+*legacy* clients without sessions, disable `legacy_session_mode` (formerly
+`stateful_mode`; builder `with_stateful_mode`). Optionally set
+`with_json_response(true)` so simple request/response tools reply with a single
+`application/json` body instead of an SSE stream (the server still falls back to
+`text/event-stream` if a handler emits a notification or server request first):
+
+```rust, ignore
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpService, StreamableHttpServerConfig,
+    session::local::LocalSessionManager,
+};
+
+let config = StreamableHttpServerConfig::default()
+    .with_legacy_session_mode(false) // stateless for legacy versions too
+    .with_json_response(true);       // plain JSON replies for simple tools
+
+let service = StreamableHttpService::new(
+    || Ok(Counter::new()),           // a fresh handler per request
+    LocalSessionManager::default().into(),
+    config,
+);
+
+// `StreamableHttpService` is a Tower service — mount it on any router.
+let router = axum::Router::new().nest_service("/mcp", service);
+```
+
+> Because there is no per-session state, the `service_factory` runs per request.
+> Keep shared state (DB pools, caches) in a `Clone` handle captured by the
+> closure; don't rely on in-memory state surviving between requests.
+
+### Client-side
+
+The Streamable HTTP client transport allows stateless operation by default
+(`allow_stateless: true`), so no configuration is needed to talk to a stateless
+server — it simply omits the session header when the server doesn't issue one:
+
+```rust, ignore
+use rmcp::transport::StreamableHttpClientTransport;
+
+// Defaults are stateless-friendly.
+let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+let client = ClientInfo::default().serve(transport).await?;
+```
+
+**Example:** [`examples/servers/src/counter_streamhttp.rs`](examples/servers/src/counter_streamhttp.rs) (server), [`examples/clients/src/streamable_http.rs`](examples/clients/src/streamable_http.rs) (client)
+
+---
+
 ## Examples
 
 See [examples](examples/README.md).
@@ -1060,8 +1249,8 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
-- [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25)
-- [Schema](https://github.com/modelcontextprotocol/specification/blob/main/schema/2025-11-25/schema.ts)
+- [MCP Specification](https://modelcontextprotocol.io/specification/draft)
+- [Schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/draft/schema.ts)
 
 ## Related Projects
 
