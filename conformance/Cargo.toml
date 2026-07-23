@@ -18,6 +18,7 @@ rmcp = { path = "../crates/rmcp", features = [
     "client",
     "elicitation",
     "auth",
+    "auth-client-credentials-jwt",
     "request-state",
     "transport-streamable-http-server",
     "transport-streamable-http-client-reqwest",
@@ -33,5 +34,3 @@ anyhow = "1"
 reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2"
 url = "2"
-p256 = { version = "0.14", features = ["ecdsa"] }
-base64 = "0.22"

@@ -30,7 +30,7 @@ runs them in separate server and client steps with
 `conformance/expected-failures-extensions.yaml`.
 
 - SEP-2663 Tasks server: 9 expected failures; `tasks-status-notifications` is currently skipped by the upstream harness; tracked in #868
-- Client extensions: `auth/client-credentials-basic` passes; `auth/client-credentials-jwt` and `auth/enterprise-managed-authorization` are expected failures
+- Client extensions: `auth/client-credentials-basic` and `auth/client-credentials-jwt` pass; `auth/enterprise-managed-authorization` is an expected failure
 
 ### Spec features without conformance scenarios
 
@@ -110,7 +110,7 @@ These extension scenarios are tracked but do not count toward tier advancement:
 
 | Scenario | Tag | Status |
 |---|---|---|
-| `auth/client-credentials-jwt` | extension | ❌ Failed — JWT `aud` claim verification error |
+| `auth/client-credentials-jwt` | extension | ✅ Passed |
 | `auth/client-credentials-basic` | extension | ✅ Passed |
 | `auth/enterprise-managed-authorization` | extension | ❌ Failed — scenario is not implemented by the conformance client |
 | `tasks-*` | extension | ❌ 9 expected failures · ⏭️ 1 upstream-skipped scenario |

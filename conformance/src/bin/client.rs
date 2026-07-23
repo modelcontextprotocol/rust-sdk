@@ -4,7 +4,10 @@ use rmcp::{
     service::RequestContext,
     transport::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
-        auth::{AuthorizationCallback, AuthorizationRequest, InMemoryCredentialStore, OAuthState},
+        auth::{
+            AuthorizationCallback, AuthorizationRequest, ClientCredentialsConfig,
+            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState,
+        },
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
@@ -651,49 +654,43 @@ async fn run_client_credentials_jwt(
 ) -> anyhow::Result<()> {
     let client_id = ctx
         .client_id
-        .as_deref()
-        .unwrap_or("conformance-test-client");
-    let _pem = ctx
+        .clone()
+        .unwrap_or_else(|| "conformance-test-client".to_string());
+    let signing_key = ctx
         .private_key_pem
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Missing private_key_pem"))?;
-    let _alg = ctx
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Missing private_key_pem"))?
+        .as_bytes()
+        .to_vec();
+    let signing_algorithm = match ctx
         .signing_algorithm
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Missing signing_algorithm"))?;
-
-    // Discover metadata to get token endpoint
-    let mut manager = AuthorizationManager::new(server_url).await?;
-    let metadata = manager.discover_metadata().await?;
-    let token_endpoint = metadata.token_endpoint.clone();
-    manager.set_metadata(metadata);
-
-    // Build JWT assertion
-    // Parse the PEM private key
-    let key = openssl_free_ec_sign(_pem, client_id, &token_endpoint)?;
-
-    let http = reqwest::Client::new();
-    let form_body = format!(
-        "grant_type=client_credentials&client_assertion_type={}&client_assertion={}",
-        urlencoding::encode("urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
-        urlencoding::encode(&key),
-    );
-    let resp = http
-        .post(&token_endpoint)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body)
-        .send()
-        .await?;
-
-    let token_resp: serde_json::Value = resp.json().await?;
-    let access_token = token_resp["access_token"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No access_token: {}", token_resp))?;
+        .ok_or_else(|| anyhow::anyhow!("Missing signing_algorithm"))?
+    {
+        "RS256" => JwtSigningAlgorithm::RS256,
+        "RS384" => JwtSigningAlgorithm::RS384,
+        "RS512" => JwtSigningAlgorithm::RS512,
+        "ES256" => JwtSigningAlgorithm::ES256,
+        "ES384" => JwtSigningAlgorithm::ES384,
+        algorithm => anyhow::bail!("Unsupported signing_algorithm: {algorithm}"),
+    };
+    let config = ClientCredentialsConfig::PrivateKeyJwt {
+        client_id,
+        signing_key,
+        signing_algorithm,
+        token_endpoint_audience: None,
+        scopes: vec![],
+        resource: Some(server_url.to_string()),
+    };
+    let mut oauth_state = OAuthState::new(server_url, None).await?;
+    oauth_state.authenticate_client_credentials(config).await?;
+    let manager = oauth_state
+        .into_authorization_manager()
+        .ok_or_else(|| anyhow::anyhow!("Client credentials flow did not authorize"))?;
 
     let transport = StreamableHttpClientTransport::with_client(
-        reqwest::Client::default(),
-        StreamableHttpClientTransportConfig::with_uri(server_url)
-            .auth_header(access_token.to_string()),
+        AuthClient::new(reqwest::Client::default(), manager),
+        StreamableHttpClientTransportConfig::with_uri(server_url),
     );
 
     let client = BasicClientHandler.serve(transport).await?;
@@ -707,73 +704,6 @@ async fn run_client_credentials_jwt(
     }
     client.cancel().await?;
     Ok(())
-}
-
-/// Minimal ES256 JWT signing without heavy deps.
-/// We use ring or pure-Rust approach. For simplicity, use the p256 + base64 crates
-/// that are already transitive deps of oauth2.
-fn openssl_free_ec_sign(pem: &str, client_id: &str, audience: &str) -> anyhow::Result<String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    // Decode PEM → DER
-    let pem_body = pem
-        .lines()
-        .filter(|l| !l.starts_with("-----"))
-        .collect::<String>();
-    let der = base64_decode(&pem_body)?;
-
-    // Parse PKCS#8 DER to get the raw EC private key bytes
-    // PKCS#8 for EC P-256: the raw 32-byte key is at the end of the structure
-    let raw_key = extract_ec_private_key(&der)?;
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let header = base64url_encode(br#"{"alg":"ES256","typ":"JWT"}"#);
-    let payload_json = serde_json::json!({
-        "iss": client_id,
-        "sub": client_id,
-        "aud": audience,
-        "iat": now,
-        "exp": now + 300,
-        "jti": format!("jti-{}", now),
-    });
-    let payload = base64url_encode(payload_json.to_string().as_bytes());
-    let signing_input = format!("{}.{}", header, payload);
-
-    // Sign with p256
-    let secret_key = p256::ecdsa::SigningKey::from_slice(raw_key.as_slice())
-        .map_err(|e| anyhow::anyhow!("Invalid EC key: {}", e))?;
-    use p256::ecdsa::signature::Signer;
-    let sig: p256::ecdsa::Signature = secret_key.sign(signing_input.as_bytes());
-    let sig_bytes = sig.to_bytes();
-    let sig_b64 = base64url_encode(&sig_bytes);
-
-    Ok(format!("{}.{}", signing_input, sig_b64))
-}
-
-fn base64url_encode(data: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
-}
-
-fn base64_decode(s: &str) -> anyhow::Result<Vec<u8>> {
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD.decode(s.trim())?)
-}
-
-/// Extract the raw 32-byte EC private key from a PKCS#8 DER blob.
-fn extract_ec_private_key(der: &[u8]) -> anyhow::Result<Vec<u8>> {
-    // PKCS#8 wraps an ECPrivateKey. We look for the octet string containing
-    // the 32-byte private key. A simple heuristic: find 0x04 0x20 (OCTET STRING, len 32)
-    // followed by exactly 32 bytes that form the key.
-    // More robust: parse ASN.1. But for conformance testing this suffices.
-    for i in 0..der.len().saturating_sub(33) {
-        if der[i] == 0x04 && der[i + 1] == 0x20 && i + 34 <= der.len() {
-            return Ok(der[i + 2..i + 34].to_vec());
-        }
-    }
-    Err(anyhow::anyhow!(
-        "Could not extract 32-byte EC private key from PKCS#8 DER"
-    ))
 }
 
 /// Cross-app access flow (SEP-1046 extension).

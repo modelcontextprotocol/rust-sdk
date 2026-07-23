@@ -862,11 +862,33 @@ pub enum ClientCredentialsConfig {
         client_id: String,
         signing_key: Vec<u8>,
         signing_algorithm: JwtSigningAlgorithm,
-        /// Override the `aud` claim in the JWT assertion; defaults to token_endpoint
+        /// Overrides the authorization server issuer used for the JWT `aud` claim.
         token_endpoint_audience: Option<String>,
         scopes: Vec<String>,
         resource: Option<String>,
     },
+}
+
+#[cfg(feature = "auth-client-credentials-jwt")]
+fn client_authentication_audience<'a>(
+    metadata: &'a AuthorizationMetadata,
+    configured_audience: Option<&'a str>,
+) -> Result<&'a str, AuthError> {
+    configured_audience
+        .or(metadata.issuer.as_deref())
+        .ok_or_else(|| {
+            AuthError::ClientCredentialsError(
+                "Authorization server metadata is missing the issuer required for private_key_jwt"
+                    .to_string(),
+            )
+        })
+}
+
+#[cfg(feature = "auth-client-credentials-jwt")]
+fn client_authentication_header(algorithm: JwtSigningAlgorithm) -> jsonwebtoken::Header {
+    let mut header = jsonwebtoken::Header::new(algorithm.to_jsonwebtoken_algorithm());
+    header.typ = Some("client-authentication+jwt".to_string());
+    header
 }
 
 impl ClientCredentialsConfig {
@@ -987,6 +1009,18 @@ fn is_https_url(value: &str) -> bool {
         .ok()
         .map(|url| url.scheme() == "https" && url.path() != "/" && url.host_str().is_some())
         .unwrap_or(false)
+}
+
+#[cfg(feature = "auth-client-credentials-jwt")]
+fn is_allowed_client_credentials_endpoint(resource: &Url, token_endpoint: &Url) -> bool {
+    token_endpoint.scheme() == "https"
+        || (token_endpoint.scheme() == "http"
+            && resource
+                .host_str()
+                .is_some_and(AuthorizationManager::is_loopback_metadata_host)
+            && token_endpoint
+                .host_str()
+                .is_some_and(AuthorizationManager::is_loopback_metadata_host))
 }
 
 impl AuthorizationManager {
@@ -2872,22 +2906,20 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or(AuthError::NoAuthorizationSupport)?;
 
-        // Validate that the token endpoint uses HTTPS before transmitting sensitive credentials.
         let token_endpoint_url = url::Url::parse(&metadata.token_endpoint).map_err(|e| {
             AuthError::ClientCredentialsError(format!(
                 "Invalid token endpoint URL in authorization metadata: {e}"
             ))
         })?;
-        if token_endpoint_url.scheme() != "https" {
+        if !is_allowed_client_credentials_endpoint(&self.base_url, &token_endpoint_url) {
             return Err(AuthError::ClientCredentialsError(
                 "Insecure token endpoint URL: HTTPS is required for client credentials flow"
                     .to_string(),
             ));
         }
 
-        let audience = token_endpoint_audience
-            .as_deref()
-            .unwrap_or(&metadata.token_endpoint);
+        let audience =
+            client_authentication_audience(metadata, token_endpoint_audience.as_deref())?;
 
         let assertion =
             Self::build_jwt_assertion(client_id, audience, signing_key, *signing_algorithm)?;
@@ -2993,7 +3025,7 @@ impl AuthorizationManager {
             "jti": jti,
         });
 
-        let header = jsonwebtoken::Header::new(algorithm.to_jsonwebtoken_algorithm());
+        let header = client_authentication_header(algorithm);
         let encoding_key = jsonwebtoken::EncodingKey::from_rsa_pem(signing_key).or_else(|_| {
             jsonwebtoken::EncodingKey::from_ec_pem(signing_key).map_err(|e| {
                 AuthError::JwtSigningError(format!("Failed to parse signing key: {}", e))
@@ -6475,6 +6507,86 @@ mod tests {
     }
 
     // -- client credentials (SEP-1046) --
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn client_authentication_audience_defaults_to_metadata_issuer() {
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        };
+
+        let audience = super::client_authentication_audience(&metadata, None).unwrap();
+
+        assert_eq!(audience, "https://auth.example.com");
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn client_authentication_audience_honors_explicit_override() {
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        };
+
+        let audience = super::client_authentication_audience(
+            &metadata,
+            Some("https://legacy.example.com/token"),
+        )
+        .unwrap();
+
+        assert_eq!(audience, "https://legacy.example.com/token");
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn client_authentication_audience_rejects_missing_metadata_issuer() {
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            ..Default::default()
+        };
+
+        let error = super::client_authentication_audience(&metadata, None).unwrap_err();
+
+        assert!(matches!(error, AuthError::ClientCredentialsError(_)));
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn client_authentication_header_sets_explicit_type() {
+        let header = super::client_authentication_header(super::JwtSigningAlgorithm::ES256);
+
+        assert_eq!(header.typ.as_deref(), Some("client-authentication+jwt"));
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn client_credentials_endpoint_allows_http_between_loopback_hosts() {
+        let resource = Url::parse("http://localhost:8000/mcp").unwrap();
+        let token_endpoint = Url::parse("http://127.0.0.1:9000/token").unwrap();
+
+        assert!(super::is_allowed_client_credentials_endpoint(
+            &resource,
+            &token_endpoint
+        ));
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn client_credentials_endpoint_rejects_http_to_non_loopback_host() {
+        let resource = Url::parse("http://localhost:8000/mcp").unwrap();
+        let token_endpoint = Url::parse("http://auth.example.com/token").unwrap();
+
+        assert!(!super::is_allowed_client_credentials_endpoint(
+            &resource,
+            &token_endpoint
+        ));
+    }
 
     #[tokio::test]
     async fn configure_client_credentials_uses_request_body_auth_for_client_secret() {

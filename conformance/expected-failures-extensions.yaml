@@ -20,5 +20,4 @@ server: []
 
 client:
   # Informational OAuth extension scenarios.
-  - auth/client-credentials-jwt
   - auth/enterprise-managed-authorization
