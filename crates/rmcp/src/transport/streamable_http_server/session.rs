@@ -82,13 +82,11 @@ pub enum RestoreOutcome<T> {
 ///
 /// Server-initiated requests issued while handling a client request carry an
 /// [`OriginatingRequestId`](crate::service::OriginatingRequestId) marker in
-/// their non-serialized `Extensions`. Implementations that keep messages
-/// in-memory (like the bundled local session manager) deliver such requests on
-/// the originating request's SSE stream, per SEP-2260. Implementations that
-/// serialize messages between processes lose the marker; those requests then
-/// fall back to the standalone stream, which violates SEP-2260 for protocol
-/// version 2026-07-28+ clients — distributed session managers need their own
-/// association mechanism.
+/// their non-serialized `Extensions`; the bundled local session manager uses
+/// it to deliver such requests on the originating request's SSE stream.
+/// Implementations that serialize messages between processes lose the marker
+/// and fall back to the standalone stream, violating SEP-2260 for 2026-07-28+
+/// clients; they need their own association mechanism.
 pub trait SessionManager: Send + Sync + 'static {
     type Error: std::error::Error + Send + 'static;
     type Transport: crate::transport::Transport<RoleServer>;

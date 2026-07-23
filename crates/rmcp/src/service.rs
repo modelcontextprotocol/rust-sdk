@@ -176,20 +176,13 @@ pub(crate) fn in_request_handler_scope() -> bool {
     ORIGINATING_REQUEST.try_with(|_| ()).is_ok()
 }
 
-/// Marker stored in an outbound request's [`Extensions`]
-/// identifying the in-flight peer request it was issued from (SEP-2260).
-///
-/// Attached automatically whenever a request is sent from within a request
-/// handler, for both roles; currently only the streamable HTTP server reads
-/// it, to deliver server-initiated requests on the originating client
-/// request's SSE stream.
-///
-/// # In-memory only
-///
-/// `Extensions` are never serialized, so this marker does not appear on the
-/// wire (SEP-2260 defines no wire field). Session managers that serialize
-/// messages between processes lose it; such requests fall back to the
-/// standalone stream (logged as a warning).
+/// Marker in an outbound request's non-serialized [`Extensions`] identifying
+/// the in-flight peer request it was issued from (SEP-2260). Attached for both
+/// roles whenever a request is sent from within a request handler; the
+/// streamable HTTP server reads it to deliver server-initiated requests on the
+/// originating request's SSE stream. Never on the wire (SEP-2260 defines no
+/// wire field), so session managers that serialize messages between processes
+/// lose it and such requests fall back to the standalone stream with a warning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct OriginatingRequestId(pub RequestId);
