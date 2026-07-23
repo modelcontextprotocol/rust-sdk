@@ -527,14 +527,8 @@ impl LocalSessionWorker {
     }
     fn resolve_outbound_channel(&self, message: &ServerJsonRpcMessage) -> OutboundChannel {
         match &message {
-            // SEP-2260: server-initiated requests issued while handling a
-            // client request carry an OriginatingRequestId marker and are
-            // delivered on that request's SSE stream, never the standalone
-            // GET stream. Unmarked requests (sent outside a handler on
-            // legacy protocol versions) keep using the common stream. If the
-            // marker is present but the originating request already completed
-            // (e.g. a task operation outliving its originating request), fall
-            // back to the common stream loudly — never a closed channel.
+            // SEP-2260: requests carrying an OriginatingRequestId marker ride the
+            // originating request's SSE stream, never the standalone GET stream.
             ServerJsonRpcMessage::Request(json_rpc_request) => {
                 use crate::model::GetExtensions;
                 let originating = json_rpc_request
@@ -1367,10 +1361,8 @@ mod sep2260_routing_tests {
 
     #[tokio::test]
     async fn associated_request_for_completed_request_falls_back_to_common() {
-        // Completion race / re-scoped task operations: the originating
-        // request's resources were unregistered before the associated request
-        // reached the worker. It must fall back to the common stream (with a
-        // warning), never be dropped into a closed request-wise channel.
+        // Originating request already unregistered (completion race / re-scoped
+        // task op): must fall back to Common, never a closed request-wise channel.
         let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
         let receiver = worker.establish_request_wise_channel().await.unwrap();
         let http_request_id = receiver.http_request_id.unwrap();

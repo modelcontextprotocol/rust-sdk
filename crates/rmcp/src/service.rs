@@ -1670,8 +1670,7 @@ mod sep2260_marker_tests {
     }
 
     async fn send_and_capture(scope: Option<RequestId>) -> <RoleServer as ServiceRole>::Req {
-        // peer_info None => enforce_request_association is non-strict, so the
-        // send is accepted regardless of scope; we only inspect the sink message.
+        // peer_info None keeps enforcement non-strict; only the sink message matters.
         let (peer, mut rx) =
             Peer::<RoleServer>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
         let send = peer.send_request_with_option(ping(), PeerRequestOptions::no_options());

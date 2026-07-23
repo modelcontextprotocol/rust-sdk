@@ -1,6 +1,5 @@
-//! SEP-2260 end-to-end: a server→client request issued while handling a
-//! client request is delivered on the originating POST's SSE stream, and the
-//! standalone GET stream never carries it.
+//! SEP-2260 end-to-end: in-handler server→client requests ride the originating
+//! POST's SSE stream, never the standalone GET stream.
 #![cfg(not(feature = "local"))]
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -33,9 +32,7 @@ impl ServerHandler for ElicitingServer {
         _request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        // Blocks awaiting the client's answer; the test only needs the elicit
-        // request to be EMITTED on the right stream, so it never answers and
-        // tears the server down at the end instead.
+        // Never answered: the test only checks the request is emitted on the right stream.
         let _ = context
             .peer
             .create_elicitation(ElicitRequestParams::FormElicitationParams {
@@ -94,10 +91,8 @@ async fn elicitation_rides_originating_post_stream_not_standalone_get() {
     let url = start_server(ct.clone()).await;
     let client = reqwest::Client::new();
 
-    // Initialize with 2025-11-25: the latest version with sessions. Per
-    // SEP-2567 the server serves 2026-07-28 statelessly (no session, no
-    // standalone GET stream), so the SEP-2260 stream-routing scenario only
-    // exists on session-carrying versions.
+    // 2025-11-25 is the latest session-carrying version; SEP-2567 serves
+    // 2026-07-28+ statelessly, with no standalone GET stream to test against.
     let resp = client
         .post(&url)
         .header("Accept", "text/event-stream, application/json")
@@ -142,8 +137,7 @@ async fn elicitation_rides_originating_post_stream_not_standalone_get() {
         .unwrap();
     assert_eq!(get_stream.status(), 200);
 
-    // tools/call — the response is an SSE stream; the in-handler elicitation
-    // request must appear on THIS stream while the handler awaits the answer.
+    // The in-handler elicitation must appear on this tools/call SSE stream.
     let post_stream = client
         .post(&url)
         .header("Accept", "text/event-stream, application/json")
