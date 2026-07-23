@@ -180,8 +180,9 @@ pub(crate) fn in_request_handler_scope() -> bool {
 /// identifying the in-flight peer request it was issued from (SEP-2260).
 ///
 /// Attached automatically whenever a request is sent from within a request
-/// handler. The streamable HTTP server uses it to deliver server-initiated
-/// requests on the originating client request's SSE stream.
+/// handler, for both roles; currently only the streamable HTTP server reads
+/// it, to deliver server-initiated requests on the originating client
+/// request's SSE stream.
 ///
 /// # In-memory only
 ///

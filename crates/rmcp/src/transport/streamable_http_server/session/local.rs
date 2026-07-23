@@ -1323,7 +1323,10 @@ mod sep2260_routing_tests {
     use crate::service::OriginatingRequestId;
 
     fn roots_request(originating: Option<RequestId>) -> ServerJsonRpcMessage {
-        #[allow(deprecated)]
+        #[expect(
+            deprecated,
+            reason = "roots is SEP-2577-deprecated; any restricted request works here"
+        )]
         let mut request = crate::model::ListRootsRequest {
             method: Default::default(),
             extensions: Default::default(),
