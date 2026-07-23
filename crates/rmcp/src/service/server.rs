@@ -772,9 +772,7 @@ impl Peer<RoleServer> {
     /// # SEP-2260: request association
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
-    /// client request; outside a handler it returns an `invalid_request` error.
-    /// The association does not cross `tokio::spawn`, so use the task manager
-    /// for long-running work.
+    /// client request; see [`OriginatingRequestId`].
     #[deprecated(
         since = "1.8.0",
         note = "Sampling is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
@@ -812,9 +810,7 @@ impl Peer<RoleServer> {
         /// # SEP-2260: request association
         ///
         /// From protocol version `2026-07-28` this must be issued while handling a
-        /// client request; outside a handler it returns an `invalid_request` error.
-        /// The association does not cross `tokio::spawn`, so use the task manager
-        /// for long-running work.
+        /// client request; see [`OriginatingRequestId`].
         #[deprecated(
             since = "1.8.0",
             note = "Roots is deprecated by SEP-2577 and will be removed in a future release. See https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577"
@@ -826,9 +822,7 @@ impl Peer<RoleServer> {
         /// # SEP-2260: request association
         ///
         /// From protocol version `2026-07-28` this must be issued while handling a
-        /// client request; outside a handler it returns an `invalid_request` error.
-        /// The association does not cross `tokio::spawn`, so use the task manager
-        /// for long-running work.
+        /// client request; see [`OriginatingRequestId`].
         peer_req create_elicitation ElicitRequest(ElicitRequestParams) => ElicitResult
     );
     #[cfg(feature = "elicitation")]
@@ -836,9 +830,7 @@ impl Peer<RoleServer> {
         /// # SEP-2260: request association
         ///
         /// From protocol version `2026-07-28` this must be issued while handling a
-        /// client request; outside a handler it returns an `invalid_request` error.
-        /// The association does not cross `tokio::spawn`, so use the task manager
-        /// for long-running work.
+        /// client request; see [`OriginatingRequestId`].
         peer_req_with_timeout create_elicitation_with_timeout ElicitRequest(ElicitRequestParams) => ElicitResult
     );
 
@@ -1071,9 +1063,7 @@ impl Peer<RoleServer> {
     /// # SEP-2260: request association
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
-    /// client request; outside a handler it returns an `invalid_request` error.
-    /// The association does not cross `tokio::spawn`, so use the task manager
-    /// for long-running work.
+    /// client request; see [`OriginatingRequestId`].
     #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Option<T>, ElicitationError>
     where
@@ -1139,9 +1129,7 @@ impl Peer<RoleServer> {
     /// # SEP-2260: request association
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
-    /// client request; outside a handler it returns an `invalid_request` error.
-    /// The association does not cross `tokio::spawn`, so use the task manager
-    /// for long-running work.
+    /// client request; see [`OriginatingRequestId`].
     #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit_with_timeout<T>(
         &self,
@@ -1241,9 +1229,7 @@ impl Peer<RoleServer> {
     /// # SEP-2260: request association
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
-    /// client request; outside a handler it returns an `invalid_request` error.
-    /// The association does not cross `tokio::spawn`, so use the task manager
-    /// for long-running work.
+    /// client request; see [`OriginatingRequestId`].
     #[cfg(feature = "elicitation")]
     pub async fn elicit_url(
         &self,
@@ -1299,9 +1285,7 @@ impl Peer<RoleServer> {
     /// # SEP-2260: request association
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
-    /// client request; outside a handler it returns an `invalid_request` error.
-    /// The association does not cross `tokio::spawn`, so use the task manager
-    /// for long-running work.
+    /// client request; see [`OriginatingRequestId`].
     #[cfg(feature = "elicitation")]
     pub async fn elicit_url_with_timeout(
         &self,

@@ -183,6 +183,14 @@ pub(crate) fn in_request_handler_scope() -> bool {
 /// originating request's SSE stream. Never on the wire (SEP-2260 defines no
 /// wire field), so session managers that serialize messages between processes
 /// lose it and such requests fall back to the standalone stream with a warning.
+///
+/// # Caller requirements
+///
+/// From protocol version `2026-07-28`, server-to-client sampling, roots, and
+/// elicitation requests must be issued while handling a client request;
+/// outside a handler they return an `invalid_request` error. The association
+/// is task-local and does not cross `tokio::spawn`, so use the task manager
+/// for long-running work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct OriginatingRequestId(pub RequestId);
