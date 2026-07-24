@@ -5,11 +5,11 @@ use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
 
 use crate::common::extract_doc_line;
 
-/// Check if a type is Json<T> and extract the inner type T
+/// Check if a type is Json<T> or StructuredOnly<T> and extract the inner type T
 fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     if let syn::Type::Path(type_path) = ty
         && let Some(last_segment) = type_path.path.segments.last()
-        && last_segment.ident == "Json"
+        && (last_segment.ident == "Json" || last_segment.ident == "StructuredOnly")
         && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
         && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
     {
@@ -19,7 +19,8 @@ fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
 }
 
 /// Extract schema expression from a function's return type
-/// Handles patterns like Json<T> and Result<Json<T>, E>
+/// Handles patterns like Json<T> and Result<Json<T>, E>, and the same
+/// shapes with StructuredOnly<T>
 fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
     // First, try direct Json<T>
     if let Some(inner_type) = extract_json_inner_type(ret_type) {

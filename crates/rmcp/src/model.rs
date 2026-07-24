@@ -3996,6 +3996,51 @@ impl CallToolResult {
             meta: None,
         }
     }
+    /// Create a successful tool result with structured content only, without
+    /// mirroring it into `content` as serialized text.
+    ///
+    /// [`CallToolResult::structured`] duplicates the value as a text content
+    /// block so that clients which do not read `structuredContent` still see
+    /// the result. Skipping that mirror halves the payload for large values,
+    /// but such clients will receive an empty `content` array — only opt out
+    /// when you know your callers consume `structuredContent`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::CallToolResult;
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured_only(json!({
+    ///     "temperature": 22.5,
+    ///     "humidity": 65,
+    ///     "description": "Partly cloudy"
+    /// }));
+    /// assert!(result.content.is_empty());
+    /// ```
+    pub fn structured_only(value: Value) -> Self {
+        CallToolResult {
+            result_type: ResultType::default(),
+            content: vec![],
+            structured_content: Some(value),
+            is_error: Some(false),
+            meta: None,
+        }
+    }
+    /// Create an error tool result with structured content only, without
+    /// mirroring it into `content` as serialized text.
+    ///
+    /// The same caveat as [`CallToolResult::structured_only`] applies: clients
+    /// that do not read `structuredContent` will see an empty error result.
+    pub fn structured_error_only(value: Value) -> Self {
+        CallToolResult {
+            result_type: ResultType::default(),
+            content: vec![],
+            structured_content: Some(value),
+            is_error: Some(true),
+            meta: None,
+        }
+    }
 
     /// Set the metadata on this result
     pub fn with_meta(mut self, meta: Option<MetaObject>) -> Self {
