@@ -199,13 +199,15 @@
           ]
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         },
         "structuredContent": {
           "description": "An optional JSON object that represents the structured result of the tool call"
@@ -326,13 +328,15 @@
           "$ref": "#/definitions/CompletionInfo"
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         }
       },
       "required": [
@@ -1140,13 +1144,15 @@
           }
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         }
       },
       "required": [
@@ -1783,13 +1789,15 @@
           }
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         },
         "ttlMs": {
           "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1842,13 +1850,15 @@
           }
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         },
         "ttlMs": {
           "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1901,13 +1911,15 @@
           }
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         },
         "ttlMs": {
           "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -1959,13 +1971,15 @@
           ]
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         },
         "tools": {
           "type": "array",
@@ -2581,13 +2595,15 @@
           }
         },
         "resultType": {
-          "description": "Result type discriminator. Absent values deserialize as `\"complete\"`.",
-          "allOf": [
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234",
+          "anyOf": [
             {
               "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
             }
-          ],
-          "default": "complete"
+          ]
         },
         "ttlMs": {
           "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
@@ -2948,7 +2964,7 @@
       }
     },
     "ResultType": {
-      "description": "Indicates the type of a result object, allowing the client to\ndetermine how to parse the response.\n\nThe spec defines this as an open string (`\"complete\" | \"input_required\" | string`),\nso unknown values are preserved rather than rejected. Servers implementing this\nprotocol version MUST include `resultType` in every result. For backward\ncompatibility, clients MUST treat an absent field as `\"complete\"`.",
+      "description": "Indicates the type of a result object, allowing the client to\ndetermine how to parse the response.\n\nThe spec defines this as an open string (`\"complete\" | \"input_required\" | string`),\nso unknown values are preserved rather than rejected. Servers implementing this\nprotocol version MUST include `resultType` in every result. For backward\ncompatibility, clients MUST treat an absent field as `\"complete\"`.\n\nOrdinary results model the field as `Option<ResultType>`: `None` means the\nfield is absent on the wire. Constructors default to `Some(COMPLETE)`, and\nthe server handler strips the `\"complete\"` discriminator before responding\nto peers that negotiated a protocol version older than `2026-07-28`, so\nlegacy sessions keep their historical wire shape (see\n[`ServerResult::strip_result_type_for_legacy_peer`]).",
       "type": "string"
     },
     "Role": {

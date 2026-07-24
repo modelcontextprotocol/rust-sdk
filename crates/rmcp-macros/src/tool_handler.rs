@@ -69,7 +69,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
                 _context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
                 Ok(rmcp::model::ListToolsResult{
-                    result_type: Default::default(),
+                    result_type: Some(rmcp::model::ResultType::COMPLETE),
                     tools: #router.list_all(),
                     meta: #result_meta,
                     next_cursor: None,

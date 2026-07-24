@@ -55,7 +55,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
         // `context` is moved into the dispatch below, so read the negotiated version first.
         let protocol_version = context.protocol_version();
-        let mrtr_supported = protocol_version
+        // SEP-2322 (`resultType` discriminator, MRTR) exists from 2026-07-28.
+        let sep_2322_supported = protocol_version
             .as_ref()
             .is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
         let requested_version = context.meta.protocol_version();
@@ -240,13 +241,18 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     .map(ServerResult::task_ack)
             }
         };
-        let result = result.and_then(|result| {
-            if matches!(result, ServerResult::InputRequiredResult(_)) && !mrtr_supported {
+        let result = result.and_then(|mut result| {
+            if matches!(result, ServerResult::InputRequiredResult(_)) && !sep_2322_supported {
                 Err(McpError::invalid_request(
                     "InputRequiredResult requires negotiated protocol version 2026-07-28 or newer",
                     None,
                 ))
             } else {
+                // Peers on protocol versions older than 2026-07-28 keep the
+                // legacy wire shape without `resultType: "complete"`.
+                if !sep_2322_supported {
+                    result.strip_result_type_for_legacy_peer();
+                }
                 Ok(result)
             }
         });

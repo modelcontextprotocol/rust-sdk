@@ -61,7 +61,7 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
         ) -> Result<rmcp::model::ListPromptsResult, rmcp::ErrorData> {
             let prompts = #router_expr.list_all();
             Ok(rmcp::model::ListPromptsResult {
-                result_type: Default::default(),
+                result_type: Some(rmcp::model::ResultType::COMPLETE),
                 prompts,
                 meta: #meta,
                 next_cursor: None,
