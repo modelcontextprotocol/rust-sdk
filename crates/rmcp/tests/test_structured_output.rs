@@ -239,6 +239,24 @@ async fn test_structured_only_in_call_result() {
 }
 
 #[tokio::test]
+async fn test_structured_only_with_divergent_content() {
+    // with_content pairs structured_content with a custom rendering instead of
+    // the serialized mirror
+    let structured_data = json!({"rows": [1, 2, 3]});
+
+    let result = CallToolResult::structured_only(structured_data.clone())
+        .with_content(vec![ContentBlock::text("3 rows matched")]);
+
+    assert_eq!(result.content.len(), 1);
+    assert_eq!(
+        result.content.first().unwrap().as_text().unwrap().text,
+        "3 rows matched"
+    );
+    assert_eq!(result.structured_content, Some(structured_data));
+    assert_eq!(result.is_error, Some(false));
+}
+
+#[tokio::test]
 async fn test_structured_error_only_in_call_result() {
     let error_data = json!({
         "error_code": "NOT_FOUND",

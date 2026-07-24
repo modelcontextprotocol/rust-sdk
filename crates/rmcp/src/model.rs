@@ -4005,6 +4005,9 @@ impl CallToolResult {
     /// but such clients will receive an empty `content` array — only opt out
     /// when you know your callers consume `structuredContent`.
     ///
+    /// To send a custom rendering instead of none (for example a short text
+    /// summary of a large value), chain [`CallToolResult::with_content`].
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -4040,6 +4043,27 @@ impl CallToolResult {
             is_error: Some(true),
             meta: None,
         }
+    }
+
+    /// Replace the `content` blocks on this result.
+    ///
+    /// The `content` and `structuredContent` fields need not carry the same
+    /// data: pairing a hand-written rendering with a structured value is
+    /// valid, e.g. a short text summary in `content` while
+    /// `structured_content` holds the full value.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use rmcp::model::{CallToolResult, ContentBlock};
+    /// use serde_json::json;
+    ///
+    /// let result = CallToolResult::structured_only(json!({"rows": [1, 2, 3]}))
+    ///     .with_content(vec![ContentBlock::text("3 rows matched")]);
+    /// ```
+    pub fn with_content(mut self, content: Vec<ContentBlock>) -> Self {
+        self.content = content;
+        self
     }
 
     /// Set the metadata on this result
