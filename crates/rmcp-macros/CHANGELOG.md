@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0-beta.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.0.0-beta.1...rmcp-macros-v3.0.0-beta.2) - 2026-07-24
+
+### Fixed
+
+- [**breaking**] omit resultType for legacy protocol sessions ([#1038](https://github.com/modelcontextprotocol/rust-sdk/pull/1038))
+
+### Other
+
+- declare and check MSRV ([#1034](https://github.com/modelcontextprotocol/rust-sdk/pull/1034))
+
 ## [3.0.0-beta.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v2.2.0...rmcp-macros-v3.0.0-beta.1) - 2026-07-23
 
 ### Added
