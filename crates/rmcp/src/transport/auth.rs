@@ -578,6 +578,38 @@ pub struct AuthorizationMetadata {
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
+/// How [`AuthorizationMetadata`] was obtained during discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthorizationMetadataSource {
+    /// Discovered through RFC 9728 protected resource metadata.
+    ProtectedResourceMetadata,
+    /// Discovered through RFC 8414 / OpenID Connect metadata at the server's
+    /// base URL.
+    AuthorizationServerMetadata,
+    /// Nothing was discovered; the endpoints were synthesized from the base
+    /// URL (`/authorize`, `/token`, `/register`) for compatibility with the
+    /// 2025-03-26 MCP spec's default-endpoint fallback. The server gave no
+    /// evidence that it supports OAuth.
+    LegacyEndpointFallback,
+}
+
+impl AuthorizationMetadataSource {
+    /// Whether the metadata was actually published by the server, as opposed
+    /// to synthesized by the client as a legacy compatibility fallback.
+    pub fn is_discovered(self) -> bool {
+        !matches!(self, Self::LegacyEndpointFallback)
+    }
+}
+
+/// [`AuthorizationMetadata`] together with its discovery provenance.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct DiscoveredAuthorizationMetadata {
+    pub metadata: AuthorizationMetadata,
+    pub source: AuthorizationMetadataSource,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ResourceServerMetadata {
     resource: Option<String>,
@@ -1321,17 +1353,45 @@ impl AuthorizationManager {
     }
 
     /// discover oauth2 metadata (per SEP-985: Protected Resource Metadata first, then direct OAuth)
+    ///
+    /// When no metadata can be discovered, this falls back to legacy default
+    /// endpoints derived from the base URL rather than returning an error, so
+    /// a successful result does not prove the server supports OAuth. Callers
+    /// that need to tell verified discovery apart from the synthesized
+    /// fallback should use [`Self::discover_metadata_with_source`] instead.
     pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
+        Ok(self.discover_metadata_with_source().await?.metadata)
+    }
+
+    /// Discover oauth2 metadata along with how it was obtained.
+    ///
+    /// Unlike [`Self::discover_metadata`], the returned
+    /// [`AuthorizationMetadataSource`] lets callers distinguish metadata the
+    /// server actually published from the legacy default-endpoint fallback
+    /// that is synthesized when discovery finds nothing
+    /// ([`AuthorizationMetadataSource::LegacyEndpointFallback`]).
+    pub async fn discover_metadata_with_source(
+        &self,
+    ) -> Result<DiscoveredAuthorizationMetadata, AuthError> {
         if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
-            return Ok(metadata);
+            return Ok(DiscoveredAuthorizationMetadata {
+                metadata,
+                source: AuthorizationMetadataSource::ProtectedResourceMetadata,
+            });
         }
 
         if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
-            return Ok(metadata);
+            return Ok(DiscoveredAuthorizationMetadata {
+                metadata,
+                source: AuthorizationMetadataSource::AuthorizationServerMetadata,
+            });
         }
 
         debug!("falling back to legacy OAuth endpoints derived from the base URL");
-        Ok(Self::legacy_authorization_metadata(&self.base_url))
+        Ok(DiscoveredAuthorizationMetadata {
+            metadata: Self::legacy_authorization_metadata(&self.base_url),
+            source: AuthorizationMetadataSource::LegacyEndpointFallback,
+        })
     }
 
     fn legacy_authorization_metadata(base_url: &Url) -> AuthorizationMetadata {
@@ -3691,10 +3751,10 @@ mod tests {
 
     use super::{
         AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
-        AuthorizationRequest, AuthorizationSession, CredentialStore, InMemoryCredentialStore,
-        InMemoryStateStore, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
-        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
-        StateStore, StoredAuthorizationState, is_https_url,
+        AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession, CredentialStore,
+        InMemoryCredentialStore, InMemoryStateStore, OAuthClientConfig, OAuthHttpClient,
+        OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest,
+        ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -4118,6 +4178,138 @@ mod tests {
                 ],
             )
         );
+    }
+
+    #[tokio::test]
+    async fn discover_metadata_with_source_reports_legacy_fallback_when_nothing_is_discovered() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://legacy.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let discovered = manager.discover_metadata_with_source().await.unwrap();
+
+        assert_eq!(
+            (
+                discovered.source,
+                discovered.metadata.authorization_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::LegacyEndpointFallback,
+                "https://legacy.example.com/authorize",
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_metadata_with_source_reports_protected_resource_metadata() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let discovered = manager.discover_metadata_with_source().await.unwrap();
+
+        assert_eq!(
+            (
+                discovered.source,
+                discovered.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_metadata_with_source_reports_authorization_server_metadata() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://mcp.example.com",
+                    "authorization_endpoint": "https://mcp.example.com/oauth/authorize",
+                    "token_endpoint": "https://mcp.example.com/oauth/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let discovered = manager.discover_metadata_with_source().await.unwrap();
+
+        assert_eq!(
+            (
+                discovered.source,
+                discovered.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::AuthorizationServerMetadata,
+                "https://mcp.example.com/oauth/token",
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::protected_resource_metadata(
+        AuthorizationMetadataSource::ProtectedResourceMetadata,
+        true
+    )]
+    #[case::authorization_server_metadata(
+        AuthorizationMetadataSource::AuthorizationServerMetadata,
+        true
+    )]
+    #[case::legacy_endpoint_fallback(AuthorizationMetadataSource::LegacyEndpointFallback, false)]
+    fn is_discovered_is_false_only_for_the_legacy_fallback(
+        #[case] source: AuthorizationMetadataSource,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(source.is_discovered(), expected);
     }
 
     fn preregistered_as_metadata_response() -> HttpResponse {
