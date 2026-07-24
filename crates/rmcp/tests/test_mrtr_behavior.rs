@@ -17,6 +17,7 @@ use rmcp::{
     service::{RequestContext, RoleClient, RoleServer, ServiceError, serve_directly},
 };
 use serde_json::json;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// A `requestState` value with characters that must survive a byte-exact echo:
 /// dots (the codec delimiter), base64 punctuation, whitespace, and quotes.
@@ -327,9 +328,98 @@ where
         .await
 }
 
+async fn raw_tool_result(
+    protocol_version: ProtocolVersion,
+    request_protocol_version: Option<ProtocolVersion>,
+) -> anyhow::Result<serde_json::Value> {
+    tokio::task::LocalSet::new()
+        .run_until(async move {
+            let (server_transport, client_transport) = tokio::io::duplex(8192);
+            let server = serve_directly::<RoleServer, _, _, _, _>(
+                MrtrServer::default(),
+                server_transport,
+                Some(client_info(protocol_version)),
+            );
+
+            let (reader, mut writer) = tokio::io::split(client_transport);
+            let mut request = json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": "noop", "arguments": {} }
+            });
+            if let Some(request_protocol_version) = request_protocol_version {
+                request["params"]["_meta"] = json!({
+                    "io.modelcontextprotocol/protocolVersion": request_protocol_version,
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "raw-client",
+                        "version": "1.0.0"
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                });
+            }
+            writer.write_all(request.to_string().as_bytes()).await?;
+            writer.write_all(b"\n").await?;
+
+            let mut response = String::new();
+            BufReader::new(reader).read_line(&mut response).await?;
+            let response: serde_json::Value = serde_json::from_str(&response)?;
+            server.cancel().await?;
+
+            Ok(response["result"].clone())
+        })
+        .await
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_protocol_omits_complete_result_type_on_the_wire() -> anyhow::Result<()> {
+    let result = raw_tool_result(ProtocolVersion::V_2025_06_18, None).await?;
+
+    assert_eq!(result["content"][0]["text"], "noop");
+    assert!(result.get("resultType").is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn modern_protocol_includes_complete_result_type_on_the_wire() -> anyhow::Result<()> {
+    let result = raw_tool_result(ProtocolVersion::V_2026_07_28, None).await?;
+
+    assert_eq!(result["content"][0]["text"], "noop");
+    assert_eq!(result["resultType"], "complete");
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_session_ignores_modern_per_request_version_for_result_wire_format()
+-> anyhow::Result<()> {
+    let result = raw_tool_result(
+        ProtocolVersion::V_2025_06_18,
+        Some(ProtocolVersion::V_2026_07_28),
+    )
+    .await?;
+
+    assert_eq!(result["content"][0]["text"], "noop");
+    assert!(result.get("resultType").is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn modern_session_ignores_legacy_per_request_version_for_result_wire_format()
+-> anyhow::Result<()> {
+    let result = raw_tool_result(
+        ProtocolVersion::V_2026_07_28,
+        Some(ProtocolVersion::V_2025_06_18),
+    )
+    .await?;
+
+    assert_eq!(result["content"][0]["text"], "noop");
+    assert_eq!(result["resultType"], "complete");
+    Ok(())
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn client_auto_fulfills_input_required_tool_call() -> anyhow::Result<()> {

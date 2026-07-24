@@ -4419,6 +4419,61 @@ impl ServerResult {
         ServerResult::EmptyResult(EmptyResult {})
     }
 
+    /// Serialize this result using the wire format required by `protocol_version`.
+    ///
+    /// MCP 2026-07-28 requires completed results to carry `resultType`, but
+    /// earlier protocol versions did not define that field. Preserve the
+    /// ordinary serializer for modern sessions and remove only the completed
+    /// result discriminator for legacy sessions.
+    pub fn to_value_for_protocol(
+        &self,
+        protocol_version: &ProtocolVersion,
+    ) -> Result<Value, serde_json::Error> {
+        let mut value = serde_json::to_value(self)?;
+        if !matches!(self, ServerResult::DiscoverResult(_))
+            && protocol_version < &ProtocolVersion::V_2026_07_28
+            && let Some(result) = value.as_object_mut()
+            && result
+                .get("resultType")
+                .and_then(Value::as_str)
+                .is_some_and(|result_type| result_type == ResultType::COMPLETE.as_str())
+        {
+            result.remove("resultType");
+        }
+        Ok(value)
+    }
+
+    /// Adapt this result to the negotiated protocol before sending it.
+    ///
+    /// Legacy results that carry `resultType: "complete"` become a custom JSON
+    /// result without that discriminator. All other result variants, including
+    /// modern results and custom discriminators, retain their original type.
+    pub fn into_result_for_protocol(
+        self,
+        protocol_version: &ProtocolVersion,
+    ) -> Result<Self, serde_json::Error> {
+        if protocol_version >= &ProtocolVersion::V_2026_07_28
+            || matches!(self, ServerResult::DiscoverResult(_))
+        {
+            return Ok(self);
+        }
+
+        let mut value = serde_json::to_value(&self)?;
+        let Some(result) = value.as_object_mut() else {
+            return Ok(self);
+        };
+        if result
+            .get("resultType")
+            .and_then(Value::as_str)
+            .is_none_or(|result_type| result_type != ResultType::COMPLETE.as_str())
+        {
+            return Ok(self);
+        }
+
+        result.remove("resultType");
+        Ok(ServerResult::CustomResult(CustomResult::new(value)))
+    }
+
     /// Empty `tasks/update` / `tasks/cancel` acknowledgement carrying the
     /// SEP-2322 `resultType: "complete"` discriminator (SEP-2663).
     pub fn task_ack(_: ()) -> ServerResult {

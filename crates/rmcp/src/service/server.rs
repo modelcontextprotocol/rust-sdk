@@ -50,6 +50,34 @@ impl ServiceRole for RoleServer {
         }
     }
 
+    fn response_protocol_version(context: &RequestContext<Self>) -> Option<ProtocolVersion> {
+        if !context.peer.request_metadata_required()
+            && let Some(peer_info) = context.peer.peer_info()
+        {
+            return Some(peer_info.protocol_version.clone());
+        }
+
+        context.protocol_version()
+    }
+
+    fn prepare_response(
+        response: Self::Resp,
+        protocol_version: Option<&ProtocolVersion>,
+    ) -> Result<Self::Resp, ErrorData> {
+        let Some(protocol_version) = protocol_version else {
+            return Ok(response);
+        };
+
+        response
+            .into_result_for_protocol(protocol_version)
+            .map_err(|error| {
+                ErrorData::internal_error(
+                    format!("failed to serialize result for negotiated protocol: {error}"),
+                    None,
+                )
+            })
+    }
+
     fn enforce_request_association(
         request: &Self::Req,
         peer_info: Option<&Self::PeerInfo>,
@@ -554,7 +582,13 @@ where
                 extensions: std::mem::take(request.extensions_mut()),
                 peer: peer.clone(),
             };
-            let response = match service.handle_request(request, context).await {
+            let response_protocol_version = context.protocol_version();
+            let response = match service
+                .handle_request(request, context)
+                .await
+                .and_then(|result| {
+                    RoleServer::prepare_response(result, response_protocol_version.as_ref())
+                }) {
                 Ok(result) => ServerJsonRpcMessage::response(result, id),
                 Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
             };

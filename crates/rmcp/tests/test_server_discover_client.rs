@@ -1,7 +1,7 @@
 #![cfg(all(feature = "client", not(feature = "local")))]
 
 use rmcp::{
-    ClientHandler, ServerHandler, ServiceExt,
+    ClientHandler, ClientLifecycleMode, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
         ClientCapabilities, Implementation, ProtocolVersion, RequestMetaObject, ServerCapabilities,
         ServerInfo,
@@ -74,4 +74,36 @@ async fn client_discover_helper_returns_typed_result() {
         Implementation::new("discovery-server", "1.0.0")
     );
     client.cancel().await.expect("client should cancel");
+}
+
+#[tokio::test]
+async fn discover_startup_accepts_historical_preferred_protocol_version() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        DiscoveryServer
+            .serve(server_transport)
+            .await
+            .expect("server should accept discovery")
+    });
+
+    let client = DiscoveryClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2025_11_25],
+            },
+        )
+        .await
+        .expect("discovery should preserve its required result discriminator");
+
+    assert_eq!(
+        client
+            .peer_info()
+            .expect("discovery should store server information")
+            .protocol_version,
+        ProtocolVersion::V_2025_11_25
+    );
+    client.cancel().await.expect("client should cancel");
+    let server = server_task.await.expect("server task should complete");
+    server.cancel().await.expect("server should cancel");
 }

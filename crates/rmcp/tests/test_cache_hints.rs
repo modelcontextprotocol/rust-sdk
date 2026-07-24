@@ -1,4 +1,8 @@
-use rmcp::model::{CacheScope, ListToolsResult, ReadResourceResult, ResourceContents};
+use rmcp::model::{
+    CacheScope, CallToolResult, CustomResult, DiscoverResult, Implementation, ListToolsResult,
+    ProtocolVersion, ReadResourceResult, ResourceContents, ResultType, ServerCapabilities,
+    ServerResult,
+};
 use serde_json::json;
 
 #[test]
@@ -76,4 +80,92 @@ fn cache_scope_round_trips() {
         serde_json::from_value::<CacheScope>(json!("private")).unwrap(),
         CacheScope::Private
     );
+}
+
+#[test]
+fn legacy_protocol_omits_complete_result_discriminator() {
+    let results = [
+        ServerResult::CallToolResult(CallToolResult::success(Vec::new())),
+        ServerResult::ListToolsResult(ListToolsResult::with_all_items(Vec::new())),
+        ServerResult::ReadResourceResult(ReadResourceResult::new(Vec::new())),
+    ];
+
+    for result in results {
+        let actual = result
+            .to_value_for_protocol(&ProtocolVersion::V_2025_06_18)
+            .expect("legacy result should serialize");
+        assert!(
+            actual.get("resultType").is_none(),
+            "legacy result unexpectedly included resultType: {actual}"
+        );
+
+        let adapted = result
+            .into_result_for_protocol(&ProtocolVersion::V_2025_06_18)
+            .expect("legacy result should adapt");
+        let wire_value = serde_json::to_value(adapted).expect("adapted result should serialize");
+        assert!(wire_value.get("resultType").is_none());
+    }
+}
+
+#[test]
+fn modern_protocol_preserves_complete_result_discriminator() {
+    let result = ServerResult::CallToolResult(CallToolResult::success(Vec::new()));
+
+    let actual = result
+        .to_value_for_protocol(&ProtocolVersion::V_2026_07_28)
+        .expect("modern result should serialize");
+    assert_eq!(actual["resultType"], json!("complete"));
+
+    let adapted = result
+        .into_result_for_protocol(&ProtocolVersion::V_2026_07_28)
+        .expect("modern result should retain its type");
+    assert!(matches!(adapted, ServerResult::CallToolResult(_)));
+}
+
+#[test]
+fn legacy_protocol_preserves_non_complete_custom_discriminators() {
+    let result = ServerResult::CustomResult(CustomResult::new(json!({
+        "resultType": "custom-extension",
+        "value": true
+    })));
+
+    let actual = result
+        .to_value_for_protocol(&ProtocolVersion::V_2025_11_25)
+        .expect("custom result should serialize");
+    assert_eq!(actual["resultType"], json!("custom-extension"));
+
+    let adapted = result
+        .into_result_for_protocol(&ProtocolVersion::V_2025_11_25)
+        .expect("custom result should retain its type");
+    assert!(matches!(adapted, ServerResult::CustomResult(_)));
+}
+
+#[test]
+fn legacy_results_without_discriminator_deserialize_as_complete() {
+    let result: CallToolResult = serde_json::from_value(json!({
+        "content": [],
+        "isError": false
+    }))
+    .expect("legacy tool result should deserialize");
+
+    assert_eq!(result.result_type, ResultType::COMPLETE);
+}
+
+#[test]
+fn discovery_preserves_result_discriminator_for_legacy_version_candidates() {
+    let result = ServerResult::DiscoverResult(DiscoverResult::new(
+        vec![ProtocolVersion::V_2025_11_25],
+        ServerCapabilities::default(),
+        Implementation::new("discovery-server", "1.0.0"),
+    ));
+
+    let actual = result
+        .to_value_for_protocol(&ProtocolVersion::V_2025_11_25)
+        .expect("discovery result should serialize");
+    assert_eq!(actual["resultType"], "complete");
+
+    let adapted = result
+        .into_result_for_protocol(&ProtocolVersion::V_2025_11_25)
+        .expect("discovery result should preserve its type");
+    assert!(matches!(adapted, ServerResult::DiscoverResult(_)));
 }

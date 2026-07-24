@@ -136,6 +136,22 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     fn peer_cancelled_params(_notification: &Self::PeerNot) -> Option<&CancelledNotificationParam> {
         None
     }
+
+    /// Select the protocol version used when serializing a response.
+    #[doc(hidden)]
+    fn response_protocol_version(_context: &RequestContext<Self>) -> Option<ProtocolVersion> {
+        None
+    }
+
+    /// Adapt a response to the negotiated protocol before it reaches the transport.
+    #[doc(hidden)]
+    fn prepare_response(
+        response: Self::Resp,
+        _protocol_version: Option<&ProtocolVersion>,
+    ) -> Result<Self::Resp, McpError> {
+        Ok(response)
+    }
+
     /// Invalidate any response cache affected by an inbound peer notification.
     ///
     /// The serve loop calls this for every notification *before* subscription
@@ -1486,12 +1502,16 @@ where
                             meta,
                             extensions,
                         };
+                        let response_protocol_version = R::response_protocol_version(&context);
                         let current_span = tracing::Span::current();
                         let handler_id = id.clone();
                         spawn_service_task(async move {
                             let result = ORIGINATING_REQUEST
                                 .scope(handler_id, service.handle_request(request, context))
-                                .await;
+                                .await
+                                .and_then(|result| {
+                                    R::prepare_response(result, response_protocol_version.as_ref())
+                                });
                             let response = match result {
                                 Ok(result) => {
                                     tracing::debug!(%id, ?result, "response message");
