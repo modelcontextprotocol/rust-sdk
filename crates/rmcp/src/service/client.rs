@@ -127,13 +127,18 @@ where
         .ok_or_else(|| ClientInitializeError::ConnectionClosed(context.to_string()))
 }
 
+enum StartupResponse {
+    Response(Box<ServerResult>, RequestId),
+    Error(ErrorData, Option<RequestId>),
+}
+
 /// Helper function to expect a response from the stream
 async fn expect_response<T, S>(
     transport: &mut T,
     context: &str,
     service: &S,
     peer: Peer<RoleClient>,
-) -> Result<(ServerResult, RequestId), ClientInitializeError>
+) -> Result<StartupResponse, ClientInitializeError>
 where
     T: Transport<RoleClient>,
     S: Service<RoleClient>,
@@ -143,11 +148,11 @@ where
         match message {
             // Expected message to complete the initialization
             ServerJsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => {
-                break Ok((result, id));
+                break Ok(StartupResponse::Response(Box::new(result), id));
             }
             // Handle JSON-RPC error responses
             ServerJsonRpcMessage::Error(error) => {
-                break Err(ClientInitializeError::JsonRpcError(error.error));
+                break Ok(StartupResponse::Error(error.error, error.id));
             }
             // Server could send logging messages before handshake
             ServerJsonRpcMessage::Notification(mut notification) => {
@@ -575,6 +580,301 @@ pub enum ClientLifecycleMode {
     },
 }
 
+#[derive(Debug)]
+struct DiscoverStartupError {
+    error: ClientInitializeError,
+    failure: DiscoverProbeFailure,
+}
+
+struct ProbeHttpResponse {
+    status: u16,
+    body: String,
+}
+
+#[derive(Debug)]
+enum DiscoverProbeFailure {
+    Other,
+    IncompatibleVersions(Vec<ProtocolVersion>),
+    Http {
+        status: u16,
+        body: String,
+        requested_version: ProtocolVersion,
+        request_id: RequestId,
+    },
+    Rpc {
+        error: ErrorData,
+        requested_version: ProtocolVersion,
+        request_id: RequestId,
+        response_id: Option<RequestId>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeDisposition {
+    RetryLegacy,
+    Fail,
+}
+
+fn classify_probe_failure(failure: &DiscoverProbeFailure) -> ProbeDisposition {
+    match failure {
+        DiscoverProbeFailure::IncompatibleVersions(versions)
+            if exclusively_historical_protocol_versions(versions) =>
+        {
+            ProbeDisposition::RetryLegacy
+        }
+        DiscoverProbeFailure::Http {
+            status,
+            body,
+            requested_version,
+            request_id,
+        } if http_error_proves_legacy(*status, body, requested_version, request_id) => {
+            ProbeDisposition::RetryLegacy
+        }
+        DiscoverProbeFailure::Rpc {
+            error,
+            requested_version,
+            request_id,
+            response_id,
+        } if rpc_error_proves_legacy(
+            error,
+            requested_version,
+            request_id,
+            response_id.as_ref(),
+        ) =>
+        {
+            ProbeDisposition::RetryLegacy
+        }
+        _ => ProbeDisposition::Fail,
+    }
+}
+
+fn http_error_proves_legacy(
+    status: u16,
+    body: &str,
+    requested_version: &ProtocolVersion,
+    request_id: &RequestId,
+) -> bool {
+    match status {
+        404 | 405 => match serde_json::from_str::<ServerJsonRpcMessage>(body) {
+            Ok(ServerJsonRpcMessage::Error(error)) => error
+                .id
+                .as_ref()
+                .is_none_or(|response_id| request_id.matches_response_id(response_id)),
+            _ => true,
+        },
+        400 => {
+            let Ok(ServerJsonRpcMessage::Error(error)) =
+                serde_json::from_str::<ServerJsonRpcMessage>(body)
+            else {
+                return false;
+            };
+            rpc_error_proves_legacy(
+                &error.error,
+                requested_version,
+                request_id,
+                error.id.as_ref(),
+            )
+        }
+        _ => false,
+    }
+}
+
+fn rpc_error_proves_legacy(
+    error: &ErrorData,
+    requested_version: &ProtocolVersion,
+    request_id: &RequestId,
+    response_id: Option<&RequestId>,
+) -> bool {
+    let correlated =
+        response_id.is_some_and(|response_id| request_id.matches_response_id(response_id));
+    if response_id.is_some() && !correlated {
+        return false;
+    }
+
+    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND {
+        return correlated;
+    }
+
+    if matches!(
+        error.code,
+        crate::model::ErrorCode::INVALID_REQUEST | crate::model::ErrorCode::INVALID_PARAMS
+    ) {
+        return correlated;
+    }
+
+    if !matches!(
+        error.code,
+        crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION | crate::model::ErrorCode(-32000)
+    ) {
+        return false;
+    }
+
+    let message = error.message.trim().to_ascii_lowercase();
+    let normalized_message = message.strip_prefix("bad request: ").unwrap_or(&message);
+    if normalized_message == "no valid session id provided" {
+        return true;
+    }
+
+    if !normalized_message.contains("unsupported protocol version")
+        || !normalized_message.contains(requested_version.as_str())
+    {
+        return false;
+    }
+
+    let supported_data = error.data.as_ref().and_then(|data| data.get("supported"));
+    let supported_from_data = match supported_data {
+        Some(value) => {
+            let Ok(versions) = serde_json::from_value::<Vec<ProtocolVersion>>(value.clone()) else {
+                return false;
+            };
+            Some(versions)
+        }
+        None => None,
+    };
+    let supported_from_message = historical_versions_from_message(normalized_message);
+    if normalized_message.contains("supported versions:") && supported_from_message.is_none() {
+        return false;
+    }
+
+    let supported = match (supported_from_data, supported_from_message) {
+        (Some(data), Some(message))
+            if data.len() == message.len()
+                && data.iter().all(|version| message.contains(version)) =>
+        {
+            Some(data)
+        }
+        (Some(_), Some(_)) => None,
+        (Some(versions), None) | (None, Some(versions)) => Some(versions),
+        (None, None) => None,
+    };
+
+    match supported {
+        Some(versions) => exclusively_historical_protocol_versions(&versions),
+        None => supported_data.is_none() && !normalized_message.contains("supported versions:"),
+    }
+}
+
+impl From<ClientInitializeError> for DiscoverStartupError {
+    fn from(error: ClientInitializeError) -> Self {
+        let failure = match &error {
+            ClientInitializeError::NoCompatibleProtocolVersion {
+                server_supported, ..
+            } => DiscoverProbeFailure::IncompatibleVersions(server_supported.clone()),
+            _ => DiscoverProbeFailure::Other,
+        };
+        Self { error, failure }
+    }
+}
+
+impl DiscoverStartupError {
+    fn transport<T>(
+        error: T::Error,
+        context: impl Into<Cow<'static, str>>,
+        requested_version: ProtocolVersion,
+        request_id: RequestId,
+    ) -> Self
+    where
+        T: Transport<RoleClient> + 'static,
+    {
+        let error = ClientInitializeError::transport::<T>(error, context);
+        let failure = probe_http_status(&error)
+            .map(|http| DiscoverProbeFailure::Http {
+                status: http.status,
+                body: http.body,
+                requested_version,
+                request_id,
+            })
+            .unwrap_or(DiscoverProbeFailure::Other);
+        Self { error, failure }
+    }
+
+    fn json_rpc(
+        error: ErrorData,
+        requested_version: ProtocolVersion,
+        request_id: RequestId,
+        response_id: Option<RequestId>,
+    ) -> Self {
+        let failure = DiscoverProbeFailure::Rpc {
+            error: error.clone(),
+            requested_version,
+            request_id,
+            response_id,
+        };
+        Self {
+            error: ClientInitializeError::JsonRpcError(error),
+            failure,
+        }
+    }
+
+    fn disposition(&self) -> ProbeDisposition {
+        classify_probe_failure(&self.failure)
+    }
+}
+
+#[cfg(feature = "transport-streamable-http-client")]
+fn probe_http_status(error: &ClientInitializeError) -> Option<ProbeHttpResponse> {
+    let ClientInitializeError::TransportError { error, .. } = error else {
+        return None;
+    };
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error.error.as_ref());
+    while let Some(current) = source {
+        if let Some(http) =
+            current.downcast_ref::<crate::transport::streamable_http_client::HttpStatusError>()
+        {
+            return Some(ProbeHttpResponse {
+                status: http.status,
+                body: http.body.to_string(),
+            });
+        }
+        source = current.source();
+    }
+    None
+}
+
+#[cfg(not(feature = "transport-streamable-http-client"))]
+fn probe_http_status(_error: &ClientInitializeError) -> Option<ProbeHttpResponse> {
+    None
+}
+
+fn exclusively_historical_protocol_versions(versions: &[ProtocolVersion]) -> bool {
+    !versions.is_empty()
+        && versions.iter().all(|version| {
+            (ProtocolVersion::KNOWN_VERSIONS.contains(version)
+                && version < &ProtocolVersion::V_2026_07_28)
+                // Some deployed legacy servers also advertise this pre-release version.
+                || version.as_str() == "2024-10-07"
+        })
+}
+
+fn historical_versions_from_message(message: &str) -> Option<Vec<ProtocolVersion>> {
+    let (_, supported_versions) = message.split_once("supported versions:")?;
+    let supported_versions = supported_versions.split(')').next()?;
+    let mut versions = Vec::new();
+    for candidate in supported_versions.split(',') {
+        let candidate = candidate
+            .trim()
+            .trim_matches(|character| matches!(character, '[' | ']' | '"' | '\''));
+        let bytes = candidate.as_bytes();
+        if bytes.len() != 10
+            || bytes.get(4) != Some(&b'-')
+            || bytes.get(7) != Some(&b'-')
+            || bytes
+                .iter()
+                .enumerate()
+                .any(|(index, byte)| index != 4 && index != 7 && !byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let version = serde_json::from_value::<ProtocolVersion>(serde_json::Value::String(
+            candidate.to_owned(),
+        ))
+        .ok()?;
+        versions.push(version);
+    }
+
+    (!versions.is_empty()).then_some(versions)
+}
+
 /// Client-specific lifecycle entry points.
 pub trait ClientServiceExt: Service<RoleClient> + Sized {
     fn serve_with_lifecycle<T, E, A>(
@@ -701,7 +1001,8 @@ where
                 &client_info,
                 preferred_versions,
             )
-            .await?;
+            .await
+            .map_err(|error| error.error)?;
         }
         ClientLifecycleMode::Auto {
             preferred_versions,
@@ -718,9 +1019,7 @@ where
             .await;
             match discover_result {
                 Ok(()) => {}
-                Err(ClientInitializeError::JsonRpcError(error))
-                    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
-                {
+                Err(error) if error.disposition() == ProbeDisposition::RetryLegacy => {
                     let mut legacy_info = client_info;
                     if let Some(version) = legacy_version {
                         legacy_info.protocol_version = version;
@@ -728,7 +1027,7 @@ where
                     legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
                         .await?;
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.error),
             }
         }
     }
@@ -764,7 +1063,12 @@ where
         })?;
 
     let (response, response_id) =
-        expect_response(transport, "initialize response", service, peer.clone()).await?;
+        match expect_response(transport, "initialize response", service, peer.clone()).await? {
+            StartupResponse::Response(response, response_id) => (*response, response_id),
+            StartupResponse::Error(error, _) => {
+                return Err(ClientInitializeError::JsonRpcError(error));
+            }
+        };
 
     if !id.matches_response_id(&response_id) {
         return Err(ClientInitializeError::ConflictInitResponseId(
@@ -798,13 +1102,13 @@ async fn discover_startup<S, T>(
     peer: &Peer<RoleClient>,
     client_info: &ClientInfo,
     preferred_versions: Vec<ProtocolVersion>,
-) -> Result<(), ClientInitializeError>
+) -> Result<(), DiscoverStartupError>
 where
     S: Service<RoleClient>,
     T: Transport<RoleClient> + 'static,
 {
     if preferred_versions.is_empty() {
-        return Err(ClientInitializeError::NoPreferredProtocolVersion);
+        return Err(ClientInitializeError::NoPreferredProtocolVersion.into());
     }
 
     let mut attempted = Vec::new();
@@ -827,16 +1131,28 @@ where
             ))
             .await
             .map_err(|error| {
-                ClientInitializeError::transport::<T>(error, "send discover request")
+                DiscoverStartupError::transport::<T>(
+                    error,
+                    "send discover request",
+                    candidate.clone(),
+                    id.clone(),
+                )
             })?;
 
-        match expect_response(transport, "discover response", service, peer.clone()).await {
-            Ok((ServerResult::DiscoverResult(result), response_id)) => {
+        match expect_response(transport, "discover response", service, peer.clone()).await? {
+            StartupResponse::Response(response, response_id) => {
+                let result = match *response {
+                    ServerResult::DiscoverResult(result) => result,
+                    response => {
+                        return Err(
+                            ClientInitializeError::ExpectedInitResult(Some(response)).into()
+                        );
+                    }
+                };
                 if !id.matches_response_id(&response_id) {
-                    return Err(ClientInitializeError::ConflictInitResponseId(
-                        id,
-                        response_id,
-                    ));
+                    return Err(
+                        ClientInitializeError::ConflictInitResponseId(id, response_id).into(),
+                    );
                 }
                 let Some(selected) =
                     select_protocol_version(&preferred_versions, &result.supported_versions)
@@ -844,7 +1160,8 @@ where
                     return Err(ClientInitializeError::NoCompatibleProtocolVersion {
                         client_supported: preferred_versions,
                         server_supported: result.supported_versions,
-                    });
+                    }
+                    .into());
                 };
                 peer.set_peer_info(ServerInfo {
                     protocol_version: selected.clone(),
@@ -860,12 +1177,28 @@ where
                 });
                 return Ok(());
             }
-            Ok((response, _)) => {
-                return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
-            }
-            Err(ClientInitializeError::JsonRpcError(error))
-                if error.code == crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION =>
-            {
+            StartupResponse::Error(error, response_id) => {
+                if let Some(response_id) = response_id.as_ref()
+                    && !id.matches_response_id(response_id)
+                {
+                    return Err(ClientInitializeError::ConflictInitResponseId(
+                        id,
+                        response_id.clone(),
+                    )
+                    .into());
+                }
+
+                if error.code != crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+                    || response_id.is_none()
+                {
+                    return Err(DiscoverStartupError::json_rpc(
+                        error,
+                        candidate,
+                        id,
+                        response_id,
+                    ));
+                }
+
                 let supported = error
                     .data
                     .as_ref()
@@ -890,11 +1223,11 @@ where
                     return Err(ClientInitializeError::NoCompatibleProtocolVersion {
                         client_supported: preferred_versions,
                         server_supported: supported,
-                    });
+                    }
+                    .into());
                 };
                 candidate = next;
             }
-            Err(error) => return Err(error),
         }
     }
 }
@@ -2065,6 +2398,244 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rpc_probe_failure(
+        code: crate::model::ErrorCode,
+        message: &str,
+        response_id: Option<RequestId>,
+    ) -> DiscoverProbeFailure {
+        rpc_probe_failure_with_data(code, message, response_id, None)
+    }
+
+    fn rpc_probe_failure_with_data(
+        code: crate::model::ErrorCode,
+        message: &str,
+        response_id: Option<RequestId>,
+        data: Option<serde_json::Value>,
+    ) -> DiscoverProbeFailure {
+        DiscoverProbeFailure::Rpc {
+            error: ErrorData::new(code, message.to_owned(), data),
+            requested_version: ProtocolVersion::V_2026_07_28,
+            request_id: RequestId::Number(7),
+            response_id,
+        }
+    }
+
+    fn http_probe_failure(status: u16, body: &str) -> DiscoverProbeFailure {
+        DiscoverProbeFailure::Http {
+            status,
+            body: body.to_owned(),
+            requested_version: ProtocolVersion::V_2026_07_28,
+            request_id: RequestId::Number(7),
+        }
+    }
+
+    #[test]
+    fn probe_classifier_uses_explicit_downgrade_evidence() {
+        let correlated_id = Some(RequestId::Number(7));
+        let cases = vec![
+            (
+                "historical discovery result",
+                DiscoverProbeFailure::IncompatibleVersions(vec![
+                    ProtocolVersion::V_2025_11_25,
+                    ProtocolVersion::V_2025_06_18,
+                ]),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "future discovery result",
+                DiscoverProbeFailure::IncompatibleVersions(vec![
+                    serde_json::from_value(serde_json::json!("2099-01-01")).unwrap(),
+                ]),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "correlated method not found",
+                rpc_probe_failure(
+                    crate::model::ErrorCode::METHOD_NOT_FOUND,
+                    "Method not found",
+                    correlated_id.clone(),
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "correlated invalid request",
+                rpc_probe_failure(
+                    crate::model::ErrorCode::INVALID_REQUEST,
+                    "Invalid Request",
+                    correlated_id.clone(),
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "correlated invalid params",
+                rpc_probe_failure(
+                    crate::model::ErrorCode::INVALID_PARAMS,
+                    "Invalid params",
+                    correlated_id.clone(),
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "uncorrelated invalid request",
+                rpc_probe_failure(
+                    crate::model::ErrorCode::INVALID_REQUEST,
+                    "Invalid Request",
+                    None,
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "unsupported attempted version without supported list",
+                rpc_probe_failure(
+                    crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version: 2026-07-28",
+                    correlated_id.clone(),
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "legacy prevalidation without supported list",
+                rpc_probe_failure(
+                    crate::model::ErrorCode(-32000),
+                    "Bad Request: Unsupported protocol version: 2026-07-28",
+                    None,
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "legacy prevalidation with historical versions",
+                rpc_probe_failure(
+                    crate::model::ErrorCode(-32000),
+                    "Bad Request: Unsupported protocol version: 2026-07-28 \
+                     (supported versions: 2025-11-25, 2025-06-18)",
+                    None,
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "known missing-session prevalidation",
+                rpc_probe_failure(
+                    crate::model::ErrorCode(-32000),
+                    "Bad Request: No valid session ID provided",
+                    None,
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "unrelated response id",
+                rpc_probe_failure(
+                    crate::model::ErrorCode::INVALID_PARAMS,
+                    "Invalid params",
+                    Some(RequestId::Number(99)),
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "arbitrary server error",
+                rpc_probe_failure(
+                    crate::model::ErrorCode(-32000),
+                    "Bad Request: database unavailable",
+                    None,
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "unsupported different version",
+                rpc_probe_failure(
+                    crate::model::ErrorCode(-32000),
+                    "Bad Request: Unsupported protocol version: 2025-11-25",
+                    None,
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "mixed historical and future versions",
+                rpc_probe_failure(
+                    crate::model::ErrorCode(-32000),
+                    "Bad Request: Unsupported protocol version: 2026-07-28 \
+                     (supported versions: 2025-06-18, 2027-01-01)",
+                    None,
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "unknown supported version data",
+                rpc_probe_failure_with_data(
+                    crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+                    "Unsupported protocol version: 2026-07-28",
+                    correlated_id,
+                    Some(serde_json::json!({ "supported": ["next-draft"] })),
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "initial HTTP 404",
+                http_probe_failure(404, "not found"),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "initial HTTP 405",
+                http_probe_failure(405, "method not allowed"),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "initial HTTP 404 with unrelated response id",
+                http_probe_failure(
+                    404,
+                    r#"{"jsonrpc":"2.0","id":99,"error":{"code":-32601,"message":"Method not found"}}"#,
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "initial HTTP 400 recognized null-id error",
+                http_probe_failure(
+                    400,
+                    r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Bad Request: Unsupported protocol version: 2026-07-28"}}"#,
+                ),
+                ProbeDisposition::RetryLegacy,
+            ),
+            (
+                "initial HTTP 400 unrelated id",
+                http_probe_failure(
+                    400,
+                    r#"{"jsonrpc":"2.0","id":99,"error":{"code":-32602,"message":"Invalid params"}}"#,
+                ),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "initial HTTP 400 arbitrary body",
+                http_probe_failure(400, "Bad Request"),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "HTTP 401",
+                http_probe_failure(401, "authentication required"),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "HTTP 403",
+                http_probe_failure(403, "forbidden"),
+                ProbeDisposition::Fail,
+            ),
+            (
+                "HTTP 500 with legacy-shaped body",
+                http_probe_failure(
+                    500,
+                    r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Bad Request: No valid session ID provided"}}"#,
+                ),
+                ProbeDisposition::Fail,
+            ),
+        ];
+
+        for (name, failure, expected) in cases {
+            assert_eq!(
+                classify_probe_failure(&failure),
+                expected,
+                "unexpected disposition for {name}"
+            );
+        }
+    }
 
     fn disconnected_peer() -> Peer<RoleClient> {
         let (peer, receiver) =

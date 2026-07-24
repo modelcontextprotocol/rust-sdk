@@ -274,9 +274,9 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 .await
                 .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
-            return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("HTTP {status}: {body}"),
-            )));
+            return Err(StreamableHttpError::UnexpectedHttpStatus(
+                HttpStatusError::new(status.as_u16(), body),
+            ));
         }
 
         let content_type = response.headers().get(http::header::CONTENT_TYPE).cloned();

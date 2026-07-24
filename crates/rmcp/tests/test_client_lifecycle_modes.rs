@@ -7,7 +7,7 @@ use rmcp::{
         Implementation, InitializeResult, ProtocolVersion, RequestId, ServerCapabilities,
         ServerJsonRpcMessage, ServerResult,
     },
-    service::PeerRequestOptions,
+    service::{ClientInitializeError, PeerRequestOptions},
     transport::{IntoTransport, Transport},
 };
 
@@ -227,6 +227,273 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
         .expect("auto client should fall back");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
+}
+
+async fn assert_auto_startup_falls_back(
+    rejection: impl FnOnce(RequestId) -> ServerJsonRpcMessage + Send + 'static,
+) {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        assert!(matches!(
+            discover.request,
+            ClientRequest::DiscoverRequest(_)
+        ));
+        server
+            .send(rejection(discover.id))
+            .await
+            .expect("send legacy discovery rejection");
+
+        let ClientJsonRpcMessage::Request(initialize) = server
+            .receive()
+            .await
+            .expect("expected fallback initialize request")
+        else {
+            panic!("expected fallback initialize request");
+        };
+        let ClientRequest::InitializeRequest(request) = initialize.request else {
+            panic!("expected initialize request");
+        };
+        assert_eq!(
+            request.params.protocol_version,
+            ProtocolVersion::V_2025_06_18
+        );
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::InitializeResult(
+                    InitializeResult::new(ServerCapabilities::default()),
+                ),
+                initialize.id,
+            ))
+            .await
+            .expect("send initialize response");
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Notification(_))
+        ));
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_06_18),
+            },
+        )
+        .await
+        .expect("Auto mode should fall back for a recognized legacy-only rejection");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_when_server_only_supports_historical_versions() {
+    assert_auto_startup_falls_back(|id| {
+        ServerJsonRpcMessage::error(
+            ErrorData::unsupported_protocol_version(
+                ProtocolVersion::V_2026_07_28,
+                &[ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2025_06_18],
+            ),
+            Some(id),
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_when_discovery_only_advertises_historical_versions() {
+    assert_auto_startup_falls_back(|id| {
+        ServerJsonRpcMessage::response(
+            ServerResult::DiscoverResult(DiscoverResult::new(
+                vec![ProtocolVersion::V_2025_06_18],
+                ServerCapabilities::default(),
+                Implementation::new("legacy-server", "1.0.0"),
+            )),
+            id,
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_for_uncorrelated_legacy_protocol_prevalidation() {
+    assert_auto_startup_falls_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(
+                ErrorCode(-32000),
+                "Bad Request: Unsupported protocol version: 2026-07-28 \
+                 (supported versions: 2025-11-25, 2025-06-18, 2025-03-26, \
+                 2024-11-05, 2024-10-07)",
+                None,
+            ),
+            None,
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_for_uncorrelated_missing_session_prevalidation() {
+    assert_auto_startup_falls_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(
+                ErrorCode(-32000),
+                "Bad Request: No valid session ID provided",
+                None,
+            ),
+            None,
+        )
+    })
+    .await;
+}
+
+async fn assert_auto_startup_does_not_fall_back(
+    rejection: impl FnOnce(RequestId) -> ServerJsonRpcMessage + Send + 'static,
+) -> ClientInitializeError {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        server
+            .send(rejection(discover.id))
+            .await
+            .expect("send discovery rejection");
+        assert!(
+            server.receive().await.is_none(),
+            "unsafe discovery rejection must not trigger initialize"
+        );
+    });
+
+    let error = match DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_06_18),
+            },
+        )
+        .await
+    {
+        Ok(_) => panic!("unsafe discovery rejection must not trigger fallback"),
+        Err(error) => error,
+    };
+    server_task.await.expect("server task");
+    error
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_unrelated_error_response_id() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None),
+            Some(RequestId::Number(999)),
+        )
+    })
+    .await;
+    assert!(matches!(
+        error,
+        ClientInitializeError::ConflictInitResponseId(_, _)
+    ));
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_uncorrelated_method_not_found() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None),
+            None,
+        )
+    })
+    .await;
+    assert!(matches!(error, ClientInitializeError::JsonRpcError(_)));
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_arbitrary_uncorrelated_errors() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(ErrorCode(-32000), "Bad Request: database unavailable", None),
+            None,
+        )
+    })
+    .await;
+    assert!(matches!(error, ClientInitializeError::JsonRpcError(_)));
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_unknown_or_future_protocol_versions() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(
+                ErrorCode(-32000),
+                "Bad Request: Unsupported protocol version: 2026-07-28 \
+                 (supported versions: 2025-06-18, 2027-01-01)",
+                None,
+            ),
+            None,
+        )
+    })
+    .await;
+    assert!(matches!(error, ClientInitializeError::JsonRpcError(_)));
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_unknown_protocol_version_tokens() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(
+                ErrorCode(-32000),
+                "Bad Request: Unsupported protocol version: 2026-07-28 \
+                 (supported versions: 2025-06-18, next-draft)",
+                None,
+            ),
+            None,
+        )
+    })
+    .await;
+    assert!(matches!(error, ClientInitializeError::JsonRpcError(_)));
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_contradictory_supported_versions() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::new(
+                ErrorCode(-32000),
+                "Bad Request: Unsupported protocol version: 2026-07-28 \
+                 (supported versions: 2025-06-18, 2027-01-01)",
+                Some(serde_json::json!({ "supported": ["2025-06-18"] })),
+            ),
+            None,
+        )
+    })
+    .await;
+    assert!(matches!(error, ClientInitializeError::JsonRpcError(_)));
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_uncorrelated_protocol_version_error() {
+    let error = assert_auto_startup_does_not_fall_back(|_| {
+        ServerJsonRpcMessage::error(
+            ErrorData::unsupported_protocol_version(
+                ProtocolVersion::V_2026_07_28,
+                &[ProtocolVersion::V_2025_06_18],
+            ),
+            None,
+        )
+    })
+    .await;
+    assert!(matches!(error, ClientInitializeError::JsonRpcError(_)));
 }
 
 #[tokio::test]

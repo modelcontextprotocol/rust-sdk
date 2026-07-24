@@ -74,10 +74,10 @@ async fn http_4xx_json_rpc_error_body_is_surfaced_as_json_response() {
     }
 }
 
-/// HTTP 4xx with non-JSON content-type must still return `UnexpectedServerResponse`
+/// HTTP 4xx with non-JSON content-type must retain the status and response body.
 /// (no regression on the original error path).
 #[tokio::test]
-async fn http_4xx_non_json_body_returns_unexpected_server_response() {
+async fn http_4xx_non_json_body_returns_typed_status_error() {
     let url = spawn_mock_server(400, "text/plain", "Bad Request").await;
 
     let client = reqwest::Client::new();
@@ -92,15 +92,15 @@ async fn http_4xx_non_json_body_returns_unexpected_server_response() {
         .await;
 
     match result {
-        Err(StreamableHttpError::UnexpectedServerResponse(_)) => {}
-        other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+        Err(StreamableHttpError::UnexpectedHttpStatus(error)) if error.status == 400 => {}
+        other => panic!("expected UnexpectedHttpStatus, got: {other:?}"),
     }
 }
 
 /// HTTP 4xx with Content-Type: application/json but a body that is NOT a valid
-/// JSON-RPC message must fall back to `UnexpectedServerResponse`.
+/// JSON-RPC message must retain the status and response body.
 #[tokio::test]
-async fn http_4xx_malformed_json_body_falls_back_to_unexpected_server_response() {
+async fn http_4xx_malformed_json_body_returns_typed_status_error() {
     let url = spawn_mock_server(400, "application/json", r#"{"error":"not jsonrpc"}"#).await;
 
     let client = reqwest::Client::new();
@@ -115,7 +115,7 @@ async fn http_4xx_malformed_json_body_falls_back_to_unexpected_server_response()
         .await;
 
     match result {
-        Err(StreamableHttpError::UnexpectedServerResponse(_)) => {}
-        other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+        Err(StreamableHttpError::UnexpectedHttpStatus(error)) if error.status == 400 => {}
+        other => panic!("expected UnexpectedHttpStatus, got: {other:?}"),
     }
 }

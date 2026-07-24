@@ -165,6 +165,11 @@ impl StreamableHttpClient for reqwest::Client {
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let is_discover_request = matches!(
+            &message,
+            ClientJsonRpcMessage::Request(request)
+                if matches!(&request.request, crate::model::ClientRequest::DiscoverRequest(_))
+        );
         let mut request = self
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
@@ -219,6 +224,21 @@ impl StreamableHttpClient for reqwest::Client {
         if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
             return Err(StreamableHttpError::SessionExpired);
         }
+        if matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED
+                | reqwest::StatusCode::FORBIDDEN
+                | reqwest::StatusCode::NOT_FOUND
+                | reqwest::StatusCode::METHOD_NOT_ALLOWED
+        ) {
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            return Err(StreamableHttpError::UnexpectedHttpStatus(
+                HttpStatusError::new(status.as_u16(), body),
+            ));
+        }
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -249,6 +269,11 @@ impl StreamableHttpClient for reqwest::Client {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            if is_discover_request {
+                return Err(StreamableHttpError::UnexpectedHttpStatus(
+                    HttpStatusError::new(status.as_u16(), body),
+                ));
+            }
             if content_type
                 .as_deref()
                 .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
@@ -262,9 +287,9 @@ impl StreamableHttpClient for reqwest::Client {
                     ),
                 }
             }
-            return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("HTTP {status}: {body}"),
-            )));
+            return Err(StreamableHttpError::UnexpectedHttpStatus(
+                HttpStatusError::new(status.as_u16(), body),
+            ));
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
@@ -472,7 +497,9 @@ mod tests {
         use tokio::sync::Mutex;
 
         use super::StreamableHttpClientTransport;
-        use crate::transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError};
+        use crate::transport::streamable_http_client::{
+            HttpStatusError, StreamableHttpClient, StreamableHttpError,
+        };
 
         const API_KEY_HEADER: &str = "x-api-key";
         const API_KEY_VALUE: &str = "secret";
@@ -575,7 +602,10 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(StreamableHttpError::UnexpectedServerResponse(_))
+                Err(StreamableHttpError::UnexpectedHttpStatus(HttpStatusError {
+                    status: 307,
+                    ..
+                }))
             ),
             "redirect response should be returned to the transport, got {result:?}"
         );

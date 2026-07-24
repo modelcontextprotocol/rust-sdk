@@ -12,7 +12,8 @@ use axum::{
 use http::{HeaderName, HeaderValue};
 use hyper_util::rt::TokioIo;
 use rmcp::{
-    ServiceExt,
+    ClientLifecycleMode, ClientServiceExt, ServiceExt,
+    model::{ClientInfo, ProtocolVersion},
     transport::{
         StreamableHttpClientTransport, UnixSocketHttpClient,
         streamable_http_client::StreamableHttpClientTransportConfig,
@@ -294,5 +295,102 @@ async fn test_unix_socket_convenience_constructor() -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&socket_path);
     let _ = std::fs::remove_dir(&dir);
 
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct LegacyDiscoveryState {
+    methods: Arc<Mutex<Vec<String>>>,
+}
+
+async fn legacy_discovery_handler(
+    State(state): State<LegacyDiscoveryState>,
+    body: Bytes,
+) -> axum::response::Response {
+    let request: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON-RPC request");
+    let method = request
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .expect("request method");
+    state.methods.lock().await.push(method.to_owned());
+
+    match method {
+        "server/discover" => (
+            StatusCode::BAD_REQUEST,
+            [(http::header::CONTENT_TYPE, "application/json")],
+            json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": {
+                    "code": -32000,
+                    "message": "Bad Request: Unsupported protocol version: 2026-07-28",
+                },
+            })
+            .to_string(),
+        )
+            .into_response(),
+        "initialize" => (
+            StatusCode::OK,
+            [(http::header::CONTENT_TYPE, "application/json")],
+            json!({
+                "jsonrpc": "2.0",
+                "id": request.get("id"),
+                "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "serverInfo": {
+                        "name": "legacy-unix-server",
+                        "version": "1.0.0",
+                    },
+                },
+            })
+            .to_string(),
+        )
+            .into_response(),
+        "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
+        other => panic!("unexpected method: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn auto_mode_falls_back_from_typed_unix_socket_http_failure() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-auto-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    let state = LegacyDiscoveryState::default();
+    let app = Router::new()
+        .route("/mcp", post(legacy_discovery_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().expect("UTF-8 socket path");
+    let uri = "http://legacy-unix-server.internal/mcp";
+    let transport = StreamableHttpClientTransport::with_client(
+        UnixSocketHttpClient::new(socket_str, uri),
+        StreamableHttpClientTransportConfig::with_uri(uri),
+    );
+    let client = ClientInfo::default()
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_06_18),
+            },
+        )
+        .await
+        .expect("Auto mode should fall back over a Unix socket");
+    client.cancel().await.expect("cancel client");
+
+    assert_eq!(
+        *state.methods.lock().await,
+        ["server/discover", "initialize", "notifications/initialized"]
+    );
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
     Ok(())
 }
