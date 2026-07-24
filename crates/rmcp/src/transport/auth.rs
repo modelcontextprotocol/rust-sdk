@@ -963,6 +963,7 @@ pub struct AuthorizationManager {
     resource_scopes: RwLock<Vec<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
+    strict_issuer_validation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1208,6 +1209,7 @@ impl AuthorizationManager {
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
+            strict_issuer_validation: false,
         };
 
         Ok(manager)
@@ -1216,6 +1218,17 @@ impl AuthorizationManager {
     /// Set the scope upgrade configuration
     pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
         self.scope_upgrade_config = config;
+    }
+
+    /// Configure whether authorization server metadata discovery requires the
+    /// metadata `issuer` field.
+    ///
+    /// The default is `false` to preserve compatibility with legacy
+    /// authorization servers that omit `issuer`. Set this to `true` to enforce
+    /// the RFC 8414/OIDC requirement that discovered metadata include `issuer`
+    /// whenever the expected issuer can be derived from the discovery URL.
+    pub fn set_strict_issuer_validation(&mut self, strict: bool) {
+        self.strict_issuer_validation = strict;
     }
 
     /// Set a custom credential store
@@ -2156,7 +2169,7 @@ impl AuthorizationManager {
 
         match serde_json::from_slice::<AuthorizationMetadata>(response.body()) {
             Ok(metadata) => {
-                Self::validate_authorization_metadata_issuer(discovery_url, &metadata)?;
+                self.validate_authorization_metadata_issuer(discovery_url, &metadata)?;
                 Ok(Some(metadata))
             }
             Err(err) => {
@@ -2218,6 +2231,7 @@ impl AuthorizationManager {
     }
 
     fn validate_authorization_metadata_issuer(
+        &self,
         discovery_url: &Url,
         metadata: &AuthorizationMetadata,
     ) -> Result<(), AuthError> {
@@ -2227,7 +2241,10 @@ impl AuthorizationManager {
             return Ok(());
         };
         let Some(received_issuer) = metadata.issuer.as_deref() else {
-            return Err(AuthError::AuthorizationServerMissingIssuer { expected_issuer });
+            if self.strict_issuer_validation {
+                return Err(AuthError::AuthorizationServerMissingIssuer { expected_issuer });
+            }
+            return Ok(());
         };
         if !Self::issuer_identifiers_match(received_issuer, &expected_issuer) {
             return Err(AuthError::AuthorizationServerMismatch {
@@ -3938,8 +3955,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn authorization_metadata_accepts_oidc_path_appended_issuer() {
+    #[tokio::test]
+    async fn authorization_metadata_accepts_oidc_path_appended_issuer() {
         let discovery_url =
             Url::parse("https://auth.example.com/tenant1/.well-known/openid-configuration")
                 .unwrap();
@@ -3949,8 +3966,12 @@ mod tests {
             token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
             ..Default::default()
         };
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
 
-        AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+        manager
+            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
             .unwrap();
     }
 
@@ -3966,8 +3987,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn authorization_metadata_accepts_oidc_path_inserted_issuer() {
+    #[tokio::test]
+    async fn authorization_metadata_accepts_oidc_path_inserted_issuer() {
         let discovery_url =
             Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
                 .unwrap();
@@ -3977,13 +3998,17 @@ mod tests {
             token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
             ..Default::default()
         };
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
 
-        AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+        manager
+            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
             .unwrap();
     }
 
-    #[test]
-    fn authorization_metadata_rejects_missing_issuer_for_standard_discovery_url() {
+    #[tokio::test]
+    async fn authorization_metadata_allows_missing_issuer_by_default() {
         let discovery_url =
             Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
                 .unwrap();
@@ -3994,9 +4019,34 @@ mod tests {
             ..Default::default()
         };
 
-        let error =
-            AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
-                .unwrap_err();
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
+
+        manager
+            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn authorization_metadata_rejects_missing_issuer_when_required() {
+        let discovery_url =
+            Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
+                .unwrap();
+        let metadata = AuthorizationMetadata {
+            issuer: None,
+            authorization_endpoint: "https://auth.example.com/tenant1/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
+            ..Default::default()
+        };
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
+        manager.set_strict_issuer_validation(true);
+
+        let error = manager
+            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .unwrap_err();
 
         assert!(
             matches!(
