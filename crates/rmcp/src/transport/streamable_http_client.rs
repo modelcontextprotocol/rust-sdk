@@ -124,7 +124,8 @@ fn negotiate_version_headers(
     (version, headers)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("authorization required: {www_authenticate_header}")]
 #[non_exhaustive]
 pub struct AuthRequiredError {
     pub www_authenticate_header: String,
@@ -139,7 +140,8 @@ impl AuthRequiredError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("insufficient scope: {www_authenticate_header}")]
 #[non_exhaustive]
 pub struct InsufficientScopeError {
     pub www_authenticate_header: String,
@@ -197,13 +199,29 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     #[error("Auth error: {0}")]
     Auth(#[from] crate::transport::auth::AuthError),
     #[error("Auth required")]
-    AuthRequired(AuthRequiredError),
+    AuthRequired(#[source] AuthRequiredError),
     #[error("Insufficient scope")]
-    InsufficientScope(InsufficientScopeError),
+    InsufficientScope(#[source] InsufficientScopeError),
     #[error("Header name '{0}' is reserved and conflicts with default headers")]
     ReservedHeaderConflict(String),
     #[error("Session expired (HTTP 404)")]
     SessionExpired,
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> StreamableHttpError<E> {
+    /// The `WWW-Authenticate` challenge carried by this error, when the
+    /// server answered 401 ([`AuthRequired`](Self::AuthRequired)) or 403
+    /// ([`InsufficientScope`](Self::InsufficientScope)). Feed it to
+    /// [`AuthorizationRequest::with_challenge`](crate::transport::auth::AuthorizationRequest::with_challenge)
+    /// to authorize reactively.
+    #[cfg(feature = "auth")]
+    pub fn auth_challenge(&self) -> Option<&str> {
+        match self {
+            Self::AuthRequired(error) => Some(&error.www_authenticate_header),
+            Self::InsufficientScope(error) => Some(&error.www_authenticate_header),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Error)]

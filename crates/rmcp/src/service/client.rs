@@ -86,6 +86,31 @@ impl ClientInitializeError {
             context: context.into(),
         }
     }
+
+    /// The `WWW-Authenticate` challenge from the 401/403 the transport hit
+    /// during initialization, if that is why initialization failed.
+    ///
+    /// This is the trigger of the reactive OAuth flow: feed the challenge to
+    /// `AuthorizationRequest::with_challenge` to authorize, then reconnect.
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub fn auth_challenge(&self) -> Option<&str> {
+        use crate::transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError};
+
+        let Self::TransportError { error, .. } = self else {
+            return None;
+        };
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error.error.as_ref());
+        while let Some(current) = source {
+            if let Some(auth_required) = current.downcast_ref::<AuthRequiredError>() {
+                return Some(&auth_required.www_authenticate_header);
+            }
+            if let Some(insufficient_scope) = current.downcast_ref::<InsufficientScopeError>() {
+                return Some(&insufficient_scope.www_authenticate_header);
+            }
+            source = current.source();
+        }
+        None
+    }
 }
 
 /// Helper function to get the next message from the stream

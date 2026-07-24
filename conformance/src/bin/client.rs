@@ -195,25 +195,73 @@ const REDIRECT_URI: &str = "http://localhost:3000/callback";
 const SCOPE_STEP_UP_INITIAL_SCOPES: &[&str] = &["mcp:basic"];
 const SCOPE_STEP_UP_ESCALATED_SCOPES: &[&str] = &["mcp:basic", "mcp:write"];
 
-/// Perform the headless OAuth authorization-code flow.
+/// Attempt the real connection unauthenticated and return the server's
+/// `WWW-Authenticate` challenge from the 401 — the reactive discovery
+/// trigger.
 ///
-/// 1. Discover metadata, register (or use CIMD), get auth URL
-/// 2. Fetch the auth URL with redirect:manual → extract code from Location header
-/// 3. Exchange code for token
-/// 4. Return an `AuthClient` wrapping `reqwest::Client`
+/// `None` (server accepted the unauthenticated connection, which is then
+/// closed cleanly) is a legitimate outcome, not an error: the scope-step-up
+/// and scope-retry-limit mocks allow unauthenticated `initialize` and only
+/// enforce authorization on tool calls.
+async fn initialize_challenge(
+    server_url: &str,
+    lifecycle: ClientLifecycleMode,
+) -> anyhow::Result<Option<String>> {
+    let transport = StreamableHttpClientTransport::from_uri(server_url);
+    match BasicClientHandler
+        .serve_with_lifecycle(transport, lifecycle)
+        .await
+    {
+        Ok(client) => {
+            client.cancel().await.ok();
+            Ok(None)
+        }
+        Err(error) => match error.auth_challenge() {
+            Some(challenge) => Ok(Some(challenge.to_string())),
+            None => Err(error.into()),
+        },
+    }
+}
+
+fn with_optional_challenge(
+    request: AuthorizationRequest,
+    challenge: Option<String>,
+) -> AuthorizationRequest {
+    match challenge {
+        Some(challenge) => request.with_challenge(challenge),
+        None => request,
+    }
+}
+
+/// Perform the headless OAuth authorization-code flow, reactively:
+///
+/// 1. Attempt the real connection; take the 401's WWW-Authenticate challenge
+/// 2. Discover from the challenge, register (or use CIMD), get auth URL
+/// 3. Fetch the auth URL with redirect:manual → extract code from Location header
+/// 4. Exchange code for token
+/// 5. Return an `AuthClient` wrapping `reqwest::Client`
 async fn perform_oauth_flow(
     server_url: &str,
     _ctx: &ConformanceContext,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
+    // Always the discover lifecycle here (not `conformance_lifecycle()`):
+    // this flow serves `run_auth_client`, whose 2026-07-28 auth mocks require
+    // the per-request MCP-Protocol-Version negotiation.
+    let challenge = initialize_challenge(
+        server_url,
+        ClientLifecycleMode::Discover {
+            preferred_versions: preferred_protocol_versions(),
+        },
+    )
+    .await?;
     let mut oauth = OAuthState::new(server_url, None).await?;
 
     // Discover + register + get auth URL
+    let request = AuthorizationRequest::new(REDIRECT_URI)
+        .with_client_name("conformance-client")
+        .with_client_metadata_url(CIMD_CLIENT_METADATA_URL);
     oauth
-        .start_authorization(
-            AuthorizationRequest::new(REDIRECT_URI)
-                .with_client_name("conformance-client")
-                .with_client_metadata_url(CIMD_CLIENT_METADATA_URL),
-        )
+        .start_authorization(with_optional_challenge(request, challenge))
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
@@ -255,14 +303,14 @@ async fn perform_oauth_flow_preregistered(
     client_id: &str,
     client_secret: &str,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
     let mut oauth = OAuthState::new(server_url, None).await?;
 
+    let request = AuthorizationRequest::new(REDIRECT_URI)
+        .with_preregistered_client(client_id)
+        .with_client_secret(client_secret);
     oauth
-        .start_authorization(
-            AuthorizationRequest::new(REDIRECT_URI)
-                .with_preregistered_client(client_id)
-                .with_client_secret(client_secret),
-        )
+        .start_authorization(with_optional_challenge(request, challenge))
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
@@ -325,14 +373,14 @@ async fn run_auth_scope_step_up_client(
     server_url: &str,
     _ctx: &ConformanceContext,
 ) -> anyhow::Result<()> {
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
     let mut oauth = OAuthState::new(server_url, None).await?;
+    let request = AuthorizationRequest::new(REDIRECT_URI)
+        .with_scopes(SCOPE_STEP_UP_INITIAL_SCOPES.iter().copied())
+        .with_client_name("conformance-client")
+        .with_client_metadata_url(CIMD_CLIENT_METADATA_URL);
     oauth
-        .start_authorization(
-            AuthorizationRequest::new(REDIRECT_URI)
-                .with_scopes(SCOPE_STEP_UP_INITIAL_SCOPES.iter().copied())
-                .with_client_name("conformance-client")
-                .with_client_metadata_url(CIMD_CLIENT_METADATA_URL),
-        )
+        .start_authorization(with_optional_challenge(request, challenge))
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
@@ -427,15 +475,15 @@ async fn run_auth_scope_retry_limit_client(
 ) -> anyhow::Result<()> {
     let max_retries = 3u32;
     let mut attempt = 0u32;
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
 
     loop {
         let mut oauth = OAuthState::new(server_url, None).await?;
+        let request = AuthorizationRequest::new(REDIRECT_URI)
+            .with_client_name("conformance-client")
+            .with_client_metadata_url(CIMD_CLIENT_METADATA_URL);
         oauth
-            .start_authorization(
-                AuthorizationRequest::new(REDIRECT_URI)
-                    .with_client_name("conformance-client")
-                    .with_client_metadata_url(CIMD_CLIENT_METADATA_URL),
-            )
+            .start_authorization(with_optional_challenge(request, challenge.clone()))
             .await?;
         let auth_url = oauth.get_authorization_url().await?;
         let callback = headless_authorize(&auth_url).await?;
@@ -509,7 +557,10 @@ async fn migration_token(
         return Ok(manager.get_access_token().await?);
     }
 
-    let resolution = manager.resolve_metadata().await?;
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
+    let resolution = manager
+        .resolve_metadata_from_challenge(challenge.as_deref())
+        .await?;
     manager.set_metadata(resolution.metadata);
     manager
         .register_client("conformance-client", REDIRECT_URI, &[])
@@ -609,7 +660,10 @@ async fn run_client_credentials_basic(
         .unwrap_or("conformance-test-secret");
 
     let mut manager = AuthorizationManager::new(server_url).await?;
-    let resolution = manager.resolve_metadata().await?;
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
+    let resolution = manager
+        .resolve_metadata_from_challenge(challenge.as_deref())
+        .await?;
     let token_endpoint = resolution.metadata.token_endpoint.clone();
     manager.set_metadata(resolution.metadata);
 
