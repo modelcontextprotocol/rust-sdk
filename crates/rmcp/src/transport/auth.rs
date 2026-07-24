@@ -26,7 +26,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
-use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
+use crate::transport::common::http_header::{HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID};
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
@@ -1000,6 +1000,19 @@ pub struct AuthorizationManager {
     resource_scopes: RwLock<Vec<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
+}
+
+/// Outcome of a resource metadata discovery GET issued by
+/// [`AuthorizationManager::probe_resource_metadata_url`].
+enum ResourceMetadataProbeOutcome {
+    /// The probe located a resource metadata URL: either a 200 on the probed
+    /// URL itself, or a 401 whose WWW-Authenticate header pointed at one.
+    Found(Url),
+    /// The probe got a 404/405, typical of streamable HTTP servers that
+    /// reject session-less GETs, so the POST probe fallback is worth trying.
+    PostProbeEligible,
+    /// The probe yielded nothing usable.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2427,10 +2440,23 @@ impl AuthorizationManager {
     }
 
     async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
-        if let Ok(Some(resource_metadata_url)) =
-            self.fetch_resource_metadata_url(&self.base_url, true).await
-        {
-            return Ok(Some(resource_metadata_url));
+        match self.probe_resource_metadata_url(&self.base_url).await {
+            ResourceMetadataProbeOutcome::Found(resource_metadata_url) => {
+                return Ok(Some(resource_metadata_url));
+            }
+            // The POST probe's 401 carries both the resource metadata URL and
+            // the scope hint from WWW-Authenticate, so it must run before
+            // well-known discovery: a well-known hit would otherwise hide the
+            // scope the server advertises only on that challenge.
+            ResourceMetadataProbeOutcome::PostProbeEligible => {
+                if let Some(resource_metadata_url) = self
+                    .post_probe_resource_metadata_url(&self.base_url)
+                    .await?
+                {
+                    return Ok(Some(resource_metadata_url));
+                }
+            }
+            ResourceMetadataProbeOutcome::Unavailable => {}
         }
 
         // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
@@ -2442,9 +2468,8 @@ impl AuthorizationManager {
             discovery_url.set_query(None);
             discovery_url.set_fragment(None);
             discovery_url.set_path(&candidate_path);
-            if let Ok(Some(resource_metadata_url)) = self
-                .fetch_resource_metadata_url(&discovery_url, false)
-                .await
+            if let ResourceMetadataProbeOutcome::Found(resource_metadata_url) =
+                self.probe_resource_metadata_url(&discovery_url).await
             {
                 return Ok(Some(resource_metadata_url));
             }
@@ -2455,38 +2480,35 @@ impl AuthorizationManager {
 
     /// Extract the resource metadata url from the WWW-Authenticate header value.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
-    async fn fetch_resource_metadata_url(
-        &self,
-        url: &Url,
-        allow_post_probe: bool,
-    ) -> Result<Option<Url>, AuthError> {
+    async fn probe_resource_metadata_url(&self, url: &Url) -> ResourceMetadataProbeOutcome {
         let response = match self.discovery_get(url).await {
             Ok(r) => r,
             Err(e) => {
                 debug!("resource metadata probe failed: {}", e);
-                return Ok(None);
+                return ResourceMetadataProbeOutcome::Unavailable;
             }
         };
 
         match response.status() {
-            StatusCode::OK => Ok(Some(url.clone())),
-            StatusCode::UNAUTHORIZED => Ok(self
+            StatusCode::OK => ResourceMetadataProbeOutcome::Found(url.clone()),
+            StatusCode::UNAUTHORIZED => self
                 .extract_resource_metadata_url_from_www_authenticate(&response)
-                .await),
-            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED if allow_post_probe => {
-                self.fetch_resource_metadata_url_with_post_probe(url).await
+                .await
+                .map_or(
+                    ResourceMetadataProbeOutcome::Unavailable,
+                    ResourceMetadataProbeOutcome::Found,
+                ),
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => {
+                ResourceMetadataProbeOutcome::PostProbeEligible
             }
             status => {
                 debug!("resource metadata probe returned unexpected status: {status}");
-                Ok(None)
+                ResourceMetadataProbeOutcome::Unavailable
             }
         }
     }
 
-    async fn fetch_resource_metadata_url_with_post_probe(
-        &self,
-        url: &Url,
-    ) -> Result<Option<Url>, AuthError> {
+    async fn post_probe_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
         let request = oauth2::http::Request::builder()
             .method("POST")
             .uri(url.as_str())
@@ -2509,6 +2531,8 @@ impl AuthorizationManager {
             }
         };
 
+        self.delete_post_probe_session(url, &response).await;
+
         if response.status() != StatusCode::UNAUTHORIZED {
             debug!(
                 "resource metadata POST probe returned unexpected status: {}",
@@ -2520,6 +2544,47 @@ impl AuthorizationManager {
         Ok(self
             .extract_resource_metadata_url_from_www_authenticate(&response)
             .await)
+    }
+
+    /// Best-effort cleanup of a session the server may have created for the
+    /// POST probe's synthetic `initialize` request.
+    /// Failures are logged and swallowed: cleanup must never fail discovery.
+    async fn delete_post_probe_session(&self, url: &Url, response: &HttpResponse) {
+        let Some(session_id) = response.headers().get(HEADER_SESSION_ID) else {
+            return;
+        };
+        let request = oauth2::http::Request::builder()
+            .method("DELETE")
+            .uri(url.as_str())
+            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
+            .header(HEADER_SESSION_ID, session_id)
+            .body(Vec::new());
+        let Ok(request) = request else {
+            debug!("failed to build resource metadata POST probe session cleanup request");
+            return;
+        };
+
+        match self
+            .http_client
+            .execute(OAuthHttpRequest::new(
+                request,
+                OAuthHttpRedirectPolicy::Stop,
+            ))
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                debug!("deleted resource metadata POST probe session");
+            }
+            Ok(response) => {
+                debug!(
+                    "resource metadata POST probe session cleanup returned status: {}",
+                    response.status()
+                );
+            }
+            Err(error) => {
+                debug!("resource metadata POST probe session cleanup failed: {error}");
+            }
+        }
     }
 
     async fn extract_resource_metadata_url_from_www_authenticate(
@@ -3415,7 +3480,7 @@ impl OAuthState {
         )
     }
 
-    async fn placeholder(&self) -> Result<Self, AuthError> {
+    async fn placeholder_state(&self) -> Result<Self, AuthError> {
         let (http_client, refresh_redirect_policy) = self.oauth_http_client_config();
         Ok(OAuthState::Unauthorized(
             AuthorizationManager::new_inner(
@@ -3531,7 +3596,7 @@ impl OAuthState {
         &mut self,
         request: AuthorizationRequest,
     ) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Unauthorized(mut manager) = old else {
             *self = old;
@@ -3563,7 +3628,7 @@ impl OAuthState {
 
     /// complete authorization
     pub async fn complete_authorization(&mut self) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         if let OAuthState::Session(session) = std::mem::replace(self, placeholder) {
             *self = OAuthState::Authorized(session.auth_manager);
             Ok(())
@@ -3573,7 +3638,7 @@ impl OAuthState {
     }
     /// covert to authorized http client
     pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         if let OAuthState::Authorized(manager) = std::mem::replace(self, placeholder) {
             *self = OAuthState::AuthorizedHttpClient(AuthorizedHttpClient::new(
                 Arc::new(manager),
@@ -3593,7 +3658,7 @@ impl OAuthState {
         required_scope: &str,
         redirect_uri: &str,
     ) -> Result<String, AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Authorized(manager) = old else {
             *self = old;
@@ -3725,7 +3790,7 @@ impl OAuthState {
         &mut self,
         config: ClientCredentialsConfig,
     ) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let OAuthState::Unauthorized(mut manager) = std::mem::replace(self, placeholder) else {
             return Err(AuthError::InternalError(
                 "Client credentials flow requires Unauthorized state".to_string(),
@@ -3768,7 +3833,7 @@ mod tests {
         OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest,
         ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
-    use crate::transport::auth::VendorExtraTokenFields;
+    use crate::transport::{auth::VendorExtraTokenFields, common::http_header::HEADER_SESSION_ID};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct RecordedOAuthRequest {
@@ -3776,6 +3841,7 @@ mod tests {
         uri: String,
         redirect_policy: OAuthHttpRedirectPolicy,
         body: Vec<u8>,
+        session_id: Option<String>,
     }
 
     #[derive(Clone, Default)]
@@ -3804,6 +3870,11 @@ mod tests {
                 uri: request.request.uri().to_string(),
                 redirect_policy: request.redirect_policy,
                 body: request.request.body().clone(),
+                session_id: request
+                    .request
+                    .headers()
+                    .get(HEADER_SESSION_ID)
+                    .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned()),
             });
             let response = self.responses.lock().unwrap().pop_front();
             Box::pin(async move {
@@ -3880,12 +3951,14 @@ mod tests {
                     uri: "https://mcp.example.com/mcp".to_string(),
                     redirect_policy: OAuthHttpRedirectPolicy::Stop,
                     body: Vec::new(),
+                    session_id: None,
                 },
                 RecordedOAuthRequest {
                     method: "GET".to_string(),
                     uri: "https://mcp.example.com/.well-known/oauth-protected-resource".to_string(),
                     redirect_policy: OAuthHttpRedirectPolicy::Stop,
                     body: Vec::new(),
+                    session_id: None,
                 },
                 RecordedOAuthRequest {
                     method: "GET".to_string(),
@@ -3893,8 +3966,175 @@ mod tests {
                         .to_string(),
                     redirect_policy: OAuthHttpRedirectPolicy::Stop,
                     body: Vec::new(),
+                    session_id: None,
                 },
             ]
+        );
+    }
+
+    // The POST probe must run before well-known discovery: its 401 challenge
+    // is the only channel for the WWW-Authenticate scope hint, which a
+    // well-known hit would otherwise hide.
+    #[tokio::test]
+    async fn post_probe_precedes_well_known_discovery() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/custom/metadata/location.json""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![empty_response(405), challenge]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resource_metadata_url = manager.discover_resource_metadata_url().await.unwrap();
+
+        assert_eq!(
+            (
+                resource_metadata_url.map(|url| url.to_string()),
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| (request.method.as_str(), request.uri.as_str()))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                Some("https://mcp.example.com/custom/metadata/location.json".to_string()),
+                vec![
+                    ("GET", "https://mcp.example.com/mcp"),
+                    ("POST", "https://mcp.example.com/mcp"),
+                ],
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_metadata_post_probe_deletes_created_session() {
+        let post_response = oauth2::http::Response::builder()
+            .status(200)
+            .header(HEADER_SESSION_ID, "probe-session")
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(405),
+            post_response,
+            empty_response(202),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resource_metadata_url = manager.discover_resource_metadata_url().await.unwrap();
+
+        assert_eq!(
+            (
+                resource_metadata_url,
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| {
+                        (
+                            request.method.as_str(),
+                            request.uri.as_str(),
+                            request.session_id.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                None,
+                vec![
+                    ("GET", "https://mcp.example.com/mcp", None),
+                    ("POST", "https://mcp.example.com/mcp", None),
+                    (
+                        "DELETE",
+                        "https://mcp.example.com/mcp",
+                        Some("probe-session"),
+                    ),
+                    (
+                        "GET",
+                        "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+                        None,
+                    ),
+                    (
+                        "GET",
+                        "https://mcp.example.com/mcp/.well-known/oauth-protected-resource",
+                        None,
+                    ),
+                    (
+                        "GET",
+                        "https://mcp.example.com/.well-known/oauth-protected-resource",
+                        None,
+                    ),
+                ],
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_metadata_post_probe_challenge_deletes_created_session() {
+        let post_response = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/custom/metadata/location.json""#,
+            )
+            .header(HEADER_SESSION_ID, "probe-session")
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(405),
+            post_response,
+            empty_response(202),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resource_metadata_url = manager.discover_resource_metadata_url().await.unwrap();
+
+        assert_eq!(
+            (
+                resource_metadata_url.map(|url| url.to_string()),
+                client
+                    .requests()
+                    .iter()
+                    .map(|request| {
+                        (
+                            request.method.as_str(),
+                            request.uri.as_str(),
+                            request.session_id.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                Some("https://mcp.example.com/custom/metadata/location.json".to_string()),
+                vec![
+                    ("GET", "https://mcp.example.com/mcp", None),
+                    ("POST", "https://mcp.example.com/mcp", None),
+                    (
+                        "DELETE",
+                        "https://mcp.example.com/mcp",
+                        Some("probe-session"),
+                    ),
+                ],
+            )
         );
     }
 
