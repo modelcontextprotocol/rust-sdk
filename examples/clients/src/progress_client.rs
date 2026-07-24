@@ -163,7 +163,10 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
     // Initialize
     let server_info = service.peer_info();
     if let Some(info) = server_info {
-        tracing::info!("Connected to server: {:?}", info.server_info.name);
+        tracing::info!(
+            "Connected to server: {:?}",
+            info.server_info.as_ref().map(|server| &server.name)
+        );
     }
 
     // List tools
@@ -214,7 +217,10 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
     // Initialize
     let server_info = client.peer_info();
     if let Some(info) = server_info {
-        tracing::info!("Connected to server: {:?}", info.server_info.name);
+        tracing::info!(
+            "Connected to server: {:?}",
+            info.server_info.as_ref().map(|server| &server.name)
+        );
     }
 
     // List tools

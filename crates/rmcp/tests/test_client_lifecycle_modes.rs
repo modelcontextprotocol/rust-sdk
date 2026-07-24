@@ -61,6 +61,51 @@ async fn discover_startup_accepts_stringified_numeric_response_id() {
 }
 
 #[tokio::test]
+async fn discover_startup_accepts_anonymous_server() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(request) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        let result: DiscoverResult = serde_json::from_value(serde_json::json!({
+            "resultType": "complete",
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {},
+            "ttlMs": 0,
+            "cacheScope": "private"
+        }))
+        .expect("anonymous discovery result");
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::DiscoverResult(result),
+                request.id,
+            ))
+            .await
+            .expect("send discover response");
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("anonymous server should remain discoverable");
+    let peer = client
+        .peer_info()
+        .expect("discovery should store peer state");
+    assert_eq!(peer.protocol_version, ProtocolVersion::V_2026_07_28);
+    assert_eq!(peer.server_info, None);
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
 async fn high_level_server_accepts_discover_startup_without_initialize() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_task = tokio::spawn(async move {

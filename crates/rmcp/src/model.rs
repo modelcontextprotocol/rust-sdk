@@ -1089,6 +1089,42 @@ impl InitializeResult {
 pub type ServerInfo = InitializeResult;
 pub type ClientInfo = InitializeRequestParams;
 
+/// Information learned about a server by a client.
+///
+/// Legacy initialization requires [`server_info`](Self::server_info), while
+/// the modern discovery lifecycle carries it as optional, self-reported result
+/// metadata. The remaining fields are available in both lifecycle modes.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ServerPeerInfo {
+    /// The negotiated protocol version.
+    pub protocol_version: ProtocolVersion,
+    /// The capabilities advertised by the server.
+    pub capabilities: ServerCapabilities,
+    /// Optional, self-reported server implementation identity.
+    pub server_info: Option<Implementation>,
+    /// Optional human-readable instructions about using the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// Protocol-level response metadata.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<MetaObject>,
+}
+
+impl From<ServerInfo> for ServerPeerInfo {
+    fn from(info: ServerInfo) -> Self {
+        Self {
+            protocol_version: info.protocol_version,
+            capabilities: info.capabilities,
+            server_info: Some(info.server_info),
+            instructions: info.instructions,
+            meta: info.meta,
+        }
+    }
+}
+
 const_string!(DiscoverRequestMethod = "server/discover");
 
 /// Parameters for [`DiscoverRequest`].
@@ -1120,7 +1156,7 @@ impl schemars::JsonSchema for DiscoverRequestParams {
 pub type DiscoverRequest = Request<DiscoverRequestMethod, DiscoverRequestParams>;
 
 /// The server's response to a [`DiscoverRequest`].
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -1131,8 +1167,6 @@ pub struct DiscoverResult {
     pub supported_versions: Vec<ProtocolVersion>,
     /// Capabilities provided by this server.
     pub capabilities: ServerCapabilities,
-    /// Information about the server implementation.
-    pub server_info: Implementation,
     /// Optional guidance for using the server.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
@@ -1145,6 +1179,53 @@ pub struct DiscoverResult {
     pub meta: Option<MetaObject>,
 }
 
+impl<'de> Deserialize<'de> for DiscoverResult {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Helper {
+            result_type: ResultType,
+            supported_versions: Vec<ProtocolVersion>,
+            capabilities: ServerCapabilities,
+            server_info: Option<serde_json::Value>,
+            instructions: Option<String>,
+            ttl_ms: u64,
+            cache_scope: CacheScope,
+            #[serde(rename = "_meta")]
+            meta: Option<MetaObject>,
+        }
+
+        let mut helper = Helper::deserialize(deserializer)?;
+        let has_canonical_server_info = helper
+            .meta
+            .as_ref()
+            .is_some_and(|metadata| metadata.0.contains_key(MetaObject::META_KEY_SERVER_INFO));
+        if !has_canonical_server_info
+            && let Some(server_info) = helper
+                .server_info
+                .and_then(|value| serde_json::from_value::<Implementation>(value).ok())
+        {
+            helper
+                .meta
+                .get_or_insert_with(MetaObject::new)
+                .set_server_info(server_info);
+        }
+
+        Ok(Self {
+            result_type: helper.result_type,
+            supported_versions: helper.supported_versions,
+            capabilities: helper.capabilities,
+            instructions: helper.instructions,
+            ttl_ms: helper.ttl_ms,
+            cache_scope: helper.cache_scope,
+            meta: helper.meta,
+        })
+    }
+}
+
 impl DiscoverResult {
     /// Create a non-cacheable private discovery result.
     pub fn new(
@@ -1152,11 +1233,23 @@ impl DiscoverResult {
         capabilities: ServerCapabilities,
         server_info: Implementation,
     ) -> Self {
+        Self::new_without_server_info(supported_versions, capabilities)
+            .with_server_info(server_info)
+    }
+
+    /// Create a non-cacheable private discovery result without a server identity.
+    ///
+    /// Server identity is optional display-only metadata. Servers should normally
+    /// use [`DiscoverResult::new`], but this constructor supports peers that do
+    /// not advertise an implementation name and version.
+    pub fn new_without_server_info(
+        supported_versions: Vec<ProtocolVersion>,
+        capabilities: ServerCapabilities,
+    ) -> Self {
         Self {
             result_type: ResultType::COMPLETE,
             supported_versions,
             capabilities,
-            server_info,
             instructions: None,
             ttl_ms: 0,
             cache_scope: CacheScope::Private,
@@ -1178,8 +1271,28 @@ impl DiscoverResult {
         } = server_info;
         let mut result = Self::new(supported_versions, capabilities, server_info);
         result.instructions = instructions;
-        result.meta = meta;
+        if let Some(meta) = meta {
+            result.meta.get_or_insert_with(MetaObject::new).extend(meta);
+        }
         result
+    }
+
+    /// Return the optional self-reported server identity from result metadata.
+    pub fn server_info(&self) -> Option<Implementation> {
+        self.meta.as_ref().and_then(MetaObject::server_info)
+    }
+
+    /// Set the self-reported server identity in canonical result metadata.
+    pub fn set_server_info(&mut self, server_info: Implementation) {
+        self.meta
+            .get_or_insert_with(MetaObject::new)
+            .set_server_info(server_info);
+    }
+
+    /// Set the self-reported server identity in canonical result metadata.
+    pub fn with_server_info(mut self, server_info: Implementation) -> Self {
+        self.set_server_info(server_info);
+        self
     }
 
     /// Set the cache lifetime hint in milliseconds.

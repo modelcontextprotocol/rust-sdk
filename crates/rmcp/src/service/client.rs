@@ -25,7 +25,7 @@ use crate::{
         NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
         ProtocolVersion, ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse,
         ReadResourceResult, Reference, RequestId, RequestMetaObject, RootsListChangedNotification,
-        ServerInfo, ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult,
+        ServerJsonRpcMessage, ServerNotification, ServerPeerInfo, ServerRequest, ServerResult,
         SetLevelRequest, SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams,
         SubscriptionFilter, SubscriptionsListenRequest, SubscriptionsListenRequestParams,
         SubscriptionsListenResult, UnsubscribeRequest, UnsubscribeRequestParams, UpdateTaskParams,
@@ -188,7 +188,7 @@ impl ServiceRole for RoleClient {
     type PeerResp = ServerResult;
     type PeerNot = ServerNotification;
     type Info = ClientInfo;
-    type PeerInfo = ServerInfo;
+    type PeerInfo = ServerPeerInfo;
     type InitializeError = ClientInitializeError;
     const IS_CLIENT: bool = true;
 
@@ -751,7 +751,7 @@ where
     let ServerResult::InitializeResult(initialize_result) = response else {
         return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
     };
-    peer.set_peer_info(initialize_result);
+    peer.set_peer_info(initialize_result.into());
 
     // send notification
     let notification = ClientJsonRpcMessage::notification(
@@ -821,10 +821,11 @@ where
                         server_supported: result.supported_versions,
                     });
                 };
-                peer.set_peer_info(ServerInfo {
+                let server_info = result.server_info();
+                peer.set_peer_info(ServerPeerInfo {
                     protocol_version: selected.clone(),
                     capabilities: result.capabilities,
-                    server_info: result.server_info,
+                    server_info,
                     instructions: result.instructions,
                     meta: result.meta,
                 });
