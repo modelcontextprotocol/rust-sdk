@@ -108,6 +108,51 @@ Use this path when OAuth traffic must go through a browser fetch API, a remote
 execution environment, a company gateway, a test fake, or any other non-reqwest
 transport.
 
+#### Inspect discovery provenance directly
+
+Most applications can use `OAuthState` without calling metadata discovery
+directly. When using `AuthorizationManager`, `resolve_metadata()` returns both
+the metadata and how it was obtained. A client that supports the 2025-03-26
+default-endpoint fallback can continue with synthesized metadata, while a
+client that requires server-published metadata should reject that result:
+
+```rust ignore
+use rmcp::transport::auth::{AuthorizationManager, AuthorizationMetadataSource};
+
+async fn configure_metadata(
+    manager: &mut AuthorizationManager,
+    allow_legacy_endpoint_fallback: bool,
+) -> anyhow::Result<()> {
+    let resolution = manager.resolve_metadata().await?;
+
+    if resolution.source == AuthorizationMetadataSource::LegacyEndpointFallback {
+        if !allow_legacy_endpoint_fallback {
+            anyhow::bail!("the server did not publish OAuth metadata");
+        }
+
+        tracing::warn!(
+            "the server did not publish OAuth metadata; using the 2025-03-26 fallback endpoints"
+        );
+    }
+
+    manager.set_metadata(resolution.metadata);
+    Ok(())
+}
+```
+
+`ProtectedResourceMetadata` and `AuthorizationServerMetadata` indicate
+server-published metadata, so clients can proceed with the returned metadata.
+`LegacyEndpointFallback` indicates endpoints synthesized for compatibility
+with the 2025-03-26 MCP specification. Clients should proceed only when they
+intentionally support that legacy behavior; clients using discovery as an
+OAuth capability check should treat it as unsupported.
+
+Applications using `OAuthState` do not need to handle these sources directly:
+the state machine resolves metadata internally and retains the legacy fallback.
+Low-level `AuthorizationManager` users can use
+`AuthorizationMetadataSource::is_discovered()` when they only need to
+distinguish server-published metadata from synthesized metadata.
+
 ### 3. Start authorization with OAuthState
 
 The `OAuthState` state machine manages the full authorization lifecycle.
@@ -229,7 +274,8 @@ match oauth_state.request_scope_upgrade("admin:write", MCP_REDIRECT_URI).await {
 
 ## Complete Examples
 
-- **Client**: [`examples/clients/src/auth/oauth_client.rs`](../examples/clients/src/auth/oauth_client.rs)
+- **Authorization Code client**: [`examples/clients/src/auth/oauth_client.rs`](../examples/clients/src/auth/oauth_client.rs)
+- **Client Credentials client**: [`examples/clients/src/auth/client_credentials.rs`](../examples/clients/src/auth/client_credentials.rs)
 - **Server**: [`examples/servers/src/complex_auth_streamhttp.rs`](../examples/servers/src/complex_auth_streamhttp.rs)
 
 ### Running the Examples
@@ -240,6 +286,10 @@ cargo run -p mcp-server-examples --example servers_complex_auth_streamhttp
 
 # Run the OAuth client (in another terminal)
 cargo run -p mcp-client-examples --example clients_oauth_client
+
+# Run the Client Credentials client
+cargo run -p mcp-client-examples --example clients_client_credentials -- \
+  <server_url> <client_id> <client_secret>
 ```
 
 ## Authorization Flow Description

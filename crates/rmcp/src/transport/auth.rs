@@ -578,6 +578,43 @@ pub struct AuthorizationMetadata {
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
+/// How [`AuthorizationMetadata`] was obtained during discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AuthorizationMetadataSource {
+    /// Discovered through RFC 9728 protected resource metadata.
+    ProtectedResourceMetadata,
+    /// Discovered through RFC 8414 / OpenID Connect metadata at the server's
+    /// base URL.
+    AuthorizationServerMetadata,
+    /// Nothing was discovered; the endpoints were synthesized from the base
+    /// URL (`/authorize`, `/token`, `/register`) for compatibility with the
+    /// 2025-03-26 MCP spec's default-endpoint fallback. The server gave no
+    /// evidence that it supports OAuth.
+    ///
+    /// [Newer MCP revisions] require metadata discovery and do not define an
+    /// endpoint-synthesis fallback.
+    ///
+    /// [Newer MCP revisions]: https://modelcontextprotocol.io/specification/draft/basic/authorization/authorization-server-discovery#protected-resource-metadata-discovery-requirements
+    LegacyEndpointFallback,
+}
+
+impl AuthorizationMetadataSource {
+    /// Whether the metadata was actually published by the server, as opposed
+    /// to synthesized by the client as a legacy compatibility fallback.
+    pub fn is_discovered(self) -> bool {
+        !matches!(self, Self::LegacyEndpointFallback)
+    }
+}
+
+/// [`AuthorizationMetadata`] together with how it was resolved.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct AuthorizationMetadataResolution {
+    pub metadata: AuthorizationMetadata,
+    pub source: AuthorizationMetadataSource,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ResourceServerMetadata {
     resource: Option<String>,
@@ -1236,8 +1273,10 @@ impl AuthorizationManager {
 
     /// Set OAuth2 authorization metadata
     ///
-    /// This should be called after discovering metadata via `discover_metadata()`
-    /// and before creating an `AuthorizationSession`.
+    /// This should be called with
+    /// [`AuthorizationMetadataResolution::metadata`] after
+    /// [`Self::resolve_metadata`] and before creating an
+    /// [`AuthorizationSession`].
     pub fn set_metadata(&mut self, metadata: AuthorizationMetadata) {
         self.metadata = Some(metadata);
     }
@@ -1252,8 +1291,8 @@ impl AuthorizationManager {
             && stored.token_response.is_some()
         {
             if self.metadata.is_none() {
-                let metadata = self.discover_metadata().await?;
-                self.metadata = Some(metadata);
+                let resolution = self.resolve_metadata().await?;
+                self.metadata = Some(resolution.metadata);
             }
 
             if let (Some(stored_issuer), Some(current_issuer)) =
@@ -1320,18 +1359,51 @@ impl AuthorizationManager {
         Ok(())
     }
 
-    /// discover oauth2 metadata (per SEP-985: Protected Resource Metadata first, then direct OAuth)
-    pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
+    /// Resolve OAuth 2.0 metadata and report how it was obtained.
+    ///
+    /// Discovery follows SEP-985: protected resource metadata first, then
+    /// direct OAuth 2.0 Authorization Server Metadata or OpenID Connect
+    /// Discovery. When discovery finds nothing, the result contains legacy
+    /// default endpoints derived from the base URL and
+    /// [`AuthorizationMetadataSource::LegacyEndpointFallback`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rmcp::transport::auth::{AuthorizationManager, AuthorizationMetadataSource};
+    ///
+    /// # async fn resolve() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut manager = AuthorizationManager::new("https://mcp.example.com").await?;
+    /// let resolution = manager.resolve_metadata().await?;
+    ///
+    /// if resolution.source == AuthorizationMetadataSource::LegacyEndpointFallback {
+    ///     println!("the server did not publish OAuth metadata");
+    /// }
+    ///
+    /// manager.set_metadata(resolution.metadata);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn resolve_metadata(&self) -> Result<AuthorizationMetadataResolution, AuthError> {
         if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
-            return Ok(metadata);
+            return Ok(AuthorizationMetadataResolution {
+                metadata,
+                source: AuthorizationMetadataSource::ProtectedResourceMetadata,
+            });
         }
 
         if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
-            return Ok(metadata);
+            return Ok(AuthorizationMetadataResolution {
+                metadata,
+                source: AuthorizationMetadataSource::AuthorizationServerMetadata,
+            });
         }
 
         debug!("falling back to legacy OAuth endpoints derived from the base URL");
-        Ok(Self::legacy_authorization_metadata(&self.base_url))
+        Ok(AuthorizationMetadataResolution {
+            metadata: Self::legacy_authorization_metadata(&self.base_url),
+            source: AuthorizationMetadataSource::LegacyEndpointFallback,
+        })
     }
 
     fn legacy_authorization_metadata(base_url: &Url) -> AuthorizationMetadata {
@@ -3413,8 +3485,8 @@ impl OAuthState {
 
             *manager.current_scopes.write().await = granted_scopes.clone();
 
-            let metadata = manager.discover_metadata().await?;
-            manager.metadata = Some(metadata);
+            let resolution = manager.resolve_metadata().await?;
+            manager.metadata = Some(resolution.metadata);
 
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
@@ -3468,8 +3540,8 @@ impl OAuthState {
             ));
         };
         debug!("start discovery");
-        let metadata = match manager.discover_metadata().await {
-            Ok(metadata) => metadata,
+        let metadata = match manager.resolve_metadata().await {
+            Ok(resolution) => resolution.metadata,
             Err(e) => {
                 *self = OAuthState::Unauthorized(manager);
                 return Err(e);
@@ -3661,8 +3733,8 @@ impl OAuthState {
         };
 
         // Discover metadata
-        let metadata = manager.discover_metadata().await?;
-        manager.metadata = Some(metadata);
+        let resolution = manager.resolve_metadata().await?;
+        manager.metadata = Some(resolution.metadata);
 
         // Validate server supports the requested auth method
         manager.validate_client_credentials_metadata(&config)?;
@@ -3691,10 +3763,10 @@ mod tests {
 
     use super::{
         AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
-        AuthorizationRequest, AuthorizationSession, CredentialStore, InMemoryCredentialStore,
-        InMemoryStateStore, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
-        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
-        StateStore, StoredAuthorizationState, is_https_url,
+        AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession, CredentialStore,
+        InMemoryCredentialStore, InMemoryStateStore, OAuthClientConfig, OAuthHttpClient,
+        OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest,
+        ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -3797,7 +3869,7 @@ mod tests {
         .await
         .unwrap();
 
-        let metadata = manager.discover_metadata().await.unwrap();
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
 
         assert_eq!(metadata.token_endpoint, "https://auth.example.com/token");
         assert_eq!(
@@ -3860,7 +3932,7 @@ mod tests {
         .await
         .unwrap();
 
-        let metadata = manager.discover_metadata().await.unwrap();
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
 
         assert_eq!(
             (
@@ -3919,7 +3991,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = manager.discover_metadata().await.unwrap_err();
+        let error = manager.resolve_metadata().await.unwrap_err();
 
         assert!(
             matches!(
@@ -4042,7 +4114,7 @@ mod tests {
         .await
         .unwrap();
 
-        let metadata = manager.discover_metadata().await.unwrap();
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
 
         assert_eq!(
             (
@@ -4077,7 +4149,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_metadata_falls_back_to_legacy_default_endpoints() {
+    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             empty_response(404),
             empty_response(404),
@@ -4092,13 +4164,14 @@ mod tests {
         .await
         .unwrap();
 
-        let metadata = manager.discover_metadata().await.unwrap();
+        let resolution = manager.resolve_metadata().await.unwrap();
 
         assert_eq!(
             (
-                metadata.authorization_endpoint.as_str(),
-                metadata.token_endpoint.as_str(),
-                metadata.registration_endpoint.as_deref(),
+                resolution.source,
+                resolution.metadata.authorization_endpoint.as_str(),
+                resolution.metadata.token_endpoint.as_str(),
+                resolution.metadata.registration_endpoint.as_deref(),
                 client
                     .requests()
                     .iter()
@@ -4106,6 +4179,7 @@ mod tests {
                     .collect::<Vec<_>>(),
             ),
             (
+                AuthorizationMetadataSource::LegacyEndpointFallback,
                 "https://legacy.example.com/authorize",
                 "https://legacy.example.com/token",
                 Some("https://legacy.example.com/register"),
@@ -4118,6 +4192,108 @@ mod tests {
                 ],
             )
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_reports_protected_resource_metadata() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_reports_authorization_server_metadata() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://mcp.example.com",
+                    "authorization_endpoint": "https://mcp.example.com/oauth/authorize",
+                    "token_endpoint": "https://mcp.example.com/oauth/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::AuthorizationServerMetadata,
+                "https://mcp.example.com/oauth/token",
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::protected_resource_metadata(
+        AuthorizationMetadataSource::ProtectedResourceMetadata,
+        true
+    )]
+    #[case::authorization_server_metadata(
+        AuthorizationMetadataSource::AuthorizationServerMetadata,
+        true
+    )]
+    #[case::legacy_endpoint_fallback(AuthorizationMetadataSource::LegacyEndpointFallback, false)]
+    fn is_discovered_is_false_only_for_the_legacy_fallback(
+        #[case] source: AuthorizationMetadataSource,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(source.is_discovered(), expected);
     }
 
     fn preregistered_as_metadata_response() -> HttpResponse {
@@ -4206,7 +4382,7 @@ mod tests {
         )
         .await
         .unwrap();
-        manager.metadata = Some(manager.discover_metadata().await.unwrap());
+        manager.metadata = Some(manager.resolve_metadata().await.unwrap().metadata);
 
         let request = AuthorizationRequest::new("http://localhost:8080/callback")
             .with_preregistered_client("preregistered-client");
@@ -4661,7 +4837,7 @@ mod tests {
         .await
         .unwrap();
 
-        let metadata = manager.discover_metadata().await.unwrap();
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
         let requests = client.requests();
 
         assert_eq!(
@@ -4718,7 +4894,7 @@ mod tests {
         .await
         .unwrap();
 
-        let metadata = manager.discover_metadata().await.unwrap();
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
 
         assert_eq!(
             (
@@ -4767,7 +4943,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = manager.discover_metadata().await.unwrap_err();
+        let error = manager.resolve_metadata().await.unwrap_err();
 
         assert!(
             matches!(error, AuthError::MetadataError(ref message) if message.contains("resource mismatch")),
@@ -4802,7 +4978,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = manager.discover_metadata().await.unwrap_err();
+        let error = manager.resolve_metadata().await.unwrap_err();
 
         assert!(
             matches!(error, AuthError::MetadataError(ref message) if message.contains("missing required resource")),
