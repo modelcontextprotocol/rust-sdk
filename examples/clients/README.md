@@ -57,6 +57,14 @@ A client demonstrating how to authenticate with an MCP server using OAuth.
 - Establishes an authorized connection to the MCP server using the acquired access token
 - Demonstrates how to use the authorized connection to retrieve available tools and prompts
 
+### OAuth Client Credentials (`auth/client_credentials.rs`)
+
+A client demonstrating the OAuth 2.0 Client Credentials flow from SEP-1046.
+
+- Accepts the server URL, client ID, and client secret as command-line arguments
+- Authenticates without an interactive browser or callback server
+- Establishes an authorized connection and retrieves the available tools
+
 
 ### Sampling Standard I/O Client (`sampling_stdio.rs`)
 
@@ -106,6 +114,10 @@ cargo run -p mcp-client-examples --example clients_collection
 
 # Run the OAuth client example
 cargo run -p mcp-client-examples --example clients_oauth_client
+
+# Run the OAuth Client Credentials example
+cargo run -p mcp-client-examples --example clients_client_credentials -- \
+  <server_url> <client_id> <client_secret>
 
 # Run the sampling standard I/O client example
 cargo run -p mcp-client-examples --example clients_sampling_stdio

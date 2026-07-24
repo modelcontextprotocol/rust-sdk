@@ -509,8 +509,8 @@ async fn migration_token(
         return Ok(manager.get_access_token().await?);
     }
 
-    let metadata = manager.discover_metadata().await?;
-    manager.set_metadata(metadata);
+    let resolution = manager.resolve_metadata().await?;
+    manager.set_metadata(resolution.metadata);
     manager
         .register_client("conformance-client", REDIRECT_URI, &[])
         .await?;
@@ -609,9 +609,9 @@ async fn run_client_credentials_basic(
         .unwrap_or("conformance-test-secret");
 
     let mut manager = AuthorizationManager::new(server_url).await?;
-    let metadata = manager.discover_metadata().await?;
-    let token_endpoint = metadata.token_endpoint.clone();
-    manager.set_metadata(metadata);
+    let resolution = manager.resolve_metadata().await?;
+    let token_endpoint = resolution.metadata.token_endpoint.clone();
+    manager.set_metadata(resolution.metadata);
 
     let http = reqwest::Client::new();
     let resp = http
