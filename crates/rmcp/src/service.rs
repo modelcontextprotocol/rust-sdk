@@ -249,6 +249,8 @@ pub(crate) fn in_request_handler_scope() -> bool {
 /// outside a handler they return an `invalid_request` error. The association
 /// is task-local and does not cross `tokio::spawn`, so use the task manager
 /// for long-running work.
+///
+/// The client receive-side mirror is [`InboundStreamOrigin`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct OriginatingRequestId(pub RequestId);
