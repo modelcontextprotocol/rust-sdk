@@ -163,15 +163,37 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     /// SEP-2260 says clients receiving a server-to-client request with no
     /// associated outbound request should reject it with invalid params. An
     /// error return is sent back to the peer instead of dispatching to the
-    /// handler.
+    /// handler. The `association` argument is the transport-observed stream
+    /// association; see [`PeerRequestAssociation`].
     #[doc(hidden)]
     fn enforce_peer_request_association(
         _peer_request: &Self::PeerReq,
         _peer_info: Option<&Self::PeerInfo>,
-        _has_pending_outbound_request: bool,
+        _association: PeerRequestAssociation,
     ) -> Result<(), McpError> {
         Ok(())
     }
+}
+
+/// How an inbound peer request relates to this side's in-flight outbound
+/// requests, as observed by the transport (SEP-2260).
+///
+/// SEP-2260 defines no wire field for request association; only a
+/// stream-separating transport (streamable HTTP) can distinguish the first
+/// two variants. Transports without stream separation (stdio, in-process)
+/// yield [`Self::Unknown`], preserving the coarse in-flight check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+pub enum PeerRequestAssociation {
+    /// Arrived on the response stream of an outbound request that is still
+    /// awaiting its response.
+    Associated,
+    /// Arrived on a stream tied to no in-flight outbound request (e.g. the
+    /// streamable HTTP standalone GET stream).
+    Unassociated,
+    /// The transport supplied no stream provenance; only the coarse
+    /// "is anything in flight" signal exists.
+    Unknown { has_pending_outbound_request: bool },
 }
 
 pub(crate) fn uses_legacy_lifecycle(
@@ -1448,7 +1470,9 @@ where
                     if let Err(error) = R::enforce_peer_request_association(
                         &request,
                         peer.peer_info().as_deref(),
-                        !local_responder_pool.is_empty(),
+                        PeerRequestAssociation::Unknown {
+                            has_pending_outbound_request: !local_responder_pool.is_empty(),
+                        },
                     ) {
                         tracing::warn!(%id, message = %error.message, "rejected peer request");
                         // send directly: the sink proxy path would drop the
