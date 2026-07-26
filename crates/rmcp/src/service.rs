@@ -231,6 +231,23 @@ pub(crate) fn in_request_handler_scope() -> bool {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct OriginatingRequestId(pub RequestId);
 
+/// Marker in an inbound request's non-serialized [`Extensions`] recording
+/// which HTTP response stream it arrived on (SEP-2260): the receive-side
+/// mirror of [`OriginatingRequestId`]. Attached by the streamable HTTP
+/// client transport; read by the service layer to enforce the client
+/// receive-side association check. Never on the wire (SEP-2260 defines no
+/// wire field), so transports that serialize messages cannot convey it and
+/// the service layer falls back to the coarse in-flight check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+pub enum InboundStreamOrigin {
+    /// The standalone GET stream, or a POST response stream not tied to an
+    /// outbound request.
+    Unassociated,
+    /// The SSE response stream of the POST that carried this outbound request.
+    OutboundRequest(RequestId),
+}
+
 pub type TxJsonRpcMessage<R> =
     JsonRpcMessage<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
 pub type RxJsonRpcMessage<R> = JsonRpcMessage<

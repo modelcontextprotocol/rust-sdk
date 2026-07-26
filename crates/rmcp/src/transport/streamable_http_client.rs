@@ -19,10 +19,11 @@ use super::common::client_side_sse::{
 use crate::{
     RoleClient,
     model::{
-        ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData, GetMeta,
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorData, GetExtensions, GetMeta,
         InitializedNotification, JsonObject, ProtocolVersion, RequestId, ServerJsonRpcMessage,
         ServerResult,
     },
+    service::InboundStreamOrigin,
     transport::{
         common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
@@ -635,6 +636,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         + Send
         + 'static,
         sse_worker_tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
+        origin: InboundStreamOrigin,
         close_on_response: bool,
         ct: CancellationToken,
     ) -> Result<(), StreamableHttpError<C::Error>> {
@@ -649,9 +651,14 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                     break;
                 }
             };
-            let Some(message) = message.transpose()? else {
+            let Some(mut message) = message.transpose()? else {
                 break;
             };
+            // SEP-2260: record which stream this request arrived on so the
+            // service layer can enforce receive-side request association.
+            if let ServerJsonRpcMessage::Request(request) = &mut message {
+                request.request.extensions_mut().insert(origin.clone());
+            }
             let is_response = matches!(
                 message,
                 ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
@@ -719,6 +726,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                     Self::execute_sse_stream(
                         sse_stream,
                         sse_worker_tx,
+                        InboundStreamOrigin::Unassociated,
                         false,
                         transport_task_ct.child_token(),
                     )
@@ -1283,9 +1291,18 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                     );
                                                 }
                                                 let stream_tx = sse_worker_tx.clone();
+                                                let origin = match &stream_request_id {
+                                                    Some(id) => {
+                                                        InboundStreamOrigin::OutboundRequest(
+                                                            id.clone(),
+                                                        )
+                                                    }
+                                                    None => InboundStreamOrigin::Unassociated,
+                                                };
                                                 streams.spawn(async move {
                                                     let result = Self::execute_sse_stream(
-                                                        sse_stream, stream_tx, true, stream_ct,
+                                                        sse_stream, stream_tx, origin, true,
+                                                        stream_ct,
                                                     )
                                                     .await;
                                                     (stream_request_id, result)
@@ -1342,9 +1359,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                     .insert(request_id.clone(), stream_ct.clone());
                             }
                             let stream_tx = sse_worker_tx.clone();
+                            let origin = match &stream_request_id {
+                                Some(id) => InboundStreamOrigin::OutboundRequest(id.clone()),
+                                None => InboundStreamOrigin::Unassociated,
+                            };
                             streams.spawn(async move {
                                 let result = Self::execute_sse_stream(
-                                    sse_stream, stream_tx, true, stream_ct,
+                                    sse_stream, stream_tx, origin, true, stream_ct,
                                 )
                                 .await;
                                 (stream_request_id, result)
@@ -1769,7 +1790,66 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::model::{ListToolsResult, NumberOrString, ServerResult, Tool};
+    use crate::{
+        model::{
+            GetExtensions, ListToolsResult, NumberOrString, ServerRequest, ServerResult, Tool,
+        },
+        service::InboundStreamOrigin,
+    };
+
+    #[expect(
+        deprecated,
+        reason = "sampling (SEP-2577) is still a representative server request"
+    )]
+    fn sampling_request_message(id: i64) -> ServerJsonRpcMessage {
+        use crate::model::{CreateMessageRequest, CreateMessageRequestParams, SamplingMessage};
+        ServerJsonRpcMessage::request(
+            ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+                CreateMessageRequestParams::new(vec![SamplingMessage::user_text("hi")], 16),
+            )),
+            NumberOrString::Number(id),
+        )
+    }
+
+    #[tokio::test]
+    async fn execute_sse_stream_marks_inbound_requests_with_origin() {
+        for origin in [
+            InboundStreamOrigin::Unassociated,
+            InboundStreamOrigin::OutboundRequest(RequestId::Number(3)),
+        ] {
+            let response = ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(ListToolsResult::default()),
+                NumberOrString::Number(1),
+            );
+            let stream = futures::stream::iter([Ok(sampling_request_message(9)), Ok(response)]);
+            let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+            StreamableHttpClientWorker::<StatelessReconnectClient>::execute_sse_stream(
+                stream,
+                tx,
+                origin.clone(),
+                false,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("stream completes");
+
+            let ServerJsonRpcMessage::Request(request) =
+                rx.recv().await.expect("request forwarded")
+            else {
+                panic!("expected request first");
+            };
+            assert_eq!(
+                request.request.extensions().get::<InboundStreamOrigin>(),
+                Some(&origin),
+                "inbound requests must carry their stream origin"
+            );
+            // Responses are correlated by JSON-RPC id; no marker needed or added.
+            assert!(matches!(
+                rx.recv().await.expect("response forwarded"),
+                ServerJsonRpcMessage::Response(_)
+            ));
+        }
+    }
 
     type ReconnectAttempt = (Option<String>, Option<String>);
 
