@@ -238,10 +238,9 @@ impl ServiceRole for RoleClient {
         }
     }
 
-    // SEP-2260: reject restricted server requests that the transport observed
-    // arriving with no in-flight outbound request association. Transports
-    // without stream separation (stdio) report `Unknown`, where the coarse
-    // in-flight check is the best available under-approximation of the SHOULD.
+    // SEP-2260: reject restricted server requests that arrived unassociated
+    // with any in-flight outbound request. Without stream separation
+    // (`Unknown`) the coarse in-flight check under-approximates the SHOULD.
     fn enforce_peer_request_association(
         peer_request: &Self::PeerReq,
         peer_info: Option<&Self::PeerInfo>,

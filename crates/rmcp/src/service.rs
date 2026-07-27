@@ -163,8 +163,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     /// SEP-2260 says clients receiving a server-to-client request with no
     /// associated outbound request should reject it with invalid params. An
     /// error return is sent back to the peer instead of dispatching to the
-    /// handler. The `association` argument is the transport-observed stream
-    /// association; see [`PeerRequestAssociation`].
+    /// handler.
     #[doc(hidden)]
     fn enforce_peer_request_association(
         _peer_request: &Self::PeerReq,
@@ -176,23 +175,21 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
 }
 
 /// How an inbound peer request relates to this side's in-flight outbound
-/// requests, as observed by the transport (SEP-2260).
+/// requests (SEP-2260).
 ///
-/// SEP-2260 defines no wire field for request association; only a
-/// stream-separating transport (streamable HTTP) can distinguish the first
-/// two variants. Transports without stream separation (stdio, in-process)
-/// yield [`Self::Unknown`], preserving the coarse in-flight check.
+/// SEP-2260 defines no wire field for association, so only stream-separating
+/// transports (streamable HTTP) can observe it; other transports yield
+/// [`Self::Unknown`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum PeerRequestAssociation {
-    /// Arrived on the response stream of an outbound request that is still
-    /// awaiting its response.
+    /// Arrived on the response stream of an in-flight outbound request.
     Associated,
     /// Arrived on a stream tied to no in-flight outbound request (e.g. the
     /// streamable HTTP standalone GET stream).
     Unassociated,
-    /// The transport supplied no stream provenance; only the coarse
-    /// "is anything in flight" signal exists.
+    /// The transport cannot distinguish streams; only the coarse in-flight
+    /// signal is available.
     Unknown { has_pending_outbound_request: bool },
 }
 
@@ -204,9 +201,6 @@ pub(crate) fn uses_legacy_lifecycle(
         && protocol_version.is_none_or(|version| version < &ProtocolVersion::V_2026_07_28)
 }
 
-/// Translate the transport-attached [`InboundStreamOrigin`] marker (if any)
-/// and the in-flight outbound request pool into the association passed to
-/// [`ServiceRole::enforce_peer_request_association`].
 pub(crate) fn peer_request_association<Req: crate::model::GetExtensions, V>(
     request: &Req,
     local_responder_pool: &std::collections::HashMap<RequestId, V>,
@@ -256,12 +250,9 @@ pub(crate) fn in_request_handler_scope() -> bool {
 pub struct OriginatingRequestId(pub RequestId);
 
 /// Marker in an inbound request's non-serialized [`Extensions`] recording
-/// which HTTP response stream it arrived on (SEP-2260): the receive-side
-/// mirror of [`OriginatingRequestId`]. Attached by the streamable HTTP
-/// client transport; read by the service layer to enforce the client
-/// receive-side association check. Never on the wire (SEP-2260 defines no
-/// wire field), so transports that serialize messages cannot convey it and
-/// the service layer falls back to the coarse in-flight check.
+/// which HTTP response stream it arrived on: the receive-side mirror of
+/// [`OriginatingRequestId`]. Never on the wire (SEP-2260 defines no wire
+/// field); when absent, the coarse in-flight check applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum InboundStreamOrigin {

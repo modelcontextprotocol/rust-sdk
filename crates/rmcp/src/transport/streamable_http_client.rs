@@ -654,8 +654,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             let Some(mut message) = message.transpose()? else {
                 break;
             };
-            // SEP-2260: record which stream this request arrived on so the
-            // service layer can enforce receive-side request association.
+            // SEP-2260: mark inbound requests with the stream they arrived on
+            // for the client receive-side association check.
             if let ServerJsonRpcMessage::Request(request) = &mut message {
                 request.request.extensions_mut().insert(origin.clone());
             }
