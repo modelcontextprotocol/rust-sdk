@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0-beta.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.0-beta.2...rmcp-v3.0.0-beta.3) - 2026-07-27
+
+### Fixed
+
+- [**breaking**] reject missing `issuer` in authorization server metadata by default ([#1054](https://github.com/modelcontextprotocol/rust-sdk/pull/1054))
+- default to allowing missing `issuer` ([#1051](https://github.com/modelcontextprotocol/rust-sdk/pull/1051))
+
+### Other
+
+- make oauth discovery reactive ([#1052](https://github.com/modelcontextprotocol/rust-sdk/pull/1052))
+
 ## [3.0.0-beta.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.0-beta.1...rmcp-v3.0.0-beta.2) - 2026-07-24
 
 ### Added
