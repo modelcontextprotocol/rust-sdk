@@ -1948,6 +1948,132 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Default)]
+    struct ResumedRequestClient {
+        reconnects: Arc<Mutex<Vec<ReconnectAttempt>>>,
+    }
+
+    impl StreamableHttpClient for ResumedRequestClient {
+        type Error = std::io::Error;
+
+        async fn post_message(
+            &self,
+            _uri: Arc<str>,
+            _message: ClientJsonRpcMessage,
+            _session_id: Option<Arc<str>>,
+            _auth_header: Option<String>,
+            _custom_headers: HashMap<HeaderName, HeaderValue>,
+        ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+            Err(StreamableHttpError::UnexpectedServerResponse(
+                "unexpected POST".into(),
+            ))
+        }
+
+        async fn delete_session(
+            &self,
+            _uri: Arc<str>,
+            _session_id: Arc<str>,
+            _auth_header: Option<String>,
+            _custom_headers: HashMap<HeaderName, HeaderValue>,
+        ) -> Result<(), StreamableHttpError<Self::Error>> {
+            Ok(())
+        }
+
+        async fn get_stream(
+            &self,
+            _uri: Arc<str>,
+            session_id: Option<Arc<str>>,
+            last_event_id: Option<String>,
+            _auth_header: Option<String>,
+            _custom_headers: HashMap<HeaderName, HeaderValue>,
+        ) -> Result<BoxedSseStream, StreamableHttpError<Self::Error>> {
+            self.reconnects
+                .lock()
+                .expect("lock reconnects")
+                .push((session_id.map(|id| id.to_string()), last_event_id));
+            let request = sampling_request_message(9);
+            let response = ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(ListToolsResult::default()),
+                NumberOrString::Number(1),
+            );
+            // Stay open after the response, like a live connection, so the
+            // post-response drain in `execute_sse_stream` doesn't trigger
+            // further reconnects.
+            Ok(futures::stream::iter([request, response].map(|message| {
+                Ok(Sse {
+                    event: None,
+                    data: Some(serde_json::to_string(&message).expect("serialize message")),
+                    id: None,
+                    retry: None,
+                })
+            }))
+            .chain(futures::stream::pending())
+            .boxed())
+        }
+    }
+
+    /// SEP-1699 resumes a broken POST SSE stream via GET + Last-Event-ID
+    /// beneath `execute_sse_stream`, so the SEP-2260 origin marker must span
+    /// resumes; if reconnection were hoisted above the marker attach point,
+    /// replayed associated requests would be wrongly rejected with -32602.
+    #[tokio::test]
+    async fn resumed_post_stream_requests_keep_outbound_origin() {
+        let initial = futures::stream::iter([Ok(Sse {
+            event: None,
+            data: None,
+            id: Some("e1".into()),
+            retry: Some(0),
+        })])
+        .boxed();
+        let client = ResumedRequestClient::default();
+        let reconnects = client.reconnects.clone();
+        let sse_stream =
+            StreamableHttpClientWorker::<ResumedRequestClient>::response_sse_to_jsonrpc(
+                initial,
+                None,
+                client,
+                Arc::from("http://localhost/mcp"),
+                None,
+                HashMap::new(),
+                DEFAULT_MAX_SSE_EVENT_SIZE,
+                Arc::new(ExponentialBackoff {
+                    max_times: Some(1),
+                    base_duration: Duration::ZERO,
+                }),
+            );
+
+        let origin = InboundStreamOrigin::OutboundRequest(RequestId::Number(3));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        StreamableHttpClientWorker::<ResumedRequestClient>::execute_sse_stream(
+            sse_stream,
+            tx,
+            origin.clone(),
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("stream completes");
+
+        assert_eq!(
+            reconnects.lock().expect("lock reconnects").as_slice(),
+            &[(None, Some("e1".into()))],
+            "the request must arrive on the resumed connection"
+        );
+        let ServerJsonRpcMessage::Request(request) = rx.recv().await.expect("request forwarded")
+        else {
+            panic!("expected request first");
+        };
+        assert_eq!(
+            request.request.extensions().get::<InboundStreamOrigin>(),
+            Some(&origin),
+            "origin marker must survive SSE resumption"
+        );
+        assert!(matches!(
+            rx.recv().await.expect("response forwarded"),
+            ServerJsonRpcMessage::Response(_)
+        ));
+    }
+
     fn tool(name: &'static str, annotation: serde_json::Value) -> Tool {
         let schema = json!({
             "type": "object",
