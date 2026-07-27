@@ -1013,7 +1013,7 @@ pub struct AuthorizationManager {
     resource_scopes: RwLock<Vec<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
-    strict_issuer_validation: bool,
+    allow_missing_issuer: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1259,7 +1259,7 @@ impl AuthorizationManager {
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
-            strict_issuer_validation: false,
+            allow_missing_issuer: false,
         };
 
         Ok(manager)
@@ -1270,15 +1270,15 @@ impl AuthorizationManager {
         self.scope_upgrade_config = config;
     }
 
-    /// Configure whether authorization server metadata discovery requires the
-    /// metadata `issuer` field.
+    /// Configure whether authorization server metadata discovery tolerates a
+    /// missing `issuer` field.
     ///
-    /// The default is `false` to preserve compatibility with legacy
-    /// authorization servers that omit `issuer`. Set this to `true` to enforce
-    /// the RFC 8414/OIDC requirement that discovered metadata include `issuer`
-    /// whenever the expected issuer can be derived from the discovery URL.
-    pub fn set_strict_issuer_validation(&mut self, strict: bool) {
-        self.strict_issuer_validation = strict;
+    /// The default is `false`, enforcing the RFC 8414/OIDC requirement that
+    /// discovered metadata include `issuer` whenever the expected issuer can be
+    /// derived from the discovery URL. Set this to `true` only for compatibility
+    /// with authorization servers that return incomplete metadata.
+    pub fn set_allow_missing_issuer(&mut self, allow: bool) {
+        self.allow_missing_issuer = allow;
     }
 
     /// Set a custom credential store
@@ -2370,10 +2370,10 @@ impl AuthorizationManager {
             return Ok(());
         };
         let Some(received_issuer) = metadata.issuer.as_deref() else {
-            if self.strict_issuer_validation {
-                return Err(AuthError::AuthorizationServerMissingIssuer { expected_issuer });
+            if self.allow_missing_issuer {
+                return Ok(());
             }
-            return Ok(());
+            return Err(AuthError::AuthorizationServerMissingIssuer { expected_issuer });
         };
         if !Self::issuer_identifiers_match(received_issuer, &expected_issuer) {
             return Err(AuthError::AuthorizationServerMismatch {
@@ -4095,7 +4095,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authorization_metadata_allows_missing_issuer_by_default() {
+    async fn authorization_metadata_allows_missing_issuer_when_configured() {
         let discovery_url =
             Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
                 .unwrap();
@@ -4106,9 +4106,10 @@ mod tests {
             ..Default::default()
         };
 
-        let manager = AuthorizationManager::new("https://mcp.example.com/")
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/")
             .await
             .unwrap();
+        manager.set_allow_missing_issuer(true);
 
         manager
             .validate_authorization_metadata_issuer(&discovery_url, &metadata)
@@ -4116,7 +4117,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authorization_metadata_rejects_missing_issuer_when_required() {
+    async fn authorization_metadata_rejects_missing_issuer_by_default() {
         let discovery_url =
             Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
                 .unwrap();
@@ -4126,10 +4127,9 @@ mod tests {
             token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
             ..Default::default()
         };
-        let mut manager = AuthorizationManager::new("https://mcp.example.com/")
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
             .await
             .unwrap();
-        manager.set_strict_issuer_validation(true);
 
         let error = manager
             .validate_authorization_metadata_issuer(&discovery_url, &metadata)
