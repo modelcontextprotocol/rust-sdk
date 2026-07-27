@@ -1799,7 +1799,7 @@ mod tests {
 
     #[expect(
         deprecated,
-        reason = "sampling (SEP-2577) is still a representative server request"
+        reason = "Sampling is deprecated by SEP-2577 but remains the canonical restricted request"
     )]
     fn sampling_request_message(id: i64) -> ServerJsonRpcMessage {
         use crate::model::{CreateMessageRequest, CreateMessageRequestParams, SamplingMessage};
