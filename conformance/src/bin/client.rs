@@ -943,8 +943,7 @@ fn preferred_protocol_versions() -> Vec<ProtocolVersion> {
     preferred_versions
 }
 
-/// Runs draft stateless scenarios through the public discover lifecycle and
-/// Streamable HTTP transport.
+/// Runs scenarios through the discover lifecycle and Streamable HTTP transport.
 async fn run_discover_client(server_url: &str) -> anyhow::Result<()> {
     let preferred_versions = preferred_protocol_versions();
     let transport = StreamableHttpClientTransport::from_uri(server_url);
