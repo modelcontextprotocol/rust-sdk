@@ -253,8 +253,6 @@ pub struct MetaObject(pub JsonObject);
 pub use self::MetaObject as Meta;
 
 impl MetaObject {
-    /// Reserved result metadata key for the server implementation identity.
-    pub const META_KEY_SERVER_INFO: &'static str = "io.modelcontextprotocol/serverInfo";
     /// Reserved `_meta` key for the W3C Trace Context `traceparent` value (SEP-414).
     const TRACEPARENT_FIELD: &str = "traceparent";
     /// Reserved `_meta` key for the W3C Trace Context `tracestate` value (SEP-414).
@@ -322,19 +320,6 @@ impl MetaObject {
     /// Insert every entry of `other`, overwriting existing keys on conflict.
     pub fn extend(&mut self, other: MetaObject) {
         self.0.extend(other.0);
-    }
-
-    /// Get the self-reported server implementation identity, if present and valid.
-    ///
-    /// This value is intended for display, logging, and debugging. Callers must
-    /// not use it for behavioral or security decisions.
-    pub fn server_info(&self) -> Option<Implementation> {
-        self.decode_value(Self::META_KEY_SERVER_INFO)
-    }
-
-    /// Set the self-reported server implementation identity.
-    pub fn set_server_info(&mut self, server_info: Implementation) {
-        self.insert_serialized(Self::META_KEY_SERVER_INFO, server_info);
     }
 
     fn decode_value<T>(&self, key: &str) -> Option<T>

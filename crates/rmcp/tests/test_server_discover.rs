@@ -61,23 +61,16 @@ fn discover_result_deserializes_to_typed_variant() {
     let ServerJsonRpcMessage::Response(JsonRpcResponse { result, .. }) = message else {
         panic!("expected response");
     };
-    let ServerResult::DiscoverResult(result) = result else {
+    let ServerResult::DiscoverResult(DiscoverResult {
+        supported_versions, ..
+    }) = result
+    else {
         panic!("expected discover result");
     };
 
     assert_eq!(
-        result.supported_versions,
+        supported_versions,
         vec![ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2026_07_28]
-    );
-    assert_eq!(
-        result.server_info(),
-        Some(rmcp::model::Implementation::new("test-server", "1.0.0"))
-    );
-    let serialized = serde_json::to_value(result).expect("serialize discovery result");
-    assert!(serialized.get("serverInfo").is_none());
-    assert_eq!(
-        serialized["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
-        "test-server"
     );
 }
 
@@ -110,13 +103,8 @@ fn discover_result_accepts_server_info_in_namespaced_metadata() {
         panic!("expected discovery response, not a tool-call result");
     };
 
-    assert_eq!(
-        result.server_info(),
-        Some(rmcp::model::Implementation::new(
-            "conformance-mock-server",
-            "1.0.0"
-        ))
-    );
+    assert_eq!(result.server_info.name, "conformance-mock-server");
+    assert_eq!(result.server_info.version, "1.0.0");
 
     let metadata = result.meta.expect("discovery metadata should be preserved");
     assert_eq!(
@@ -133,7 +121,25 @@ fn discover_result_accepts_server_info_in_namespaced_metadata() {
 }
 
 #[test]
-fn discover_result_prefers_canonical_metadata_over_legacy_top_level_server_info() {
+fn discover_result_serializes_top_level_server_info() {
+    let result = DiscoverResult::new(
+        vec![ProtocolVersion::V_2026_07_28],
+        rmcp::model::ServerCapabilities::default(),
+        rmcp::model::Implementation::new("test-server", "1.0.0"),
+    );
+
+    let serialized = serde_json::to_value(result).expect("serialize discovery result");
+    assert_eq!(
+        serialized["serverInfo"],
+        json!({
+            "name": "test-server",
+            "version": "1.0.0"
+        })
+    );
+}
+
+#[test]
+fn discover_result_prefers_top_level_server_info_over_namespaced_metadata() {
     let result: DiscoverResult = serde_json::from_value(json!({
         "resultType": "complete",
         "supportedVersions": ["2026-07-28"],
@@ -154,10 +160,8 @@ fn discover_result_prefers_canonical_metadata_over_legacy_top_level_server_info(
     }))
     .expect("top-level server info should remain supported");
 
-    assert_eq!(
-        result.server_info(),
-        Some(rmcp::model::Implementation::new("metadata-server", "1.0.0"))
-    );
+    assert_eq!(result.server_info.name, "top-level-server");
+    assert_eq!(result.server_info.version, "2.0.0");
     assert_eq!(
         result
             .meta
@@ -168,7 +172,7 @@ fn discover_result_prefers_canonical_metadata_over_legacy_top_level_server_info(
 }
 
 #[test]
-fn discover_result_accepts_anonymous_or_malformed_server_identity() {
+fn discover_result_requires_valid_top_level_or_namespaced_server_info() {
     let result = json!({
         "resultType": "complete",
         "supportedVersions": ["2026-07-28"],
@@ -178,9 +182,7 @@ fn discover_result_accepts_anonymous_or_malformed_server_identity() {
         "_meta": { "unrelated": true }
     });
 
-    let result =
-        serde_json::from_value::<DiscoverResult>(result).expect("anonymous server is valid");
-    assert_eq!(result.server_info(), None);
+    assert!(serde_json::from_value::<DiscoverResult>(result).is_err());
 
     let malformed_server_info = json!({
         "resultType": "complete",
@@ -191,36 +193,7 @@ fn discover_result_accepts_anonymous_or_malformed_server_identity() {
         "_meta": { "io.modelcontextprotocol/serverInfo": { "name": "missing-version" } }
     });
 
-    let malformed_server_info = serde_json::from_value::<DiscoverResult>(malformed_server_info)
-        .expect("malformed display-only identity must not reject discovery");
-    assert_eq!(malformed_server_info.server_info(), None);
-}
-
-#[test]
-fn discover_result_serializes_server_info_only_in_metadata() {
-    let result = DiscoverResult::new(
-        vec![ProtocolVersion::V_2026_07_28],
-        rmcp::model::ServerCapabilities::default(),
-        rmcp::model::Implementation::new("test-server", "1.0.0"),
-    );
-
-    let serialized = serde_json::to_value(result).expect("serialize discovery result");
-    assert!(serialized.get("serverInfo").is_none());
-    assert_eq!(
-        serialized["_meta"]["io.modelcontextprotocol/serverInfo"],
-        json!({
-            "name": "test-server",
-            "version": "1.0.0"
-        })
-    );
-
-    let anonymous = DiscoverResult::new_without_server_info(
-        vec![ProtocolVersion::V_2026_07_28],
-        rmcp::model::ServerCapabilities::default(),
-    );
-    let serialized = serde_json::to_value(anonymous).expect("serialize anonymous result");
-    assert!(serialized.get("serverInfo").is_none());
-    assert!(serialized.get("_meta").is_none());
+    assert!(serde_json::from_value::<DiscoverResult>(malformed_server_info).is_err());
 }
 
 #[test]

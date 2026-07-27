@@ -316,7 +316,7 @@ where
             let client = serve_directly::<RoleClient, _, _, _, _>(
                 MrtrClient,
                 client_transport,
-                Some(client_peer_info.into()),
+                Some(client_peer_info),
             );
 
             let result = body(client).await;
@@ -580,7 +580,7 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
             let client = serve_directly::<RoleClient, _, _, _, _>(
                 MrtrClient,
                 client_transport,
-                Some(server_info(ProtocolVersion::V_2026_07_28).into()),
+                Some(server_info(ProtocolVersion::V_2026_07_28)),
             );
 
             let result = client

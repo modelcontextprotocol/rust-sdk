@@ -70,8 +70,8 @@ async fn client_discover_helper_returns_typed_result() {
         .expect("discover should succeed");
 
     assert_eq!(
-        result.server_info(),
-        Some(Implementation::new("discovery-server", "1.0.0"))
+        result.server_info,
+        Implementation::new("discovery-server", "1.0.0")
     );
     client.cancel().await.expect("client should cancel");
 }
