@@ -31,12 +31,6 @@ use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OAUTH_DISCOVERY_REDIRECTS: usize = 10;
-const RESOURCE_METADATA_POST_PROBE_BODY: &str = concat!(
-    r#"{"jsonrpc":"2.0","id":"auth-discovery","method":"initialize","params":{"#,
-    r#""protocolVersion":"2024-11-05","capabilities":{},"#,
-    r#""clientInfo":{"name":"rmcp-auth-discovery","version":"0.0.0"}}"#,
-    r#"}"#
-);
 const CLOUD_METADATA_HOSTS: &[&str] = &[
     "metadata",
     "metadata.google.internal",
@@ -634,6 +628,12 @@ pub struct WWWAuthenticateParams {
 }
 
 impl WWWAuthenticateParams {
+    /// Parse a `WWW-Authenticate` header value, resolving a relative
+    /// `resource_metadata` URL against `base_url`.
+    pub fn parse(header: &str, base_url: &Url) -> Self {
+        AuthorizationManager::extract_www_authenticate_params(header, base_url)
+    }
+
     /// check if this is an insufficient_scope error
     pub fn is_insufficient_scope(&self) -> bool {
         self.error.as_deref() == Some("insufficient_scope")
@@ -736,6 +736,11 @@ pub struct AuthorizationRequest {
     /// OIDC Dynamic Client Registration `application_type` (SEP-837),
     /// e.g. `"native"` or `"web"`.
     pub application_type: Option<String>,
+    /// `WWW-Authenticate` header value from a real request's 401 response.
+    /// When set, discovery is seeded from the challenge (its
+    /// `resource_metadata` URL and `scope` hint) instead of probing the
+    /// server — the reactive discovery path.
+    pub challenge: Option<String>,
 }
 
 impl AuthorizationRequest {
@@ -750,6 +755,7 @@ impl AuthorizationRequest {
             client_secret: None,
             client_metadata_url: None,
             application_type: None,
+            challenge: None,
         }
     }
 
@@ -803,6 +809,13 @@ impl AuthorizationRequest {
     /// e.g. `"native"` or `"web"`.
     pub fn with_application_type(mut self, application_type: impl Into<String>) -> Self {
         self.application_type = Some(application_type.into());
+        self
+    }
+
+    /// Seed discovery from the `WWW-Authenticate` header value of a real
+    /// request's 401 response instead of probing the server.
+    pub fn with_challenge(mut self, www_authenticate: impl Into<String>) -> Self {
+        self.challenge = Some(www_authenticate.into());
         self
     }
 }
@@ -1417,6 +1430,52 @@ impl AuthorizationManager {
             metadata: Self::legacy_authorization_metadata(&self.base_url),
             source: AuthorizationMetadataSource::LegacyEndpointFallback,
         })
+    }
+
+    /// Resolve authorization server metadata starting from the
+    /// `WWW-Authenticate` challenge of a real request's 401 response — the
+    /// reactive discovery path, matching the TypeScript and Python SDKs.
+    ///
+    /// Seeds scope selection with the challenge's `scope` hint and prefers
+    /// the challenge's `resource_metadata` URL; falls back to
+    /// [`resolve_metadata`](Self::resolve_metadata) when the challenge is
+    /// `None` or carries no usable metadata pointer.
+    pub async fn resolve_metadata_from_challenge(
+        &self,
+        www_authenticate: Option<&str>,
+    ) -> Result<AuthorizationMetadataResolution, AuthError> {
+        let Some(www_authenticate) = www_authenticate else {
+            return self.resolve_metadata().await;
+        };
+        let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
+
+        self.record_challenge_scope(&params).await;
+
+        if let Some(resource_metadata_url) = &params.resource_metadata_url
+            && let Some(metadata) = self
+                .discover_oauth_server_from_resource_metadata_url(resource_metadata_url)
+                .await?
+        {
+            return Ok(AuthorizationMetadataResolution {
+                metadata,
+                source: AuthorizationMetadataSource::ProtectedResourceMetadata,
+            });
+        }
+
+        self.resolve_metadata().await
+    }
+
+    /// Store a challenge's `scope` hint for later scope selection.
+    async fn record_challenge_scope(&self, params: &WWWAuthenticateParams) {
+        let Some(scope) = &params.scope else {
+            return;
+        };
+        let scopes: Vec<String> = scope.split_whitespace().map(str::to_string).collect();
+        if scopes.is_empty() {
+            return;
+        }
+        debug!("WWW-Authenticate challenge contains scope: {scope}");
+        *self.www_auth_scopes.write().await = scopes;
     }
 
     fn legacy_authorization_metadata(base_url: &Url) -> AuthorizationMetadata {
@@ -2056,7 +2115,7 @@ impl AuthorizationManager {
     /// refresh token or the server rejected it, return `AuthorizationRequired`
     /// so the caller can re-prompt the user. Infrastructure errors (e.g. store
     /// I/O failures, misconfigured client) are propagated as-is.
-    async fn try_refresh_or_reauth(&self) -> Result<String, AuthError> {
+    pub(crate) async fn try_refresh_or_reauth(&self) -> Result<String, AuthError> {
         match self.refresh_token().await {
             Ok(new_creds) => {
                 tracing::info!("Refreshed access token.");
@@ -2328,12 +2387,19 @@ impl AuthorizationManager {
     async fn discover_oauth_server_via_resource_metadata(
         &self,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await? else {
+        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await else {
             return Ok(None);
         };
+        self.discover_oauth_server_from_resource_metadata_url(&resource_metadata_url)
+            .await
+    }
 
+    async fn discover_oauth_server_from_resource_metadata_url(
+        &self,
+        resource_metadata_url: &Url,
+    ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         let Some(resource_metadata) = self
-            .fetch_resource_metadata_from_url(&resource_metadata_url)
+            .fetch_resource_metadata_from_url(resource_metadata_url)
             .await?
         else {
             return Ok(None);
@@ -2443,11 +2509,10 @@ impl AuthorizationManager {
             && Self::is_same_origin(&root_resource, &path_resource)
     }
 
-    async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
-        if let Ok(Some(resource_metadata_url)) =
-            self.fetch_resource_metadata_url(&self.base_url, true).await
+    async fn discover_resource_metadata_url(&self) -> Option<Url> {
+        if let Some(resource_metadata_url) = self.probe_resource_metadata_url(&self.base_url).await
         {
-            return Ok(Some(resource_metadata_url));
+            return Some(resource_metadata_url);
         }
 
         // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
@@ -2459,84 +2524,40 @@ impl AuthorizationManager {
             discovery_url.set_query(None);
             discovery_url.set_fragment(None);
             discovery_url.set_path(&candidate_path);
-            if let Ok(Some(resource_metadata_url)) = self
-                .fetch_resource_metadata_url(&discovery_url, false)
-                .await
+            if let Some(resource_metadata_url) =
+                self.probe_resource_metadata_url(&discovery_url).await
             {
-                return Ok(Some(resource_metadata_url));
+                return Some(resource_metadata_url);
             }
         }
 
-        Ok(None)
+        None
     }
 
-    /// Extract the resource metadata url from the WWW-Authenticate header value.
+    /// Probe `url` with a GET, extracting the resource metadata url from a
+    /// 200 (the url itself is the metadata document) or from a 401's
+    /// WWW-Authenticate header value.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
-    async fn fetch_resource_metadata_url(
-        &self,
-        url: &Url,
-        allow_post_probe: bool,
-    ) -> Result<Option<Url>, AuthError> {
+    async fn probe_resource_metadata_url(&self, url: &Url) -> Option<Url> {
         let response = match self.discovery_get(url).await {
             Ok(r) => r,
             Err(e) => {
                 debug!("resource metadata probe failed: {}", e);
-                return Ok(None);
+                return None;
             }
         };
 
         match response.status() {
-            StatusCode::OK => Ok(Some(url.clone())),
-            StatusCode::UNAUTHORIZED => Ok(self
-                .extract_resource_metadata_url_from_www_authenticate(&response)
-                .await),
-            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED if allow_post_probe => {
-                self.fetch_resource_metadata_url_with_post_probe(url).await
+            StatusCode::OK => Some(url.clone()),
+            StatusCode::UNAUTHORIZED => {
+                self.extract_resource_metadata_url_from_www_authenticate(&response)
+                    .await
             }
             status => {
                 debug!("resource metadata probe returned unexpected status: {status}");
-                Ok(None)
+                None
             }
         }
-    }
-
-    async fn fetch_resource_metadata_url_with_post_probe(
-        &self,
-        url: &Url,
-    ) -> Result<Option<Url>, AuthError> {
-        let request = oauth2::http::Request::builder()
-            .method("POST")
-            .uri(url.as_str())
-            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
-            .header(CONTENT_TYPE, "application/json")
-            .body(RESOURCE_METADATA_POST_PROBE_BODY.as_bytes().to_vec())
-            .map_err(|error| AuthError::InternalError(error.to_string()))?;
-        let response = match self
-            .http_client
-            .execute(OAuthHttpRequest::new(
-                request,
-                OAuthHttpRedirectPolicy::Stop,
-            ))
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                debug!("resource metadata POST probe failed: {}", error);
-                return Ok(None);
-            }
-        };
-
-        if response.status() != StatusCode::UNAUTHORIZED {
-            debug!(
-                "resource metadata POST probe returned unexpected status: {}",
-                response.status()
-            );
-            return Ok(None);
-        }
-
-        Ok(self
-            .extract_resource_metadata_url_from_www_authenticate(&response)
-            .await)
     }
 
     async fn extract_resource_metadata_url_from_www_authenticate(
@@ -2549,14 +2570,9 @@ impl AuthorizationManager {
                 continue;
             };
             let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
-            if let Some(url) = params.resource_metadata_url {
-                if let Some(scope) = &params.scope {
-                    debug!("WWW-Authenticate header contains scope: {}", scope);
-                    let scopes: Vec<String> =
-                        scope.split_whitespace().map(|s| s.to_string()).collect();
-                    *self.www_auth_scopes.write().await = scopes;
-                }
-                parsed_url = Some(url);
+            if params.resource_metadata_url.is_some() {
+                self.record_challenge_scope(&params).await;
+                parsed_url = params.resource_metadata_url;
                 break;
             }
         }
@@ -3432,7 +3448,7 @@ impl OAuthState {
         )
     }
 
-    async fn placeholder(&self) -> Result<Self, AuthError> {
+    async fn placeholder_state(&self) -> Result<Self, AuthError> {
         let (http_client, refresh_redirect_policy) = self.oauth_http_client_config();
         Ok(OAuthState::Unauthorized(
             AuthorizationManager::new_inner(
@@ -3548,7 +3564,7 @@ impl OAuthState {
         &mut self,
         request: AuthorizationRequest,
     ) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Unauthorized(mut manager) = old else {
             *self = old;
@@ -3557,7 +3573,10 @@ impl OAuthState {
             ));
         };
         debug!("start discovery");
-        let metadata = match manager.resolve_metadata().await {
+        let resolution = manager
+            .resolve_metadata_from_challenge(request.challenge.as_deref())
+            .await;
+        let metadata = match resolution {
             Ok(resolution) => resolution.metadata,
             Err(e) => {
                 *self = OAuthState::Unauthorized(manager);
@@ -3580,7 +3599,7 @@ impl OAuthState {
 
     /// complete authorization
     pub async fn complete_authorization(&mut self) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         if let OAuthState::Session(session) = std::mem::replace(self, placeholder) {
             *self = OAuthState::Authorized(session.auth_manager);
             Ok(())
@@ -3590,7 +3609,7 @@ impl OAuthState {
     }
     /// covert to authorized http client
     pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         if let OAuthState::Authorized(manager) = std::mem::replace(self, placeholder) {
             *self = OAuthState::AuthorizedHttpClient(AuthorizedHttpClient::new(
                 Arc::new(manager),
@@ -3610,7 +3629,7 @@ impl OAuthState {
         required_scope: &str,
         redirect_uri: &str,
     ) -> Result<String, AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Authorized(manager) = old else {
             *self = old;
@@ -3742,7 +3761,7 @@ impl OAuthState {
         &mut self,
         config: ClientCredentialsConfig,
     ) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let OAuthState::Unauthorized(mut manager) = std::mem::replace(self, placeholder) else {
             return Err(AuthError::InternalError(
                 "Client credentials flow requires Unauthorized state".to_string(),
@@ -4137,7 +4156,6 @@ mod tests {
             .body(Vec::new())
             .unwrap();
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(404),
             challenge,
             http_response(
                 200,
@@ -4179,7 +4197,6 @@ mod tests {
                 "https://auth.example.com/tenant1/token",
                 vec![
                     "https://mcp.example.com/mcp",
-                    "https://mcp.example.com/mcp",
                     "https://mcp.example.com/custom/metadata/location.json",
                     "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
                     "https://auth.example.com/.well-known/openid-configuration/tenant1",
@@ -4187,21 +4204,18 @@ mod tests {
                 ],
             )
         );
-        assert_eq!(
+        assert!(
             client
                 .requests()
                 .iter()
-                .take(2)
-                .map(|request| request.method.as_str())
-                .collect::<Vec<_>>(),
-            vec!["GET", "POST"]
+                .all(|request| request.method == "GET"),
+            "discovery must not send non-GET requests"
         );
     }
 
     #[tokio::test]
     async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(404),
             empty_response(404),
             empty_response(404),
             empty_response(404),
@@ -4234,7 +4248,6 @@ mod tests {
                 "https://legacy.example.com/token",
                 Some("https://legacy.example.com/register"),
                 vec![
-                    "https://legacy.example.com/",
                     "https://legacy.example.com/",
                     "https://legacy.example.com/.well-known/oauth-protected-resource",
                     "https://legacy.example.com/.well-known/oauth-authorization-server",
@@ -4289,6 +4302,85 @@ mod tests {
             (
                 AuthorizationMetadataSource::ProtectedResourceMetadata,
                 "https://auth.example.com/token",
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_from_challenge_uses_challenge_pointer_and_scope() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(
+                r#"Bearer resource_metadata="https://mcp.example.com/custom/prm.json", scope="mcp:read mcp:write""#,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+                manager.select_scopes(None, &[]),
+                client.requests().first().map(|request| request.uri.clone()),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+                vec!["mcp:read".to_string(), "mcp:write".to_string()],
+                // discovery starts at the challenge's pointer: no probing
+                Some("https://mcp.example.com/custom/prm.json".to_string()),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_from_challenge_falls_back_without_metadata_pointer() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://legacy.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(r#"Bearer scope="mcp:basic""#))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (resolution.source, manager.select_scopes(None, &[]),),
+            (
+                AuthorizationMetadataSource::LegacyEndpointFallback,
+                vec!["mcp:basic".to_string()],
             )
         );
     }

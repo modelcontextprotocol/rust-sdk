@@ -8,8 +8,9 @@ use axum::{
     routing::get,
 };
 use rmcp::{
-    ServiceExt,
+    RoleClient, ServiceExt,
     model::ClientInfo,
+    service::RunningService,
     transport::{
         StreamableHttpClientTransport,
         auth::{AuthClient, AuthorizationRequest, OAuthState},
@@ -53,6 +54,109 @@ async fn callback_handler(
     }
     // Return success page
     Html(CALLBACK_HTML.to_string())
+}
+
+enum ConnectOutcome {
+    /// The server accepted the unauthenticated connection.
+    Connected(RunningService<RoleClient, ClientInfo>),
+    /// The server answered 401; authorize with this `WWW-Authenticate`
+    /// challenge and reconnect.
+    AuthRequired(String),
+}
+
+/// Attempt the real connection unauthenticated — the reactive discovery
+/// trigger (matching the TypeScript and Python SDKs). The server's 401
+/// challenge, not a probe, tells us whether and how to authorize.
+async fn try_connect(http_client: reqwest::Client, server_url: &str) -> Result<ConnectOutcome> {
+    let transport = StreamableHttpClientTransport::with_client(
+        http_client,
+        StreamableHttpClientTransportConfig::with_uri(server_url),
+    );
+    match ClientInfo::default().serve(transport).await {
+        Ok(client) => Ok(ConnectOutcome::Connected(client)),
+        Err(error) => match error.auth_challenge() {
+            Some(challenge) => Ok(ConnectOutcome::AuthRequired(challenge.to_string())),
+            None => Err(error.into()),
+        },
+    }
+}
+
+/// Run the browser OAuth flow seeded by the server's challenge, then
+/// reconnect with the authorized transport.
+async fn authorize_and_connect(
+    challenge: String,
+    oauth_http_client: reqwest::Client,
+    server_url: &str,
+    client_metadata_url: &str,
+    code_receiver: oneshot::Receiver<CallbackParams>,
+    output: &mut BufWriter<tokio::io::Stdout>,
+) -> Result<RunningService<RoleClient, ClientInfo>> {
+    tracing::info!("Server requires authorization: {challenge}");
+
+    // initialize oauth state machine
+    let mut oauth_state = OAuthState::new(server_url, Some(oauth_http_client))
+        .await
+        .context("Failed to initialize oauth state machine")?;
+    // Seed discovery from the server's challenge, and use CIMD (SEP-991)
+    // with client metadata URL. Passing no scopes lets the SDK auto-select
+    // from the challenge's scope hint, Protected Resource Metadata, or AS
+    // metadata.
+    oauth_state
+        .start_authorization(
+            AuthorizationRequest::new(MCP_REDIRECT_URI)
+                .with_client_name("Test MCP Client")
+                .with_client_metadata_url(client_metadata_url)
+                .with_challenge(challenge),
+        )
+        .await
+        .context("Failed to start authorization")?;
+
+    // Output authorization URL to user
+    output
+        .write_all(b"Please open the following URL in your browser to authorize:\n\n")
+        .await?;
+    output
+        .write_all(oauth_state.get_authorization_url().await?.as_bytes())
+        .await?;
+    output
+        .write_all(b"\n\nWaiting for browser callback, please do not close this window...\n")
+        .await?;
+    output.flush().await?;
+
+    // Wait for authorization code
+    tracing::info!("Waiting for authorization code...");
+    let CallbackParams {
+        code: auth_code,
+        state: csrf_token,
+        iss,
+    } = code_receiver
+        .await
+        .context("Failed to get authorization code")?;
+    tracing::info!("Received authorization code: {}", auth_code);
+    // Exchange code for access token
+    tracing::info!("Exchanging authorization code for access token...");
+    oauth_state
+        .handle_callback_with_issuer(&auth_code, &csrf_token, iss.as_deref())
+        .await
+        .context("Failed to handle callback")?;
+    tracing::info!("Successfully obtained access token");
+
+    output
+        .write_all(b"\nAuthorization successful! Access token obtained.\n\n")
+        .await?;
+    output.flush().await?;
+
+    // Reconnect with the authorized transport
+    tracing::info!("Establishing authorized connection to MCP server...");
+    let am = oauth_state
+        .into_authorization_manager()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get authorization manager"))?;
+    let auth_client = AuthClient::new(reqwest::Client::default(), am);
+    let transport = StreamableHttpClientTransport::with_client(
+        auth_client,
+        StreamableHttpClientTransportConfig::with_uri(server_url),
+    );
+    Ok(ClientInfo::default().serve(transport).await?)
 }
 
 #[tokio::main]
@@ -123,73 +227,32 @@ async fn main() -> Result<()> {
         .build()
         .context("Failed to build OAuth HTTP client")?;
 
-    // initialize oauth state machine
-    let mut oauth_state = OAuthState::new(&server_url, Some(oauth_http_client))
-        .await
-        .context("Failed to initialize oauth state machine")?;
-    // use CIMD (SEP-991) with client metadata URL.
-    // passing no scopes lets the SDK auto-select from the server's
-    // WWW-Authenticate header, Protected Resource Metadata, or AS metadata.
-    oauth_state
-        .start_authorization(
-            AuthorizationRequest::new(MCP_REDIRECT_URI)
-                .with_client_name("Test MCP Client")
-                .with_client_metadata_url(&client_metadata_url),
-        )
-        .await
-        .context("Failed to start authorization")?;
-
-    // Output authorization URL to user
     let mut output = BufWriter::new(tokio::io::stdout());
     output.write_all(b"\n=== MCP OAuth Client ===\n\n").await?;
-    output
-        .write_all(b"Please open the following URL in your browser to authorize:\n\n")
-        .await?;
-    output
-        .write_all(oauth_state.get_authorization_url().await?.as_bytes())
-        .await?;
-    output
-        .write_all(b"\n\nWaiting for browser callback, please do not close this window...\n")
-        .await?;
     output.flush().await?;
 
-    // Wait for authorization code
-    tracing::info!("Waiting for authorization code...");
-    let CallbackParams {
-        code: auth_code,
-        state: csrf_token,
-        iss,
-    } = code_receiver
-        .await
-        .context("Failed to get authorization code")?;
-    tracing::info!("Received authorization code: {}", auth_code);
-    // Exchange code for access token
-    tracing::info!("Exchanging authorization code for access token...");
-    oauth_state
-        .handle_callback_with_issuer(&auth_code, &csrf_token, iss.as_deref())
-        .await
-        .context("Failed to handle callback")?;
-    tracing::info!("Successfully obtained access token");
-
-    output
-        .write_all(b"\nAuthorization successful! Access token obtained.\n\n")
-        .await?;
-    output.flush().await?;
-
-    // Create authorized transport, this transport is authorized by the oauth state machine
-    tracing::info!("Establishing authorized connection to MCP server...");
-    let am = oauth_state
-        .into_authorization_manager()
-        .ok_or_else(|| anyhow::anyhow!("Failed to get authorization manager"))?;
-    let client = AuthClient::new(reqwest::Client::default(), am);
-    let transport = StreamableHttpClientTransport::with_client(
-        client,
-        StreamableHttpClientTransportConfig::with_uri(server_url.as_str()),
-    );
-
-    // Create client and connect to MCP server
-    let client_service = ClientInfo::default();
-    let client = client_service.serve(transport).await?;
+    // Reactive discovery: attempt the real connection first. The server's
+    // 401 challenge — not a probe — tells us whether and how to authorize.
+    // The transport gets a default client: `oauth_http_client`'s request
+    // timeout would cut long-lived SSE streams short.
+    tracing::info!("Attempting connection to MCP server...");
+    let client = match try_connect(reqwest::Client::default(), &server_url).await? {
+        ConnectOutcome::Connected(client) => {
+            tracing::info!("Server accepted the connection without authorization");
+            client
+        }
+        ConnectOutcome::AuthRequired(challenge) => {
+            authorize_and_connect(
+                challenge,
+                oauth_http_client,
+                &server_url,
+                &client_metadata_url,
+                code_receiver,
+                &mut output,
+            )
+            .await?
+        }
+    };
     tracing::info!("Successfully connected to MCP server");
 
     // Test API requests
