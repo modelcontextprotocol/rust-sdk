@@ -1085,6 +1085,66 @@ impl InitializeResult {
 pub type ServerInfo = InitializeResult;
 pub type ClientInfo = InitializeRequestParams;
 
+/// Information negotiated about a server peer.
+///
+/// Unlike [`InitializeResult`], the server implementation identity is optional
+/// because discovery responses are not required to provide it.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ServerPeerInfo {
+    /// The negotiated MCP protocol version.
+    pub protocol_version: ProtocolVersion,
+    /// The capabilities this server provides.
+    pub capabilities: ServerCapabilities,
+    /// Information about the server implementation, when provided.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_info: Option<Implementation>,
+    /// Optional human-readable instructions about using this server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// Protocol-level response metadata.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<MetaObject>,
+}
+
+impl ServerPeerInfo {
+    /// Create peer information without a server implementation identity.
+    pub fn new(protocol_version: ProtocolVersion, capabilities: ServerCapabilities) -> Self {
+        Self {
+            protocol_version,
+            capabilities,
+            server_info: None,
+            instructions: None,
+            meta: None,
+        }
+    }
+
+    /// Set the server implementation identity.
+    pub fn with_server_info(mut self, server_info: Implementation) -> Self {
+        self.server_info = Some(server_info);
+        self
+    }
+
+    /// Set instructions supplied by the server.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+}
+
+impl From<InitializeResult> for ServerPeerInfo {
+    fn from(result: InitializeResult) -> Self {
+        Self {
+            protocol_version: result.protocol_version,
+            capabilities: result.capabilities,
+            server_info: Some(result.server_info),
+            instructions: result.instructions,
+            meta: result.meta,
+        }
+    }
+}
+
 const_string!(DiscoverRequestMethod = "server/discover");
 
 /// Parameters for [`DiscoverRequest`].
@@ -1116,9 +1176,9 @@ impl schemars::JsonSchema for DiscoverRequestParams {
 pub type DiscoverRequest = Request<DiscoverRequestMethod, DiscoverRequestParams>;
 
 /// The server's response to a [`DiscoverRequest`].
-#[derive(Debug, Serialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct DiscoverResult {
     /// Identifies how the result should be parsed.
@@ -1127,8 +1187,6 @@ pub struct DiscoverResult {
     pub supported_versions: Vec<ProtocolVersion>,
     /// Capabilities provided by this server.
     pub capabilities: ServerCapabilities,
-    /// Information about the server implementation.
-    pub server_info: Implementation,
     /// Optional guidance for using the server.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
@@ -1141,70 +1199,45 @@ pub struct DiscoverResult {
     pub meta: Option<MetaObject>,
 }
 
-impl<'de> Deserialize<'de> for DiscoverResult {
-    fn deserialize<__D>(deserializer: __D) -> Result<Self, __D::Error>
-    where
-        __D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Helper {
-            result_type: ResultType,
-            supported_versions: Vec<ProtocolVersion>,
-            capabilities: ServerCapabilities,
-            server_info: Option<Implementation>,
-            instructions: Option<String>,
-            ttl_ms: u64,
-            cache_scope: CacheScope,
-            #[serde(rename = "_meta")]
-            meta: Option<MetaObject>,
-        }
-
-        let helper = Helper::deserialize(deserializer)?;
-        let server_info = match helper.server_info {
-            Some(server_info) => server_info,
-            None => {
-                let metadata_server_info = helper
-                    .meta
-                    .as_ref()
-                    .and_then(|metadata| metadata.0.get("io.modelcontextprotocol/serverInfo"))
-                    .ok_or_else(|| serde::de::Error::missing_field("serverInfo"))?;
-
-                serde_json::from_value(metadata_server_info.clone())
-                    .map_err(serde::de::Error::custom)?
-            }
-        };
-
-        Ok(Self {
-            result_type: helper.result_type,
-            supported_versions: helper.supported_versions,
-            capabilities: helper.capabilities,
-            server_info,
-            instructions: helper.instructions,
-            ttl_ms: helper.ttl_ms,
-            cache_scope: helper.cache_scope,
-            meta: helper.meta,
-        })
-    }
-}
-
 impl DiscoverResult {
+    const SERVER_INFO_META_KEY: &str = "io.modelcontextprotocol/serverInfo";
+
     /// Create a non-cacheable private discovery result.
-    pub fn new(
-        supported_versions: Vec<ProtocolVersion>,
-        capabilities: ServerCapabilities,
-        server_info: Implementation,
-    ) -> Self {
+    pub fn new(supported_versions: Vec<ProtocolVersion>, capabilities: ServerCapabilities) -> Self {
         Self {
             result_type: ResultType::COMPLETE,
             supported_versions,
             capabilities,
-            server_info,
             instructions: None,
             ttl_ms: 0,
             cache_scope: CacheScope::Private,
             meta: None,
         }
+    }
+
+    /// Return the server implementation information stored in result metadata.
+    pub fn server_info(&self) -> Option<Implementation> {
+        self.meta
+            .as_ref()?
+            .0
+            .get(Self::SERVER_INFO_META_KEY)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    }
+
+    /// Store server implementation information in result metadata.
+    pub fn set_server_info(&mut self, server_info: Implementation) {
+        let server_info =
+            serde_json::to_value(server_info).expect("Implementation serialization cannot fail");
+        self.meta
+            .get_or_insert_default()
+            .0
+            .insert(Self::SERVER_INFO_META_KEY.to_owned(), server_info);
+    }
+
+    /// Store server implementation information in result metadata.
+    pub fn with_server_info(mut self, server_info: Implementation) -> Self {
+        self.set_server_info(server_info);
+        self
     }
 
     /// Create a discovery result from the server's initialization information.
@@ -1219,9 +1252,16 @@ impl DiscoverResult {
             meta,
             ..
         } = server_info;
-        let mut result = Self::new(supported_versions, capabilities, server_info);
-        result.instructions = instructions;
-        result.meta = meta;
+        let mut result = Self {
+            result_type: ResultType::COMPLETE,
+            supported_versions,
+            capabilities,
+            instructions,
+            ttl_ms: 0,
+            cache_scope: CacheScope::Private,
+            meta,
+        };
+        result.set_server_info(server_info);
         result
     }
 
@@ -1235,6 +1275,20 @@ impl DiscoverResult {
     pub fn with_cache_scope(mut self, cache_scope: CacheScope) -> Self {
         self.cache_scope = cache_scope;
         self
+    }
+}
+
+impl ServerPeerInfo {
+    /// Create peer information from a discovery result and the selected version.
+    pub fn from_discover_result(protocol_version: ProtocolVersion, result: DiscoverResult) -> Self {
+        let server_info = result.server_info();
+        Self {
+            protocol_version,
+            capabilities: result.capabilities,
+            server_info,
+            instructions: result.instructions,
+            meta: result.meta,
+        }
     }
 }
 

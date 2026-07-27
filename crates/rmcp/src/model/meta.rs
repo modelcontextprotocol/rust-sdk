@@ -374,9 +374,10 @@ impl schemars::JsonSchema for MetaObject {
 /// - `io.modelcontextprotocol/clientCapabilities` (SEP-2575)
 /// - `io.modelcontextprotocol/logLevel` (SEP-2575)
 ///
-/// The 2026-07-28 schema defines required per-request metadata; earlier
-/// protocol versions do not know these keys. All keys therefore stay optional
-/// at runtime and in the generated (version-shared) JSON schema — use
+/// The 2026-07-28 draft schema requires the protocol-version and
+/// client-capabilities keys; client-info is optional. Earlier protocol versions
+/// do not know them. All keys therefore stay optional at runtime and in the
+/// generated (version-shared) JSON schema — use
 /// [`RequestMetaObject::missing_required_keys`] to validate a request against
 /// the negotiated protocol version.
 ///
@@ -395,10 +396,9 @@ impl RequestMetaObject {
     const META_KEY_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
     const META_KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
 
-    /// Request `_meta` keys validated for the 2026-07-28 protocol.
-    pub const DRAFT_REQUIRED_KEYS: [&str; 3] = [
+    /// Request `_meta` keys the 2026-07-28 draft schema marks as required.
+    pub const DRAFT_REQUIRED_KEYS: [&str; 2] = [
         Self::META_KEY_PROTOCOL_VERSION,
-        Self::META_KEY_CLIENT_INFO,
         Self::META_KEY_CLIENT_CAPABILITIES,
     ];
 
@@ -522,9 +522,6 @@ impl RequestMetaObject {
         let mut missing = Vec::new();
         if self.protocol_version().is_none() {
             missing.push(Self::META_KEY_PROTOCOL_VERSION);
-        }
-        if self.client_info().is_none() {
-            missing.push(Self::META_KEY_CLIENT_INFO);
         }
         if self.client_capabilities().is_none() {
             missing.push(Self::META_KEY_CLIENT_CAPABILITIES);
@@ -838,7 +835,6 @@ mod tests {
         fn treats_malformed_values_as_missing() {
             let meta: RequestMetaObject = serde_json::from_value(serde_json::json!({
                 "io.modelcontextprotocol/protocolVersion": 123,
-                "io.modelcontextprotocol/clientInfo": "not an implementation",
                 "io.modelcontextprotocol/clientCapabilities": null,
             }))
             .unwrap();

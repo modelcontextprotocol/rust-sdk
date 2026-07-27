@@ -103,8 +103,9 @@ fn discover_result_accepts_server_info_in_namespaced_metadata() {
         panic!("expected discovery response, not a tool-call result");
     };
 
-    assert_eq!(result.server_info.name, "conformance-mock-server");
-    assert_eq!(result.server_info.version, "1.0.0");
+    let server_info = result.server_info().expect("server info should be present");
+    assert_eq!(server_info.name, "conformance-mock-server");
+    assert_eq!(server_info.version, "1.0.0");
 
     let metadata = result.meta.expect("discovery metadata should be preserved");
     assert_eq!(
@@ -121,25 +122,42 @@ fn discover_result_accepts_server_info_in_namespaced_metadata() {
 }
 
 #[test]
-fn discover_result_serializes_top_level_server_info() {
-    let result = DiscoverResult::new(
+fn discover_result_serializes_server_info_in_namespaced_metadata() {
+    let mut result = DiscoverResult::new(
         vec![ProtocolVersion::V_2026_07_28],
         rmcp::model::ServerCapabilities::default(),
-        rmcp::model::Implementation::new("test-server", "1.0.0"),
     );
+    result.meta = Some(rmcp::model::MetaObject(
+        json!({
+            "io.modelcontextprotocol/serverInfo": {
+                "name": "stale-server",
+                "version": "0.1.0"
+            },
+            "unrelated": { "preserved": true }
+        })
+        .as_object()
+        .expect("metadata is an object")
+        .clone(),
+    ));
+    result.set_server_info(rmcp::model::Implementation::new("test-server", "1.0.0"));
 
     let serialized = serde_json::to_value(result).expect("serialize discovery result");
+    assert!(serialized.get("serverInfo").is_none());
     assert_eq!(
-        serialized["serverInfo"],
+        serialized["_meta"]["io.modelcontextprotocol/serverInfo"],
         json!({
             "name": "test-server",
             "version": "1.0.0"
         })
     );
+    assert_eq!(
+        serialized["_meta"]["unrelated"],
+        json!({ "preserved": true })
+    );
 }
 
 #[test]
-fn discover_result_prefers_top_level_server_info_over_namespaced_metadata() {
+fn discover_result_ignores_legacy_top_level_server_info() {
     let result: DiscoverResult = serde_json::from_value(json!({
         "resultType": "complete",
         "supportedVersions": ["2026-07-28"],
@@ -160,8 +178,11 @@ fn discover_result_prefers_top_level_server_info_over_namespaced_metadata() {
     }))
     .expect("top-level server info should remain supported");
 
-    assert_eq!(result.server_info.name, "top-level-server");
-    assert_eq!(result.server_info.version, "2.0.0");
+    let server_info = result
+        .server_info()
+        .expect("namespaced server info is present");
+    assert_eq!(server_info.name, "metadata-server");
+    assert_eq!(server_info.version, "1.0.0");
     assert_eq!(
         result
             .meta
@@ -172,7 +193,7 @@ fn discover_result_prefers_top_level_server_info_over_namespaced_metadata() {
 }
 
 #[test]
-fn discover_result_requires_valid_top_level_or_namespaced_server_info() {
+fn discover_result_allows_missing_or_malformed_optional_server_info() {
     let result = json!({
         "resultType": "complete",
         "supportedVersions": ["2026-07-28"],
@@ -182,7 +203,9 @@ fn discover_result_requires_valid_top_level_or_namespaced_server_info() {
         "_meta": { "unrelated": true }
     });
 
-    assert!(serde_json::from_value::<DiscoverResult>(result).is_err());
+    let result =
+        serde_json::from_value::<DiscoverResult>(result).expect("server info metadata is optional");
+    assert_eq!(result.server_info(), None);
 
     let malformed_server_info = json!({
         "resultType": "complete",
@@ -193,7 +216,9 @@ fn discover_result_requires_valid_top_level_or_namespaced_server_info() {
         "_meta": { "io.modelcontextprotocol/serverInfo": { "name": "missing-version" } }
     });
 
-    assert!(serde_json::from_value::<DiscoverResult>(malformed_server_info).is_err());
+    let result = serde_json::from_value::<DiscoverResult>(malformed_server_info)
+        .expect("opaque metadata should not prevent deserialization");
+    assert_eq!(result.server_info(), None);
 }
 
 #[test]

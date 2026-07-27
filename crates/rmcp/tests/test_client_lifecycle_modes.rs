@@ -36,11 +36,13 @@ async fn discover_startup_accepts_stringified_numeric_response_id() {
         };
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 RequestId::String(response_id.to_string().into()),
             ))
             .await
@@ -56,6 +58,110 @@ async fn discover_startup_accepts_stringified_numeric_response_id() {
         )
         .await
         .expect("client should accept stringified discover response ID");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn discover_startup_accepts_missing_optional_server_info() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let (rejection_observed_tx, rejection_observed_rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover_request) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        let mut result = DiscoverResult::new(
+            vec![ProtocolVersion::V_2026_07_28],
+            ServerCapabilities::builder().enable_tools().build(),
+        );
+        result.instructions = Some("discovery instructions".into());
+        result.meta = Some(rmcp::model::MetaObject::new());
+        result
+            .meta
+            .as_mut()
+            .expect("metadata")
+            .0
+            .insert("example.test/key".into(), serde_json::json!(7));
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::DiscoverResult(result),
+                discover_request.id,
+            ))
+            .await
+            .expect("send discover response");
+
+        server
+            .send(ServerJsonRpcMessage::request(
+                rmcp::model::ServerRequest::CreateMessageRequest(
+                    rmcp::model::CreateMessageRequest::new(
+                        rmcp::model::CreateMessageRequestParams::new(
+                            vec![rmcp::model::SamplingMessage::user_text("unsolicited")],
+                            16,
+                        ),
+                    ),
+                ),
+                RequestId::Number(99),
+            ))
+            .await
+            .expect("send unsolicited server request");
+        let Some(ClientJsonRpcMessage::Error(error)) = server.receive().await else {
+            panic!("expected unsolicited server request to be rejected");
+        };
+        assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
+        rejection_observed_tx
+            .send(())
+            .expect("signal observed rejection");
+
+        let ClientJsonRpcMessage::Request(request) =
+            server.receive().await.expect("expected normal request")
+        else {
+            panic!("expected normal request");
+        };
+        assert_eq!(
+            request.request.get_meta().protocol_version(),
+            Some(ProtocolVersion::V_2026_07_28)
+        );
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(Default::default()),
+                request.id,
+            ))
+            .await
+            .expect("send list tools response");
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("missing optional server info should not fail discovery");
+    let peer_info = client.peer_info().expect("peer info should be retained");
+    assert_eq!(peer_info.protocol_version, ProtocolVersion::V_2026_07_28);
+    assert!(peer_info.capabilities.tools.is_some());
+    assert_eq!(peer_info.server_info, None);
+    assert_eq!(
+        peer_info.instructions.as_deref(),
+        Some("discovery instructions")
+    );
+    assert_eq!(
+        peer_info
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("example.test/key")),
+        Some(&serde_json::json!(7))
+    );
+    rejection_observed_rx
+        .await
+        .expect("server should observe association rejection");
+    client.list_tools(None).await.expect("list tools");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }
@@ -103,11 +209,13 @@ async fn discover_startup_omits_initialize() {
 
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 request.id,
             ))
             .await
@@ -267,11 +375,13 @@ async fn discover_startup_retries_a_mutually_supported_version() {
         );
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 second.id,
             ))
             .await
@@ -326,11 +436,13 @@ async fn discover_startup_retries_current_version_once_when_server_reports_it_su
         );
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 second.id,
             ))
             .await

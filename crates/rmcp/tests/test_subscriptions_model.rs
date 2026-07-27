@@ -215,7 +215,6 @@ fn subscription_schemas_mark_only_draft_required_fields_as_required() {
         request_schema["properties"]["_meta"]["required"],
         json!([
             "io.modelcontextprotocol/protocolVersion",
-            "io.modelcontextprotocol/clientInfo",
             "io.modelcontextprotocol/clientCapabilities"
         ])
     );

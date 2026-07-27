@@ -121,6 +121,13 @@ mod tests {
         let schema = settings
             .into_generator()
             .into_root_schema_for::<ServerJsonRpcMessage>();
+        let schema_value =
+            serde_json::to_value(&schema).expect("Failed to serialize server schema");
+        let discover_result = &schema_value["definitions"]["DiscoverResult"];
+        assert!(
+            discover_result["properties"].get("serverInfo").is_none(),
+            "DiscoverResult serverInfo belongs in namespaced _meta"
+        );
         let schema_str = serde_json::to_string_pretty(&schema).expect("Failed to serialize schema");
 
         compare_schemas(

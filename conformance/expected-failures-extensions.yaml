@@ -21,3 +21,6 @@ server: []
 client:
   # Informational OAuth extension scenarios.
   - auth/enterprise-managed-authorization
+  - auth/dpop
+  - auth/dpop-nonce
+  - auth/wif-jwt-bearer
