@@ -254,6 +254,26 @@ let client_service = ClientInfo::default();
 let client = client_service.serve(transport).await?;
 ```
 
+If initialization reports that authorization is required, return to the
+application's authorization flow:
+
+```rust ignore
+let client = match client_service.serve(transport).await {
+    Ok(client) => client,
+    Err(error) if error.is_authorization_required() => {
+        // Prompt the user and start the application's authorization flow again.
+        return Err(error.into());
+    }
+    Err(error) => return Err(error.into()),
+};
+```
+
+The predicate covers both missing or expired local OAuth authorization and an
+HTTP 401 challenge from the MCP server. Other failures, including transient
+token-refresh errors and insufficient scope, return `false`. The original error
+is preserved for logging or more detailed handling; the SDK does not start an
+authorization flow automatically.
+
 ### 6. Handle scope upgrades
 
 If a server returns 403 with `insufficient_scope`, you can request a scope

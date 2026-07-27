@@ -111,6 +111,17 @@ impl ClientInitializeError {
         }
         None
     }
+
+    /// Returns whether client initialization failed because authorization is required.
+    ///
+    /// This covers both missing or expired local OAuth authorization and an HTTP
+    /// authorization challenge from the MCP server.
+    pub fn is_authorization_required(&self) -> bool {
+        matches!(
+            self,
+            Self::TransportError { error, .. } if error.is_authorization_required()
+        )
+    }
 }
 
 /// Helper function to get the next message from the stream
