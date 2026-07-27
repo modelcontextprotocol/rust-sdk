@@ -12,12 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pinned for reproducible runs; bump deliberately when the suite updates.
-  CONFORMANCE_VERSION: "0.1.16"
-  # When updating DRAFT_CONFORMANCE_VERSION, diff
-  #   `conformance list --spec-version 2026-07-28`
-  # and update #977
-  DRAFT_CONFORMANCE_VERSION: "0.2.0-alpha.9"
+  CONFORMANCE_VERSION: "0.2.0-alpha.9"
 
 jobs:
   server:
@@ -33,15 +28,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Build the whole package (server + client bins): the conformance crate is
-      # excluded from the workspace default-members.
       - name: Build conformance binaries
         run: cargo build -p mcp-conformance
 
       - name: Test conformance server
         run: cargo test -p mcp-conformance --bin conformance-server
 
-      - name: Start 2025-11-25 server
+      - name: Start conformance server
         run: |
           PORT=8001 ./target/debug/conformance-server &
           echo $! > server.pid
@@ -58,45 +51,19 @@ jobs:
         run: |
           npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \
             --url http://127.0.0.1:8001/mcp \
+            --suite all \
             --spec-version 2025-11-25 \
-            -o conformance-results
+            -o conformance-results/2025-11-25
 
-      # These pass today but are excluded from the default "active" suite;
-      # run them explicitly so regressions are still caught.
-      - name: Run 2025-11-25 pending scenarios
+      - name: Run 2026-07-28 server suite
         run: |
-          for scenario in json-schema-2020-12 server-sse-polling; do
-            npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \
-              --url http://127.0.0.1:8001/mcp \
-              --scenario "$scenario" \
-              -o conformance-results
-          done
-
-      - name: Start draft server
-        run: |
-          STATELESS=1 PORT=8002 ./target/debug/conformance-server &
-          echo $! > draft-server.pid
-          for _ in $(seq 1 30); do
-            if curl -s -o /dev/null http://127.0.0.1:8002/mcp; then
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "draft conformance server did not become ready" >&2
-          exit 1
-
-      - name: Run 2026-07-28 versioned-spec server suite
-        run: |
-          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
-            --url http://127.0.0.1:8002/mcp \
+          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \
+            --url http://127.0.0.1:8001/mcp \
             --suite all \
             --spec-version 2026-07-28 \
-            -o conformance-results
+            -o conformance-results/2026-07-28
 
-      # Extension scenarios are excluded by the --spec-version filter and
-      # are informational for tiering. Run them explicitly so their gaps remain
-      # visible and newly passing scenarios make the strict baseline fail stale.
-      - name: Run Tasks extension server suite (informational)
+      - name: Run extension server scenarios (informational)
         run: |
           scenarios=(
             tasks-lifecycle
@@ -110,20 +77,17 @@ jobs:
             tasks-required-task-error
             tasks-mrtr-composition
           )
-
           for scenario in "${scenarios[@]}"; do
-            npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" server \
-              --url http://127.0.0.1:8002/mcp \
+            npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \
+              --url http://127.0.0.1:8001/mcp \
               --scenario "$scenario" \
               --expected-failures conformance/expected-failures-extensions.yaml \
               -o conformance-extension-results
           done
 
-      - name: Stop conformance servers
+      - name: Stop conformance server
         if: always()
-        run: |
-          kill "$(cat draft-server.pid)" 2>/dev/null || true
-          kill "$(cat server.pid)" 2>/dev/null || true
+        run: kill "$(cat server.pid)" 2>/dev/null || true
 
       - name: Upload results
         if: always()
@@ -156,19 +120,19 @@ jobs:
             --command "$(pwd)/target/debug/conformance-client" \
             --suite all \
             --spec-version 2025-11-25 \
-            -o conformance-client-results/full
+            -o conformance-client-results/2025-11-25
 
-      - name: Run 2026-07-28 versioned-spec client suite
+      - name: Run 2026-07-28 client suite
         run: |
-          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
+          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" client \
             --command "$(pwd)/target/debug/conformance-client" \
             --suite all \
             --spec-version 2026-07-28 \
-            -o conformance-client-results/draft
+            -o conformance-client-results/2026-07-28
 
       - name: Run extension client suite (informational)
         run: |
-          npx -y "@modelcontextprotocol/conformance@${DRAFT_CONFORMANCE_VERSION}" client \
+          npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" client \
             --command "$(pwd)/target/debug/conformance-client" \
             --suite extensions \
             --expected-failures conformance/expected-failures-extensions.yaml \
