@@ -2178,7 +2178,7 @@ impl AuthorizationManager {
             ));
         };
 
-        let Some(resource_url) = Url::parse(resource).ok() else {
+        let Ok(resource_url) = Url::parse(resource) else {
             return Err(AuthError::MetadataError(
                 "Protected resource metadata resource field is not a valid URL".to_string(),
             ));
@@ -2223,6 +2223,8 @@ impl AuthorizationManager {
         expected_path.starts_with(actual_path)
             && expected.query().is_none()
             && actual.query().is_none()
+            && (actual_path.ends_with('/')
+                || expected_path.as_bytes().get(actual_path.len()) == Some(&b'/'))
     }
 
     async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
@@ -4481,6 +4483,10 @@ mod tests {
         assert!(!AuthorizationManager::is_resource_identifier_valid(
             &Url::parse("https://mcp.example.com/mcp").unwrap(),
             &Url::parse("https://mcp.example.com/mcp/").unwrap()
+        ));
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp-tools").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp").unwrap()
         ));
         assert!(!AuthorizationManager::is_resource_identifier_valid(
             &Url::parse("https://mcp.example.com/mcp").unwrap(),
