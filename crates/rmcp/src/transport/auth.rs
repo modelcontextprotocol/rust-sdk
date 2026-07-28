@@ -2635,10 +2635,14 @@ impl AuthorizationManager {
         request: OAuthHttpRequest,
     ) -> Result<HttpResponse, OAuthHttpClientError> {
         let response = self.http_client.execute(request).await?;
-        if response.status().is_server_error() {
-            return Err(Box::new(OAuthHttpError::UnexpectedStatus(
-                response.status(),
-            )));
+        let status = response.status();
+        if status.is_server_error()
+            || matches!(
+                status,
+                StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
+            )
+        {
+            return Err(Box::new(OAuthHttpError::UnexpectedStatus(status)));
         }
         Ok(response)
     }
@@ -3820,6 +3824,7 @@ mod tests {
     };
 
     use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier};
+    use reqwest::StatusCode;
     use rstest::rstest;
     use url::Url;
 
@@ -3985,6 +3990,74 @@ mod tests {
             ),
             "unexpected discovery error: {error}"
         );
+    }
+
+    #[rstest]
+    #[case::resource_request_timeout(StatusCode::REQUEST_TIMEOUT, 0, "https://mcp.example.com/mcp")]
+    #[case::resource_too_early(StatusCode::TOO_EARLY, 0, "https://mcp.example.com/mcp")]
+    #[case::resource_too_many_requests(
+        StatusCode::TOO_MANY_REQUESTS,
+        0,
+        "https://mcp.example.com/mcp"
+    )]
+    #[case::protected_metadata_request_timeout(
+        StatusCode::REQUEST_TIMEOUT,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::protected_metadata_too_early(
+        StatusCode::TOO_EARLY,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::protected_metadata_too_many_requests(
+        StatusCode::TOO_MANY_REQUESTS,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::authorization_request_timeout(
+        StatusCode::REQUEST_TIMEOUT,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[case::authorization_too_early(
+        StatusCode::TOO_EARLY,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[case::authorization_too_many_requests(
+        StatusCode::TOO_MANY_REQUESTS,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[tokio::test]
+    async fn discovery_propagates_transient_client_errors(
+        #[case] status: StatusCode,
+        #[case] successful_response_count: usize,
+        #[case] expected_url: &str,
+    ) {
+        let mut responses = preregistered_discovery_responses();
+        responses.insert(successful_response_count, empty_response(status.as_u16()));
+
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains(expected_url) && reason.contains(status.as_str())
+            ),
+            "unexpected discovery error for {status}: {error}"
+        );
+        assert_eq!(client.requests().len(), successful_response_count + 1);
     }
 
     #[tokio::test]
@@ -4330,13 +4403,18 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::not_found(StatusCode::NOT_FOUND)]
+    #[case::method_not_allowed(StatusCode::METHOD_NOT_ALLOWED)]
     #[tokio::test]
-    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered() {
+    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered(
+        #[case] status: StatusCode,
+    ) {
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
+            empty_response(status.as_u16()),
+            empty_response(status.as_u16()),
+            empty_response(status.as_u16()),
+            empty_response(status.as_u16()),
         ]);
         let manager = AuthorizationManager::new_with_oauth_http_client(
             "https://legacy.example.com/",
