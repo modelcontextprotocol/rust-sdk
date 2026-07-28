@@ -61,7 +61,9 @@ have been obtained.
 If OAuth requests must run outside reqwest, implement `OAuthHttpClient` and use
 `OAuthState::new_with_oauth_http_client`. The SDK passes each OAuth request to
 your implementation with the raw HTTP request, a suggested timeout, and an
-`OAuthHttpRedirectPolicy`.
+`OAuthHttpRedirectPolicy`. `OAuthHttpClientFuture` returns
+`OAuthHttpClientError`, so implementations can propagate their native error
+types with `?` without flattening their source chains into strings.
 
 ```rust ignore
 use std::sync::Arc;

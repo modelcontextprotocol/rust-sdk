@@ -70,20 +70,19 @@ impl OAuthHttpRequest {
     }
 }
 
-/// Error returned by a custom OAuth HTTP client.
-#[derive(Debug, Error)]
-#[error("{message}")]
-pub struct OAuthHttpClientError {
-    message: String,
-}
+/// Type-erased error returned by an [`OAuthHttpClient`].
+pub type OAuthHttpClientError = Box<dyn std::error::Error + Send + Sync>;
 
-impl OAuthHttpClientError {
-    /// Create an error from a transport-provided message.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
+#[derive(Debug, Error)]
+enum OAuthHttpError {
+    #[error("OAuth HTTP response body exceeds {0} bytes")]
+    ResponseBodyTooLarge(usize),
+    #[error("unexpected HTTP status {0}")]
+    UnexpectedStatus(StatusCode),
+    #[error("OAuth discovery redirect to non-same-origin URL rejected: {0}")]
+    CrossOriginRedirect(Url),
+    #[error("OAuth discovery exceeded {0} redirects")]
+    TooManyRedirects(usize),
 }
 
 /// Future returned by [`OAuthHttpClient::execute`].
@@ -132,11 +131,11 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
                 OAuthHttpRedirectPolicy::Stop => &self.stop_redirects,
             };
             let request = reqwest::Request::try_from(request)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let response = client
                 .execute(request)
                 .await
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
 
             let mut builder = oauth2::http::Response::builder()
                 .status(response.status())
@@ -147,17 +146,17 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             let mut body = Vec::new();
             let mut body_stream = response.bytes_stream();
             while let Some(chunk) = body_stream.next().await {
-                let chunk = chunk.map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                let chunk = chunk.map_err(|error| Box::new(error) as OAuthHttpClientError)?;
                 if chunk.len() > MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES - body.len() {
-                    return Err(OAuthHttpClientError::new(format!(
-                        "OAuth HTTP response body exceeds {MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES} bytes"
-                    )));
+                    return Err(Box::new(OAuthHttpError::ResponseBodyTooLarge(
+                        MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES,
+                    )) as OAuthHttpClientError);
                 }
                 body.extend_from_slice(&chunk);
             }
             builder
                 .body(body)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)
         })
     }
 }
@@ -167,16 +166,35 @@ struct OAuth2HttpClient<'a> {
     redirect_policy: OAuthHttpRedirectPolicy,
 }
 
+#[derive(Debug)]
+struct OAuth2HttpClientError(OAuthHttpClientError);
+
+impl std::fmt::Display for OAuth2HttpClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OAuth HTTP request failed")
+    }
+}
+
+impl std::error::Error for OAuth2HttpClientError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
-    type Error = OAuthHttpClientError;
+    type Error = OAuth2HttpClientError;
 
     type Future = std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<HttpResponse, Self::Error>> + Send + 'c>,
     >;
 
     fn call(&'c self, request: HttpRequest) -> Self::Future {
-        self.client
-            .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+        Box::pin(async move {
+            self.client
+                .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+                .await
+                .map_err(OAuth2HttpClientError)
+        })
     }
 }
 
@@ -2283,13 +2301,10 @@ impl AuthorizationManager {
         discovery_url: &Url,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         debug!("discovery url: {:?}", discovery_url);
-        let response = match self.discovery_get(discovery_url).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("discovery request failed: {}", e);
-                return Ok(None);
-            }
-        };
+        let response = self
+            .discovery_get(discovery_url)
+            .await
+            .map_err(|error| Self::discovery_failed(discovery_url, error))?;
 
         if response.status() != StatusCode::OK {
             debug!("discovery returned non-200: {}", response.status());
@@ -2387,7 +2402,7 @@ impl AuthorizationManager {
     async fn discover_oauth_server_via_resource_metadata(
         &self,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await else {
+        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await? else {
             return Ok(None);
         };
         self.discover_oauth_server_from_resource_metadata_url(&resource_metadata_url)
@@ -2509,10 +2524,11 @@ impl AuthorizationManager {
             && Self::is_same_origin(&root_resource, &path_resource)
     }
 
-    async fn discover_resource_metadata_url(&self) -> Option<Url> {
-        if let Some(resource_metadata_url) = self.probe_resource_metadata_url(&self.base_url).await
+    async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
+        if let Some(resource_metadata_url) =
+            self.probe_resource_metadata_url(&self.base_url).await?
         {
-            return Some(resource_metadata_url);
+            return Ok(Some(resource_metadata_url));
         }
 
         // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
@@ -2525,37 +2541,33 @@ impl AuthorizationManager {
             discovery_url.set_fragment(None);
             discovery_url.set_path(&candidate_path);
             if let Some(resource_metadata_url) =
-                self.probe_resource_metadata_url(&discovery_url).await
+                self.probe_resource_metadata_url(&discovery_url).await?
             {
-                return Some(resource_metadata_url);
+                return Ok(Some(resource_metadata_url));
             }
         }
 
-        None
+        Ok(None)
     }
 
     /// Probe `url` with a GET, extracting the resource metadata url from a
     /// 200 (the url itself is the metadata document) or from a 401's
     /// WWW-Authenticate header value.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
-    async fn probe_resource_metadata_url(&self, url: &Url) -> Option<Url> {
-        let response = match self.discovery_get(url).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("resource metadata probe failed: {}", e);
-                return None;
-            }
-        };
+    async fn probe_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
+        let response = self
+            .discovery_get(url)
+            .await
+            .map_err(|error| Self::discovery_failed(url, error))?;
 
         match response.status() {
-            StatusCode::OK => Some(url.clone()),
-            StatusCode::UNAUTHORIZED => {
-                self.extract_resource_metadata_url_from_www_authenticate(&response)
-                    .await
-            }
+            StatusCode::OK => Ok(Some(url.clone())),
+            StatusCode::UNAUTHORIZED => Ok(self
+                .extract_resource_metadata_url_from_www_authenticate(&response)
+                .await),
             status => {
                 debug!("resource metadata probe returned unexpected status: {status}");
-                None
+                Ok(None)
             }
         }
     }
@@ -2588,13 +2600,10 @@ impl AuthorizationManager {
             "resource metadata discovery url: {:?}",
             resource_metadata_url
         );
-        let response = match self.discovery_get(resource_metadata_url).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("resource metadata request failed: {}", e);
-                return Ok(None);
-            }
-        };
+        let response = self
+            .discovery_get(resource_metadata_url)
+            .await
+            .map_err(|error| Self::discovery_failed(resource_metadata_url, error))?;
 
         if response.status() != StatusCode::OK {
             debug!(
@@ -2614,6 +2623,26 @@ impl AuthorizationManager {
         Ok(Some(metadata))
     }
 
+    fn discovery_failed(url: &Url, error: OAuthHttpClientError) -> AuthError {
+        AuthError::MetadataError(format!(
+            "OAuth metadata discovery failed for {url}\n  Caused by: {}",
+            crate::error::ErrorChain(error.as_ref())
+        ))
+    }
+
+    async fn discovery_request(
+        &self,
+        request: OAuthHttpRequest,
+    ) -> Result<HttpResponse, OAuthHttpClientError> {
+        let response = self.http_client.execute(request).await?;
+        if response.status().is_server_error() {
+            return Err(Box::new(OAuthHttpError::UnexpectedStatus(
+                response.status(),
+            )));
+        }
+        Ok(response)
+    }
+
     async fn discovery_get(&self, url: &Url) -> Result<HttpResponse, OAuthHttpClientError> {
         let mut current_url = url.clone();
         for _ in 0..MAX_OAUTH_DISCOVERY_REDIRECTS {
@@ -2622,10 +2651,9 @@ impl AuthorizationManager {
                 .uri(current_url.as_str())
                 .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
                 .body(Vec::new())
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let response = self
-                .http_client
-                .execute(OAuthHttpRequest::new(
+                .discovery_request(OAuthHttpRequest::new(
                     request,
                     OAuthHttpRedirectPolicy::Stop,
                 ))
@@ -2640,23 +2668,21 @@ impl AuthorizationManager {
             };
             let location = location
                 .to_str()
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let next_url = current_url
                 .join(location)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
 
             if Self::is_http_url(&next_url) && Self::is_same_origin(&current_url, &next_url) {
                 current_url = next_url;
                 continue;
             }
 
-            return Err(OAuthHttpClientError::new(format!(
-                "OAuth discovery redirect to non-same-origin URL rejected: {next_url}"
-            )));
+            return Err(Box::new(OAuthHttpError::CrossOriginRedirect(next_url)));
         }
 
-        Err(OAuthHttpClientError::new(format!(
-            "OAuth discovery exceeded {MAX_OAUTH_DISCOVERY_REDIRECTS} redirects"
+        Err(Box::new(OAuthHttpError::TooManyRedirects(
+            MAX_OAUTH_DISCOVERY_REDIRECTS,
         )))
     }
 
@@ -3842,9 +3868,7 @@ mod tests {
                 body: request.request.body().clone(),
             });
             let response = self.responses.lock().unwrap().pop_front();
-            Box::pin(async move {
-                response.ok_or_else(|| OAuthHttpClientError::new("missing fake response"))
-            })
+            Box::pin(async move { response.ok_or_else(|| "missing fake response".into()) })
         }
     }
 
@@ -3868,6 +3892,99 @@ mod tests {
             .status(status)
             .body(Vec::new())
             .unwrap()
+    }
+
+    #[test]
+    fn oauth_http_client_error_preserves_source_chain() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("request failed")]
+        struct RequestError(#[source] std::io::Error);
+
+        let error: OAuthHttpClientError = RequestError(std::io::Error::other(
+            "certificate signed by unknown authority",
+        ))
+        .into();
+        assert!(error.downcast_ref::<RequestError>().is_some());
+
+        let url = Url::parse("https://mcp.example.com/mcp").unwrap();
+        let error = AuthorizationManager::discovery_failed(&url, error);
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: OAuth metadata discovery failed for https://mcp.example.com/mcp\n  Caused by: request failed\n  Caused by: certificate signed by unknown authority"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_http_client_preserves_connection_failure_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        drop(listener);
+
+        let manager = AuthorizationManager::new(&url).await.unwrap();
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains(&url)
+                        && reason.contains("\n  Caused by: error sending request for url")
+                        && reason.matches("error sending request for url").count() == 1
+                        && reason.to_ascii_lowercase().contains("connection refused")
+            ),
+            "unexpected discovery error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorization_metadata_propagates_transport_failure() {
+        let responses = preregistered_discovery_responses()
+            .into_iter()
+            .take(2)
+            .collect();
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains("https://auth.example.com/.well-known/oauth-authorization-server")
+                        && reason.contains("missing fake response")
+            ),
+            "unexpected discovery error: {error}"
+        );
+        assert_eq!(client.requests().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn discovery_propagates_server_errors() {
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(vec![
+                empty_response(503),
+            ])),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains("https://mcp.example.com/mcp") && reason.contains("503")
+            ),
+            "unexpected discovery error: {error}"
+        );
     }
 
     #[tokio::test]

@@ -17,6 +17,20 @@ impl Display for ErrorData {
 
 impl std::error::Error for ErrorData {}
 
+#[cfg(all(feature = "auth", any(feature = "client", feature = "server")))]
+pub(crate) struct ErrorChain<'a>(pub(crate) &'a (dyn std::error::Error + 'static));
+
+#[cfg(all(feature = "auth", any(feature = "client", feature = "server")))]
+impl Display for ErrorChain<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)?;
+        for source in std::iter::successors(self.0.source(), |source| source.source()) {
+            write!(f, "\n  Caused by: {source}")?;
+        }
+        Ok(())
+    }
+}
+
 /// This is an unified error type for the errors could be returned by the service.
 #[derive(Debug, thiserror::Error)]
 #[allow(clippy::large_enum_variant)]
