@@ -70,36 +70,19 @@ impl OAuthHttpRequest {
     }
 }
 
-/// Error returned by a custom OAuth HTTP client.
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct OAuthHttpClientError {
-    inner: OAuthHttpClientErrorKind,
-}
+/// Type-erased error returned by an [`OAuthHttpClient`].
+pub type OAuthHttpClientError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, Error)]
-enum OAuthHttpClientErrorKind {
-    #[error("{0}")]
-    Message(String),
-
-    #[error("{0}")]
-    Source(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl OAuthHttpClientError {
-    /// Create an error from a message.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            inner: OAuthHttpClientErrorKind::Message(message.into()),
-        }
-    }
-
-    /// Create an error from its underlying cause.
-    pub fn from_error(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Self {
-            inner: OAuthHttpClientErrorKind::Source(source.into()),
-        }
-    }
+enum OAuthHttpError {
+    #[error("OAuth HTTP response body exceeds {0} bytes")]
+    ResponseBodyTooLarge(usize),
+    #[error("unexpected HTTP status {0}")]
+    UnexpectedStatus(StatusCode),
+    #[error("OAuth discovery redirect to non-same-origin URL rejected: {0}")]
+    CrossOriginRedirect(Url),
+    #[error("OAuth discovery exceeded {0} redirects")]
+    TooManyRedirects(usize),
 }
 
 /// Future returned by [`OAuthHttpClient::execute`].
@@ -147,12 +130,12 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
                 OAuthHttpRedirectPolicy::Follow => &self.follow_redirects,
                 OAuthHttpRedirectPolicy::Stop => &self.stop_redirects,
             };
-            let request =
-                reqwest::Request::try_from(request).map_err(OAuthHttpClientError::from_error)?;
+            let request = reqwest::Request::try_from(request)
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let response = client
                 .execute(request)
                 .await
-                .map_err(OAuthHttpClientError::from_error)?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
 
             let mut builder = oauth2::http::Response::builder()
                 .status(response.status())
@@ -163,17 +146,17 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             let mut body = Vec::new();
             let mut body_stream = response.bytes_stream();
             while let Some(chunk) = body_stream.next().await {
-                let chunk = chunk.map_err(OAuthHttpClientError::from_error)?;
+                let chunk = chunk.map_err(|error| Box::new(error) as OAuthHttpClientError)?;
                 if chunk.len() > MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES - body.len() {
-                    return Err(OAuthHttpClientError::new(format!(
-                        "OAuth HTTP response body exceeds {MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES} bytes"
-                    )));
+                    return Err(Box::new(OAuthHttpError::ResponseBodyTooLarge(
+                        MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES,
+                    )) as OAuthHttpClientError);
                 }
                 body.extend_from_slice(&chunk);
             }
             builder
                 .body(body)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)
         })
     }
 }
@@ -183,16 +166,35 @@ struct OAuth2HttpClient<'a> {
     redirect_policy: OAuthHttpRedirectPolicy,
 }
 
+#[derive(Debug)]
+struct OAuth2HttpClientError(OAuthHttpClientError);
+
+impl std::fmt::Display for OAuth2HttpClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OAuth HTTP request failed")
+    }
+}
+
+impl std::error::Error for OAuth2HttpClientError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
-    type Error = OAuthHttpClientError;
+    type Error = OAuth2HttpClientError;
 
     type Future = std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<HttpResponse, Self::Error>> + Send + 'c>,
     >;
 
     fn call(&'c self, request: HttpRequest) -> Self::Future {
-        self.client
-            .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+        Box::pin(async move {
+            self.client
+                .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+                .await
+                .map_err(OAuth2HttpClientError)
+        })
     }
 }
 
@@ -2622,10 +2624,9 @@ impl AuthorizationManager {
     }
 
     fn discovery_failed(url: &Url, error: OAuthHttpClientError) -> AuthError {
-        let source = std::error::Error::source(&error).unwrap_or(&error);
         AuthError::MetadataError(format!(
             "OAuth metadata discovery failed for {url}\n  Caused by: {}",
-            crate::error::ErrorChain(source)
+            crate::error::ErrorChain(error.as_ref())
         ))
     }
 
@@ -2635,9 +2636,8 @@ impl AuthorizationManager {
     ) -> Result<HttpResponse, OAuthHttpClientError> {
         let response = self.http_client.execute(request).await?;
         if response.status().is_server_error() {
-            return Err(OAuthHttpClientError::new(format!(
-                "HTTP {}",
-                response.status()
+            return Err(Box::new(OAuthHttpError::UnexpectedStatus(
+                response.status(),
             )));
         }
         Ok(response)
@@ -2651,7 +2651,7 @@ impl AuthorizationManager {
                 .uri(current_url.as_str())
                 .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
                 .body(Vec::new())
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let response = self
                 .discovery_request(OAuthHttpRequest::new(
                     request,
@@ -2668,23 +2668,21 @@ impl AuthorizationManager {
             };
             let location = location
                 .to_str()
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let next_url = current_url
                 .join(location)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
 
             if Self::is_http_url(&next_url) && Self::is_same_origin(&current_url, &next_url) {
                 current_url = next_url;
                 continue;
             }
 
-            return Err(OAuthHttpClientError::new(format!(
-                "OAuth discovery redirect to non-same-origin URL rejected: {next_url}"
-            )));
+            return Err(Box::new(OAuthHttpError::CrossOriginRedirect(next_url)));
         }
 
-        Err(OAuthHttpClientError::new(format!(
-            "OAuth discovery exceeded {MAX_OAUTH_DISCOVERY_REDIRECTS} redirects"
+        Err(Box::new(OAuthHttpError::TooManyRedirects(
+            MAX_OAUTH_DISCOVERY_REDIRECTS,
         )))
     }
 
@@ -3870,9 +3868,7 @@ mod tests {
                 body: request.request.body().clone(),
             });
             let response = self.responses.lock().unwrap().pop_front();
-            Box::pin(async move {
-                response.ok_or_else(|| OAuthHttpClientError::new("missing fake response"))
-            })
+            Box::pin(async move { response.ok_or_else(|| "missing fake response".into()) })
         }
     }
 
@@ -3904,11 +3900,11 @@ mod tests {
         #[error("request failed")]
         struct RequestError(#[source] std::io::Error);
 
-        let error = OAuthHttpClientError::from_error(RequestError(std::io::Error::other(
+        let error: OAuthHttpClientError = RequestError(std::io::Error::other(
             "certificate signed by unknown authority",
-        )));
-        let source = std::error::Error::source(&error).unwrap();
-        assert!(source.downcast_ref::<RequestError>().is_some());
+        ))
+        .into();
+        assert!(error.downcast_ref::<RequestError>().is_some());
 
         let url = Url::parse("https://mcp.example.com/mcp").unwrap();
         let error = AuthorizationManager::discovery_failed(&url, error);
@@ -3925,7 +3921,7 @@ mod tests {
         drop(listener);
 
         let manager = AuthorizationManager::new(&url).await.unwrap();
-        let error = manager.discover_metadata().await.unwrap_err();
+        let error = manager.resolve_metadata().await.unwrap_err();
 
         assert!(
             matches!(
@@ -3954,7 +3950,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = manager.discover_metadata().await.unwrap_err();
+        let error = manager.resolve_metadata().await.unwrap_err();
 
         assert!(
             matches!(
@@ -3979,7 +3975,7 @@ mod tests {
         .await
         .unwrap();
 
-        let error = manager.discover_metadata().await.unwrap_err();
+        let error = manager.resolve_metadata().await.unwrap_err();
 
         assert!(
             matches!(
