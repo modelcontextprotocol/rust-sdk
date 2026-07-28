@@ -122,9 +122,11 @@ async fn discover_returns_server_metadata_without_session() {
             "resultType": "complete",
             "supportedVersions": ["2025-11-25"],
             "capabilities": { "tools": {} },
-            "serverInfo": {
-                "name": "discovery-server",
-                "version": "1.0.0"
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "discovery-server",
+                    "version": "1.0.0"
+                }
             },
             "instructions": "Use the tools carefully",
             "ttlMs": 0,
@@ -323,6 +325,38 @@ async fn discover_rejects_missing_client_capabilities() {
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await.expect("response should be JSON");
     assert_eq!(body["error"]["code"], -32602);
+
+    cancellation_token.cancel();
+}
+
+#[tokio::test]
+async fn discover_accepts_missing_optional_client_info() {
+    let (client, url, cancellation_token) = spawn_server(true).await;
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2025-11-25",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    });
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2025-11-25")
+        .json(&body)
+        .send()
+        .await
+        .expect("request should send");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("response should be JSON");
+    assert!(body.get("result").is_some());
 
     cancellation_token.cancel();
 }

@@ -51,6 +51,14 @@ async fn client_initialization_accepts_stringified_numeric_response_id() {
         .serve(client_transport)
         .await
         .expect("client should accept stringified initialize response ID");
+    assert!(
+        client
+            .peer_info()
+            .expect("peer info should be retained")
+            .server_info
+            .is_some(),
+        "initialize always provides a server implementation identity"
+    );
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }

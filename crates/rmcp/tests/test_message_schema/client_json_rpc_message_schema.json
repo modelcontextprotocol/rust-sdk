@@ -2255,7 +2255,6 @@
           "additionalProperties": true,
           "required": [
             "io.modelcontextprotocol/protocolVersion",
-            "io.modelcontextprotocol/clientInfo",
             "io.modelcontextprotocol/clientCapabilities"
           ]
         },

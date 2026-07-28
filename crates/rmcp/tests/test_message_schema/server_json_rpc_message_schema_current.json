@@ -759,14 +759,6 @@
             }
           ]
         },
-        "serverInfo": {
-          "description": "Information about the server implementation.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/Implementation"
-            }
-          ]
-        },
         "supportedVersions": {
           "description": "Protocol versions implemented by this server.",
           "type": "array",
@@ -785,7 +777,6 @@
         "resultType",
         "supportedVersions",
         "capabilities",
-        "serverInfo",
         "ttlMs",
         "cacheScope"
       ]
