@@ -249,12 +249,13 @@ const UTF8_BOM: &[u8; 3] = b"\xEF\xBB\xBF";
 /// Check if a method is a standard MCP method (request, response, or notification).
 /// This includes both requests and notifications defined in the MCP specification.
 ///
-/// Based on MCP specification 2025-06-18: https://modelcontextprotocol.io/specification/2025-06-18
+/// Based on MCP specification 2026-07-28: https://modelcontextprotocol.io/specification/2026-07-28
 fn is_standard_method(method: &str) -> bool {
     matches!(
         method,
         "initialize"
             | "ping"
+            | "server/discover"
             | "prompts/get"
             | "prompts/list"
             | "resources/list"
@@ -262,9 +263,11 @@ fn is_standard_method(method: &str) -> bool {
             | "resources/subscribe"
             | "resources/unsubscribe"
             | "resources/templates/list"
+            | "subscriptions/listen"
             | "tools/call"
             | "tools/list"
             | "completion/complete"
+            | "elicitation/create"
             | "logging/setLevel"
             | "roots/list"
             | "sampling/createMessage"
@@ -282,6 +285,7 @@ fn is_standard_notification(method: &str) -> bool {
             | "notifications/resources/list_changed"
             | "notifications/resources/updated"
             | "notifications/roots/list_changed"
+            | "notifications/subscriptions/acknowledged"
             | "notifications/tools/list_changed"
     )
 }
@@ -582,12 +586,48 @@ mod test {
         assert!(is_standard_notification("notifications/tools/list_changed"));
         assert!(is_standard_notification("notifications/message"));
         assert!(is_standard_notification("notifications/roots/list_changed"));
+        assert!(is_standard_notification(
+            "notifications/subscriptions/acknowledged"
+        ));
 
         // Test that non-standard notifications are not recognized
         assert!(!is_standard_notification("notifications/stderr"));
         assert!(!is_standard_notification("notifications/custom"));
         assert!(!is_standard_notification("notifications/debug"));
         assert!(!is_standard_notification("some/other/method"));
+    }
+
+    #[test]
+    fn test_2026_07_28_standard_method_check() {
+        for method in [
+            "elicitation/create",
+            "server/discover",
+            "subscriptions/listen",
+        ] {
+            assert!(is_standard_method(method), "{method} should be standard");
+        }
+    }
+
+    #[test]
+    fn test_current_standard_notification_is_not_ignored() {
+        let method = "notifications/subscriptions/acknowledged";
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+        });
+
+        assert!(!should_ignore_notification(&notification, method));
+    }
+
+    #[test]
+    fn test_unknown_notification_is_ignored() {
+        let method = "notifications/custom";
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+        });
+
+        assert!(should_ignore_notification(&notification, method));
     }
 
     #[test]
