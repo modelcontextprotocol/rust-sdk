@@ -2635,10 +2635,12 @@ impl AuthorizationManager {
         request: OAuthHttpRequest,
     ) -> Result<HttpResponse, OAuthHttpClientError> {
         let response = self.http_client.execute(request).await?;
-        if response.status().is_server_error() {
-            return Err(Box::new(OAuthHttpError::UnexpectedStatus(
-                response.status(),
-            )));
+        let status = response.status();
+        if status.is_server_error()
+            || status == StatusCode::REQUEST_TIMEOUT
+            || status == StatusCode::TOO_MANY_REQUESTS
+        {
+            return Err(Box::new(OAuthHttpError::UnexpectedStatus(status)));
         }
         Ok(response)
     }
@@ -3987,6 +3989,58 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::request_timeout_at_resource(408, 0, "https://mcp.example.com/mcp")]
+    #[case::too_many_requests_at_resource(429, 0, "https://mcp.example.com/mcp")]
+    #[case::request_timeout_at_protected_resource_metadata(
+        408,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::too_many_requests_at_protected_resource_metadata(
+        429,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::request_timeout_at_authorization_server_metadata(
+        408,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[case::too_many_requests_at_authorization_server_metadata(
+        429,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[tokio::test]
+    async fn discovery_propagates_retryable_http_errors(
+        #[case] status: u16,
+        #[case] successful_response_count: usize,
+        #[case] failed_url: &str,
+    ) {
+        let mut responses = preregistered_discovery_responses();
+        responses.insert(successful_response_count, empty_response(status));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains(failed_url) && reason.contains(&status.to_string())
+            ),
+            "unexpected discovery error for HTTP {status} at {failed_url}: {error}"
+        );
+        assert_eq!(client.requests().len(), successful_response_count + 1);
+    }
+
     #[tokio::test]
     async fn custom_http_client_handles_protected_resource_discovery() {
         let challenge = oauth2::http::Response::builder()
@@ -4330,13 +4384,18 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::not_found(404)]
+    #[case::method_not_allowed(405)]
     #[tokio::test]
-    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered() {
+    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered(
+        #[case] status: u16,
+    ) {
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
+            empty_response(status),
+            empty_response(status),
+            empty_response(status),
+            empty_response(status),
         ]);
         let manager = AuthorizationManager::new_with_oauth_http_client(
             "https://legacy.example.com/",
