@@ -61,15 +61,15 @@ mod tests {
         );
     }
 
-    /// The three metadata definitions must expose the MCP 2026-07-28 draft
+    /// The three metadata definitions must expose the MCP 2026-07-28
     /// vocabulary: `MetaObject` is an open map, `RequestMetaObject` reserves
     /// `progressToken` plus the SEP-2575 keys, and `NotificationMetaObject`
-    /// reserves `io.modelcontextprotocol/subscriptionId`. The keys the draft
-    /// marks as required stay optional because rmcp generates one schema
-    /// shared by every supported protocol version; draft-strict validation is
+    /// reserves `io.modelcontextprotocol/subscriptionId`. Version-specific
+    /// required keys stay optional because rmcp generates one schema shared
+    /// by every supported protocol version; current-version validation is
     /// a runtime concern (`RequestMetaObject::missing_required_keys`).
     #[test]
-    fn test_metadata_definitions_match_draft_schema() {
+    fn test_metadata_definitions_match_2026_07_28_schema() {
         let settings = SchemaSettings::draft07();
         let schema = settings
             .into_generator()
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(
             definitions["MetaObject"],
             serde_json::json!({
-                "description": "See [specification/draft/basic/index#general-fields] for notes on _meta usage.",
+                "description": "See [MCP general fields](https://modelcontextprotocol.io/specification/2026-07-28/basic#general-fields) for notes on _meta usage.",
                 "type": "object",
                 "additionalProperties": true,
             })

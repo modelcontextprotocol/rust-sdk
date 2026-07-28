@@ -1206,7 +1206,7 @@
       ]
     },
     "MetaObject": {
-      "description": "See [specification/draft/basic/index#general-fields] for notes on _meta usage.",
+      "description": "See [MCP general fields](https://modelcontextprotocol.io/specification/2026-07-28/basic#general-fields) for notes on _meta usage.",
       "type": "object",
       "additionalProperties": true
     },
@@ -2233,7 +2233,7 @@
       "type": "object",
       "properties": {
         "_meta": {
-          "description": "Protocol-level metadata. Required by the draft wire schema.",
+          "description": "Protocol-level metadata. Required by the 2026-07-28 wire schema.",
           "type": "object",
           "properties": {
             "io.modelcontextprotocol/clientCapabilities": {
