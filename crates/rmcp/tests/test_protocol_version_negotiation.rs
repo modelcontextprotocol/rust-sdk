@@ -1,7 +1,7 @@
 //! Tests for protocol version negotiation in the default ServerHandler::initialize impl.
 //!
 //! Known versions are echoed back; unknown versions fall back to LATEST.
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 #![cfg(feature = "client")]
 
 use rmcp::{

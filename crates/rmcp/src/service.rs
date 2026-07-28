@@ -1,47 +1,47 @@
 use std::sync::OnceLock;
 
 use futures::FutureExt;
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 use futures::future::BoxFuture;
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 use futures::future::LocalBoxFuture;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
 // Conditional Send helpers
 //
-// `MaybeSend`       – supertrait alias: `Send + Sync` without `local`, empty with `local`
-// `MaybeSendFuture` – future bound alias: `Send` without `local`, empty with `local`
-// `MaybeBoxFuture`  – boxed future type: `BoxFuture` without `local`, `LocalBoxFuture` with `local`
+// `MaybeSend`       – supertrait alias: `Send + Sync` without `unsync`, empty with `unsync`
+// `MaybeSendFuture` – future bound alias: `Send` without `unsync`, empty with `unsync`
+// `MaybeBoxFuture`  – boxed future type: `BoxFuture` without `unsync`, `LocalBoxFuture` with `unsync`
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 #[doc(hidden)]
 pub trait MaybeSend: Send + Sync {}
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 impl<T: Send + Sync> MaybeSend for T {}
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 #[doc(hidden)]
 pub trait MaybeSend {}
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 impl<T> MaybeSend for T {}
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 #[doc(hidden)]
 pub trait MaybeSendFuture: Send {}
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 impl<T: Send> MaybeSendFuture for T {}
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 #[doc(hidden)]
 pub trait MaybeSendFuture {}
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 impl<T> MaybeSendFuture for T {}
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 pub(crate) type MaybeBoxFuture<'a, T> = BoxFuture<'a, T>;
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 pub(crate) type MaybeBoxFuture<'a, T> = LocalBoxFuture<'a, T>;
 
 #[cfg(feature = "server")]
@@ -217,7 +217,7 @@ pub type RxJsonRpcMessage<R> = JsonRpcMessage<
     <R as ServiceRole>::PeerNot,
 >;
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 pub trait Service<R: ServiceRole>: Send + Sync + 'static {
     fn handle_request(
         &self,
@@ -232,7 +232,7 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
     fn get_info(&self) -> R::Info;
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 pub trait Service<R: ServiceRole>: 'static {
     fn handle_request(
         &self,
@@ -298,7 +298,7 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
     }
 }
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 pub trait DynService<R: ServiceRole>: Send + Sync {
     fn handle_request(
         &self,
@@ -313,7 +313,7 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
     fn get_info(&self) -> R::Info;
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 pub trait DynService<R: ServiceRole> {
     fn handle_request(
         &self,
@@ -1208,11 +1208,11 @@ where
     serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
 }
 
-/// Spawn a task that may hold `!Send` state when the `local` feature is active.
+/// Spawn a task that may hold `!Send` state when the `unsync` feature is active.
 ///
-/// Without the `local` feature this is `tokio::spawn` (requires `Future: Send + 'static`).
-/// With `local` it uses `tokio::task::spawn_local` (requires only `Future: 'static`).
-#[cfg(not(feature = "local"))]
+/// Without the `unsync` feature this is `tokio::spawn` (requires `Future: Send + 'static`).
+/// With `unsync` it uses `tokio::task::spawn_local` (requires only `Future: 'static`).
+#[cfg(not(feature = "unsync"))]
 fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
@@ -1221,7 +1221,7 @@ where
     tokio::spawn(future)
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + 'static,

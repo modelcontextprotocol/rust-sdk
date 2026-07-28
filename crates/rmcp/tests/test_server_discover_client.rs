@@ -1,4 +1,4 @@
-#![cfg(all(feature = "client", not(feature = "local")))]
+#![cfg(all(feature = "client", not(feature = "unsync")))]
 
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,

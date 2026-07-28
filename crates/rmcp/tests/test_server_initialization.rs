@@ -1,5 +1,5 @@
 // cargo test --features "client" --package rmcp -- server_init
-#![cfg(all(feature = "client", not(feature = "local")))]
+#![cfg(all(feature = "client", not(feature = "unsync")))]
 mod common;
 
 use common::handlers::TestServer;

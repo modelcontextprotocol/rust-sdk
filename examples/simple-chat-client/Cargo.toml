@@ -14,9 +14,5 @@ thiserror = "2.0"
 async-trait = "0.1"
 futures = "0.3"
 toml = "1.0"
-rmcp = { workspace = true, features = [
-    "client",
-    "transport-child-process",
-    "transport-streamable-http-client-reqwest"
-] }
+rmcp = { workspace = true, features = ["client-http", "client-stdio"] }
 clap = { version = "4.0", features = ["derive"] }

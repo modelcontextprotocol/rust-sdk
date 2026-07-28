@@ -1,4 +1,4 @@
-#![cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
+#![cfg(all(feature = "transport-streamable-http-server", not(feature = "unsync")))]
 
 use std::time::Duration;
 

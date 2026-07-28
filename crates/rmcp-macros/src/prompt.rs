@@ -21,7 +21,7 @@ pub struct PromptAttribute {
     /// Optional metadata for the prompt
     pub meta: Option<Expr>,
     /// When true, the generated future will not require `Send`. Useful for `!Send` handlers
-    /// (e.g. single-threaded database connections). Also enabled globally by the `local` crate feature.
+    /// (e.g. single-threaded database connections). Also enabled globally by the `unsync` crate feature.
     pub local: bool,
 }
 
@@ -81,7 +81,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     };
     let mut fn_item = syn::parse2::<ImplItemFn>(input.clone())?;
     let fn_ident = &fn_item.sig.ident;
-    let omit_send = cfg!(feature = "local") || attribute.local;
+    let omit_send = cfg!(feature = "unsync") || attribute.local;
 
     let prompt_attr_fn_ident = format_ident!("{}_prompt_attr", fn_ident);
 
@@ -128,7 +128,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
         // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> + Send + '_>>`
-        //    (omit `+ Send` when the `local` crate feature is active or `#[prompt(local)]` is used)
+        //    (omit `+ Send` when the `unsync` crate feature is active or `#[prompt(local)]` is used)
         // 3. make body: { Box::pin(async move { #body }) }
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
@@ -251,7 +251,7 @@ mod test {
         let result = prompt(attr, input)?;
 
         let result_str = result.to_string();
-        if cfg!(feature = "local") {
+        if cfg!(feature = "unsync") {
             assert!(!result_str.contains("+ Send +"));
         } else {
             assert!(result_str.contains("+ Send +"));

@@ -1,6 +1,6 @@
 //! End-to-end tests for the MCP Tasks extension (SEP-2663,
 //! `io.modelcontextprotocol/tasks`).
-#![cfg(all(feature = "server", feature = "client", not(feature = "local")))]
+#![cfg(all(feature = "server", feature = "client", not(feature = "unsync")))]
 
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,

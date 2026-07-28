@@ -1,4 +1,4 @@
-#![cfg(all(feature = "client", feature = "server", not(feature = "local")))]
+#![cfg(all(feature = "client", feature = "server", not(feature = "unsync")))]
 // cargo test --test test_inflight_response_drain --features "client server"
 
 use std::{

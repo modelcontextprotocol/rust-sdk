@@ -18,29 +18,27 @@ exhaustive_enums = "warn"
 features = [
   "auth",
   "auth-client-credentials-jwt",
-  "base64",
   "client",
-  "client-side-sse",
-  "elicitation",
+  "client-http",
+  "client-stdio",
   "macros",
   "request-state",
-  "reqwest",
-  "reqwest-native-tls",
-  "reqwest-tls-no-provider",
   "schemars",
   "server",
-  "server-side-http",
+  "server-http",
+  "server-stdio",
+  "tls-native",
+  "tls-no-provider",
+  "tls-rustls",
   "tower",
   "transport-async-rw",
   "transport-child-process",
-  "transport-io",
+  "transport-stdio",
   "transport-streamable-http-client",
   "transport-streamable-http-client-reqwest",
   "transport-streamable-http-client-unix-socket",
   "transport-streamable-http-server",
-  "transport-streamable-http-server-session",
   "transport-worker",
-  "uuid",
 ]
 rustdoc-args = ["--cfg", "docsrs"]
 
@@ -64,7 +62,7 @@ jsonwebtoken = { version = "11", optional = true, features = ["aws_lc_rs"] }
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
 
 # for image encoding
-base64 = { version = "0.23", optional = true }
+base64 = "0.23"
 
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
@@ -79,6 +77,8 @@ reqwest = { version = "0.13.2", default-features = false, features = [
 sse-stream = { version = "0.2.4", optional = true }
 
 http = { version = "1", optional = true }
+# only for OAuth; the elicitation API takes URLs as plain strings so that the
+# `url` -> `idna` -> ICU4X tree stays out of builds that do not need it
 url = { version = "2.4", optional = true }
 
 # For tower compatibility
@@ -89,9 +89,6 @@ process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
 
 # for cross-platform executable path resolution
 which = { version = "8", optional = true }
-
-# for ws transport
-# tokio-tungstenite ={ version = "0.26", optional = true }
 
 # for http-server transport
 rand = { version = "0.10", optional = true }
@@ -119,45 +116,41 @@ chrono = { version = "0.4.38", default-features = false, features = [
 ] }
 
 [features]
-default = ["base64", "macros", "server"]
-local = ["rmcp-macros?/local"]
+default = ["macros", "server"]
+
+# --- Use-case bundles --------------------------------------------------------
+# One flag per common scenario. Prefer these over hand-assembling the parts.
+server-stdio = ["server", "macros", "transport-stdio"]
+server-http = ["server", "macros", "transport-streamable-http-server"]
+client-stdio = ["client", "transport-child-process"]
+client-http = ["client", "transport-streamable-http-client-reqwest", "tls-rustls"]
+
+# --- Roles -------------------------------------------------------------------
 client = ["dep:tokio-stream"]
-server = ["transport-async-rw", "schemars", "dep:pastey", "uuid"]
+server = ["transport-async-rw", "schemars", "dep:pastey", "dep:uuid"]
 macros = ["dep:rmcp-macros", "dep:pastey"]
-elicitation = ["dep:url"]
+
+# --- Protocol capabilities ---------------------------------------------------
+# Only capabilities carrying a heavy dependency are gated; everything else
+# (sampling, elicitation, tasks, response caching) is always available.
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
-request-state = ["dep:hmac", "dep:sha2", "base64"]
+request-state = ["dep:hmac", "dep:sha2"]
+auth = ["dep:oauth2", "__reqwest", "dep:url"]
+auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "dep:uuid"]
 
-# reqwest http client
-__reqwest = ["dep:reqwest"]
-
-reqwest = ["__reqwest", "reqwest?/rustls"]
-
-reqwest-tls-no-provider = ["__reqwest", "reqwest?/rustls-no-provider"]
-
-reqwest-native-tls = ["__reqwest", "reqwest?/native-tls"]
-
-server-side-http = [
-  "uuid",
-  "dep:rand",
-  "dep:tokio-stream",
-  "dep:http",
-  "dep:http-body",
-  "dep:http-body-util",
-  "dep:bytes",
-  "dep:sse-stream",
-  "tower",
-  "base64",
+# --- Transports --------------------------------------------------------------
+transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
+transport-stdio = ["transport-async-rw", "tokio/io-std"]
+transport-child-process = [
+  "transport-async-rw",
+  "tokio/process",
+  "dep:process-wrap",
+  "dep:which",
 ]
-
+# Build a transport from a `Worker` implementation.
 transport-worker = ["dep:tokio-stream"]
-
-# SSE stream parsing utilities (used by streamable HTTP client for SSE-formatted responses)
-client-side-sse = ["dep:sse-stream", "dep:http", "dep:bytes", "base64"]
-
-# Streamable HTTP client
-transport-streamable-http-client = ["client-side-sse", "transport-worker"]
+transport-streamable-http-client = ["__client-side-sse", "transport-worker"]
 transport-streamable-http-client-reqwest = ["transport-streamable-http-client", "__reqwest"]
 transport-streamable-http-client-unix-socket = [
   "transport-streamable-http-client",
@@ -168,32 +161,60 @@ transport-streamable-http-client-unix-socket = [
   "dep:bytes",
   "tokio/net",
 ]
-
-transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
-transport-io = ["transport-async-rw", "tokio/io-std"]
-transport-child-process = [
-  "transport-async-rw",
-  "tokio/process",
-  "dep:process-wrap",
-]
-which-command = [
-  "transport-child-process",
-  "dep:which",
-]
 transport-streamable-http-server = [
-  "transport-streamable-http-server-session",
-  "server-side-http",
+  "__transport-streamable-http-server-session",
+  "__server-side-http",
   "transport-worker",
 ]
-transport-streamable-http-server-session = [
+
+# --- TLS backends for the reqwest-based HTTP transports ----------------------
+# Enabling none of these leaves reqwest without a TLS backend: `http://` works,
+# every `https://` request fails at runtime.
+tls-rustls = ["__reqwest", "reqwest?/rustls"]
+tls-native = ["__reqwest", "reqwest?/native-tls"]
+tls-no-provider = ["__reqwest", "reqwest?/rustls-no-provider"]
+
+# --- Ecosystem integrations --------------------------------------------------
+tower = ["dep:tower-service"]
+schemars = ["dep:schemars"]
+
+# --- Single-threaded / wasm --------------------------------------------------
+# Drops the `Send` bounds on futures crate-wide. Not additive: enabling it
+# anywhere in the dependency graph changes the trait bounds for every user.
+unsync = ["rmcp-macros?/unsync"]
+
+# --- Internal building blocks ------------------------------------------------
+# Composed by the transport features above; not part of the public API.
+__reqwest = ["dep:reqwest"]
+# SSE stream parsing utilities (used by streamable HTTP client for SSE-formatted responses)
+__client-side-sse = ["dep:sse-stream", "dep:http", "dep:bytes"]
+__server-side-http = [
+  "dep:uuid",
+  "dep:rand",
+  "dep:tokio-stream",
+  "dep:http",
+  "dep:http-body",
+  "dep:http-body-util",
+  "dep:bytes",
+  "dep:sse-stream",
+  "tower",
+]
+__transport-streamable-http-server-session = [
   "transport-async-rw",
   "dep:tokio-stream",
 ]
-# transport-ws = ["transport-io", "dep:tokio-tungstenite"]
-tower = ["dep:tower-service"]
-auth = ["dep:oauth2", "__reqwest", "dep:url"]
-auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
-schemars = ["dep:schemars"]
+
+# --- Deprecated aliases ------------------------------------------------------
+# Kept for one major cycle so v2 manifests keep building. Removed in v4.0 (#1067).
+transport-io = ["transport-stdio"]
+which-command = ["transport-child-process"]
+reqwest = ["tls-rustls"]
+reqwest-native-tls = ["tls-native"]
+reqwest-tls-no-provider = ["tls-no-provider"]
+local = ["unsync"]
+# Now always available; the flag is a no-op.
+elicitation = []
+base64 = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -202,7 +223,6 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tower-service = "0.3"
-url = "2.4"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
@@ -219,7 +239,7 @@ path = "tests/test_tool_macros.rs"
 [[test]]
 name = "test_with_python"
 required-features = [
-  "reqwest",
+  "tls-rustls",
   "server",
   "client",
   "transport-child-process",
@@ -240,7 +260,7 @@ path = "tests/test_with_js.rs"
 
 [[test]]
 name = "test_local_client_handler"
-required-features = ["client", "local"]
+required-features = ["client", "unsync"]
 path = "tests/test_local_client_handler.rs"
 
 [[test]]
@@ -275,7 +295,7 @@ path = "tests/test_request_timeout_progress.rs"
 
 [[test]]
 name = "test_elicitation"
-required-features = ["elicitation", "client", "server"]
+required-features = ["client", "server"]
 path = "tests/test_elicitation.rs"
 
 [[test]]
@@ -285,22 +305,22 @@ path = "tests/test_task.rs"
 
 [[test]]
 name = "test_streamable_http_priming"
-required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+required-features = ["server", "client", "transport-streamable-http-server", "tls-rustls"]
 path = "tests/test_streamable_http_priming.rs"
 
 [[test]]
 name = "test_streamable_http_json_response"
-required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+required-features = ["server", "client", "transport-streamable-http-server", "tls-rustls"]
 path = "tests/test_streamable_http_json_response.rs"
 
 [[test]]
 name = "test_streamable_http_protocol_version"
-required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+required-features = ["server", "client", "transport-streamable-http-server", "tls-rustls"]
 path = "tests/test_streamable_http_protocol_version.rs"
 
 [[test]]
 name = "test_stateless_protocol_version"
-required-features = ["server", "transport-streamable-http-server", "reqwest"]
+required-features = ["server", "transport-streamable-http-server", "tls-rustls"]
 path = "tests/test_stateless_protocol_version.rs"
 
 [[test]]
@@ -322,7 +342,7 @@ path = "tests/test_stateless_server_requests.rs"
 name = "test_discover_http_client_startup"
 required-features = [
   "client",
-  "reqwest",
+  "tls-rustls",
   "transport-streamable-http-client-reqwest",
   "transport-streamable-http-server",
 ]
@@ -330,7 +350,7 @@ path = "tests/test_discover_http_client_startup.rs"
 
 [[test]]
 name = "test_streamable_http_standard_headers"
-required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
+required-features = ["server", "client", "transport-streamable-http-server", "tls-rustls"]
 path = "tests/test_streamable_http_standard_headers.rs"
 
 [[test]]
@@ -382,7 +402,7 @@ path = "tests/test_custom_headers.rs"
 
 [[test]]
 name = "test_sse_concurrent_streams"
-required-features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client", "reqwest"]
+required-features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client", "tls-rustls"]
 path = "tests/test_sse_concurrent_streams.rs"
 
 [[test]]
@@ -448,11 +468,11 @@ name = "test_streamable_http_disconnect_cancel"
 required-features = [
   "server",
   "transport-streamable-http-server",
-  "reqwest",
+  "tls-rustls",
 ]
 path = "tests/test_streamable_http_disconnect_cancel.rs"
 
 [[test]]
 name = "test_sep_2260_stream_routing"
-required-features = ["server", "elicitation", "transport-streamable-http-server", "reqwest"]
+required-features = ["server", "transport-streamable-http-server", "tls-rustls"]
 path = "tests/test_sep_2260_stream_routing.rs"

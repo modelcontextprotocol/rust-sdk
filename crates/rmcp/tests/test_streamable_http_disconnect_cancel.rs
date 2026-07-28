@@ -1,8 +1,8 @@
 #![cfg(all(
     feature = "server",
     feature = "transport-streamable-http-server",
-    feature = "reqwest",
-    not(feature = "local")
+    feature = "tls-rustls",
+    not(feature = "unsync")
 ))]
 
 //! Regression test for #857: when a stateless streamable-HTTP client disconnects

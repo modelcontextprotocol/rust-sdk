@@ -83,14 +83,12 @@ pub use worker::WorkerTransport;
 
 #[cfg(feature = "transport-child-process")]
 pub mod child_process;
-#[cfg(feature = "which-command")]
-pub use child_process::which_command;
 #[cfg(feature = "transport-child-process")]
-pub use child_process::{ConfigureCommandExt, TokioChildProcess};
+pub use child_process::{ConfigureCommandExt, TokioChildProcess, which_command};
 
-#[cfg(feature = "transport-io")]
+#[cfg(feature = "transport-stdio")]
 pub mod io;
-#[cfg(feature = "transport-io")]
+#[cfg(feature = "transport-stdio")]
 pub use io::stdio;
 
 #[cfg(feature = "auth")]
@@ -107,11 +105,9 @@ pub use auth::{
     WWWAuthenticateParams,
 };
 
-// #[cfg(feature = "transport-ws")]
-// pub mod ws;
-#[cfg(feature = "transport-streamable-http-server-session")]
+#[cfg(feature = "__transport-streamable-http-server-session")]
 pub mod streamable_http_server;
-#[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
+#[cfg(all(feature = "transport-streamable-http-server", not(feature = "unsync")))]
 pub use streamable_http_server::tower::{StreamableHttpServerConfig, StreamableHttpService};
 
 #[cfg(feature = "transport-streamable-http-client")]

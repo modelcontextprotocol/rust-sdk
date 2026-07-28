@@ -1,4 +1,4 @@
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 
 use std::{collections::BTreeSet, process::Stdio, time::Duration};
 

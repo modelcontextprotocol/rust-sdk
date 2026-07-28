@@ -1,4 +1,4 @@
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 //! Regression tests for the `MCP-Protocol-Version` header / initialize body consistency check.
 use std::sync::Arc;
 

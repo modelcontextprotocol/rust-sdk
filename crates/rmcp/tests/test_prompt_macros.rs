@@ -1,4 +1,4 @@
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 //cargo test --test test_prompt_macros --features "client server"
 #![allow(dead_code)]
 use std::sync::Arc;

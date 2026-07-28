@@ -1,4 +1,4 @@
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 #![allow(deprecated)]
 mod common;
 

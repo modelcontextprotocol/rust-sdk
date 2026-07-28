@@ -2,7 +2,7 @@
 //!
 //! Peers negotiating `2026-07-28` or newer receive `resultType: "complete"` on
 //! ordinary results; older peers keep the legacy wire shape without the field.
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 #![cfg(feature = "client")]
 
 use rmcp::{

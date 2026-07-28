@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
 };
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 use futures::future::BoxFuture;
 use serde::de::DeserializeOwned;
 
@@ -170,12 +170,12 @@ pub trait CallToolHandler<S, A> {
     ) -> MaybeBoxFuture<'_, Result<CallToolResponse, crate::ErrorData>>;
 }
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 pub type DynCallToolHandler<S> = dyn for<'s> Fn(ToolCallContext<'s, S>) -> BoxFuture<'s, Result<CallToolResponse, crate::ErrorData>>
     + Send
     + Sync;
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 pub type DynCallToolHandler<S> = dyn for<'s> Fn(
     ToolCallContext<'s, S>,
 ) -> futures::future::LocalBoxFuture<

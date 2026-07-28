@@ -99,12 +99,12 @@ jobs:
             --only-explicit-features \
             --features default
 
-      - name: Check rmcp (all features except local)
+      - name: Check rmcp (all features except unsync)
         run: |
           FEATURES=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
                       | select(startswith("__") | not)
-                      | select(. != "local")] | join(",")')
+                      | select(. != "local" and . != "unsync")] | join(",")')
           cargo semver-checks \
             --package rmcp \
             --baseline-rev ${{ github.event.pull_request.base.sha }} \
@@ -168,7 +168,7 @@ jobs:
             --force \
             ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
 
-      - name: Check rmcp (all features except local)
+      - name: Check rmcp (all features except unsync)
         run: |
           BASE_SHA=${{ github.event.pull_request.base.sha }}
           # `cargo public-api diff` builds both revisions with the same feature
@@ -181,7 +181,7 @@ jobs:
             cargo metadata --no-deps --format-version 1 --manifest-path "$1/Cargo.toml" \
               | jq -r '.packages[] | select(.name == "rmcp") | .features | keys[]
                        | select(startswith("__") | not)
-                       | select(. != "local")'
+                       | select(. != "local" and . != "unsync")'
           }
           list_features "." | sort -u > "$RUNNER_TEMP/head_features"
           git worktree add --detach "$RUNNER_TEMP/rmcp-base" "$BASE_SHA"
@@ -258,8 +258,8 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
-  test-no-local:
-    name: Run Tests (no local feature)
+  test-no-unsync:
+    name: Run Tests (no unsync feature)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -284,13 +284,45 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run tests without local feature
+      - name: Run tests without unsync feature
         run: |
           FEATURES=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
                       | select(startswith("__") | not)
-                      | select(. != "local")] | join(",")')
+                      | select(. != "local" and . != "unsync")] | join(",")')
           cargo test -p rmcp --features "$FEATURES"
+
+  feature-matrix:
+    name: Check Features Individually
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--all-features` and the aggregate feature list both hide a feature
+      # whose dependencies only resolve because a sibling feature supplies
+      # them. Building each one alone is what catches a missing `dep:` entry.
+      # Internal `__` features are skipped; they are only ever composed.
+      - name: Check each public feature on its own
+        run: |
+          failed=()
+          while IFS= read -r feature; do
+            echo "::group::cargo check --features $feature"
+            if ! cargo check -p rmcp --no-default-features --features "$feature"; then
+              failed+=("$feature")
+            fi
+            echo "::endgroup::"
+          done < <(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "rmcp") | .features | keys[]
+                     | select(startswith("__") | not)')
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "features that do not build on their own: ${failed[*]}"
+            exit 1
+          fi
 
   coverage:
     name: Code Coverage

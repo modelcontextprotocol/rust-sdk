@@ -1,24 +1,19 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
-#[cfg(feature = "elicitation")]
-use std::collections::HashSet;
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use thiserror::Error;
-#[cfg(feature = "elicitation")]
-use url::Url;
 
 use super::*;
-#[cfg(feature = "elicitation")]
-use crate::model::{ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction};
 use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData, ListRootsRequest,
-        ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
-        ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
-        ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
+        CreateMessageRequestParams, CreateMessageResult, ElicitRequest, ElicitRequestParams,
+        ElicitResult, ElicitationAction, EmptyResult, ErrorData, ListRootsRequest, ListRootsResult,
+        LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
+        ProgressNotificationParam, PromptListChangedNotification, ProtocolVersion,
+        ResourceListChangedNotification, ResourceUpdatedNotification,
         ResourceUpdatedNotificationParam, ServerInfo, ServerNotification, ServerRequest,
         ServerResult, SubscriptionFilter, SubscriptionsAcknowledgedNotification,
         SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
@@ -803,7 +798,6 @@ impl Peer<RoleServer> {
         )]
         peer_req list_roots ListRootsRequest() => ListRootsResult
     );
-    #[cfg(feature = "elicitation")]
     method!(
         /// # SEP-2260: request association
         ///
@@ -811,7 +805,6 @@ impl Peer<RoleServer> {
         /// client request; see [`OriginatingRequestId`].
         peer_req create_elicitation ElicitRequest(ElicitRequestParams) => ElicitResult
     );
-    #[cfg(feature = "elicitation")]
     method!(
         /// # SEP-2260: request association
         ///
@@ -841,7 +834,6 @@ impl Peer<RoleServer> {
 // =============================================================================
 
 /// Errors that can occur during typed elicitation operations
-#[cfg(feature = "elicitation")]
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum ElicitationError {
@@ -894,7 +886,6 @@ pub enum ElicitationError {
 /// let name: String = server.elicit("Enter name").await?;        // Primitive
 /// let items: Vec<i32> = server.elicit("Enter items").await?;    // Array
 /// ```
-#[cfg(feature = "elicitation")]
 pub trait ElicitationSafe: schemars::JsonSchema {}
 
 /// Macro to mark types as safe for elicitation by verifying they generate object schemas.
@@ -920,7 +911,6 @@ pub trait ElicitationSafe: schemars::JsonSchema {}
 /// // Now safe to use in async context:
 /// // let profile: UserProfile = server.elicit("Enter profile").await?;
 /// ```
-#[cfg(feature = "elicitation")]
 #[macro_export]
 macro_rules! elicit_safe {
     ($($t:ty),* $(,)?) => {
@@ -937,7 +927,6 @@ pub enum ElicitationMode {
     Url,
 }
 
-#[cfg(feature = "elicitation")]
 impl Peer<RoleServer> {
     /// Check if the client supports elicitation capability
     ///
@@ -974,7 +963,6 @@ impl Peer<RoleServer> {
     /// eliminating the need to manually create schemas. The response is automatically parsed
     /// into the requested type.
     ///
-    /// **Requires the `elicitation` feature to be enabled.**
     ///
     /// # Type Requirements
     /// The type `T` must implement:
@@ -997,7 +985,7 @@ impl Peer<RoleServer> {
     /// Add to your `Cargo.toml`:
     /// ```toml
     /// [dependencies]
-    /// rmcp = { version = "0.3", features = ["elicitation"] }
+    /// rmcp = { version = "3.0", features = ["server"] }
     /// serde = { version = "1.0", features = ["derive"] }
     /// schemars = "1.0"
     /// ```
@@ -1050,7 +1038,6 @@ impl Peer<RoleServer> {
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
     /// client request; see [`OriginatingRequestId`].
-    #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Option<T>, ElicitationError>
     where
         T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
@@ -1116,7 +1103,6 @@ impl Peer<RoleServer> {
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
     /// client request; see [`OriginatingRequestId`].
-    #[cfg(all(feature = "schemars", feature = "elicitation"))]
     pub async fn elicit_with_timeout<T>(
         &self,
         message: impl Into<String>,
@@ -1177,11 +1163,11 @@ impl Peer<RoleServer> {
     /// This method sends a URL elicitation request to the client, prompting the user
     /// to visit the specified URL and confirm completion. It returns the user's action
     /// (accept/decline/cancel) without any additional data.
-    /// **Requires the `elicitation` feature to be enabled.**
     ///
     /// # Arguments
     /// * `message` - The prompt message for the user
-    /// * `url` - The URL the user is requested to visit
+    /// * `url` - The URL the user is requested to visit. Sent verbatim; parse it
+    ///   into a URL type first if you need validation
     /// * `elicitation_id` - A unique identifier for this elicitation request
     /// # Returns
     /// * `Ok(action)` indicating the user's response action
@@ -1191,11 +1177,10 @@ impl Peer<RoleServer> {
     /// ```rust,no_run
     /// # use rmcp::*;
     /// # use rmcp::model::ElicitationAction;
-    /// # use url::Url;
     ///
     /// async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
     /// let elicit_result = peer.elicit_url("Please visit the following URL to complete the action",
-    ///      Url::parse("https://example.com/complete_action")?, "elicit_123").await?;
+    ///      "https://example.com/complete_action", "elicit_123").await?;
     ///  match elicit_result {
     ///        ElicitationAction::Accept => {
     ///        println!("User accepted and confirmed completion");
@@ -1216,11 +1201,10 @@ impl Peer<RoleServer> {
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
     /// client request; see [`OriginatingRequestId`].
-    #[cfg(feature = "elicitation")]
     pub async fn elicit_url(
         &self,
         message: impl Into<String>,
-        url: impl Into<Url>,
+        url: impl Into<String>,
         elicitation_id: impl Into<String>,
     ) -> Result<ElicitationAction, ElicitationError> {
         self.elicit_url_with_timeout(message, url, elicitation_id, None)
@@ -1233,7 +1217,8 @@ impl Peer<RoleServer> {
     ///
     /// # Arguments
     /// * `message` - The prompt message for the user
-    /// * `url` - The URL the user is requested to visit
+    /// * `url` - The URL the user is requested to visit. Sent verbatim; parse it
+    ///   into a URL type first if you need validation
     /// * `elicitation_id` - A unique identifier for this elicitation request
     /// * `timeout` - Optional timeout duration. If None, uses default timeout behavior
     /// # Returns
@@ -1245,11 +1230,10 @@ impl Peer<RoleServer> {
     /// # use std::time::Duration;
     /// use rmcp::*;
     /// # use rmcp::model::ElicitationAction;
-    /// # use url::Url;
     ///
     /// async fn example(peer: Peer<RoleServer>) -> Result<(), Box<dyn std::error::Error>> {
     /// let elicit_result = peer.elicit_url_with_timeout("Please visit the following URL to complete the action",
-    ///      Url::parse("https://example.com/complete_action")?,
+    ///      "https://example.com/complete_action",
     ///     "elicit_123",
     ///     Some(Duration::from_secs(30))).await?;
     ///  match elicit_result {
@@ -1272,11 +1256,10 @@ impl Peer<RoleServer> {
     ///
     /// From protocol version `2026-07-28` this must be issued while handling a
     /// client request; see [`OriginatingRequestId`].
-    #[cfg(feature = "elicitation")]
     pub async fn elicit_url_with_timeout(
         &self,
         message: impl Into<String>,
-        url: impl Into<Url>,
+        url: impl Into<String>,
         elicitation_id: impl Into<String>,
         timeout: Option<std::time::Duration>,
     ) -> Result<ElicitationAction, ElicitationError> {
@@ -1293,7 +1276,7 @@ impl Peer<RoleServer> {
                 ElicitRequestParams::UrlElicitationParams {
                     meta: None,
                     message: message.into(),
-                    url: url.into().to_string(),
+                    url: url.into(),
                     elicitation_id: elicitation_id.into(),
                 },
                 timeout,

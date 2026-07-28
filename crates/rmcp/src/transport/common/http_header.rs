@@ -27,7 +27,7 @@ pub(crate) const RESERVED_HEADERS: &[&str] = &[
 /// Checks whether a custom header name is allowed.
 /// Returns `Ok(())` if allowed, `Err(name)` if rejected as reserved.
 /// `MCP-Protocol-Version` is reserved but allowed through (the worker injects it post-init).
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), String> {
     if RESERVED_HEADERS
         .iter()
@@ -46,7 +46,7 @@ pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), Stri
 
 /// Extracts the `scope=` parameter from a `WWW-Authenticate` header value.
 /// Handles both quoted (`scope="files:read files:write"`) and unquoted (`scope=read:data`) forms.
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 pub(crate) fn extract_scope_from_header(header: &str) -> Option<String> {
     let header_lowercase = header.to_ascii_lowercase();
     let scope_key = "scope=";
@@ -74,10 +74,10 @@ pub(crate) fn extract_scope_from_header(header: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     use super::*;
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn extract_scope_quoted() {
         let header = r#"Bearer error="insufficient_scope", scope="files:read files:write""#;
@@ -87,7 +87,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn extract_scope_unquoted() {
         let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
@@ -97,41 +97,41 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn extract_scope_missing() {
         let header = r#"Bearer error="invalid_token""#;
         assert_eq!(extract_scope_from_header(header), None);
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn extract_scope_empty_header() {
         assert_eq!(extract_scope_from_header("Bearer"), None);
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn validate_rejects_reserved_accept() {
         let name = http::HeaderName::from_static("accept");
         assert!(validate_custom_header(&name).is_err());
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn validate_rejects_reserved_session_id() {
         let name = http::HeaderName::from_static("mcp-session-id");
         assert!(validate_custom_header(&name).is_err());
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn validate_allows_mcp_protocol_version() {
         let name = http::HeaderName::from_static("mcp-protocol-version");
         assert!(validate_custom_header(&name).is_ok());
     }
 
-    #[cfg(feature = "client-side-sse")]
+    #[cfg(feature = "__client-side-sse")]
     #[test]
     fn validate_allows_custom_header() {
         let name = http::HeaderName::from_static("x-custom");

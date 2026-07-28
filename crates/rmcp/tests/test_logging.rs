@@ -1,5 +1,5 @@
 // cargo test --features "server client" --package rmcp test_logging
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 #![allow(deprecated)]
 mod common;
 

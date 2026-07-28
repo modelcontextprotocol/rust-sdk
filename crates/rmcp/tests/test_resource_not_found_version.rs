@@ -2,7 +2,7 @@
 //!
 //! `2026-07-28` and newer get the standard `INVALID_PARAMS` (-32602); older versions
 //! keep the legacy `RESOURCE_NOT_FOUND` (-32002).
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 #![cfg(feature = "client")]
 
 use rmcp::{

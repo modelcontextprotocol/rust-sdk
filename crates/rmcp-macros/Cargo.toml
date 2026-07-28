@@ -23,6 +23,11 @@ serde_json = "1.0"
 darling = { version = "0.23" }
 
 [features]
-local = []
+# Generate code without `Send` bounds, for single-threaded / wasm targets.
+unsync = []
+
+# --- Deprecated aliases ------------------------------------------------------
+# Kept for one major cycle. Removed in v4.0 (#1067).
+local = ["unsync"]
 
 [dev-dependencies]

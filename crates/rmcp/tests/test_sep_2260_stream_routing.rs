@@ -1,6 +1,6 @@
 //! SEP-2260 end-to-end: in-handler server→client requests ride the originating
 //! POST's SSE stream, never the standalone GET stream.
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 

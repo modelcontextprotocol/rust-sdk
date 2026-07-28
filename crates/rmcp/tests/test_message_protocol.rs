@@ -1,5 +1,5 @@
 //cargo test --test test_message_protocol --features "client server"
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 #![expect(deprecated)] // exercises SEP-2577-deprecated Sampling/Roots/Logging types
 
 mod common;

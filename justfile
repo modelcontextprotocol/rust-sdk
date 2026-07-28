@@ -14,10 +14,10 @@ test:
       FEATURES=$(cargo metadata --no-deps --format-version 1 \
         | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[] \
                   | select(startswith("__") | not) \
-                  | select(. != "local")] | join(",")') && \
+                  | select(. != "local" and . != "unsync")] | join(",")') && \
       cargo test -p rmcp --features "$FEATURES"; \
     else \
-      echo "warning: jq not found, skipping non-local feature tests"; \
+      echo "warning: jq not found, skipping non-unsync feature tests"; \
     fi
 
 cov:

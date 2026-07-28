@@ -1,6 +1,6 @@
 #![cfg(all(
-    not(feature = "local"),
-    feature = "reqwest",
+    not(feature = "unsync"),
+    feature = "tls-rustls",
     feature = "transport-streamable-http-server"
 ))]
 

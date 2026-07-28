@@ -2,7 +2,7 @@
     feature = "transport-streamable-http-client",
     feature = "transport-streamable-http-client-reqwest",
     feature = "transport-streamable-http-server",
-    not(feature = "local")
+    not(feature = "unsync")
 ))]
 
 use std::{

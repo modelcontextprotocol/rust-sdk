@@ -6,7 +6,7 @@
 
 use std::{future::Future, marker::PhantomData};
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 use futures::future::BoxFuture;
 use serde::de::DeserializeOwned;
 
@@ -63,12 +63,12 @@ pub trait GetPromptHandler<S, A> {
 }
 
 /// Type alias for dynamic prompt handlers
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 pub type DynGetPromptHandler<S> = dyn for<'a> Fn(PromptContext<'a, S>) -> BoxFuture<'a, Result<GetPromptResponse, crate::ErrorData>>
     + Send
     + Sync;
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 pub type DynGetPromptHandler<S> = dyn for<'a> Fn(
     PromptContext<'a, S>,
 ) -> futures::future::LocalBoxFuture<

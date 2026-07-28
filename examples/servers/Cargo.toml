@@ -6,15 +6,11 @@ publish = false
 
 [dependencies]
 rmcp = { workspace = true, features = [
-    "server",
-    "macros",
+    "server-stdio",
+    "server-http",
     "client",
-    "transport-io",
-    "transport-streamable-http-server",
     "auth",
-    "elicitation",
     "request-state",
-    "schemars",
 ] }
 tokio = { version = "1", features = [
     "macros",

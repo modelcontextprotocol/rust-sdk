@@ -1,7 +1,7 @@
 //! Tests for protocol version negotiation in stateless HTTP mode.
 //!
 //! Known versions are echoed back; unknown versions fall back to LATEST.
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 
 use rmcp::{
     model::ProtocolVersion,

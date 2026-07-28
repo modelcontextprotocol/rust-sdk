@@ -1,5 +1,5 @@
 #![cfg(all(
-    not(feature = "local"),
+    not(feature = "unsync"),
     feature = "client",
     feature = "server",
     feature = "transport-streamable-http-client-reqwest",

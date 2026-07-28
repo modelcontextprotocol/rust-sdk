@@ -576,13 +576,13 @@ macro_rules! server_handler_methods {
 }
 
 #[allow(unused_variables)]
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 pub trait ServerHandler: Sized + Send + Sync + 'static {
     server_handler_methods!();
 }
 
 #[allow(unused_variables)]
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 pub trait ServerHandler: Sized + 'static {
     server_handler_methods!();
 }

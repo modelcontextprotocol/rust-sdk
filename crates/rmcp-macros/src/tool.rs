@@ -77,7 +77,7 @@ pub struct ToolAttribute {
     /// Optional metadata for the tool
     pub meta: Option<Expr>,
     /// When true, the generated future will not require `Send`. Useful for `!Send` handlers
-    /// (e.g. single-threaded database connections). Also enabled globally by the `local` crate feature.
+    /// (e.g. single-threaded database connections). Also enabled globally by the `unsync` crate feature.
     pub local: bool,
 }
 
@@ -278,9 +278,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     if fn_item.sig.asyncness.is_some() {
         // 1. remove asyncness from sig
         // 2. make return type: `std::pin::Pin<Box<dyn std::future::Future<Output = #ReturnType> + Send + '_>>`
-        //    (omit `+ Send` when the `local` crate feature is active or `#[tool(local)]` is used)
+        //    (omit `+ Send` when the `unsync` crate feature is active or `#[tool(local)]` is used)
         // 3. make body: { Box::pin(async move { #body }) }
-        let omit_send = cfg!(feature = "local") || attribute.local;
+        let omit_send = cfg!(feature = "unsync") || attribute.local;
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
             if let Some(receiver) = fn_item.sig.receiver()

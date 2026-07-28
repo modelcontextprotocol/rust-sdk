@@ -1,4 +1,4 @@
-#![cfg(all(feature = "server", feature = "macros", not(feature = "local")))]
+#![cfg(all(feature = "server", feature = "macros", not(feature = "unsync")))]
 
 use rmcp::{
     Json,

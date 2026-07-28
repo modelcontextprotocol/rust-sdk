@@ -1,4 +1,4 @@
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 //! SEP-414: the reserved trace-context `_meta` keys survive a client→server round trip unchanged.
 use std::sync::Arc;
 

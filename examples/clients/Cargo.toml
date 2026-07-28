@@ -8,12 +8,10 @@ publish = false
 
 [dependencies]
 rmcp = { workspace = true, features = [
-    "client",
-    "reqwest",
-    "transport-streamable-http-client-reqwest",
-    "transport-child-process",
+    "client-http",
+    "client-stdio",
     "tower",
-    "auth"
+    "auth",
 ] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

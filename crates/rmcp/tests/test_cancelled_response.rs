@@ -114,14 +114,14 @@ async fn cancelled_response_helper() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "unsync")]
 async fn run_helper_server() -> anyhow::Result<()> {
     tokio::task::LocalSet::new()
         .run_until(serve_helper_stdio())
         .await
 }
 
-#[cfg(not(feature = "local"))]
+#[cfg(not(feature = "unsync"))]
 async fn run_helper_server() -> anyhow::Result<()> {
     serve_helper_stdio().await
 }

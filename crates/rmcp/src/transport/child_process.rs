@@ -214,7 +214,6 @@ impl ConfigureCommandExt for tokio::process::Command {
 /// # Ok(())
 /// # }
 /// ```
-#[cfg(feature = "which-command")]
 pub fn which_command(
     name: impl AsRef<std::ffi::OsStr>,
 ) -> std::io::Result<tokio::process::Command> {
@@ -223,7 +222,6 @@ pub fn which_command(
     Ok(tokio::process::Command::new(resolved))
 }
 
-#[cfg(feature = "which-command")]
 #[cfg(test)]
 mod tests_which {
     #[test]

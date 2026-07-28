@@ -1,7 +1,7 @@
 #![cfg(all(
     unix,
     feature = "transport-streamable-http-client-unix-socket",
-    not(feature = "local")
+    not(feature = "unsync")
 ))]
 
 use std::{collections::HashMap, sync::Arc};

@@ -1,4 +1,4 @@
-#![cfg(all(feature = "server", feature = "client", not(feature = "local")))]
+#![cfg(all(feature = "server", feature = "client", not(feature = "unsync")))]
 #![allow(deprecated)]
 
 use std::sync::{Arc, Mutex};

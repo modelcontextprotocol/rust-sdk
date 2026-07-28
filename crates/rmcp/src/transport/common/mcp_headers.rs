@@ -58,7 +58,7 @@ fn primitive_to_string(value: &Value) -> Option<String> {
 /// True if `value` must be Base64-wrapped to survive as an HTTP header value:
 /// leading/trailing space or tab, control/non-ASCII characters, or a value that
 /// already looks like the `=?base64?...?=` sentinel.
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 fn requires_base64(value: &str) -> bool {
     if value.is_empty() {
         return false;
@@ -77,7 +77,7 @@ fn requires_base64(value: &str) -> bool {
 }
 
 /// RFC 9110 §5.6.2 token character.
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 fn is_tchar(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
@@ -119,7 +119,7 @@ fn param_header_annotations(input_schema: &JsonObject) -> Vec<(String, String)> 
 /// Annotations must be non-empty RFC 9110 tokens, case-insensitively unique,
 /// applied only to top-level primitive (`string`/`integer`/`boolean`) properties.
 /// Returns the offending reason on the first violation.
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Result<(), String> {
     let Some(Value::Object(props)) = input_schema.get("properties") else {
         return Ok(());
@@ -160,7 +160,7 @@ pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Re
 }
 
 /// Rejects `x-mcp-header` on nested properties (only top-level promotion is supported).
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 fn reject_nested_annotations(schema: &Value, path: &str) -> Result<(), String> {
     if let Some(Value::Object(nested)) = schema.get("properties") {
         for (key, value) in nested {
@@ -176,7 +176,7 @@ fn reject_nested_annotations(schema: &Value, path: &str) -> Result<(), String> {
 }
 
 /// Wraps a value as `=?base64?<b64>?=` when it cannot travel as a bare header value.
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 fn encode_header_value(value: &str) -> String {
     use base64::{Engine, prelude::BASE64_STANDARD};
     if requires_base64(value) {
@@ -190,7 +190,7 @@ fn encode_header_value(value: &str) -> String {
 }
 
 /// Reverses [`encode_header_value`]. Returns `None` if the sentinel wraps invalid Base64/UTF-8.
-#[cfg(feature = "server-side-http")]
+#[cfg(feature = "__server-side-http")]
 fn decode_header_value(value: &str) -> Option<String> {
     use base64::{Engine, prelude::BASE64_STANDARD};
     match value
@@ -209,7 +209,7 @@ fn decode_header_value(value: &str) -> Option<String> {
 ///
 /// `tool_schema` is the cached input schema of the called tool, used to promote
 /// annotated `tools/call` arguments to `Mcp-Param-*` headers.
-#[cfg(feature = "client-side-sse")]
+#[cfg(feature = "__client-side-sse")]
 pub(crate) fn standard_request_headers(
     request: &Value,
     tool_schema: Option<&JsonObject>,
@@ -257,7 +257,7 @@ pub(crate) fn standard_request_headers(
 ///
 /// Returns `Err(reason)` when a required header is missing or its value does not
 /// match the body; the caller maps this to a JSON-RPC `-32020` error (HTTP 400).
-#[cfg(feature = "server-side-http")]
+#[cfg(feature = "__server-side-http")]
 pub(crate) fn validate_request_headers(
     headers: &http::HeaderMap,
     request: &Value,
@@ -330,12 +330,12 @@ pub(crate) fn validate_request_headers(
 }
 
 /// Case-insensitive header lookup returning the value as `&str`, if present and valid UTF-8.
-#[cfg(feature = "server-side-http")]
+#[cfg(feature = "__server-side-http")]
 fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-#[cfg(all(test, feature = "client-side-sse", feature = "server-side-http"))]
+#[cfg(all(test, feature = "__client-side-sse", feature = "__server-side-http"))]
 mod tests {
     use std::collections::HashMap;
 

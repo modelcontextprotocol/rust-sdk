@@ -139,7 +139,6 @@ impl PromptMessage {
         }
     }
 
-    #[cfg(feature = "base64")]
     pub fn new_image(
         role: Role,
         data: &[u8],
@@ -161,7 +160,6 @@ impl PromptMessage {
         }
     }
 
-    #[cfg(feature = "base64")]
     pub fn new_audio(
         role: Role,
         data: &[u8],
@@ -271,7 +269,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "base64")]
     fn test_prompt_message_new_audio_constructor() {
         let message = PromptMessage::new_audio(Role::User, b"hello", "audio/wav", None, None);
         let value = serde_json::to_value(&message).unwrap();

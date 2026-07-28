@@ -1,4 +1,4 @@
-#![cfg(not(feature = "local"))]
+#![cfg(not(feature = "unsync"))]
 //cargo test --test test_close_connection --features "client server"
 
 mod common;

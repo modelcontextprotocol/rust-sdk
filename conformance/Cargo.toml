@@ -14,14 +14,12 @@ path = "src/bin/client.rs"
 
 [dependencies]
 rmcp = { path = "../crates/rmcp", features = [
-    "server",
+    "server-http",
     "client",
-    "elicitation",
-    "auth",
+    # Localhost-only harness, so no `tls-*` backend is pulled in on purpose.
+    "transport-streamable-http-client-reqwest",
     "auth-client-credentials-jwt",
     "request-state",
-    "transport-streamable-http-server",
-    "transport-streamable-http-client-reqwest",
 ] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7" }

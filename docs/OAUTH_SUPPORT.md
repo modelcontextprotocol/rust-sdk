@@ -24,7 +24,7 @@ Enable the auth feature in Cargo.toml:
 
 ```toml
 [dependencies]
-rmcp = { version = "0.1", features = ["auth", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "0.1", features = ["auth", "client-http"] }
 ```
 
 ### 2. Configure OAuth network requests

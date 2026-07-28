@@ -287,7 +287,7 @@ fn server_info(protocol_version: ProtocolVersion) -> ServerInfo {
     info
 }
 
-/// Runs `body` inside a `LocalSet` so `spawn_local` (used when the `local`
+/// Runs `body` inside a `LocalSet` so `spawn_local` (used when the `unsync`
 /// feature is active) is available, wiring up a connected client/server pair.
 async fn with_pair<F, Fut>(
     server: MrtrServer,

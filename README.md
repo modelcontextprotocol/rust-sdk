@@ -51,13 +51,13 @@ below. For the full MCP specification, see
 Add the latest published version with cargo:
 
 ```sh
-cargo add rmcp --features server
+cargo add rmcp --features server-stdio
 ```
 
 Or use the dev channel:
 
 ```sh
-cargo add rmcp --features server --git https://github.com/modelcontextprotocol/rust-sdk --branch main
+cargo add rmcp --features server-stdio --git https://github.com/modelcontextprotocol/rust-sdk --branch main
 ```
 ### Third Dependencies
 

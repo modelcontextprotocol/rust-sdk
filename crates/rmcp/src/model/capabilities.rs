@@ -510,7 +510,7 @@ impl<const E: bool, const EXT: bool, const R: bool, const EL: bool>
     }
 }
 
-#[cfg(all(feature = "elicitation", any(feature = "server", feature = "macros")))]
+#[cfg(any(feature = "server", feature = "macros"))]
 impl<const E: bool, const EXT: bool, const R: bool, const S: bool>
     ClientCapabilitiesBuilder<ClientCapabilitiesBuilderState<E, EXT, R, S, true>>
 {

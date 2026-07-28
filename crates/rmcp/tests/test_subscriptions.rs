@@ -1,8 +1,8 @@
 #![cfg(all(
-    not(feature = "local"),
+    not(feature = "unsync"),
     feature = "client",
     feature = "server",
-    feature = "transport-io"
+    feature = "transport-stdio"
 ))]
 
 use std::{
