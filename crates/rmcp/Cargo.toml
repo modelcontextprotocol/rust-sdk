@@ -64,7 +64,7 @@ jsonwebtoken = { version = "11", optional = true, features = ["aws_lc_rs"] }
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
 
 # for image encoding
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
