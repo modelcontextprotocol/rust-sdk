@@ -358,7 +358,7 @@ impl schemars::JsonSchema for MetaObject {
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "See [specification/draft/basic/index#general-fields] for notes on _meta usage.",
+            "description": "See [MCP general fields](https://modelcontextprotocol.io/specification/2026-07-28/basic#general-fields) for notes on _meta usage.",
             "type": "object",
             "additionalProperties": true,
         })
@@ -374,10 +374,9 @@ impl schemars::JsonSchema for MetaObject {
 /// - `io.modelcontextprotocol/clientCapabilities` (SEP-2575)
 /// - `io.modelcontextprotocol/logLevel` (SEP-2575)
 ///
-/// The 2026-07-28 draft schema marks the protocol-version, client-info, and
-/// client-capabilities keys as required; earlier protocol versions do not know
-/// them. All keys therefore stay optional at runtime and in the generated
-/// (version-shared) JSON schema — use
+/// The 2026-07-28 schema defines required per-request metadata; earlier
+/// protocol versions do not know these keys. All keys therefore stay optional
+/// at runtime and in the generated (version-shared) JSON schema — use
 /// [`RequestMetaObject::missing_required_keys`] to validate a request against
 /// the negotiated protocol version.
 ///
@@ -396,7 +395,7 @@ impl RequestMetaObject {
     const META_KEY_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
     const META_KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
 
-    /// Request `_meta` keys the 2026-07-28 draft schema marks as required.
+    /// Request `_meta` keys validated for the 2026-07-28 protocol.
     pub const DRAFT_REQUIRED_KEYS: [&str; 3] = [
         Self::META_KEY_PROTOCOL_VERSION,
         Self::META_KEY_CLIENT_INFO,
@@ -510,7 +509,7 @@ impl RequestMetaObject {
     ///     meta.missing_required_keys(&ProtocolVersion::V_2025_11_25)
     ///         .is_empty()
     /// );
-    /// // The 2026-07-28 draft requires the SEP-2575 keys.
+    /// // The 2026-07-28 protocol requires per-request context.
     /// assert_eq!(
     ///     meta.missing_required_keys(&ProtocolVersion::V_2026_07_28),
     ///     RequestMetaObject::DRAFT_REQUIRED_KEYS.to_vec(),
@@ -577,9 +576,9 @@ impl schemars::JsonSchema for RequestMetaObject {
         let client_capabilities = generator.subschema_for::<ClientCapabilities>();
         let log_level = generator.subschema_for::<LoggingLevel>();
         // rmcp generates one schema shared by every supported protocol
-        // version, so the keys the 2026-07-28 draft marks as required are left
+        // version, so the keys validated for 2026-07-28 are left
         // optional here: a 2025-11-25 request whose `_meta` only carries
-        // `progressToken` is valid. Draft-strict validation is available at
+        // `progressToken` is valid. Version-specific validation is available at
         // runtime via [`RequestMetaObject::missing_required_keys`].
         schemars::json_schema!({
             "description": "Metadata reserved by MCP on requests. Extension keys are also allowed.",

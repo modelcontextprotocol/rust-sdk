@@ -171,7 +171,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     let subscription_id = context.id.clone();
                     let subscription =
                         SubscriptionContext::establish(context, requested, accepted).await?;
-                    // The integrated draft schema defines a final result for graceful
+                    // The 2026-07-28 schema defines a final result for graceful
                     // server teardown; explicit stdio cancellation remains a notification.
                     self.listen(subscription).await.map(|()| {
                         ServerResult::SubscriptionsListenResult(
@@ -405,7 +405,7 @@ macro_rules! server_handler_methods {
         ///
         /// The SDK sends the acknowledgment before invoking this method. Returning
         /// `Ok(())` sends the final [`SubscriptionsListenResult`] defined by the
-        /// integrated draft schema, marking graceful server teardown. Explicit
+        /// 2026-07-28 schema, marking graceful server teardown. Explicit
         /// stdio cancellation uses `notifications/cancelled` instead.
         fn listen(
             &self,

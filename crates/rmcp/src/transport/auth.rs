@@ -607,7 +607,7 @@ pub enum AuthorizationMetadataSource {
     /// [Newer MCP revisions] require metadata discovery and do not define an
     /// endpoint-synthesis fallback.
     ///
-    /// [Newer MCP revisions]: https://modelcontextprotocol.io/specification/draft/basic/authorization/authorization-server-discovery#protected-resource-metadata-discovery-requirements
+    /// [Newer MCP revisions]: https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery#protected-resource-metadata-discovery-requirements
     LegacyEndpointFallback,
 }
 
@@ -705,7 +705,7 @@ impl OAuthClientConfig {
 /// Declarative description of the client identity material available for an
 /// authorization flow.
 ///
-/// The [MCP authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration)
+/// The [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)
 /// recommends that clients obtain a client ID using the following priority
 /// order. [`OAuthState::start_authorization`] and [`AuthorizationSession::new`]
 /// apply it internally:
@@ -3245,7 +3245,7 @@ pub struct AuthorizationSession {
 
 impl AuthorizationSession {
     /// Create a new authorization session, selecting a client registration
-    /// mechanism per the [MCP authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration)
+    /// mechanism per the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)
     /// priority order:
     ///
     /// 1. Pre-registered client information
@@ -3600,7 +3600,7 @@ impl OAuthState {
     /// Start authorization.
     ///
     /// Selects a client registration mechanism from the identity material in
-    /// `request`, following the [MCP authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration)
+    /// `request`, following the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)
     /// priority order:
     ///
     /// 1. Pre-registered client information

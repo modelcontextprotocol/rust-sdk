@@ -503,9 +503,9 @@ pub struct JsonRpcResponse<R = JsonObject> {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct JsonRpcError {
     pub jsonrpc: JsonRpcVersion2_0,
-    // MCP 2025-11-25 §Error Responses: `id` is optional and omitted when the
+    // MCP 2026-07-28 §Error Responses: `id` is optional and omitted when the
     // server cannot read the request id (e.g. parse error / invalid request).
-    // https://modelcontextprotocol.io/specification/2025-11-25/basic#error-responses
+    // https://modelcontextprotocol.io/specification/2026-07-28/basic#error-responses
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<RequestId>,
     pub error: ErrorData,
@@ -1534,7 +1534,7 @@ macro_rules! paginated_result {
             /// the server handler clears the field when responding to peers that
             /// negotiated an older version.
             ///
-            /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+            /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/271ecc9accafdd9b83a3c869fa67c22953b2af80/schema/2026-07-28/schema.ts#L219-L235
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub result_type: Option<ResultType>,
             #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
@@ -1688,7 +1688,7 @@ pub struct ReadResourceResult {
     /// the server handler clears the field when responding to peers that
     /// negotiated an older version.
     ///
-    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/271ecc9accafdd9b83a3c869fa67c22953b2af80/schema/2026-07-28/schema.ts#L219-L235
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<ResultType>,
     /// Time, in milliseconds, that this result may be treated as fresh (SEP-2549).
@@ -2046,7 +2046,7 @@ fn subscriptions_listen_request_meta_schema(
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SubscriptionsListenRequestParams {
-    /// Protocol-level metadata. Required by the draft wire schema.
+    /// Protocol-level metadata. Required by the 2026-07-28 wire schema.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     #[cfg_attr(
         feature = "schemars",
@@ -3262,7 +3262,7 @@ pub struct CompleteResult {
     /// the server handler clears the field when responding to peers that
     /// negotiated an older version.
     ///
-    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/271ecc9accafdd9b83a3c869fa67c22953b2af80/schema/2026-07-28/schema.ts#L219-L235
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<ResultType>,
     pub completion: CompletionInfo,
@@ -3721,7 +3721,7 @@ pub struct CallToolResult {
     /// the server handler clears the field when responding to peers that
     /// negotiated an older version.
     ///
-    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/271ecc9accafdd9b83a3c869fa67c22953b2af80/schema/2026-07-28/schema.ts#L219-L235
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<ResultType>,
     /// The content returned by the tool (text, images, etc.)
@@ -4105,7 +4105,7 @@ pub struct GetPromptResult {
     /// the server handler clears the field when responding to peers that
     /// negotiated an older version.
     ///
-    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/5bed7b30527019e34ccb0eb474636651424501f6/schema/draft/schema.ts#L225-L234
+    /// [spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/271ecc9accafdd9b83a3c869fa67c22953b2af80/schema/2026-07-28/schema.ts#L219-L235
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<ResultType>,
     #[serde(skip_serializing_if = "Option::is_none")]

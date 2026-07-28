@@ -63,7 +63,7 @@ pub struct StreamableHttpServerConfig {
     /// When enabled, SSE priming events are sent to enable client reconnection.
     ///
     /// Only applies to legacy protocol versions (`< 2026-07-28`). Per SEP-2567,
-    /// sessions are removed from the `2026-07-28` draft version, so requests
+    /// sessions are removed from the `2026-07-28` version, so requests
     /// negotiating that version are always served statelessly regardless of
     /// this setting.
     pub legacy_session_mode: bool,
@@ -745,7 +745,7 @@ fn validate_origin_header(
 /// # Streamable HTTP server
 ///
 /// An HTTP service that implements the
-/// [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http)
+/// [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
 /// for MCP servers.
 ///
 /// ## Session management
