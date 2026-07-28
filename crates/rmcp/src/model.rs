@@ -1029,10 +1029,6 @@ impl RequestParamsMeta for InitializeRequestParams {
     }
 }
 
-/// Deprecated: Use [`InitializeRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use InitializeRequestParams instead")]
-pub type InitializeRequestParam = InitializeRequestParams;
-
 /// The server's response to an initialization request.
 ///
 /// Contains the server's protocol version, capabilities, and implementation
@@ -1437,9 +1433,6 @@ impl RequestParamsMeta for PaginatedRequestParams {
     }
 }
 
-/// Deprecated: Use [`PaginatedRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use PaginatedRequestParams instead")]
-pub type PaginatedRequestParam = PaginatedRequestParams;
 // =============================================================================
 // PROGRESS AND PAGINATION
 // =============================================================================
@@ -1680,10 +1673,6 @@ impl RequestParamsMeta for ReadResourceRequestParams {
     }
 }
 
-/// Deprecated: Use [`ReadResourceRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use ReadResourceRequestParams instead")]
-pub type ReadResourceRequestParam = ReadResourceRequestParams;
-
 /// Result containing the contents of a read resource
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -1788,10 +1777,6 @@ impl RequestParamsMeta for SubscribeRequestParams {
     }
 }
 
-/// Deprecated: Use [`SubscribeRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use SubscribeRequestParams instead")]
-pub type SubscribeRequestParam = SubscribeRequestParams;
-
 /// Request to subscribe to resource updates
 #[deprecated(
     note = "resources/subscribe is legacy-only; use subscriptions/listen for protocol version 2026-07-28"
@@ -1830,10 +1815,6 @@ impl RequestParamsMeta for UnsubscribeRequestParams {
         &mut self.meta
     }
 }
-
-/// Deprecated: Use [`UnsubscribeRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use UnsubscribeRequestParams instead")]
-pub type UnsubscribeRequestParam = UnsubscribeRequestParams;
 
 /// Request to unsubscribe from resource updates
 #[deprecated(
@@ -2333,10 +2314,6 @@ impl RequestParamsMeta for GetPromptRequestParams {
     }
 }
 
-/// Deprecated: Use [`GetPromptRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use GetPromptRequestParams instead")]
-pub type GetPromptRequestParam = GetPromptRequestParams;
-
 /// Request to get a specific prompt
 pub type GetPromptRequest = Request<GetPromptRequestMethod, GetPromptRequestParams>;
 
@@ -2405,10 +2382,6 @@ impl RequestParamsMeta for SetLevelRequestParams {
         &mut self.meta
     }
 }
-
-/// Deprecated: Use [`SetLevelRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use SetLevelRequestParams instead")]
-pub type SetLevelRequestParam = SetLevelRequestParams;
 
 /// Request to set the logging level
 #[deprecated(
@@ -2678,9 +2651,6 @@ pub enum SamplingMessageContentBlock {
     /// User only
     ToolResult(ToolResultContent),
 }
-
-#[deprecated(since = "2.0.0", note = "Renamed to SamplingMessageContentBlock")]
-pub type SamplingMessageContent = SamplingMessageContentBlock;
 
 impl SamplingMessageContentBlock {
     /// Create a text content
@@ -3008,10 +2978,6 @@ impl CreateMessageRequestParams {
     }
 }
 
-/// Deprecated: Use [`CreateMessageRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CreateMessageRequestParams instead")]
-pub type CreateMessageRequestParam = CreateMessageRequestParams;
-
 /// Preferences for model selection and behavior in sampling requests.
 ///
 /// This allows servers to express their preferences for which model to use
@@ -3201,10 +3167,6 @@ impl RequestParamsMeta for CompleteRequestParams {
     }
 }
 
-/// Deprecated: Use [`CompleteRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CompleteRequestParams instead")]
-pub type CompleteRequestParam = CompleteRequestParams;
-
 pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParams>;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -3391,9 +3353,6 @@ impl ResourceTemplateReference {
     }
 }
 
-#[deprecated(since = "2.0.0", note = "Renamed to ResourceTemplateReference")]
-pub type ResourceReference = ResourceTemplateReference;
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -3545,21 +3504,20 @@ pub enum ElicitationAction {
     Cancel,
 }
 
-/// Helper enum for deserializing CreateElicitationRequestParam with backward compatibility.
-/// When mode is missing, it defaults to FormElicitationParam.
+/// Wire representation for tagged elicitation parameters and legacy forms without `mode`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "mode")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-enum CreateElicitationRequestParamDeserializeHelper {
+enum ElicitRequestParamsWire {
     #[serde(rename = "form", rename_all = "camelCase")]
-    FormElicitationParam {
+    Form {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
         meta: Option<RequestMetaObject>,
         message: String,
         requested_schema: ElicitationSchema,
     },
     #[serde(rename = "url", rename_all = "camelCase")]
-    UrlElicitationParam {
+    Url {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
         meta: Option<RequestMetaObject>,
         message: String,
@@ -3567,7 +3525,7 @@ enum CreateElicitationRequestParamDeserializeHelper {
         elicitation_id: String,
     },
     #[serde(untagged, rename_all = "camelCase")]
-    FormElicitationParamBackwardsCompat {
+    LegacyForm {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
         meta: Option<RequestMetaObject>,
         message: String,
@@ -3575,19 +3533,17 @@ enum CreateElicitationRequestParamDeserializeHelper {
     },
 }
 
-impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for ElicitRequestParams {
+impl TryFrom<ElicitRequestParamsWire> for ElicitRequestParams {
     type Error = serde_json::Error;
 
-    fn try_from(
-        value: CreateElicitationRequestParamDeserializeHelper,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(value: ElicitRequestParamsWire) -> Result<Self, Self::Error> {
         match value {
-            CreateElicitationRequestParamDeserializeHelper::FormElicitationParam {
+            ElicitRequestParamsWire::Form {
                 meta,
                 message,
                 requested_schema,
             }
-            | CreateElicitationRequestParamDeserializeHelper::FormElicitationParamBackwardsCompat {
+            | ElicitRequestParamsWire::LegacyForm {
                 meta,
                 message,
                 requested_schema,
@@ -3596,7 +3552,7 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for ElicitRequestPa
                 message,
                 requested_schema,
             }),
-            CreateElicitationRequestParamDeserializeHelper::UrlElicitationParam {
+            ElicitRequestParamsWire::Url {
                 meta,
                 message,
                 url,
@@ -3642,10 +3598,7 @@ impl TryFrom<CreateElicitationRequestParamDeserializeHelper> for ElicitRequestPa
 /// };
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(
-    tag = "mode",
-    try_from = "CreateElicitationRequestParamDeserializeHelper"
-)]
+#[serde(tag = "mode", try_from = "ElicitRequestParamsWire")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum ElicitRequestParams {
@@ -3697,13 +3650,6 @@ impl RequestParamsMeta for ElicitRequestParams {
     }
 }
 
-/// Deprecated: Use [`ElicitRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use ElicitRequestParams instead")]
-pub type CreateElicitationRequestParam = ElicitRequestParams;
-
-#[deprecated(since = "2.0.0", note = "Renamed to ElicitRequestParams")]
-pub type CreateElicitationRequestParams = ElicitRequestParams;
-
 /// The result returned by a client in response to an elicitation request.
 ///
 /// Contains the user's decision (accept/decline/cancel) and optionally their input data
@@ -3750,14 +3696,8 @@ impl ElicitResult {
     }
 }
 
-#[deprecated(since = "2.0.0", note = "Renamed to ElicitResult")]
-pub type CreateElicitationResult = ElicitResult;
-
 /// Request type for creating an elicitation to gather user input
 pub type ElicitRequest = Request<ElicitationCreateRequestMethod, ElicitRequestParams>;
-
-#[deprecated(since = "2.0.0", note = "Renamed to ElicitRequest")]
-pub type CreateElicitationRequest = ElicitRequest;
 
 // =============================================================================
 // TOOL EXECUTION RESULTS
@@ -4087,10 +4027,6 @@ impl RequestParamsMeta for CallToolRequestParams {
         &mut self.meta
     }
 }
-
-/// Deprecated: Use [`CallToolRequestParams`] instead (SEP-1319 compliance).
-#[deprecated(since = "0.13.0", note = "Use CallToolRequestParams instead")]
-pub type CallToolRequestParam = CallToolRequestParams;
 
 /// Request to call a specific tool
 pub type CallToolRequest = Request<CallToolRequestMethod, CallToolRequestParams>;
@@ -4625,14 +4561,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    #[allow(deprecated)]
-    fn deprecated_aliases_still_resolve() {
-        // 하위호환: 구 이름이 새 타입으로 여전히 resolve되는지 확인.
-        let _: CreateElicitationResult = ElicitResult::new(ElicitationAction::Accept);
-        let _: ResourceReference = ResourceTemplateReference::new("res://x");
-    }
-
     #[cfg(feature = "transport-streamable-http-client")]
     #[test]
     fn transport_closed_marker_accepts_only_the_process_local_token() {
@@ -4853,12 +4781,11 @@ mod tests {
             serde_json::from_value(request.clone()).expect("invalid request");
         let (request, id) = request.into_request().expect("should be a request");
         assert_eq!(id, RequestId::Number(1));
-        #[allow(deprecated)]
         match request {
             ClientRequest::InitializeRequest(Request {
                 method: _,
                 params:
-                    InitializeRequestParam {
+                    InitializeRequestParams {
                         meta: _,
                         protocol_version: _,
                         capabilities,
@@ -5124,8 +5051,7 @@ mod tests {
     }
 
     #[test]
-    fn test_elicitation_deserialization_untagged() {
-        // Test deserialization without the "type" field (should default to FormElicitationParam)
+    fn elicitation_without_mode_deserializes_as_form() {
         let json_data_without_tag = json!({
             "message": "Please provide more details.",
             "requestedSchema": {
@@ -5151,7 +5077,7 @@ mod tests {
             assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
             assert_eq!(requested_schema.type_, ObjectTypeConst);
         } else {
-            panic!("Expected FormElicitationParam");
+            panic!("Expected FormElicitationParams");
         }
     }
 
@@ -5189,7 +5115,7 @@ mod tests {
             assert_eq!(requested_schema.title, Some(Cow::from("User Details")));
             assert_eq!(requested_schema.type_, ObjectTypeConst);
         } else {
-            panic!("Expected FormElicitationParam");
+            panic!("Expected FormElicitationParams");
         }
 
         let json_data_url = json!({
@@ -5218,7 +5144,7 @@ mod tests {
             assert_eq!(url, "https://example.com/form");
             assert_eq!(elicitation_id, "elicitation-123");
         } else {
-            panic!("Expected UrlElicitationParam");
+            panic!("Expected UrlElicitationParams");
         }
     }
 

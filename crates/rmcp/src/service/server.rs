@@ -85,13 +85,6 @@ pub enum ServerInitializeError {
     #[error("expect initialized request, but received: {0:?}")]
     ExpectedInitializeRequest(Option<ClientJsonRpcMessage>),
 
-    #[deprecated(
-        since = "1.4.0",
-        note = "The server no longer gates on the initialized notification. This variant is never constructed and will be removed in a future major release."
-    )]
-    #[error("expect initialized notification, but received: {0:?}")]
-    ExpectedInitializedNotification(Option<ClientJsonRpcMessage>),
-
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
 
@@ -100,13 +93,6 @@ pub enum ServerInitializeError {
 
     #[error("initialize failed: {0}")]
     InitializeFailed(ErrorData),
-
-    #[deprecated(
-        since = "1.8.0",
-        note = "Negotiation now falls back to the server-configured version. This variant is never constructed and will be removed in a future major release."
-    )]
-    #[error("unsupported protocol version: {0}")]
-    UnsupportedProtocolVersion(ProtocolVersion),
 
     #[error("Send message error {error}, when {context}")]
     TransportError {

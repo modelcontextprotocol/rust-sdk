@@ -63,9 +63,6 @@ pub enum PrimitiveSchemaDefinition {
     Boolean(BooleanSchema),
 }
 
-#[deprecated(since = "2.0.0", note = "Renamed to PrimitiveSchemaDefinition")]
-pub type PrimitiveSchema = PrimitiveSchemaDefinition;
-
 // =============================================================================
 // STRING SCHEMA
 // =============================================================================
@@ -1598,44 +1595,6 @@ impl ElicitationSchemaBuilder {
     /// Add an optional enum property using EnumSchema
     pub fn optional_enum_schema(self, name: impl Into<String>, enum_schema: EnumSchema) -> Self {
         self.property(name, PrimitiveSchemaDefinition::Enum(enum_schema))
-    }
-
-    /// Add a required enum property using values. Creates an untitled single-select enum.
-    #[deprecated(
-        since = "0.13.0",
-        note = "Use ElicitationSchemaBuilder::required_enum_schema with EnumSchema::builder instead"
-    )]
-    pub fn required_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
-        self.required_property(
-            name,
-            PrimitiveSchemaDefinition::Enum(EnumSchema::Legacy(LegacyEnumSchema {
-                type_: StringTypeConst,
-                title: None,
-                description: None,
-                enum_: values,
-                enum_names: None,
-                default: None,
-            })),
-        )
-    }
-
-    /// Add an optional enum property using values. Creates an untitled single-select enum.
-    #[deprecated(
-        since = "0.13.0",
-        note = "Use ElicitationSchemaBuilder::optional_enum_schema with EnumSchema::builder instead"
-    )]
-    pub fn optional_enum(self, name: impl Into<String>, values: Vec<String>) -> Self {
-        self.property(
-            name,
-            PrimitiveSchemaDefinition::Enum(EnumSchema::Legacy(LegacyEnumSchema {
-                type_: StringTypeConst,
-                title: None,
-                description: None,
-                enum_: values,
-                enum_names: None,
-                default: None,
-            })),
-        )
     }
 
     /// Mark an existing property as required

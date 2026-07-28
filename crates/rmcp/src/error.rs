@@ -1,10 +1,6 @@
 use std::{borrow::Cow, fmt::Display};
 
 pub use crate::model::ErrorData;
-#[deprecated(
-    note = "Use `rmcp::ErrorData` instead, `rmcp::ErrorData` could become `RmcpError` in the future."
-)]
-pub type Error = ErrorData;
 impl Display for ErrorData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code.0, self.message)?;
