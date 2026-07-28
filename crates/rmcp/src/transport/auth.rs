@@ -2639,7 +2639,7 @@ impl AuthorizationManager {
         if status.is_server_error()
             || matches!(
                 status,
-                StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+                StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
             )
         {
             return Err(Box::new(OAuthHttpError::UnexpectedStatus(status)));
@@ -3994,6 +3994,7 @@ mod tests {
 
     #[rstest]
     #[case::resource_request_timeout(StatusCode::REQUEST_TIMEOUT, 0, "https://mcp.example.com/mcp")]
+    #[case::resource_too_early(StatusCode::TOO_EARLY, 0, "https://mcp.example.com/mcp")]
     #[case::resource_too_many_requests(
         StatusCode::TOO_MANY_REQUESTS,
         0,
@@ -4004,6 +4005,11 @@ mod tests {
         1,
         "https://mcp.example.com/.well-known/oauth-protected-resource"
     )]
+    #[case::protected_metadata_too_early(
+        StatusCode::TOO_EARLY,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
     #[case::protected_metadata_too_many_requests(
         StatusCode::TOO_MANY_REQUESTS,
         1,
@@ -4011,6 +4017,11 @@ mod tests {
     )]
     #[case::authorization_request_timeout(
         StatusCode::REQUEST_TIMEOUT,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[case::authorization_too_early(
+        StatusCode::TOO_EARLY,
         2,
         "https://auth.example.com/.well-known/oauth-authorization-server"
     )]
