@@ -6,20 +6,20 @@
 
 An official Rust Model Context Protocol SDK implementation with tokio async runtime.
 
-> **Migrating to 1.x?** See the [migration guide](https://github.com/modelcontextprotocol/rust-sdk/discussions/716) for breaking changes and upgrade instructions.
+> **Migrating to 3.x?** See the [migration guide](https://github.com/modelcontextprotocol/rust-sdk/discussions/969) for breaking changes and upgrade instructions.
 
 This repository contains the following crates:
 
 - [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation - see [rmcp](crates/rmcp/README.md)
 - [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations - see [rmcp-macros](crates/rmcp-macros/README.md)
 
-This SDK tracks the MCP **`2026-07-28`** draft (the current development spec)
-while remaining fully compatible with the stable **`2025-11-25`** release and
-earlier versions. New `2026-07-28` features — server discovery & negotiation,
+This SDK implements the stable MCP **`2026-07-28`** specification while
+remaining fully compatible with the **`2025-11-25`** release and earlier
+versions. Features introduced in `2026-07-28` — server discovery & negotiation,
 transport-neutral subscriptions, long-running tasks, response caching,
 multi-round-trip requests, and standard HTTP routing headers — are documented
-below alongside the stable feature set. For the full MCP specification, see
-[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/draft).
+below. For the full MCP specification, see
+[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/2026-07-28).
 
 ## Table of Contents
 
@@ -185,7 +185,7 @@ let quit_reason = server.cancel().await?;
 
 Tools let servers expose callable functions to clients. Each tool has a name, description, and a JSON Schema for its parameters. Clients discover tools via `list_tools` and invoke them via `call_tool`.
 
-**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/draft/server/tools)
+**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 
 ### Server-side
 
@@ -274,7 +274,7 @@ let result = client.call_tool(CallToolRequestParams::new("add")).await?;
 
 Resources let servers expose data (files, database records, API responses) that clients can read. Each resource is identified by a URI and returns content as text or binary (base64-encoded) data. Resource templates allow servers to declare URI patterns with dynamic parameters.
 
-**MCP Spec:** [Resources](https://modelcontextprotocol.io/specification/draft/server/resources)
+**MCP Spec:** [Resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources)
 
 ### Server-side
 
@@ -409,7 +409,7 @@ impl ClientHandler for MyClient {
 
 Prompts are reusable message templates that servers expose to clients. They accept typed arguments and return conversation messages. The `#[prompt]` macro handles argument validation and routing automatically.
 
-**MCP Spec:** [Prompts](https://modelcontextprotocol.io/specification/draft/server/prompts)
+**MCP Spec:** [Prompts](https://modelcontextprotocol.io/specification/2026-07-28/server/prompts)
 
 ### Server-side
 
@@ -523,7 +523,7 @@ context.peer.notify_prompt_list_changed().await?;
 
 Sampling flips the usual direction: the server asks the client to run an LLM completion. The server sends a `create_message` request, the client processes it through its LLM, and returns the result.
 
-**MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/draft/client/sampling)
+**MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/2026-07-28/client/sampling)
 
 ### Server-side (requesting sampling)
 
@@ -595,7 +595,7 @@ impl ClientHandler for MyClient {
 
 Roots tell servers which directories or projects the client is working in. A root is a URI (typically `file://`) pointing to a workspace or repository. Servers can query roots to know where to look for files and how to scope their work.
 
-**MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/draft/client/roots)
+**MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/2026-07-28/client/roots)
 
 ### Server-side
 
@@ -660,7 +660,7 @@ client.notify_roots_list_changed().await?;
 
 Servers can send structured log messages to clients. The client sets a minimum severity level, and the server sends messages through the peer notification interface.
 
-**MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/draft/server/utilities/logging)
+**MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/logging)
 
 ### Server-side
 
@@ -733,7 +733,7 @@ client.set_level(SetLevelRequestParams::new(LoggingLevel::Warning)).await?;
 
 Completions give auto-completion suggestions for prompt or resource template arguments. As a user fills in arguments, the client can ask the server for suggestions based on what's already been entered.
 
-**MCP Spec:** [Completions](https://modelcontextprotocol.io/specification/draft/server/utilities/completion)
+**MCP Spec:** [Completions](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/completion)
 
 ### Server-side
 
@@ -815,7 +815,7 @@ let result = client.complete(CompleteRequestParams::new(
 
 Notifications are fire-and-forget messages -- no response is expected. They cover progress updates, cancellation, and lifecycle events. Both sides can send and receive them.
 
-**MCP Spec:** [Notifications](https://modelcontextprotocol.io/specification/draft/basic#notifications)
+**MCP Spec:** [Notifications](https://modelcontextprotocol.io/specification/2026-07-28/basic#notifications)
 
 ### Progress notifications
 
@@ -903,7 +903,7 @@ Protocol `2026-07-28` replaces `resources/subscribe`, `resources/unsubscribe`, a
 the standalone HTTP GET stream with the transport-neutral, long-lived
 `subscriptions/listen` request. Each requested notification category is opt-in.
 
-**MCP Spec:** [Subscriptions](https://modelcontextprotocol.io/specification/draft/basic/patterns/subscriptions)
+**MCP Spec:** [Subscriptions](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions)
 
 ### Server-side
 
@@ -995,7 +995,7 @@ one or more embedded server requests (elicitation, sampling, or roots) and then
 retry. The exchange is stateless — the server carries its progress in an opaque
 `requestState` that the client echoes back verbatim.
 
-**MCP Spec:** [Multiple Round-Trip Requests](https://modelcontextprotocol.io/specification/draft/server/tools#multiple-round-trip-requests)
+**MCP Spec:** [Multiple Round-Trip Requests](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#multiple-round-trip-requests)
 
 ### Server-side
 
@@ -1098,7 +1098,7 @@ See [`servers_task_stdio`](examples/servers/src/task_stdio.rs) and the matching
 ## Caching
 
 `rmcp` clients transparently cache responses that carry the
-[SEP-2549](https://modelcontextprotocol.io/specification/draft/server/utilities/caching)
+[SEP-2549](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching)
 caching hints (`ttlMs` / `cacheScope`) for `server/discover`, `tools/list`,
 `prompts/list`, `resources/list`, `resources/templates/list`, and `resources/read`.
 
@@ -1150,7 +1150,7 @@ validates these automatically once a connection negotiates `2026-07-28` or
 newer — no call-site changes are required, and older negotiated versions are
 untouched.
 
-**MCP Spec:** [Header standardization](https://modelcontextprotocol.io/specification/draft/basic/transports#header)
+**MCP Spec:** [Header standardization](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports#header)
 
 - `Mcp-Method` — the JSON-RPC method (e.g. `tools/call`).
 - `Mcp-Name` — the target name, sourced from `params.name` (`tools/call`,
@@ -1186,7 +1186,7 @@ no `Mcp-Session-Id`, no standalone GET/DELETE stream, and no `Last-Event-ID`
 resumption. The `legacy_session_mode` flag below only controls behavior for
 *legacy* protocol versions (`< 2026-07-28`).
 
-**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/draft/basic/transports)
+**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
 
 ### Server-side
 
@@ -1249,8 +1249,8 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
-- [MCP Specification](https://modelcontextprotocol.io/specification/draft)
-- [Schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/draft/schema.ts)
+- [MCP Specification](https://modelcontextprotocol.io/specification/2026-07-28)
+- [Schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
 
 ## Related Projects
 

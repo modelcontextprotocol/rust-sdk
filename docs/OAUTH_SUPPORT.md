@@ -1,6 +1,6 @@
 # Model Context Protocol OAuth Authorization
 
-This document describes the OAuth 2.1 authorization implementation for Model Context Protocol (MCP), following the [MCP Authorization Specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/).
+This document describes the OAuth 2.1 authorization implementation for Model Context Protocol (MCP), following the [MCP Authorization Specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/).
 
 ## Features
 
@@ -160,7 +160,7 @@ distinguish server-published metadata from synthesized metadata.
 The `OAuthState` state machine manages the full authorization lifecycle.
 `start_authorization` accepts an `AuthorizationRequest` describing the client
 identity material you have available, and selects a client registration
-mechanism following the [spec's priority order](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration):
+mechanism following the [spec's priority order](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration):
 
 1. **Pre-registered client information** (`with_preregistered_client`), when
    the client already holds a `client_id` issued out of band
@@ -331,7 +331,7 @@ If you encounter authorization issues, check the following:
 
 ## References
 
-- [MCP Authorization Specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/)
+- [MCP Authorization Specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/)
 - [OAuth 2.1 Specification Draft](https://oauth.net/2.1/)
 - [RFC 8414: OAuth 2.0 Authorization Server Metadata](https://datatracker.ietf.org/doc/html/rfc8414)
 - [RFC 7591: OAuth 2.0 Dynamic Client Registration Protocol](https://datatracker.ietf.org/doc/html/rfc7591)
