@@ -239,6 +239,11 @@ required-features = [
 path = "tests/test_with_js.rs"
 
 [[test]]
+name = "test_local_client_handler"
+required-features = ["client", "local"]
+path = "tests/test_local_client_handler.rs"
+
+[[test]]
 name = "test_notification"
 required-features = ["server", "client"]
 path = "tests/test_notification.rs"
