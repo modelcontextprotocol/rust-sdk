@@ -90,7 +90,7 @@ async fn test_elicitation_request_param_serialization() {
             assert_eq!(msg1, msg2);
             assert_eq!(schema1, schema2);
         }
-        _ => panic!("Expected FormElicitationParam variant"),
+        _ => panic!("Expected FormElicitationParams variant"),
     }
 }
 
@@ -179,7 +179,7 @@ async fn test_elicitation_json_rpc_protocol() {
         ElicitRequestParams::FormElicitationParams { message, .. } => {
             assert_eq!(message, "Do you want to continue?");
         }
-        _ => panic!("Expected FormElicitationParam variant"),
+        _ => panic!("Expected FormElicitationParams variant"),
     }
 }
 
@@ -496,7 +496,7 @@ async fn test_elicitation_structured_schemas() {
                 ])
             );
         }
-        _ => panic!("Expected FormElicitationParam variant"),
+        _ => panic!("Expected FormElicitationParams variant"),
     }
 }
 
@@ -738,7 +738,7 @@ async fn test_elicitation_multi_select_enum() {
                 )
             }
         }
-        _ => panic!("Expected FormElicitationParam variant"),
+        _ => panic!("Expected FormElicitationParams variant"),
     }
 }
 
@@ -799,7 +799,7 @@ async fn test_elicitation_single_select_enum() {
                 )
             }
         }
-        _ => panic!("Expected FormElicitationParam variant"),
+        _ => panic!("Expected FormElicitationParams variant"),
     }
 }
 
@@ -1056,10 +1056,8 @@ async fn test_client_capabilities_with_elicitation() {
     assert!(capabilities_without.elicitation.is_none());
 }
 
-/// Test InitializeRequestParam with elicitation capability
 #[tokio::test]
 async fn test_initialize_request_with_elicitation() {
-    // Test InitializeRequestParam with elicitation capability
     let init_param = InitializeRequestParams::new(
         ClientCapabilities::builder()
             .enable_elicitation_with(
@@ -1829,7 +1827,7 @@ async fn test_url_elicitation_request_param_serialization() {
             assert_eq!(url, "https://example.com/verify");
             assert_eq!(elicitation_id, "elicit-123");
         }
-        _ => panic!("Expected UrlElicitationParam variant"),
+        _ => panic!("Expected UrlElicitationParams variant"),
     }
 }
 
@@ -1878,7 +1876,7 @@ async fn test_url_elicitation_json_rpc_protocol() {
             assert_eq!(url, "https://auth.example.com/authorize/abc123");
             assert_eq!(elicitation_id, "auth-request-456");
         }
-        _ => panic!("Expected UrlElicitationParam variant"),
+        _ => panic!("Expected UrlElicitationParams variant"),
     }
 }
 
@@ -1927,7 +1925,6 @@ async fn test_url_elicitation_capability() {
 /// Test backward compatibility: ElicitRequestParams without mode tag
 #[tokio::test]
 async fn test_elicitation_backward_compatibility_no_mode() {
-    // JSON without "mode" field should deserialize as FormElicitationParam
     let json_without_mode = json!({
         "message": "Please enter your details",
         "requestedSchema": {
@@ -1953,7 +1950,7 @@ async fn test_elicitation_backward_compatibility_no_mode() {
             assert_eq!(requested_schema.properties.len(), 1);
             assert!(requested_schema.properties.contains_key("name"));
         }
-        _ => panic!("Expected FormElicitationParam for backward compatibility"),
+        _ => panic!("Expected FormElicitationParams for backward compatibility"),
     }
 }
 

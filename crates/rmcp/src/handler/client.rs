@@ -129,42 +129,51 @@ macro_rules! client_handler_methods {
         /// Real clients should override this to provide user interaction.
         ///
         /// # Example
-        /// ```rust,ignore
-        /// use rmcp::model::ElicitRequestParams;
+        /// ```rust,no_run
         /// use rmcp::{
-        ///     model::ErrorData as McpError,
-        ///     model::*,
-        ///     service::{NotificationContext, RequestContext, RoleClient, Service, ServiceRole},
+        ///     ClientHandler,
+        ///     model::{
+        ///         ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema,
+        ///         ErrorData as McpError,
+        ///     },
+        ///     service::{RequestContext, RoleClient},
         /// };
-        /// use rmcp::ClientHandler;
         ///
+        /// # struct MyClient;
+        /// #
+        /// # async fn get_user_input(
+        /// #     _message: String,
+        /// #     _schema: ElicitationSchema,
+        /// # ) -> Result<serde_json::Value, McpError> {
+        /// #     std::future::pending().await
+        /// # }
+        /// #
+        /// # async fn open_url_in_browser(_url: String) -> Result<(), McpError> {
+        /// #     Ok(())
+        /// # }
+        /// #
         /// impl ClientHandler for MyClient {
-        ///  async fn create_elicitation(
-        ///     &self,
-        ///     request: ElicitRequestParams,
-        ///     context: RequestContext<RoleClient>,
-        ///  ) -> Result<ElicitResult, McpError> {
-        ///     match request {
-        ///         ElicitRequestParams::FormElicitationParam {meta, message, requested_schema,} => {
-        ///            // Display message to user and collect input according to requested_schema
-        ///           let user_input = get_user_input(message, requested_schema).await?;
-        ///          Ok(ElicitResult {
-        ///             action: ElicitationAction::Accept,
-        ///              content: Some(user_input),
-        ///              meta: None,
-        ///          })
-        ///         }
-        ///         ElicitRequestParams::UrlElicitationParam {meta, message, url, elicitation_id,} => {
-        ///           // Open URL in browser for user to complete elicitation
-        ///           open_url_in_browser(url).await?;
-        ///          Ok(ElicitResult {
-        ///              action: ElicitationAction::Accept,
-        ///             content: None,
-        ///             meta: None,
-        ///             })
+        ///     async fn create_elicitation(
+        ///         &self,
+        ///         request: ElicitRequestParams,
+        ///         _context: RequestContext<RoleClient>,
+        ///     ) -> Result<ElicitResult, McpError> {
+        ///         match request {
+        ///             ElicitRequestParams::FormElicitationParams {
+        ///                 message,
+        ///                 requested_schema,
+        ///                 ..
+        ///             } => {
+        ///                 let input = get_user_input(message, requested_schema).await?;
+        ///                 Ok(ElicitResult::new(ElicitationAction::Accept).with_content(input))
+        ///             }
+        ///             ElicitRequestParams::UrlElicitationParams { url, .. } => {
+        ///                 open_url_in_browser(url).await?;
+        ///                 Ok(ElicitResult::new(ElicitationAction::Accept))
+        ///             }
+        ///             _ => Ok(ElicitResult::new(ElicitationAction::Decline)),
         ///         }
         ///     }
-        ///  }
         /// }
         /// ```
         fn create_elicitation(

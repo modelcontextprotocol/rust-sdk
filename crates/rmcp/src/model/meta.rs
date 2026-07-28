@@ -243,15 +243,6 @@ variant_extension! {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct MetaObject(pub JsonObject);
 
-/// Deprecated alias for [`MetaObject`].
-///
-/// This is a re-export rather than a type alias so the `Meta(...)` tuple
-/// constructor keeps working. Request and notification metadata now have
-/// dedicated types; use [`RequestMetaObject`] or [`NotificationMetaObject`]
-/// where those are expected.
-#[deprecated(note = "Use MetaObject (or RequestMetaObject / NotificationMetaObject)")]
-pub use self::MetaObject as Meta;
-
 impl MetaObject {
     /// Reserved `_meta` key for the W3C Trace Context `traceparent` value (SEP-414).
     const TRACEPARENT_FIELD: &str = "traceparent";
