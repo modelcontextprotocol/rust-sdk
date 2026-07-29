@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.0...rmcp-v3.0.1) - 2026-07-29
+
+### Fixed
+
+- *(auth)* use discovered resource for token refresh ([#1084](https://github.com/modelcontextprotocol/rust-sdk/pull/1084))
+- return header mismatch for missing protocol header ([#1083](https://github.com/modelcontextprotocol/rust-sdk/pull/1083))
+- negotiate stateless initialize versions ([#1080](https://github.com/modelcontextprotocol/rust-sdk/pull/1080))
+- stamp server info on graceful subscription results ([#1078](https://github.com/modelcontextprotocol/rust-sdk/pull/1078))
+
 ## [3.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.0-beta.5...rmcp-v3.0.0) - 2026-07-28
 
 ### Fixed
