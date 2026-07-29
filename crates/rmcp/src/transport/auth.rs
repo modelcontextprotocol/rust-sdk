@@ -2180,7 +2180,7 @@ impl AuthorizationManager {
         let mut refresh_request = oauth_client
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
-            .add_extra_param("resource", self.base_url.to_string());
+            .add_extra_param("resource", self.oauth_resource().await);
         let mut refresh_scopes = stored_credentials.granted_scopes;
         self.add_offline_access_if_supported(&mut refresh_scopes);
         for scope in refresh_scopes {
@@ -4151,6 +4151,110 @@ mod tests {
                     body: Vec::new(),
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_uses_discovered_protected_resource() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token",
+                    "response_types_supported": ["code"],
+                    "code_challenge_methods_supported": ["S256"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "access_token": "initial-access-token",
+                    "token_type": "bearer",
+                    "refresh_token": "initial-refresh-token",
+                    "expires_in": 3600
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "access_token": "refreshed-access-token",
+                    "token_type": "bearer",
+                    "refresh_token": "refreshed-refresh-token",
+                    "expires_in": 3600
+                }),
+            ),
+        ]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let authorization_url = manager.get_authorization_url(&[]).await.unwrap();
+        let authorization_params: HashMap<String, String> = Url::parse(&authorization_url)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+        let state = authorization_params.get("state").unwrap();
+
+        manager
+            .exchange_code_for_token("authorization-code", state)
+            .await
+            .unwrap();
+        manager.refresh_token().await.unwrap();
+
+        let token_requests: Vec<HashMap<String, String>> = client
+            .requests()
+            .into_iter()
+            .filter(|request| request.uri == "https://auth.example.com/token")
+            .map(|request| {
+                url::form_urlencoded::parse(&request.body)
+                    .into_owned()
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(token_requests.len(), 2);
+        assert_eq!(
+            token_requests[0].get("grant_type").map(String::as_str),
+            Some("authorization_code")
+        );
+        assert_eq!(
+            token_requests[1].get("grant_type").map(String::as_str),
+            Some("refresh_token")
+        );
+        assert_eq!(
+            [
+                authorization_params.get("resource").map(String::as_str),
+                token_requests[0].get("resource").map(String::as_str),
+                token_requests[1].get("resource").map(String::as_str),
+            ],
+            [Some("https://mcp.example.com"); 3],
+            "authorization, code exchange, and refresh must use the discovered resource audience"
         );
     }
 
