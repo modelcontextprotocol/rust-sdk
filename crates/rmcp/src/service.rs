@@ -180,7 +180,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
 /// SEP-2260 defines no wire field for association, so only stream-separating
 /// transports (streamable HTTP) can observe it; other transports yield
 /// [`Self::Unknown`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
 pub enum PeerRequestAssociation {
     /// Arrived on the response stream of an in-flight outbound request.
