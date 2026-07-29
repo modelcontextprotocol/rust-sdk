@@ -1,7 +1,7 @@
 use rmcp::model::{
-    ClientJsonRpcMessage, ClientRequest, GetMeta, JsonRpcNotification, JsonRpcRequest,
-    NotificationMetaObject, RequestId, RequestMetaObject, ServerJsonRpcMessage, ServerNotification,
-    SubscriptionFilter, SubscriptionsAcknowledgedNotification,
+    ClientJsonRpcMessage, ClientRequest, GetMeta, Implementation, JsonRpcNotification,
+    JsonRpcRequest, NotificationMetaObject, RequestId, RequestMetaObject, ServerJsonRpcMessage,
+    ServerNotification, SubscriptionFilter, SubscriptionsAcknowledgedNotification,
     SubscriptionsAcknowledgedNotificationParams, SubscriptionsListenRequest,
     SubscriptionsListenRequestParams, SubscriptionsListenResult, SubscriptionsListenResultMeta,
 };
@@ -155,6 +155,7 @@ fn acknowledged_notification_round_trips_numeric_subscription_id_and_metadata() 
 #[test]
 fn listen_result_requires_matching_string_subscription_id_and_preserves_metadata() {
     let mut meta = SubscriptionsListenResultMeta::new(RequestId::String("subscription-2".into()));
+    meta.set_server_info(Implementation::new("test-server", "1.0.0"));
     meta.insert("com.example/result".into(), json!({ "reason": "shutdown" }));
     let result = SubscriptionsListenResult::new(meta);
 
@@ -165,6 +166,10 @@ fn listen_result_requires_matching_string_subscription_id_and_preserves_metadata
             "resultType": "complete",
             "_meta": {
                 "io.modelcontextprotocol/subscriptionId": "subscription-2",
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "test-server",
+                    "version": "1.0.0",
+                },
                 "com.example/result": {
                     "reason": "shutdown",
                 },
@@ -177,6 +182,10 @@ fn listen_result_requires_matching_string_subscription_id_and_preserves_metadata
     assert_eq!(
         round_trip.meta.subscription_id(),
         Some(RequestId::String("subscription-2".into()))
+    );
+    assert_eq!(
+        round_trip.meta.server_info(),
+        Some(Implementation::new("test-server", "1.0.0"))
     );
     assert_eq!(
         round_trip.meta.get("com.example/result"),
@@ -231,6 +240,15 @@ fn subscription_schemas_mark_only_draft_required_fields_as_required() {
     assert_eq!(
         acknowledgment_schema["properties"]["_meta"]["$ref"],
         "#/$defs/NotificationMetaObject"
+    );
+    let result_meta_schema = &result_schema["$defs"]["SubscriptionsListenResultMeta"];
+    assert_eq!(
+        result_meta_schema["properties"]["io.modelcontextprotocol/serverInfo"]["allOf"][0]["$ref"],
+        "#/$defs/Implementation"
+    );
+    assert_eq!(
+        result_meta_schema["required"],
+        json!(["io.modelcontextprotocol/subscriptionId"])
     );
     assert_eq!(result_schema["required"], json!(["resultType", "_meta"]));
 }

@@ -1199,9 +1199,20 @@ pub struct DiscoverResult {
     pub meta: Option<MetaObject>,
 }
 
-impl DiscoverResult {
-    const SERVER_INFO_META_KEY: &str = "io.modelcontextprotocol/serverInfo";
+const SERVER_INFO_META_KEY: &str = "io.modelcontextprotocol/serverInfo";
 
+fn server_info_from_meta(meta: &MetaObject) -> Option<Implementation> {
+    meta.get(SERVER_INFO_META_KEY)
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
+fn set_server_info_on_meta(meta: &mut MetaObject, server_info: Implementation) {
+    let server_info =
+        serde_json::to_value(server_info).expect("Implementation serialization cannot fail");
+    meta.insert(SERVER_INFO_META_KEY.to_owned(), server_info);
+}
+
+impl DiscoverResult {
     /// Create a non-cacheable private discovery result.
     pub fn new(supported_versions: Vec<ProtocolVersion>, capabilities: ServerCapabilities) -> Self {
         Self {
@@ -1217,21 +1228,12 @@ impl DiscoverResult {
 
     /// Return the server implementation information stored in result metadata.
     pub fn server_info(&self) -> Option<Implementation> {
-        self.meta
-            .as_ref()?
-            .0
-            .get(Self::SERVER_INFO_META_KEY)
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
+        server_info_from_meta(self.meta.as_ref()?)
     }
 
     /// Store server implementation information in result metadata.
     pub fn set_server_info(&mut self, server_info: Implementation) {
-        let server_info =
-            serde_json::to_value(server_info).expect("Implementation serialization cannot fail");
-        self.meta
-            .get_or_insert_default()
-            .0
-            .insert(Self::SERVER_INFO_META_KEY.to_owned(), server_info);
+        set_server_info_on_meta(self.meta.get_or_insert_default(), server_info);
     }
 
     /// Store server implementation information in result metadata.
@@ -2174,6 +2176,16 @@ impl SubscriptionsListenResultMeta {
             subscription_id.into_json_value(),
         );
     }
+
+    /// Return the server implementation information stored in result metadata.
+    pub fn server_info(&self) -> Option<Implementation> {
+        server_info_from_meta(&self.0)
+    }
+
+    /// Store server implementation information in result metadata.
+    pub fn set_server_info(&mut self, server_info: Implementation) {
+        set_server_info_on_meta(&mut self.0, server_info);
+    }
 }
 
 impl<'de> Deserialize<'de> for SubscriptionsListenResultMeta {
@@ -2212,9 +2224,14 @@ impl schemars::JsonSchema for SubscriptionsListenResultMeta {
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         let subscription_id = generator.subschema_for::<RequestId>();
+        let server_info = generator.subschema_for::<Implementation>();
         schemars::json_schema!({
             "type": "object",
             "properties": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "description": "Identifies the server software producing the response. Servers SHOULD include this field on every response unless specifically configured not to do so.",
+                    "allOf": [server_info],
+                },
                 "io.modelcontextprotocol/subscriptionId": subscription_id,
             },
             "required": ["io.modelcontextprotocol/subscriptionId"],

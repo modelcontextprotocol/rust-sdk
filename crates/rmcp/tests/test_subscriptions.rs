@@ -51,6 +51,7 @@ impl ServerHandler for ToolsOnlyServer {
                 .enable_tool_list_changed()
                 .build(),
         )
+        .with_server_info(Implementation::new("tools-only-server", "1.0.0"))
     }
 
     fn accepted_subscription_filter(
@@ -439,6 +440,13 @@ async fn listen_exposes_acknowledged_filter_and_graceful_result() -> anyhow::Res
     assert_eq!(
         result.meta.subscription_id().as_ref(),
         Some(subscription.id())
+    );
+    assert_eq!(
+        result
+            .meta
+            .server_info()
+            .expect("graceful result should contain valid server info"),
+        Implementation::new("tools-only-server", "1.0.0")
     );
 
     client.cancel().await?;

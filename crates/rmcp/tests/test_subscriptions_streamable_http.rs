@@ -18,8 +18,8 @@ use std::{
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
     model::{
-        ClientInfo, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject,
-        ServerCapabilities, ServerInfo, ServerNotification, SubscriptionFilter,
+        ClientInfo, ClientRequest, Implementation, ListToolsRequest, ProtocolVersion,
+        RequestMetaObject, ServerCapabilities, ServerInfo, ServerNotification, SubscriptionFilter,
     },
     service::{PeerRequestOptions, SubscriptionContext, SubscriptionEnd},
     transport::{
@@ -59,6 +59,7 @@ impl ServerHandler for HttpSubscriptionServer {
                 .enable_tool_list_changed()
                 .build(),
         )
+        .with_server_info(Implementation::new("http-subscription-server", "1.0.0"))
     }
 
     fn accepted_subscription_filter(
@@ -217,10 +218,16 @@ async fn modern_http_graceful_close_returns_final_listen_result() -> anyhow::Res
 
     assert!(subscription.next().await?.is_some());
     assert!(subscription.next().await?.is_none());
-    assert!(matches!(
-        subscription.end(),
-        Some(SubscriptionEnd::Graceful(_))
-    ));
+    let Some(SubscriptionEnd::Graceful(result)) = subscription.end() else {
+        panic!("expected graceful final result");
+    };
+    assert_eq!(
+        result
+            .meta
+            .server_info()
+            .expect("graceful result should contain valid server info"),
+        Implementation::new("http-subscription-server", "1.0.0")
+    );
 
     client.cancel().await?;
     server_ct.cancel();

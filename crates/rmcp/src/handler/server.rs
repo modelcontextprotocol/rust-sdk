@@ -154,7 +154,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                             McpError::method_not_found::<SubscriptionsListenRequestMethod>(),
                         );
                     };
-                    let advertised = requested.supported_by(&self.get_info().capabilities);
+                    let server_info = self.get_info();
+                    let advertised = requested.supported_by(&server_info.capabilities);
                     let handler_accepted = requested.intersection(&candidate);
                     let accepted = handler_accepted.intersection(&advertised);
                     if accepted != handler_accepted {
@@ -168,15 +169,16 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                             "subscription filter reduced to advertised server capabilities"
                         );
                     }
+                    let server_implementation = server_info.server_info;
                     let subscription_id = context.id.clone();
                     let subscription =
                         SubscriptionContext::establish(context, requested, accepted).await?;
                     // The 2026-07-28 schema defines a final result for graceful
                     // server teardown; explicit stdio cancellation remains a notification.
                     self.listen(subscription).await.map(|()| {
-                        ServerResult::SubscriptionsListenResult(
-                            SubscriptionsListenResult::complete(subscription_id),
-                        )
+                        let mut result = SubscriptionsListenResult::complete(subscription_id);
+                        result.meta.set_server_info(server_implementation);
+                        ServerResult::SubscriptionsListenResult(result)
                     })
                 }
             }
