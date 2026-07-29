@@ -1199,9 +1199,9 @@ pub struct DiscoverResult {
     pub meta: Option<MetaObject>,
 }
 
-impl DiscoverResult {
-    const SERVER_INFO_META_KEY: &str = "io.modelcontextprotocol/serverInfo";
+pub(crate) const SERVER_INFO_META_KEY: &str = "io.modelcontextprotocol/serverInfo";
 
+impl DiscoverResult {
     /// Create a non-cacheable private discovery result.
     pub fn new(supported_versions: Vec<ProtocolVersion>, capabilities: ServerCapabilities) -> Self {
         Self {
@@ -1220,7 +1220,7 @@ impl DiscoverResult {
         self.meta
             .as_ref()?
             .0
-            .get(Self::SERVER_INFO_META_KEY)
+            .get(SERVER_INFO_META_KEY)
             .and_then(|value| serde_json::from_value(value.clone()).ok())
     }
 
@@ -1231,7 +1231,7 @@ impl DiscoverResult {
         self.meta
             .get_or_insert_default()
             .0
-            .insert(Self::SERVER_INFO_META_KEY.to_owned(), server_info);
+            .insert(SERVER_INFO_META_KEY.to_owned(), server_info);
     }
 
     /// Store server implementation information in result metadata.
