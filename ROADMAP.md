@@ -1,69 +1,65 @@
 # RMCP Roadmap
 
-This roadmap tracks the path to SEP-1730 Tier 1 for the Rust MCP SDK.
+This roadmap tracks the path to [SEP-1730](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1730) Tier 1 for the Rust MCP SDK.
 
-Spec 2025-11-25 (suite 0.1.16): Server 100% (30/30) · Client 100% (18/18)
-Spec 2026-07-28 (suite 0.2.0-alpha.9): Server 97.5% (39/40) · Client 90.6% (29/32)
+**Status (2026-07-29):** conformance is 100% across every date-versioned suite, and
+the stable **v3.0.0** release has shipped. The remaining Tier 1 work is documentation
+coverage and two governance documents.
 
-Extension scenarios are reported separately below because they are
-informational and do not count toward SDK tiering.
+| Suite (date-versioned) | Server        | Client        |
+| ---------------------- | ------------- | ------------- |
+| 2025-11-25             | 100% (30/30)  | 100%          |
+| 2026-07-28             | 100% (30/30)  | 100%          |
+
+Only date-versioned scenarios count toward SDK tiering. `draft` (2026-07-28 draft)
+and `extension` scenarios are informational and reported separately below.
 
 ---
 
-## Target spec: 2026-07-28 (release 2026-07-28)
+## Conformance
 
-All 2026-07-28 work carries the `2026-07-28` label and the
-[`2026-07-28 spec` milestone](https://github.com/modelcontextprotocol/rust-sdk/milestone/3).
-Per-scenario conformance status is tracked in the epic issue:
-[#977 — Tracking: 2026-07-28 spec conformance](https://github.com/modelcontextprotocol/rust-sdk/issues/977).
+Per-scenario status for the current spec is tracked in the epic issue
+[#977 — Tracking: 2026-07-28 spec conformance](https://github.com/modelcontextprotocol/rust-sdk/issues/977),
+under the [`2026-07-28 spec` milestone](https://github.com/modelcontextprotocol/rust-sdk/milestone/3).
 
-### Versioned-spec conformance (baseline 2026-07-21, suite `0.2.0-alpha.9`)
+CI (`.github/workflows/conformance.yml`) runs the full `2025-11-25` and `2026-07-28`
+server and client suites on every push and PR. Both suites are fully green.
 
-- Server: 1 expected failure: `json-schema-2020-12`
-- Client: 3 expected failures: `tools_call`, `auth/scope-step-up`, and `auth/authorization-server-migration`
-- CI: runs the complete `2026-07-28` versioned-spec suites with a strict baseline; an unlisted failure or a listed scenario that starts passing fails the build
+### Informational (not scored for tiering)
 
-### Extension conformance (informational)
+Extension-tagged scenarios are excluded by `--spec-version` filters, so CI runs them
+in separate steps against `conformance/expected-failures-extensions.yaml`:
 
-Extension-tagged scenarios are excluded by `--spec-version` filters, so CI
-runs them in separate server and client steps with
-`conformance/expected-failures-extensions.yaml`.
-
-- SEP-2663 Tasks server: 9 expected failures; `tasks-status-notifications` is currently skipped by the upstream harness; tracked in #868
-- Client extensions: `auth/client-credentials-basic` and `auth/client-credentials-jwt` pass; `auth/enterprise-managed-authorization` is an expected failure
+| Scenario                                | Tag        | Status |
+| --------------------------------------- | ---------- | ------ |
+| `auth/client-credentials-basic`         | extension  | ✅ Pass |
+| `auth/client-credentials-jwt`           | extension  | ✅ Pass |
+| `auth/enterprise-managed-authorization` | extension  | ❌ Expected failure (not implemented by the conformance client) |
+| `auth/wif-jwt-bearer`                   | 2026-07-28 draft | ❌ Expected failure (WIF / SEP-1933, draft) |
+| `tasks-*` (SEP-2663)                    | extension  | ❌ 9 expected failures · ⏭️ 1 upstream-skipped |
 
 ### Spec features without conformance scenarios
 
-Conformance alone does not cover the full spec surface. Feature work tracked via the milestone:
+Conformance does not cover the entire spec surface. Remaining feature work tracked via
+the milestone:
 
 - SEP-2567 sessionless MCP via explicit state handles (#870)
 - SEP-2260 server requests must associate with a client request (#873)
 - SEP-2549 follow-up: client-side TTL-honoring cache (#974)
 
-(SEP-2575 discovery & negotiation is covered by the `server-stateless` conformance scenario;
-implementation is in review — #869, PRs #973, #943.)
-
-### Release
-
-The 2026-07-28 implementation ships as **v3.0.0** (release PR #964): MRTR, SEP-2549 cache hints,
-SEP-2243 standard headers, and the SEP-2106 relaxations are merged but unreleased — tiering and
-relegation are evaluated against the latest stable release, so cutting v3.0.0 with the remaining
-conformance fixes is on the critical path. Migration guide (draft, kept current until release):
-[discussion #969](https://github.com/modelcontextprotocol/rust-sdk/discussions/969).
-
 ---
 
-## Tier 1 (non-conformance requirements)
+## Tier 1 — remaining work
 
-### Governance & Policy
+Conformance, stable release, labels, issue triage, and spec-tracking already meet the
+Tier 1 bar. What's left:
 
-- [ ] Create `VERSIONING.md` — document semver scheme, what constitutes a breaking change, and how breaking changes are communicated
-- [ ] Publish a dependency update policy (Tier 1 requires a published policy)
-- [ ] Cut v3.0.0 (#964) including all conformance fixes (tier relegation is evaluated against the latest stable release)
+### Documentation (Tier 1 requires all non-experimental features documented with examples)
 
-### Documentation (26/48 → 48/48 features with prose + examples)
+The README already documents core primitives comprehensively with linked examples.
+Remaining features to document:
 
-#### Undocumented features (14)
+#### Undocumented (add prose + example)
 
 - [ ] Tools — image results
 - [ ] Tools — audio results
@@ -72,45 +68,56 @@ conformance fixes is on the critical path. Migration guide (draft, kept current 
 - [ ] Prompts — image content
 - [ ] Elicitation — URL mode
 - [ ] Elicitation — default values
+- [ ] Elicitation — enum values
 - [ ] Elicitation — complete notification
 - [ ] Ping
-- [ ] SSE transport — legacy (client)
-- [ ] SSE transport — legacy (server)
-- [ ] Pagination
+- [ ] SSE (legacy) transport — client
+- [ ] SSE (legacy) transport — server
+- [ ] Pagination (as a first-class documented feature)
 - [ ] Protocol version negotiation
-- [ ] JSON Schema 2020-12 support *(upgrade from partial)*
 
-#### Partially documented features (7)
+#### Partially documented (upgrade to full prose + example)
 
-- [ ] Tools — error handling *(add dedicated prose + example)*
-- [ ] Resources — reading binary *(add dedicated example)*
-- [ ] Elicitation — form mode *(add prose docs, not just example README)*
-- [ ] Elicitation — schema validation *(add prose docs)*
-- [ ] Elicitation — enum values *(add prose docs)*
-- [ ] Capability negotiation *(add dedicated prose explaining the builder API)*
-- [ ] Protocol version negotiation *(document version negotiation behavior)*
+- [ ] Tools — error handling
+- [ ] Resources — reading binary (dedicated example)
+- [ ] Elicitation — form mode (add prose, not just example)
+- [ ] Elicitation — schema validation (add prose)
+- [ ] Capability negotiation (dedicated prose for the builder API)
+- [ ] JSON Schema 2020-12 support (upgrade from partial)
+
+### Governance & Policy
+
+- [ ] Add `VERSIONING.md` — document the semver scheme, what constitutes a breaking
+      change, and how breaking changes are communicated (migration guides are linked
+      from the README but the policy itself is not yet written down).
+- [ ] Add `DEPENDENCY_POLICY.md` — a published dependency update policy (Dependabot is
+      configured in `.github/dependabot.yml`, but Tier 1 requires a written, findable policy).
+- [ ] Re-triage mislabeled `P0` issues — #869 / #871 / #872 are SEP *feature*
+      implementation tasks, not critical bugs; they should not carry `P0`. Reserving
+      `P0` for genuine critical bugs keeps the SEP-1730 critical-bug-resolution metric
+      accurate.
+
+### Nice-to-have (scorecard hygiene)
+
+- [ ] Add a top-level `CHANGELOG.md` (release notes are currently managed by release-plz).
+- [ ] Add a top-level `CONTRIBUTING.md` (contributor docs currently live at `docs/CONTRIBUTE.MD`).
 
 ---
 
 ## Completed
 
-- [x] 2025-11-25 server conformance 100% (30 scenarios + pending `json-schema-2020-12`, `server-sse-polling`)
-- [x] 2025-11-25 client conformance 100% (18 scenarios + legacy `auth/2025-03-26-*`)
-- [x] SEP-2322 MRTR (14 server scenarios + `sep-2322-client-request-state`)
+- [x] **v3.0.0 stable released** (2026-07-28) — MRTR, SEP-2549 cache hints, SEP-2243
+      standard headers, SEP-2575 stateless MCP, and SEP-2106 relaxations
+- [x] 2025-11-25 server conformance 100% (30/30)
+- [x] 2025-11-25 client conformance 100%
+- [x] 2026-07-28 server conformance 100% (30/30 dated)
+- [x] 2026-07-28 client conformance 100% (dated)
+- [x] SEP-2322 MRTR (server scenarios + `sep-2322-client-request-state`)
+- [x] SEP-2575 Make MCP Stateless (`server-stateless`)
 - [x] SEP-2164 resource not found
-- [x] Cache hints (`caching`)
-- [x] `http-header-validation`
-- [x] Issue triage labels (bug, enhancement, needs confirmation, needs repro, ready for work, P0–P3)
-
----
-
-## Informational (not scored for tiering)
-
-These extension scenarios are tracked but do not count toward tier advancement:
-
-| Scenario | Tag | Status |
-|---|---|---|
-| `auth/client-credentials-jwt` | extension | ✅ Passed |
-| `auth/client-credentials-basic` | extension | ✅ Passed |
-| `auth/enterprise-managed-authorization` | extension | ❌ Failed — scenario is not implemented by the conformance client |
-| `tasks-*` | extension | ❌ 9 expected failures · ⏭️ 1 upstream-skipped scenario |
+- [x] SEP-2549 cache hints (`caching`)
+- [x] SEP-2243 HTTP standardization (`http-header-validation`, standard headers)
+- [x] DNS rebinding protection
+- [x] Full SEP-1730 issue-triage label taxonomy (bug, enhancement, question,
+      needs confirmation, needs repro, ready for work, good first issue, help wanted, P0–P3)
+- [x] `SECURITY.md` and Dependabot configuration
