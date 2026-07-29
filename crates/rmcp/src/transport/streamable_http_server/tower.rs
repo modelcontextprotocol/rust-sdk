@@ -473,9 +473,9 @@ fn validate_request_protocol_version_meta(
         .get(HEADER_MCP_PROTOCOL_VERSION)
         .and_then(|value| value.to_str().ok())
     else {
-        return Err(invalid_request_jsonrpc_response(
+        return Err(header_mismatch_jsonrpc_response(
             Some(request.id.clone()),
-            "Invalid Request: request _meta protocolVersion requires MCP-Protocol-Version header",
+            "request _meta protocolVersion requires MCP-Protocol-Version header",
         ));
     };
     if header_version != meta_version.as_str() {
