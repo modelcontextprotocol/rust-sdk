@@ -28,10 +28,13 @@ use crate::{
         ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode,
         ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
         InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
-        ProtocolVersion, RequestId, ServerJsonRpcMessage,
+        ProtocolVersion, RequestId, ServerInfo, ServerJsonRpcMessage, ServerResult,
     },
     serve_server,
-    service::{serve_directly_with_ct, uses_legacy_lifecycle},
+    service::{
+        NotificationContext, RequestContext, Service, negotiate_protocol_version,
+        serve_directly_with_ct, uses_legacy_lifecycle,
+    },
     transport::{
         OneshotTransport, TransportAdapterIdentity,
         common::{
@@ -254,6 +257,49 @@ fn message_has_per_request_protocol_version(message: &ClientJsonRpcMessage) -> b
             request.request.get_meta().protocol_version().is_some()
         }
         _ => false,
+    }
+}
+
+struct NegotiatingStatelessHttpService<S>(S);
+
+impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpService<S> {
+    async fn handle_request(
+        &self,
+        request: ClientRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ServerResult, ErrorData> {
+        let requested_protocol_version =
+            if let ClientRequest::InitializeRequest(initialize) = &request {
+                Some(initialize.params.protocol_version.clone())
+            } else {
+                None
+            };
+        let peer = context.peer.clone();
+        let mut response = self.0.handle_request(request, context).await?;
+        if let (Some(requested), ServerResult::InitializeResult(result)) =
+            (requested_protocol_version, &mut response)
+        {
+            result.protocol_version =
+                negotiate_protocol_version(&requested, result.protocol_version.clone());
+            if let Some(peer_info) = peer.peer_info() {
+                let mut peer_info = (*peer_info).clone();
+                peer_info.protocol_version = result.protocol_version.clone();
+                peer.set_peer_info(peer_info);
+            }
+        }
+        Ok(response)
+    }
+
+    async fn handle_notification(
+        &self,
+        notification: ClientNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.0.handle_notification(notification, context).await
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        self.0.get_info()
     }
 }
 
@@ -1044,7 +1090,12 @@ where
         // disconnect can cancel the in-flight handler (#857), as in the
         // non-negotiated stateless path below.
         let request_ct = CancellationToken::new();
-        let service = serve_directly_with_ct(service, transport, peer_info, request_ct.clone());
+        let service = serve_directly_with_ct(
+            NegotiatingStatelessHttpService(service),
+            transport,
+            peer_info,
+            request_ct.clone(),
+        );
         tokio::spawn(async move {
             let _ = service.waiting().await;
         });
@@ -1789,8 +1840,12 @@ where
                     // unpersisted response can cancel the in-flight handler on
                     // disconnect (#857).
                     let request_ct = CancellationToken::new();
-                    let service =
-                        serve_directly_with_ct(service, transport, peer_info, request_ct.clone());
+                    let service = serve_directly_with_ct(
+                        NegotiatingStatelessHttpService(service),
+                        transport,
+                        peer_info,
+                        request_ct.clone(),
+                    );
                     tokio::spawn(async move {
                         // on service created
                         let _ = service.waiting().await;

@@ -4,30 +4,51 @@
 #![cfg(not(feature = "local"))]
 
 use rmcp::{
-    model::ProtocolVersion,
+    ErrorData, RoleServer, ServerHandler,
+    model::{
+        InitializeRequestParams, InitializeResult, ProtocolVersion, ServerCapabilities, ServerInfo,
+    },
+    service::RequestContext,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
 };
 use tokio_util::sync::CancellationToken;
 
-mod common;
-use common::calculator::Calculator;
+#[derive(Clone)]
+struct OverridingInitialize;
 
-fn stateless_json_config() -> StreamableHttpServerConfig {
+impl ServerHandler for OverridingInitialize {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::default())
+    }
+
+    async fn initialize(
+        &self,
+        _request: InitializeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        Ok(self.get_info())
+    }
+}
+
+fn stateless_sse_config() -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
-        .with_json_response(true)
         .with_sse_keep_alive(None)
         .with_cancellation_token(CancellationToken::new())
+}
+
+fn stateless_json_config() -> StreamableHttpServerConfig {
+    stateless_sse_config().with_json_response(true)
 }
 
 async fn spawn_server(
     config: StreamableHttpServerConfig,
 ) -> (reqwest::Client, String, CancellationToken) {
     let ct = config.cancellation_token.clone();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(Calculator::new()), Default::default(), config);
+    let service: StreamableHttpService<OverridingInitialize, LocalSessionManager> =
+        StreamableHttpService::new(|| Ok(OverridingInitialize), Default::default(), config);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -65,11 +86,27 @@ async fn post_init(client: &reqwest::Client, url: &str, body_version: &str) -> s
         .await
         .expect("send request");
     assert!(resp.status().is_success(), "HTTP {}", resp.status());
-    resp.json().await.expect("parse JSON")
+    let is_json = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+    if is_json {
+        resp.json().await.expect("parse JSON")
+    } else {
+        let body = resp.text().await.expect("read SSE body");
+        let data = body
+            .lines()
+            .find_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .filter(|data| !data.is_empty())
+            .expect("SSE response contains data");
+        serde_json::from_str(data).expect("parse SSE data")
+    }
 }
 
 #[tokio::test]
-async fn stateless_init_echoes_known_version() {
+async fn stateless_json_init_echoes_known_versions_when_handler_overrides_initialize() {
     let (client, url, ct) = spawn_server(stateless_json_config()).await;
 
     for version in ProtocolVersion::KNOWN_VERSIONS {
@@ -85,14 +122,30 @@ async fn stateless_init_echoes_known_version() {
 }
 
 #[tokio::test]
-async fn stateless_init_unknown_version_falls_back_to_latest() {
+async fn stateless_sse_init_echoes_known_versions_when_handler_overrides_initialize() {
+    let (client, url, ct) = spawn_server(stateless_sse_config()).await;
+
+    for version in ProtocolVersion::KNOWN_VERSIONS {
+        let resp = post_init(&client, &url, version.as_str()).await;
+        assert_eq!(
+            resp["result"]["protocolVersion"],
+            version.as_str(),
+            "known version {version} should be echoed back"
+        );
+    }
+
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_json_init_preserves_handler_fallback_for_unknown_version() {
     let (client, url, ct) = spawn_server(stateless_json_config()).await;
 
     let resp = post_init(&client, &url, "1999-01-01").await;
     assert_eq!(
         resp["result"]["protocolVersion"],
         ProtocolVersion::LATEST.as_str(),
-        "unknown version should fall back to LATEST"
+        "unknown version should preserve the handler's fallback"
     );
 
     ct.cancel();
