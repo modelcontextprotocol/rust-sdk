@@ -177,11 +177,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     // server teardown; explicit stdio cancellation remains a notification.
                     self.listen(subscription).await.map(|()| {
                         let mut result = SubscriptionsListenResult::complete(subscription_id);
-                        result.meta.insert(
-                            SERVER_INFO_META_KEY.to_owned(),
-                            serde_json::to_value(server_implementation)
-                                .expect("Implementation serialization cannot fail"),
-                        );
+                        result.meta.set_server_info(server_implementation);
                         ServerResult::SubscriptionsListenResult(result)
                     })
                 }

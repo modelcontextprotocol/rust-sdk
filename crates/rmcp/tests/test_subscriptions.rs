@@ -444,9 +444,9 @@ async fn listen_exposes_acknowledged_filter_and_graceful_result() -> anyhow::Res
     assert_eq!(
         result
             .meta
-            .get("io.modelcontextprotocol/serverInfo")
-            .and_then(|value| serde_json::from_value::<Implementation>(value.clone()).ok()),
-        Some(Implementation::new("tools-only-server", "1.0.0"))
+            .server_info()
+            .expect("graceful result should contain valid server info"),
+        Implementation::new("tools-only-server", "1.0.0")
     );
 
     client.cancel().await?;

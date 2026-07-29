@@ -224,9 +224,9 @@ async fn modern_http_graceful_close_returns_final_listen_result() -> anyhow::Res
     assert_eq!(
         result
             .meta
-            .get("io.modelcontextprotocol/serverInfo")
-            .and_then(|value| serde_json::from_value::<Implementation>(value.clone()).ok()),
-        Some(Implementation::new("http-subscription-server", "1.0.0"))
+            .server_info()
+            .expect("graceful result should contain valid server info"),
+        Implementation::new("http-subscription-server", "1.0.0")
     );
 
     client.cancel().await?;

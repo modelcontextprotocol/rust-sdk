@@ -3450,6 +3450,14 @@
     "SubscriptionsListenResultMeta": {
       "type": "object",
       "properties": {
+        "io.modelcontextprotocol/serverInfo": {
+          "description": "Identifies the server software producing the response. Servers SHOULD include this field on every response unless specifically configured not to do so.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Implementation"
+            }
+          ]
+        },
         "io.modelcontextprotocol/subscriptionId": {
           "$ref": "#/definitions/NumberOrString"
         }
