@@ -3935,11 +3935,14 @@ impl CallToolResult {
             meta: None,
         }
     }
-    /// Create a successful tool result with structured content
+    /// Create a successful tool result with structured content.
+    ///
+    /// This leaves `content` empty. Use [`Self::with_content`] when the result
+    /// should also include a human-readable or backwards-compatible rendering.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
     /// use rmcp::model::CallToolResult;
     /// use serde_json::json;
     ///
@@ -3948,21 +3951,26 @@ impl CallToolResult {
     ///     "humidity": 65,
     ///     "description": "Partly cloudy"
     /// }));
+    ///
+    /// assert!(result.content.is_empty());
     /// ```
     pub fn structured(value: Value) -> Self {
         CallToolResult {
             result_type: Some(ResultType::COMPLETE),
-            content: vec![ContentBlock::text(value.to_string())],
+            content: Vec::new(),
             structured_content: Some(value),
             is_error: Some(false),
             meta: None,
         }
     }
-    /// Create an error tool result with structured content
+    /// Create an error tool result with structured content.
+    ///
+    /// This leaves `content` empty. Use [`Self::with_content`] when the result
+    /// should also include a human-readable or backwards-compatible rendering.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
     /// use rmcp::model::CallToolResult;
     /// use serde_json::json;
     ///
@@ -3975,15 +3983,40 @@ impl CallToolResult {
     ///         "provided": 100
     ///     }
     /// }));
+    ///
+    /// assert!(result.content.is_empty());
     /// ```
     pub fn structured_error(value: Value) -> Self {
         CallToolResult {
             result_type: Some(ResultType::COMPLETE),
-            content: vec![ContentBlock::text(value.to_string())],
+            content: Vec::new(),
             structured_content: Some(value),
             is_error: Some(true),
             meta: None,
         }
+    }
+
+    /// Replace the content blocks on this result.
+    ///
+    /// This can pair structured content with a custom rendering or an explicit
+    /// serialized JSON fallback.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rmcp::model::{CallToolResult, ContentBlock};
+    /// use serde_json::json;
+    ///
+    /// let value = json!({"rows": [1, 2, 3]});
+    /// let fallback = ContentBlock::text(value.to_string());
+    /// let result = CallToolResult::structured(value)
+    ///     .with_content(vec![fallback]);
+    ///
+    /// assert_eq!(result.content.len(), 1);
+    /// ```
+    pub fn with_content(mut self, content: Vec<ContentBlock>) -> Self {
+        self.content = content;
+        self
     }
 
     /// Set the metadata on this result

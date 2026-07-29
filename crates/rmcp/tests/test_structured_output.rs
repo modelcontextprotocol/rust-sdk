@@ -8,7 +8,7 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct CalculationRequest {
@@ -147,9 +147,8 @@ async fn test_tool_without_output_schema() {
     assert!(greeting_tool.output_schema.is_none());
 }
 
-#[tokio::test]
-async fn test_structured_content_in_call_result() {
-    // Test creating a CallToolResult with structured content
+#[test]
+fn structured_should_leave_content_empty() {
     let structured_data = json!({
         "sum": 7,
         "product": 12
@@ -157,27 +156,13 @@ async fn test_structured_content_in_call_result() {
 
     let result = CallToolResult::structured(structured_data.clone());
 
-    assert!(!result.content.is_empty());
-    assert!(result.structured_content.is_some());
-
-    let contents = result.content;
-
-    assert_eq!(contents.len(), 1);
-
-    let content_text = contents.first().unwrap().as_text();
-
-    assert!(content_text.is_some());
-
-    let content_value: Value = serde_json::from_str(&content_text.unwrap().text).unwrap();
-
-    assert_eq!(content_value, structured_data);
-    assert_eq!(result.structured_content.unwrap(), structured_data);
+    assert!(result.content.is_empty());
+    assert_eq!(result.structured_content, Some(structured_data));
     assert_eq!(result.is_error, Some(false));
 }
 
-#[tokio::test]
-async fn test_structured_error_in_call_result() {
-    // Test creating a CallToolResult with structured error
+#[test]
+fn structured_error_should_leave_content_empty() {
     let error_data = json!({
         "error_code": "NOT_FOUND",
         "message": "User not found"
@@ -185,22 +170,25 @@ async fn test_structured_error_in_call_result() {
 
     let result = CallToolResult::structured_error(error_data.clone());
 
-    assert!(!result.content.is_empty());
-    assert!(result.structured_content.is_some());
-
-    let contents = result.content;
-
-    assert_eq!(contents.len(), 1);
-
-    let content_text = contents.first().unwrap().as_text();
-
-    assert!(content_text.is_some());
-
-    let content_value: Value = serde_json::from_str(&content_text.unwrap().text).unwrap();
-
-    assert_eq!(content_value, error_data);
-    assert_eq!(result.structured_content.unwrap(), error_data);
+    assert!(result.content.is_empty());
+    assert_eq!(result.structured_content, Some(error_data));
     assert_eq!(result.is_error, Some(true));
+}
+
+#[test]
+fn with_content_should_add_explicit_json_fallback() {
+    let structured_data = json!({"rows": [1, 2, 3]});
+    let fallback = structured_data.to_string();
+
+    let result = CallToolResult::structured(structured_data.clone())
+        .with_content(vec![ContentBlock::text(&fallback)]);
+
+    assert_eq!(result.content.len(), 1);
+    assert_eq!(
+        result.content.first().unwrap().as_text().unwrap().text,
+        fallback
+    );
+    assert_eq!(result.structured_content, Some(structured_data));
 }
 
 #[tokio::test]
@@ -236,9 +224,8 @@ async fn test_mutual_exclusivity_validation() {
     assert!(deserialized.is_ok());
 }
 
-#[tokio::test]
-async fn test_structured_return_conversion() {
-    // Test that Json<T> converts to CallToolResult with structured_content
+#[test]
+fn json_should_convert_without_content() {
     let calc_result = CalculationResult {
         sum: 7,
         product: 12,
@@ -253,23 +240,8 @@ async fn test_structured_return_conversion() {
         panic!("expected complete CallToolResult");
     };
 
-    // Tools which return structured content should also return a serialized version as
-    // Content::text for backwards compatibility.
-    assert!(!call_result.content.is_empty());
-    assert!(call_result.structured_content.is_some());
-
-    let contents = call_result.content;
-
-    assert_eq!(contents.len(), 1);
-
-    let content_text = contents.first().unwrap().as_text();
-
-    assert!(content_text.is_some());
-
-    let content_value: Value = serde_json::from_str(&content_text.unwrap().text).unwrap();
+    assert!(call_result.content.is_empty());
     let structured_value = call_result.structured_content.unwrap();
-
-    assert_eq!(content_value, structured_value);
 
     assert_eq!(structured_value["sum"], 7);
     assert_eq!(structured_value["product"], 12);
@@ -294,7 +266,7 @@ async fn test_tool_serialization_with_output_schema() {
 }
 
 #[tokio::test]
-async fn test_output_schema_requires_structured_content() {
+async fn json_tool_should_return_structured_content_without_fallback() {
     // Test that tools with output_schema must use structured_content
     let server = TestServer::new();
     let tools = server.tool_router.list_all();
@@ -316,9 +288,8 @@ async fn test_output_schema_requires_structured_content() {
         panic!("expected complete CallToolResult");
     };
 
-    // Verify it has structured_content and content
     assert!(call_result.structured_content.is_some());
-    assert!(!call_result.content.is_empty());
+    assert!(call_result.content.is_empty());
 }
 
 #[tokio::test]
