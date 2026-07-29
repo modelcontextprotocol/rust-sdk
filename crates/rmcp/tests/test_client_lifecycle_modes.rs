@@ -338,6 +338,66 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
 }
 
 #[tokio::test]
+async fn auto_startup_falls_back_after_discover_invalid_params() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected request");
+        };
+        assert!(matches!(
+            discover.request,
+            ClientRequest::DiscoverRequest(_)
+        ));
+        server
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::new(ErrorCode::INVALID_PARAMS, "Invalid params", None),
+                Some(discover.id),
+            ))
+            .await
+            .expect("send invalid-params");
+
+        let ClientJsonRpcMessage::Request(initialize) =
+            server.receive().await.expect("expected initialize request")
+        else {
+            panic!("expected request");
+        };
+        assert!(matches!(
+            initialize.request,
+            ClientRequest::InitializeRequest(_)
+        ));
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::InitializeResult(
+                    InitializeResult::new(ServerCapabilities::default()),
+                ),
+                initialize.id,
+            ))
+            .await
+            .expect("send initialize response");
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Notification(_))
+        ));
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("auto client should fall back");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
 async fn discover_startup_retries_a_mutually_supported_version() {
     let unsupported: ProtocolVersion =
         serde_json::from_value(serde_json::json!("2099-01-01")).unwrap();
