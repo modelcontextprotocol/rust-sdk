@@ -2236,13 +2236,14 @@ mod sep2260_association_tests {
         ))
     }
 
-    fn server_info(version: ProtocolVersion) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::default());
-        info.protocol_version = version;
-        info
+    fn server_info(version: ProtocolVersion) -> ServerPeerInfo {
+        ServerPeerInfo::new(version, ServerCapabilities::default())
     }
 
-    fn enforce(info: &ServerInfo, association: PeerRequestAssociation) -> Result<(), ErrorData> {
+    fn enforce(
+        info: &ServerPeerInfo,
+        association: PeerRequestAssociation,
+    ) -> Result<(), ErrorData> {
         RoleClient::enforce_peer_request_association(&sampling_request(), Some(info), association)
     }
 
