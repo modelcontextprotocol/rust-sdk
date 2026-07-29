@@ -168,10 +168,29 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     fn enforce_peer_request_association(
         _peer_request: &Self::PeerReq,
         _peer_info: Option<&Self::PeerInfo>,
-        _has_pending_outbound_request: bool,
+        _association: PeerRequestAssociation,
     ) -> Result<(), McpError> {
         Ok(())
     }
+}
+
+/// How an inbound peer request relates to this side's in-flight outbound
+/// requests (SEP-2260).
+///
+/// SEP-2260 defines no wire field for association, so only stream-separating
+/// transports (streamable HTTP) can observe it; other transports yield
+/// [`Self::Unknown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+pub enum PeerRequestAssociation {
+    /// Arrived on the response stream of an in-flight outbound request.
+    Associated,
+    /// Arrived on a stream tied to no in-flight outbound request (e.g. the
+    /// streamable HTTP standalone GET stream).
+    Unassociated,
+    /// The transport cannot distinguish streams; only the coarse in-flight
+    /// signal is available.
+    Unknown { has_pending_outbound_request: bool },
 }
 
 pub(crate) fn uses_legacy_lifecycle(
@@ -180,6 +199,25 @@ pub(crate) fn uses_legacy_lifecycle(
 ) -> bool {
     !uses_discover_lifecycle
         && protocol_version.is_none_or(|version| version < &ProtocolVersion::V_2026_07_28)
+}
+
+pub(crate) fn peer_request_association<Req: crate::model::GetExtensions, V>(
+    request: &Req,
+    local_responder_pool: &std::collections::HashMap<RequestId, V>,
+) -> PeerRequestAssociation {
+    match request.extensions().get::<InboundStreamOrigin>() {
+        None => PeerRequestAssociation::Unknown {
+            has_pending_outbound_request: !local_responder_pool.is_empty(),
+        },
+        Some(InboundStreamOrigin::Unassociated) => PeerRequestAssociation::Unassociated,
+        Some(InboundStreamOrigin::OutboundRequest(id)) => {
+            if local_responder_pool.contains_key(id) {
+                PeerRequestAssociation::Associated
+            } else {
+                PeerRequestAssociation::Unassociated
+            }
+        }
+    }
 }
 
 tokio::task_local! {
@@ -205,9 +243,25 @@ pub(crate) fn in_request_handler_scope() -> bool {
 /// outside a handler they return an `invalid_request` error. The association
 /// is task-local and does not cross `tokio::spawn`, so use the task manager
 /// for long-running work.
+///
+/// The client receive-side mirror is [`InboundStreamOrigin`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct OriginatingRequestId(pub RequestId);
+
+/// Marker in an inbound request's non-serialized [`Extensions`] recording
+/// which HTTP response stream it arrived on: the receive-side mirror of
+/// [`OriginatingRequestId`]. Never on the wire (SEP-2260 defines no wire
+/// field); when absent, the coarse in-flight check applies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
+pub enum InboundStreamOrigin {
+    /// The standalone GET stream, or a POST response stream not tied to an
+    /// outbound request.
+    Unassociated,
+    /// The SSE response stream of the POST that carried this outbound request.
+    OutboundRequest(RequestId),
+}
 
 pub type TxJsonRpcMessage<R> =
     JsonRpcMessage<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
@@ -1448,7 +1502,7 @@ where
                     if let Err(error) = R::enforce_peer_request_association(
                         &request,
                         peer.peer_info().as_deref(),
-                        !local_responder_pool.is_empty(),
+                        peer_request_association(&request, &local_responder_pool),
                     ) {
                         tracing::warn!(%id, message = %error.message, "rejected peer request");
                         // send directly: the sink proxy path would drop the
@@ -1728,5 +1782,74 @@ mod sep2260_marker_tests {
     async fn outbound_request_has_no_marker_outside_scope() {
         let request = send_and_capture(None).await;
         assert!(request.extensions().get::<OriginatingRequestId>().is_none());
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "Sampling is deprecated by SEP-2577 but remains the canonical restricted request"
+    )]
+    fn peer_request_association_maps_stream_origin() {
+        use std::collections::HashMap;
+
+        use crate::model::{
+            CreateMessageRequest, CreateMessageRequestParams, SamplingMessage, ServerRequest,
+        };
+
+        fn sampling(origin: Option<InboundStreamOrigin>) -> ServerRequest {
+            let mut request = CreateMessageRequest::new(CreateMessageRequestParams::new(
+                vec![SamplingMessage::user_text("hi")],
+                16,
+            ));
+            if let Some(origin) = origin {
+                request.extensions.insert(origin);
+            }
+            ServerRequest::CreateMessageRequest(request)
+        }
+
+        let empty: HashMap<RequestId, ()> = HashMap::new();
+        let in_flight: HashMap<RequestId, ()> = HashMap::from([(RequestId::Number(7), ())]);
+
+        // No marker (stdio): coarse signal.
+        assert_eq!(
+            peer_request_association(&sampling(None), &in_flight),
+            PeerRequestAssociation::Unknown {
+                has_pending_outbound_request: true
+            }
+        );
+        assert_eq!(
+            peer_request_association(&sampling(None), &empty),
+            PeerRequestAssociation::Unknown {
+                has_pending_outbound_request: false
+            }
+        );
+        // Standalone GET stream: unassociated even with requests in flight.
+        assert_eq!(
+            peer_request_association(
+                &sampling(Some(InboundStreamOrigin::Unassociated)),
+                &in_flight
+            ),
+            PeerRequestAssociation::Unassociated
+        );
+        // Originating POST stream of an in-flight request: associated.
+        assert_eq!(
+            peer_request_association(
+                &sampling(Some(InboundStreamOrigin::OutboundRequest(
+                    RequestId::Number(7)
+                ))),
+                &in_flight
+            ),
+            PeerRequestAssociation::Associated
+        );
+        // Stream of a request that is no longer in flight: unassociated.
+        assert_eq!(
+            peer_request_association(
+                &sampling(Some(InboundStreamOrigin::OutboundRequest(
+                    RequestId::Number(8)
+                ))),
+                &in_flight
+            ),
+            PeerRequestAssociation::Unassociated
+        );
     }
 }

@@ -238,14 +238,13 @@ impl ServiceRole for RoleClient {
         }
     }
 
-    // SEP-2260: with no outbound request in flight there is nothing the
-    // server request could be associated with, so reject it. With one in
-    // flight we cannot tell which request it belongs to (no wire field), so
-    // we accept — an under-approximation of the spec's SHOULD.
+    // SEP-2260: reject restricted server requests that arrived unassociated
+    // with any in-flight outbound request. Without stream separation
+    // (`Unknown`) the coarse in-flight check under-approximates the SHOULD.
     fn enforce_peer_request_association(
         peer_request: &Self::PeerReq,
         peer_info: Option<&Self::PeerInfo>,
-        has_pending_outbound_request: bool,
+        association: PeerRequestAssociation,
     ) -> Result<(), ErrorData> {
         let restricted = matches!(
             peer_request,
@@ -258,13 +257,24 @@ impl ServiceRole for RoleClient {
         }
         let strict =
             peer_info.is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
-        if strict && !has_pending_outbound_request {
-            return Err(ErrorData::invalid_params(
+        if !strict {
+            return Ok(());
+        }
+        let associated = match association {
+            PeerRequestAssociation::Associated => true,
+            PeerRequestAssociation::Unassociated => false,
+            PeerRequestAssociation::Unknown {
+                has_pending_outbound_request,
+            } => has_pending_outbound_request,
+        };
+        if associated {
+            Ok(())
+        } else {
+            Err(ErrorData::invalid_params(
                 "SEP-2260: server-to-client requests must be associated with an in-flight client request",
                 None,
-            ));
+            ))
         }
-        Ok(())
     }
 
     async fn invalidate_response_cache(peer: &Peer<Self>, notification: &Self::PeerNot) {
@@ -2207,5 +2217,75 @@ mod tests {
         .await;
 
         assert_eq!(peer.discover(meta).await.unwrap(), expected);
+    }
+}
+
+#[cfg(test)]
+mod sep2260_association_tests {
+    use super::*;
+    use crate::{
+        model::{
+            CreateMessageRequest, CreateMessageRequestParams, SamplingMessage, ServerCapabilities,
+        },
+        service::PeerRequestAssociation,
+    };
+
+    fn sampling_request() -> ServerRequest {
+        ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+            CreateMessageRequestParams::new(vec![SamplingMessage::user_text("hi")], 16),
+        ))
+    }
+
+    fn server_info(version: ProtocolVersion) -> ServerPeerInfo {
+        ServerPeerInfo::new(version, ServerCapabilities::default())
+    }
+
+    fn enforce(
+        info: &ServerPeerInfo,
+        association: PeerRequestAssociation,
+    ) -> Result<(), ErrorData> {
+        RoleClient::enforce_peer_request_association(&sampling_request(), Some(info), association)
+    }
+
+    #[test]
+    fn strict_rejects_unassociated() {
+        let info = server_info(ProtocolVersion::V_2026_07_28);
+        let err = enforce(&info, PeerRequestAssociation::Unassociated).unwrap_err();
+        assert_eq!(err.code, crate::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn strict_accepts_associated() {
+        let info = server_info(ProtocolVersion::V_2026_07_28);
+        assert!(enforce(&info, PeerRequestAssociation::Associated).is_ok());
+    }
+
+    #[test]
+    fn strict_unknown_falls_back_to_coarse_check() {
+        let info = server_info(ProtocolVersion::V_2026_07_28);
+        assert!(
+            enforce(
+                &info,
+                PeerRequestAssociation::Unknown {
+                    has_pending_outbound_request: true
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            enforce(
+                &info,
+                PeerRequestAssociation::Unknown {
+                    has_pending_outbound_request: false
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_protocol_accepts_even_unassociated() {
+        let info = server_info(ProtocolVersion::V_2025_11_25);
+        assert!(enforce(&info, PeerRequestAssociation::Unassociated).is_ok());
     }
 }
