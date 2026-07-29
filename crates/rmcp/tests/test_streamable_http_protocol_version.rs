@@ -185,3 +185,35 @@ async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Res
     ct.cancel();
     Ok(())
 }
+
+#[tokio::test]
+async fn stateless_missing_protocol_header_returns_header_mismatch() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Method", "tools/list")
+        .body(body)
+        .send()
+        .await
+        .expect("send non-initialize request");
+
+    assert_eq!(response.status(), 400);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["jsonrpc"], "2.0");
+    assert_eq!(body["id"], 1);
+    assert_eq!(body["error"]["code"], -32020);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("requires MCP-Protocol-Version header")),
+        "expected missing protocol header message, got: {body}"
+    );
+
+    ct.cancel();
+    Ok(())
+}
