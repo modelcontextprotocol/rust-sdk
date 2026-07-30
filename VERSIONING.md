@@ -33,9 +33,7 @@ ship in MINOR releases.
 ### Cargo features
 
 The public API is feature-gated. SemVer compatibility is evaluated against the
-crate's **default features** (see `release-plz.toml`). Feature flags that
-intentionally alter the API surface (for example the `local` feature) are exempt
-from automated SemVer checks and their behavior is documented at the feature site.
+crate's **default features** and all features except `local`.
 
 ## Pre-1.0 crates in the workspace
 

@@ -721,7 +721,7 @@ use serde::{Deserialize, Serialize};
 pub struct UserInfo {
     #[schemars(description = "User's name")]
     pub name: String,
-    // A default value the client can pre-fill.
+    // Optional field; omitted if the user doesn't provide it.
     #[serde(default)]
     #[schemars(description = "Preferred greeting")]
     pub greeting: Option<String>,
@@ -732,8 +732,8 @@ elicit_safe!(UserInfo);
 
 #[tool(description = "Greet the user")]
 async fn greet(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
-    // Returns Ok(Some(UserInfo)) if the user accepts, Ok(None) if they
-    // decline or cancel.
+    // Returns Ok(Some(UserInfo)) if the user accepts.
+    // Decline and cancel are returned as ElicitationError variants.
     match ctx.peer.elicit::<UserInfo>("Please provide your name").await {
         Ok(Some(info)) => Ok(CallToolResult::success(vec![ContentBlock::text(
             format!("Hello, {}!", info.name),
@@ -785,9 +785,9 @@ let action = ctx.peer.elicit_url(
 ).await?;
 
 match action {
-    ElicitationAction::Accept  => { /* user confirmed completion */ }
+    ElicitationAction::Accept  => { /* user consented */ }
     ElicitationAction::Decline => { /* user declined */ }
-    ElicitationAction::Cancel  => { /* user aborted the whole operation */ }
+    ElicitationAction::Cancel  => { /* user aborted */ }
 }
 ```
 
@@ -1543,26 +1543,6 @@ notifications or requests before the result. `rmcp` handles both automatically
 > HTTP. For server-to-client streaming under `2026-07-28`, see
 > [Subscriptions](#subscriptions).
 
-### Ping
-
-`ping` is a bidirectional liveness check. `rmcp` **answers pings automatically**
-— the default `ServerHandler`/`ClientHandler` reply with success. Override the
-`ping` method only for custom health-check behavior:
-
-```rust,ignore
-use rmcp::{ServerHandler, service::{RequestContext, RoleServer}};
-use rmcp::ErrorData as McpError;
-
-impl ServerHandler for MyServer {
-    async fn ping(&self, _ctx: RequestContext<RoleServer>) -> Result<(), McpError> {
-        // Return Ok to report healthy, or Err(..) to signal a problem.
-        Ok(())
-    }
-}
-```
-
-**MCP Spec:** [Ping](https://modelcontextprotocol.io/specification/2026-07-28/basic/utilities/ping)
-
 ---
 
 ## Pagination
@@ -1653,7 +1633,7 @@ Version-specific behavior (SEP-2243 headers, SEP-2567 stateless serving, the
 SEP-2575 subscription model) is gated on the negotiated version, so older clients
 keep working while newer ones opt in.
 
-**MCP Spec:** [Lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle)
+**MCP Spec:** [Versioning and Compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
 
 ---
 

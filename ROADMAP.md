@@ -56,34 +56,7 @@ Tier 1 bar. What's left:
 
 ### Documentation (Tier 1 requires all non-experimental features documented with examples)
 
-The README already documents core primitives comprehensively with linked examples.
-Remaining features to document:
-
-#### Undocumented (add prose + example)
-
-- [ ] Tools — image results
-- [ ] Tools — audio results
-- [ ] Tools — embedded resources
-- [ ] Prompts — embedded resources
-- [ ] Prompts — image content
-- [ ] Elicitation — URL mode
-- [ ] Elicitation — default values
-- [ ] Elicitation — enum values
-- [ ] Elicitation — complete notification
-- [ ] Ping
-- [ ] SSE (legacy) transport — client
-- [ ] SSE (legacy) transport — server
-- [ ] Pagination (as a first-class documented feature)
-- [ ] Protocol version negotiation
-
-#### Partially documented (upgrade to full prose + example)
-
-- [ ] Tools — error handling
-- [ ] Resources — reading binary (dedicated example)
-- [ ] Elicitation — form mode (add prose, not just example)
-- [ ] Elicitation — schema validation (add prose)
-- [ ] Capability negotiation (dedicated prose for the builder API)
-- [ ] JSON Schema 2020-12 support (upgrade from partial)
+The README now documents core primitives comprehensively with linked examples.
 
 ### Governance & Policy
 
