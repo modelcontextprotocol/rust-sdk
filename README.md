@@ -28,6 +28,7 @@ below. For the full MCP specification, see
 - [Resources](#resources)
 - [Prompts](#prompts)
 - [Sampling](#sampling)
+- [Elicitation](#elicitation)
 - [Roots](#roots)
 - [Logging](#logging)
 - [Completions](#completions)
@@ -38,6 +39,10 @@ below. For the full MCP specification, see
 - [Caching](#caching)
 - [Standard HTTP Headers](#standard-http-headers)
 - [Stateless Streamable HTTP](#stateless-streamable-http)
+- [Transports](#transports)
+- [Pagination](#pagination)
+- [Capability & Protocol Version Negotiation](#capability--protocol-version-negotiation)
+- [JSON Schema 2020-12](#json-schema-2020-12)
 - [Examples](#examples)
 - [OAuth Support](#oauth-support)
 - [Related Resources](#related-resources)
@@ -254,6 +259,75 @@ impl ServerHandler for Calculator {}
 
 See [`crates/rmcp-macros`](crates/rmcp-macros/README.md) for full macro documentation.
 
+#### Tool result content types
+
+Beyond a plain `String`, tools can return images, audio, embedded resources, and
+mixed content. Build a `CallToolResult` from a `Vec<ContentBlock>`:
+
+```rust,ignore
+use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
+
+#[tool(description = "Render a chart")]
+async fn chart(&self) -> Result<CallToolResult, McpError> {
+    let png_base64 = render_png(); // base64-encoded bytes
+
+    Ok(CallToolResult::success(vec![
+        // Text
+        ContentBlock::text("Here is your chart:"),
+        // Image — base64 data + MIME type
+        ContentBlock::image(png_base64, "image/png"),
+        // Audio — base64 data + MIME type
+        // ContentBlock::audio(wav_base64, "audio/wav"),
+        // Embedded resource — inline text (or ResourceContents::blob for binary)
+        ContentBlock::resource(ResourceContents::text(
+            "chart source data",
+            "chart://last/data.csv",
+        )),
+    ]))
+}
+# fn render_png() -> String { String::new() }
+```
+
+Image and audio data are base64 strings with a MIME type. For embedded
+resources, `ResourceContents::text(..)` inlines text and
+`ResourceContents::blob(base64, uri)` inlines binary.
+
+#### Error handling
+
+Two failure modes, chosen by **whose problem it is**:
+
+- **Tool-level error** — `Ok(CallToolResult::error(vec![...]))`. The tool ran but
+  failed in a way the caller should see (no rows matched, upstream 500). The
+  client renders your `content`, so the message reaches the user. Use this for
+  almost every "the tool ran and didn't work" case.
+- **Protocol error** — `Err(McpError)` with a JSON-RPC code (e.g.
+  `McpError::invalid_params(..)`). Use this when the server can't route or process
+  the request at all; clients render these opaquely, so the caller does **not**
+  see your message.
+
+```rust,ignore
+use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::ErrorData as McpError;
+
+#[tool(description = "Look up a record")]
+async fn lookup(&self, Parameters(args): Parameters<LookupArgs>) -> Result<CallToolResult, McpError> {
+    // Malformed request — the server can't run anything → protocol error.
+    if args.query.is_empty() {
+        return Err(McpError::invalid_params("query must be non-empty", None));
+    }
+
+    // Tool ran, no result → tool-level error the user should see.
+    let rows = self.run_query(&args.query).await;
+    if rows.is_empty() {
+        return Ok(CallToolResult::error(vec![ContentBlock::text(
+            format!("no rows matched '{}'", args.query),
+        )]));
+    }
+
+    Ok(CallToolResult::success(vec![ContentBlock::text(format_rows(&rows))]))
+}
+```
+
 ### Client-side
 
 ```rust,ignore
@@ -328,6 +402,16 @@ impl ServerHandler for MyServer {
             "memo://insights" => Ok(ReadResourceResult::new(vec![
                 ResourceContents::text("Analysis results...", &request.uri),
             ])),
+            // Binary resource — base64-encode the bytes and return a blob.
+            "file:///logo.png" => {
+                use base64::{Engine, prelude::BASE64_STANDARD};
+                let bytes = std::fs::read("logo.png").unwrap_or_default();
+                let blob = BASE64_STANDARD.encode(bytes);
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::blob(blob, &request.uri)
+                        .with_mime_type("image/png"),
+                ]))
+            }
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
                 Some(json!({ "uri": request.uri })),
@@ -487,6 +571,30 @@ Prompt functions support several return types:
 - `GetPromptResult` -- messages with an optional description
 - `Result<T, McpError>` -- either of the above, with error handling
 
+#### Image and embedded-resource content
+
+A `PromptMessage` can also carry an image or embedded resource. Use the
+dedicated constructors (image/audio require the `base64` feature):
+
+```rust,ignore
+use rmcp::model::{PromptMessage, Role};
+
+// Image content — raw bytes are base64-encoded for you.
+let screenshot: &[u8] = load_png();
+let msg = PromptMessage::new_image(Role::User, screenshot, "image/png", None, None);
+
+// Embedded resource — inline a text resource by URI. Pass `Some(text)` for a
+// text resource, or `None` for a blob resource.
+let msg = PromptMessage::new_resource(
+    Role::User,
+    "file:///spec.md".to_string(),
+    Some("text/markdown".to_string()),
+    Some("# Specification\n...".to_string()),
+    None, None, None,
+);
+# fn load_png() -> &'static [u8] { &[] }
+```
+
 ### Client-side
 
 ```rust
@@ -586,6 +694,140 @@ impl ClientHandler for MyClient {
 ```
 
 **Example:** [`examples/servers/src/sampling_stdio.rs`](examples/servers/src/sampling_stdio.rs) (server), [`examples/clients/src/sampling_stdio.rs`](examples/clients/src/sampling_stdio.rs) (client)
+
+---
+
+## Elicitation
+
+Elicitation lets a server pause mid-operation to ask the user for input, in one
+of two modes: **form mode** (structured fields with a JSON Schema) or **URL
+mode** (send the user to a web page and wait for completion).
+
+**MCP Spec:** [Elicitation](https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation)
+
+### Server-side (form mode)
+
+Define a struct deriving `JsonSchema`, mark it `elicit_safe!`, and call
+`elicit::<T>()` on the peer. Schema validation, defaults, and enum choices all
+come from the type.
+
+```rust,ignore
+use rmcp::{elicit_safe, model::*, service::{RequestContext, RoleServer}};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[schemars(description = "User information")]
+pub struct UserInfo {
+    #[schemars(description = "User's name")]
+    pub name: String,
+    // Optional field; omitted if the user doesn't provide it.
+    #[serde(default)]
+    #[schemars(description = "Preferred greeting")]
+    pub greeting: Option<String>,
+}
+
+// Whitelist the type for elicitation (schema-validated on both ends).
+elicit_safe!(UserInfo);
+
+#[tool(description = "Greet the user")]
+async fn greet(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+    // Returns Ok(Some(UserInfo)) if the user accepts.
+    // Decline and cancel are returned as ElicitationError variants.
+    match ctx.peer.elicit::<UserInfo>("Please provide your name").await {
+        Ok(Some(info)) => Ok(CallToolResult::success(vec![ContentBlock::text(
+            format!("Hello, {}!", info.name),
+        )])),
+        Ok(None) => Ok(CallToolResult::success(vec![ContentBlock::text(
+            "No name provided.",
+        )])),
+        Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
+            format!("Elicitation failed: {e}"),
+        )])),
+    }
+}
+```
+
+#### Enum values
+
+Enum fields become a choice list. `schemars` needs two hints to inline and type
+the enum correctly:
+
+```rust,ignore
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(inline)]                     // inline the enum into the parent schema
+#[schemars(extend("type" = "string"))]  // schemars omits `type` for enums; add it
+enum Priority {
+    #[schemars(title = "Low priority")]
+    #[default]
+    Low,
+    #[schemars(title = "High priority")]
+    High,
+}
+```
+
+See [`examples/servers/src/elicitation_enum_inference.rs`](examples/servers/src/elicitation_enum_inference.rs)
+for single-select, multi-select, titled, and defaulted enum forms.
+
+### Server-side (URL mode)
+
+For flows a form can't capture (OAuth consent, a payment page), send the user to
+a URL. `elicit_url` returns the user's `ElicitationAction` rather than typed data:
+
+```rust,ignore
+use rmcp::model::ElicitationAction;
+use url::Url;
+
+let action = ctx.peer.elicit_url(
+    "Please complete setup in your browser",
+    Url::parse("https://example.com/setup").unwrap(),
+    "setup-123", // a unique elicitation id
+).await?;
+
+match action {
+    ElicitationAction::Accept  => { /* user consented */ }
+    ElicitationAction::Decline => { /* user declined */ }
+    ElicitationAction::Cancel  => { /* user aborted */ }
+}
+```
+
+### Client-side
+
+Implement `ClientHandler::create_elicitation()`, matching on the request variant
+to handle form vs. URL mode:
+
+```rust,ignore
+use rmcp::{ClientHandler, model::*, service::{RequestContext, RoleClient}};
+
+impl ClientHandler for MyClient {
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, ErrorData> {
+        match request {
+            ElicitRequestParams::FormElicitationParams { message, .. } => {
+                // Show `message` + the requested schema, collect input, then:
+                Ok(ElicitResult {
+                    action: ElicitationAction::Accept,
+                    content: Some(rmcp::object!({ "name": "Ada" })),
+                    meta: None,
+                })
+            }
+            ElicitRequestParams::UrlElicitationParams { url, .. } => {
+                // Open `url`, wait for the user, then report the action.
+                let _ = url;
+                Ok(ElicitResult { action: ElicitationAction::Accept, content: None, meta: None })
+            }
+        }
+    }
+}
+```
+
+On completion the client sends a `notifications/elicitation/response`
+notification to release the waiting server-side `elicit_url` call.
+
+**Example:** [`examples/servers/src/elicitation_stdio.rs`](examples/servers/src/elicitation_stdio.rs) (form + URL), [`examples/servers/src/elicitation_enum_inference.rs`](examples/servers/src/elicitation_enum_inference.rs) (enum forms)
 
 ---
 
@@ -1236,6 +1478,187 @@ let client = ClientInfo::default().serve(transport).await?;
 ```
 
 **Example:** [`examples/servers/src/counter_streamhttp.rs`](examples/servers/src/counter_streamhttp.rs) (server), [`examples/clients/src/streamable_http.rs`](examples/clients/src/streamable_http.rs) (client)
+
+---
+
+## Transports
+
+A transport moves JSON-RPC messages between client and server. Any `Transport`
+impl can be passed to `.serve(..)`; `rmcp` ships the common ones behind Cargo
+features.
+
+**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
+
+| Transport                    | Feature(s)                                   | Notes |
+| ---------------------------- | -------------------------------------------- | ----- |
+| **stdio**                    | `transport-io` (client + server)             | Communicate over `stdin`/`stdout`; the standard way to launch local MCP servers as child processes. |
+| **Child process** (client)   | `transport-child-process`                    | Spawn a server binary and talk to it over its stdio. |
+| **Streamable HTTP** (server) | `transport-streamable-http-server`           | The current HTTP transport. Exposes a Tower service you can mount on any router. |
+| **Streamable HTTP** (client) | `transport-streamable-http-client-reqwest`   | HTTP client transport built on `reqwest`. |
+| **Worker / in-process**      | `transport-worker`                           | For embedding or testing without real I/O. |
+
+### stdio
+
+```rust,ignore
+use rmcp::{ServiceExt, transport::stdio};
+
+// Server: serve over stdin/stdout.
+let server = MyServer.serve(stdio()).await?;
+server.waiting().await?;
+```
+
+```rust,ignore
+use rmcp::{ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
+use tokio::process::Command;
+
+// Client: launch a server binary and talk to it over its stdio.
+let transport = TokioChildProcess::new(Command::new("uvx").configure(|cmd| {
+    cmd.arg("mcp-server-git");
+}))?;
+let client = ().serve(transport).await?;
+```
+
+### Streamable HTTP
+
+`StreamableHttpService` is a Tower service — mount it on any `axum`/`hyper`
+router (see [Stateless Streamable HTTP](#stateless-streamable-http) for the full
+server example). The client transport connects with a single URI:
+
+```rust,ignore
+use rmcp::transport::StreamableHttpClientTransport;
+
+let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+let client = ClientInfo::default().serve(transport).await?;
+```
+
+#### A note on SSE
+
+Streamable HTTP responses arrive as either a single `application/json` body or a
+`text/event-stream` (Server-Sent Events) stream when the server pushes
+notifications or requests before the result. `rmcp` handles both automatically
+(SSE parsing lives behind the `client-side-sse` feature). There is no separate
+"SSE transport" to configure — it's an implementation detail of Streamable HTTP.
+
+> The standalone HTTP+SSE transport from `2024-11-05` is superseded by Streamable
+> HTTP. For server-to-client streaming under `2026-07-28`, see
+> [Subscriptions](#subscriptions).
+
+---
+
+## Pagination
+
+List operations (`tools/list`, `prompts/list`, `resources/list`,
+`resources/templates/list`) are paginated via a `next_cursor`. The `list_all_*`
+helpers walk every page for you:
+
+```rust,ignore
+// Fetches all pages transparently.
+let tools     = client.list_all_tools().await?;
+let prompts   = client.list_all_prompts().await?;
+let resources = client.list_all_resources().await?;
+```
+
+To page manually, call the single-page method and follow `next_cursor` until
+it's `None`:
+
+```rust,ignore
+use rmcp::model::PaginatedRequestParams;
+
+let mut cursor = None;
+loop {
+    let page = client
+        .list_tools(Some(PaginatedRequestParams { meta: None, cursor }))
+        .await?;
+    for tool in &page.tools {
+        // handle each tool
+    }
+    cursor = page.next_cursor;
+    if cursor.is_none() {
+        break;
+    }
+}
+```
+
+On the server, return a `next_cursor` from your `list_*` handler when more pages
+remain (`None` when complete).
+
+**MCP Spec:** [Pagination](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/pagination)
+
+---
+
+## Capability & Protocol Version Negotiation
+
+### Capabilities
+
+At initialization, client and server exchange **capabilities** so each side
+knows what the other supports. Declare yours with the `ServerCapabilities`
+builder in `get_info()`:
+
+```rust,ignore
+use rmcp::model::{ServerCapabilities, ServerInfo};
+
+fn get_info(&self) -> ServerInfo {
+    ServerInfo::new(
+        ServerCapabilities::builder()
+            .enable_tools()
+            .enable_prompts()
+            .enable_resources()
+            .enable_resources_subscribe()
+            .enable_tool_list_changed()
+            .enable_logging()
+            .build(),
+    )
+}
+```
+
+Clients do the same via `ClientCapabilities::builder()`. Macros like
+`#[tool_handler]` / `#[prompt_handler]` set the relevant flags automatically.
+After connecting, read the peer's capabilities via `peer.peer_info()`.
+
+### Protocol version
+
+MCP is versioned by date. `rmcp` negotiates automatically on connect — the
+client offers a preferred `ProtocolVersion` and falls back to one the server
+supports:
+
+```rust,ignore
+use rmcp::model::ProtocolVersion;
+
+ProtocolVersion::LATEST;        // newest stable version this SDK defaults to
+ProtocolVersion::V_2026_07_28;  // a specific version constant
+ProtocolVersion::KNOWN_VERSIONS; // every version this SDK understands
+```
+
+Version-specific behavior (SEP-2243 headers, SEP-2567 stateless serving, the
+SEP-2575 subscription model) is gated on the negotiated version, so older clients
+keep working while newer ones opt in.
+
+**MCP Spec:** [Versioning and Compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
+
+---
+
+## JSON Schema 2020-12
+
+Deriving `schemars::JsonSchema` on your parameter and result types generates
+[JSON Schema draft 2020-12](https://json-schema.org/) — the dialect the MCP spec
+requires — for the tool's `inputSchema` and `outputSchema`.
+
+```rust,ignore
+use rmcp::schemars;
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SearchParams {
+    /// Full-text query.
+    query: String,
+    /// Maximum number of results.
+    #[serde(default)]
+    limit: Option<u32>,
+}
+```
+
+Field names, types, and doc comments flow into the schema — no manual authoring
+needed. As of `2026-07-28` (SEP-2106), `outputSchema` may be any JSON Schema type
+(not only `object`) and `structuredContent` may be any JSON value.
 
 ---
 
