@@ -1,9 +1,15 @@
 #![cfg(not(feature = "local"))]
 //! Streamable HTTP protocol-version and request-metadata validation tests.
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+use rmcp::{
+    ServerHandler,
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    },
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -379,4 +385,431 @@ async fn stateless_request_accepts_missing_optional_meta_client_info() {
 
     assert_eq!(response.status(), 200);
     ct.cancel();
+}
+
+// ---------------------------------------------------------------------------
+// Opt-in seam: `with_stateless_protocol_metadata_required(true)`
+// ---------------------------------------------------------------------------
+// In stateless mode, every non-initialize Streamable HTTP JSON-RPC request
+// POST must carry the `MCP-Protocol-Version` HTTP header (missing → HTTP 400 /
+// JSON-RPC `-32020` HeaderMismatch before dispatch). Every non-initialize,
+// non-discover request must additionally carry a per-request
+// `io.modelcontextprotocol/protocolVersion` in `_meta` (missing → HTTP 400 /
+// JSON-RPC `-32602`). The existing rule that requires `server/discover` to
+// carry `_meta.protocolVersion` is preserved unchanged.
+//
+// Non-dispatch is proven with an explicit invocation counter (`AtomicUsize`).
+
+#[derive(Clone)]
+struct CountingServer {
+    lists: Arc<AtomicUsize>,
+}
+
+impl CountingServer {
+    fn new() -> (Self, Arc<AtomicUsize>) {
+        let lists = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                lists: lists.clone(),
+            },
+            lists,
+        )
+    }
+}
+
+impl ServerHandler for CountingServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>>
+    + Send
+    + '_ {
+        self.lists.fetch_add(1, Ordering::SeqCst);
+        std::future::ready(Ok(rmcp::model::ListToolsResult::default()))
+    }
+}
+
+async fn spawn_counting(
+    config: StreamableHttpServerConfig,
+) -> (reqwest::Client, String, CancellationToken, Arc<AtomicUsize>) {
+    let ct = config.cancellation_token.clone();
+    let (server, lists) = CountingServer::new();
+    let service: StreamableHttpService<CountingServer, LocalSessionManager> =
+        StreamableHttpService::new(move || Ok(server.clone()), Default::default(), config);
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = tcp_listener.local_addr().unwrap();
+
+    tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    (
+        reqwest::Client::new(),
+        format!("http://{addr}/mcp"),
+        ct,
+        lists,
+    )
+}
+
+fn modern_required_config() -> StreamableHttpServerConfig {
+    StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true)
+        .with_sse_keep_alive(None)
+        .with_stateless_protocol_metadata_required(true)
+        .with_cancellation_token(CancellationToken::new())
+}
+
+async fn post_seam(
+    client: &reqwest::Client,
+    url: &str,
+    body: &str,
+    header_version: Option<&str>,
+    extra_headers: &[(&str, &str)],
+) -> reqwest::Response {
+    let mut req = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(body.to_owned());
+    if let Some(h) = header_version {
+        req = req.header("MCP-Protocol-Version", h);
+    }
+    for (k, v) in extra_headers {
+        req = req.header(*k, *v);
+    }
+    req.send().await.expect("send request")
+}
+
+// With the seam disabled, explicit stateless mode still dispatches a request
+// without protocol metadata, preserving backwards compatibility.
+#[tokio::test]
+async fn seam_disabled_preserves_stateless_compatibility() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(stateless_json_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#;
+    let response = post_seam(&client, &url, body, None, &[]).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        1,
+        "seam-disabled stateless config must dispatch exactly once"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// With legacy compatibility enabled, the seam applies only to requests that
+// are routed statelessly: an established legacy session remains unchanged,
+// while a self-identifying modern request is still enforced.
+#[tokio::test]
+async fn seam_mixed_mode_enforces_only_stateless_routed_requests() -> anyhow::Result<()> {
+    let config = StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(true)
+        .with_json_response(true)
+        .with_sse_keep_alive(None)
+        .with_stateless_protocol_metadata_required(true)
+        .with_cancellation_token(CancellationToken::new());
+    let (client, url, ct, lists) = spawn_counting(config).await;
+
+    let initialize = post_init(&client, &url, None, "2025-11-25").await;
+    assert_eq!(initialize.status(), 200);
+    let session_id = initialize
+        .headers()
+        .get("Mcp-Session-Id")
+        .and_then(|value| value.to_str().ok())
+        .expect("legacy initialize response must include a session id")
+        .to_owned();
+
+    let legacy_body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+    let legacy_response = post_seam(
+        &client,
+        &url,
+        legacy_body,
+        None,
+        &[("Mcp-Session-Id", &session_id)],
+    )
+    .await;
+    assert_eq!(legacy_response.status(), 200);
+    let _ = legacy_response.bytes().await?;
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        1,
+        "legacy session routing must remain unchanged"
+    );
+
+    let modern_body = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"#;
+    let modern_response = post_seam(
+        &client,
+        &url,
+        modern_body,
+        Some("2026-07-28"),
+        &[("Mcp-Method", "tools/list")],
+    )
+    .await;
+    assert_eq!(modern_response.status(), 400);
+    let payload: serde_json::Value = modern_response.json().await?;
+    assert_eq!(payload["error"]["code"], -32602);
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        1,
+        "stateless metadata rejection must happen before another handler dispatch"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// Both signals absent → missing header / -32020 before dispatch.
+#[tokio::test]
+async fn seam_opt_in_rejects_missing_header_before_dispatch() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
+
+    let without_meta = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+    let response = post_seam(&client, &url, without_meta, None, &[]).await;
+    assert_eq!(response.status(), 400, "missing header must yield HTTP 400");
+    let payload: serde_json::Value = response.json().await?;
+    assert_eq!(payload["error"]["code"], -32020);
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        0,
+        "handler invocation counter must stay at 0 when the header is missing"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// Header present but `_meta.protocolVersion` absent → -32602 before
+// dispatch. Counter must equal 0.
+#[tokio::test]
+async fn seam_opt_in_rejects_missing_meta_before_dispatch() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}"#;
+    let response = post_seam(
+        &client,
+        &url,
+        body,
+        Some("2026-07-28"),
+        &[("Mcp-Method", "tools/list")],
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let payload: serde_json::Value = response.json().await?;
+    assert_eq!(payload["error"]["code"], -32602);
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        0,
+        "handler invocation counter must stay at 0 when _meta.protocolVersion is missing"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// A 2026 request with protocolVersion but no clientCapabilities reaches the
+// existing inline-metadata validator and is rejected before method dispatch.
+#[tokio::test]
+async fn seam_opt_in_rejects_missing_client_capabilities_before_dispatch() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+    let response = post_seam(
+        &client,
+        &url,
+        body,
+        Some("2026-07-28"),
+        &[("Mcp-Method", "tools/list")],
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let payload: serde_json::Value = response.json().await?;
+    assert_eq!(payload["error"]["code"], -32602);
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        0,
+        "handler invocation counter must stay at 0 when clientCapabilities is missing"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// Both signals present at the current version, plus the routing header
+// required by `validate_standard_headers` for `>= STANDARD_HEADERS`. The
+// seam must dispatch and the handler must run exactly once.
+#[tokio::test]
+async fn seam_opt_in_dispatches_when_header_and_meta_present() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+    let response = post_seam(
+        &client,
+        &url,
+        body,
+        Some("2026-07-28"),
+        &[("Mcp-Method", "tools/list")],
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    let payload: serde_json::Value = response.json().await?;
+    assert!(payload.get("result").is_some());
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        1,
+        "handler invocation counter must equal 1 on successful dispatch"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// The seam requires version signals to be present and consistent; the
+// handler's supported-version policy remains responsible for version floors.
+#[tokio::test]
+async fn seam_opt_in_preserves_handler_supported_older_versions() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}}"#;
+    let response = post_seam(&client, &url, body, Some("2025-11-25"), &[]).await;
+    assert_eq!(response.status(), 200);
+    let payload: serde_json::Value = response.json().await?;
+    assert!(payload.get("result").is_some());
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        1,
+        "metadata enforcement must not override the handler's supported-version policy"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// When the 2026+ header is present but `Mcp-Method` is missing, the
+// existing `validate_standard_headers` rule must fire first with -32020,
+// before the seam's -32602 missing-meta check.
+#[tokio::test]
+async fn seam_opt_in_preserves_standard_header_precedence() -> anyhow::Result<()> {
+    let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+    let response = post_seam(&client, &url, body, Some("2026-07-28"), &[]).await;
+    assert_eq!(response.status(), 400);
+    let payload: serde_json::Value = response.json().await?;
+    assert_eq!(
+        payload["error"]["code"], -32020,
+        "standard-headers routing-header error must precede the seam's meta check"
+    );
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        0,
+        "handler invocation counter must stay at 0 when a routing header is missing"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// `initialize` is exempt from the new required-header check while retaining
+// its existing optional-header and header/body consistency rules.
+#[tokio::test]
+async fn seam_opt_in_preserves_initialize_rules() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server(modern_required_config()).await;
+
+    let response = post_init(&client, &url, None, "2025-11-25").await;
+    assert_eq!(response.status(), 200);
+
+    let response = post_init(&client, &url, Some("2025-11-25"), "2025-11-25").await;
+    assert_eq!(response.status(), 200);
+
+    let response = post_init(&client, &url, Some("2025-03-26"), "2025-11-25").await;
+    assert_eq!(response.status(), 400);
+    let payload: serde_json::Value = response.json().await?;
+    assert_eq!(payload["error"]["code"], -32600);
+
+    ct.cancel();
+    Ok(())
+}
+
+// `notifications/initialized` returns HTTP 202 (Accepted) without
+// requiring any protocol metadata, even under the seam.
+#[tokio::test]
+async fn seam_opt_in_notifications_return_202() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server(modern_required_config()).await;
+
+    let body = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+    let response = post_seam(&client, &url, body, None, &[]).await;
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::ACCEPTED,
+        "notifications must surface HTTP 202 regardless of metadata"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+// `server/discover` is still subject to the new HTTP-header precheck.
+#[tokio::test]
+async fn seam_opt_in_discover_rejects_missing_header() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server(modern_required_config()).await;
+
+    let with_meta = r#"{"jsonrpc":"2.0","id":8,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+    let without_meta = r#"{"jsonrpc":"2.0","id":9,"method":"server/discover","params":{}}"#;
+    for body in [with_meta, without_meta] {
+        let response = post_seam(
+            &client,
+            &url,
+            body,
+            None,
+            &[("Mcp-Method", "server/discover")],
+        )
+        .await;
+        assert_eq!(response.status(), 400);
+        let payload: serde_json::Value = response.json().await?;
+        assert_eq!(payload["error"]["code"], -32020);
+    }
+
+    let response = post_seam(
+        &client,
+        &url,
+        without_meta,
+        Some("2025-11-25"),
+        &[("Mcp-Method", "server/discover")],
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let payload: serde_json::Value = response.json().await?;
+    assert_eq!(payload["error"]["code"], -32602);
+
+    let response = post_seam(
+        &client,
+        &url,
+        with_meta,
+        Some("2025-11-25"),
+        &[("Mcp-Method", "server/discover")],
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+
+    ct.cancel();
+    Ok(())
 }
