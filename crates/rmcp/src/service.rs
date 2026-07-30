@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{borrow::Cow, sync::OnceLock};
 
 use futures::FutureExt;
 #[cfg(not(feature = "local"))]
@@ -284,6 +284,19 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
         context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
     fn get_info(&self) -> R::Info;
+    /// The protocol versions this service can speak, bounding what `initialize`
+    /// negotiation may agree to.
+    ///
+    /// Servers normally override
+    /// [`ServerHandler::supported_protocol_versions`] instead of this method;
+    /// the blanket `Service` impl forwards to it. This method exists so the
+    /// transport and handshake layers, which see only a `Service`, can read the
+    /// list and avoid agreeing to a version the server cannot serve.
+    ///
+    /// [`ServerHandler::supported_protocol_versions`]: crate::handler::server::ServerHandler::supported_protocol_versions
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
+    }
 }
 
 #[cfg(feature = "local")]
@@ -299,6 +312,12 @@ pub trait Service<R: ServiceRole>: 'static {
         context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
     fn get_info(&self) -> R::Info;
+    /// The protocol versions this service can speak.
+    ///
+    /// See the non-`local` variant of this trait for details.
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
+    }
 }
 
 pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
@@ -350,6 +369,10 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
     fn get_info(&self) -> R::Info {
         DynService::get_info(self.as_ref())
     }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        DynService::supported_protocol_versions(self.as_ref())
+    }
 }
 
 #[cfg(not(feature = "local"))]
@@ -365,6 +388,10 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         context: NotificationContext<R>,
     ) -> MaybeBoxFuture<'_, Result<(), McpError>>;
     fn get_info(&self) -> R::Info;
+    /// See [`Service::supported_protocol_versions`].
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
+    }
 }
 
 #[cfg(feature = "local")]
@@ -380,6 +407,10 @@ pub trait DynService<R: ServiceRole> {
         context: NotificationContext<R>,
     ) -> MaybeBoxFuture<'_, Result<(), McpError>>;
     fn get_info(&self) -> R::Info;
+    /// See [`Service::supported_protocol_versions`].
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
+    }
 }
 
 impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
@@ -399,6 +430,9 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
     }
     fn get_info(&self) -> R::Info {
         self.get_info()
+    }
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Service::supported_protocol_versions(self)
     }
 }
 

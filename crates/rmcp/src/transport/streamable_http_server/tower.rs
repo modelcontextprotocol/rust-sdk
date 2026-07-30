@@ -279,8 +279,11 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
         if let (Some(requested), ServerResult::InitializeResult(result)) =
             (requested_protocol_version, &mut response)
         {
-            result.protocol_version =
-                negotiate_protocol_version(&requested, result.protocol_version.clone());
+            result.protocol_version = negotiate_protocol_version(
+                &requested,
+                result.protocol_version.clone(),
+                &self.0.supported_protocol_versions(),
+            );
             if let Some(peer_info) = peer.peer_info() {
                 let mut peer_info = (*peer_info).clone();
                 peer_info.protocol_version = result.protocol_version.clone();
@@ -300,6 +303,10 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
 
     fn get_info(&self) -> ServerInfo {
         self.0.get_info()
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        self.0.supported_protocol_versions()
     }
 }
 

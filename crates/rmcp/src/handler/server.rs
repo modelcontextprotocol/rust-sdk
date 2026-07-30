@@ -300,6 +300,10 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     fn get_info(&self) -> <RoleServer as ServiceRole>::Info {
         self.get_info()
     }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        ServerHandler::supported_protocol_versions(self)
+    }
 }
 
 macro_rules! server_handler_methods {
@@ -321,10 +325,17 @@ macro_rules! server_handler_methods {
             info.protocol_version = negotiate_protocol_version(
                 &request.protocol_version,
                 info.protocol_version,
+                &self.supported_protocol_versions(),
             );
             std::future::ready(Ok(info))
         }
         /// Return the protocol versions supported by this server.
+        ///
+        /// Defaults to every version this SDK knows. Override it to narrow the
+        /// set to the revisions the server actually implements: the returned
+        /// list is advertised by [`Self::discover`], bounds what `initialize`
+        /// negotiation may agree to, and is what per-request versions are
+        /// validated against.
         fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
             Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
         }
