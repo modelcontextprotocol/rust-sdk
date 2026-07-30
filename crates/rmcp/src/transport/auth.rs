@@ -736,9 +736,10 @@ impl OAuthClientConfig {
 pub struct AuthorizationRequest {
     /// Redirect URI for the authorization-code flow.
     pub redirect_uri: String,
-    /// Scopes to request. When empty, the SDK selects scopes from the
-    /// server's `WWW-Authenticate` challenge, Protected Resource Metadata,
-    /// or authorization server metadata.
+    /// Scopes requested by the caller, combined with scopes required by the
+    /// server's `WWW-Authenticate` challenge or Protected Resource Metadata.
+    /// When no caller or server scopes are present, the SDK falls back to
+    /// authorization server metadata.
     pub scopes: Vec<String>,
     /// Human-readable client name, used for Dynamic Client Registration.
     pub client_name: Option<String>,
@@ -777,8 +778,8 @@ impl AuthorizationRequest {
         }
     }
 
-    /// Set the scopes to request. When not set, the SDK auto-selects scopes
-    /// using its normal scope-selection policy.
+    /// Set the requested scopes. The SDK combines these with server-required
+    /// scopes; when omitted, it auto-selects scopes using its normal policy.
     pub fn with_scopes<I, S>(mut self, scopes: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -1845,7 +1846,17 @@ impl AuthorizationManager {
         www_authenticate_scope: Option<&str>,
         default_scopes: &[&str],
     ) -> Vec<String> {
-        let mut scopes = self.select_base_scopes(www_authenticate_scope, default_scopes);
+        self.select_scopes_with_requested(&[], www_authenticate_scope, default_scopes)
+    }
+
+    fn select_scopes_with_requested(
+        &self,
+        requested_scopes: &[String],
+        www_authenticate_scope: Option<&str>,
+        default_scopes: &[&str],
+    ) -> Vec<String> {
+        let mut scopes =
+            self.select_base_scopes(requested_scopes, www_authenticate_scope, default_scopes);
         self.add_offline_access_if_supported(&mut scopes);
         scopes
     }
@@ -1858,10 +1869,11 @@ impl AuthorizationManager {
     /// request when nothing has been requested or challenged yet.
     fn select_base_scopes(
         &self,
+        requested_scopes: &[String],
         www_authenticate_scope: Option<&str>,
         default_scopes: &[&str],
     ) -> Vec<String> {
-        let mut accumulated: Vec<String> = Vec::new();
+        let mut accumulated = requested_scopes.to_vec();
 
         // previously requested scopes
         if let Ok(guard) = self.current_scopes.try_read() {
@@ -3257,8 +3269,9 @@ impl AuthorizationSession {
     ///    advertises a `registration_endpoint`
     ///
     /// The manager must already have discovered authorization server metadata.
-    /// If `request.scopes` is empty, scopes are selected using the SDK's
-    /// normal scope-selection policy.
+    /// Requested scopes are combined with scopes required by the server's
+    /// challenge and protected resource metadata using the SDK's normal
+    /// scope-selection policy.
     ///
     /// On failure, the manager is returned alongside the error so callers can
     /// retry without losing the original configuration and stores.
@@ -3277,11 +3290,7 @@ impl AuthorizationSession {
             ));
         }
 
-        if request.scopes.is_empty() {
-            request.scopes = auth_manager.select_scopes(None, &[]);
-        } else {
-            auth_manager.add_offline_access_if_supported(&mut request.scopes);
-        }
+        request.scopes = auth_manager.select_scopes_with_requested(&request.scopes, None, &[]);
 
         if request.application_type.is_some() {
             auth_manager.application_type = request.application_type.clone();
@@ -3611,8 +3620,9 @@ impl OAuthState {
     /// 3. Dynamic Client Registration, when the authorization server
     ///    advertises a `registration_endpoint`
     ///
-    /// If `request.scopes` is empty, scopes are selected using the SDK's
-    /// normal scope-selection policy.
+    /// Requested scopes are combined with scopes required by the server's
+    /// challenge and protected resource metadata using the SDK's normal
+    /// scope-selection policy.
     ///
     /// On failure, the state returns to `Unauthorized` so callers can retry
     /// without losing the original configuration and stores.
@@ -4805,6 +4815,34 @@ mod tests {
         ]
     }
 
+    const CONFIGURED_SCOPE_CHALLENGE: &str = concat!(
+        r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", "#,
+        r#"scope="challenge shared""#
+    );
+
+    fn configured_scope_discovery_responses() -> Vec<HttpResponse> {
+        vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"],
+                    "scopes_supported": ["resource", "shared"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token",
+                    "registration_endpoint": "https://auth.example.com/register",
+                    "scopes_supported": ["fallback-only", "offline_access"]
+                }),
+            ),
+        ]
+    }
+
     fn auth_url_query(auth_url: &str) -> HashMap<String, String> {
         Url::parse(auth_url)
             .unwrap()
@@ -4886,6 +4924,38 @@ mod tests {
         let auth_url = state.get_authorization_url().await.unwrap();
         let query = auth_url_query(&auth_url);
         assert_eq!(query.get("scope").unwrap(), "read offline_access");
+    }
+
+    #[tokio::test]
+    async fn preregistered_client_unions_configured_challenge_and_resource_scopes() {
+        let client =
+            RecordingOAuthHttpClient::with_responses(configured_scope_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_preregistered_client("preregistered-client")
+            .with_scopes(["configured", "shared", "configured"])
+            .with_challenge(CONFIGURED_SCOPE_CHALLENGE);
+        state.start_authorization(request).await.unwrap();
+
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        assert_eq!(
+            query.get("scope").unwrap(),
+            "configured shared challenge resource offline_access"
+        );
+
+        let requests = client.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests.iter().all(|request| request.method == "GET"),
+            "pre-registered clients should only fetch OAuth metadata: {requests:?}"
+        );
     }
 
     #[tokio::test]
@@ -5103,6 +5173,48 @@ mod tests {
         let query = auth_url_query(&auth_url);
         assert_eq!(query.get("client_id").unwrap(), "dcr-client");
         assert!(matches!(state, super::OAuthState::Session(_)));
+    }
+
+    #[tokio::test]
+    async fn dcr_unions_configured_challenge_and_resource_scopes() {
+        let mut responses = configured_scope_discovery_responses();
+        responses.push(http_response(
+            201,
+            serde_json::json!({
+                "client_id": "dcr-client",
+                "redirect_uris": ["http://localhost:8080/callback"]
+            }),
+        ));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_client_name("scope-union-client")
+            .with_scopes(["configured", "shared", "configured"])
+            .with_challenge(CONFIGURED_SCOPE_CHALLENGE);
+        state.start_authorization(request).await.unwrap();
+
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        let expected_scopes = "configured shared challenge resource offline_access";
+        assert_eq!(query.get("scope").unwrap(), expected_scopes);
+        assert_eq!(query.get("client_id").unwrap(), "dcr-client");
+
+        let requests = client.requests();
+        assert_eq!(requests.len(), 3);
+        let registration = requests
+            .iter()
+            .find(|request| request.uri == "https://auth.example.com/register")
+            .expect("dynamic client registration should occur exactly once");
+        assert_eq!(registration.method, "POST");
+        let body: serde_json::Value = serde_json::from_slice(&registration.body).unwrap();
+        assert_eq!(body.get("client_name").unwrap(), "scope-union-client");
+        assert_eq!(body.get("scope").unwrap(), expected_scopes);
     }
 
     #[tokio::test]
