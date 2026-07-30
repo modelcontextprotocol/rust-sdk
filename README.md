@@ -269,7 +269,8 @@ use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
 
 #[tool(description = "Render a chart")]
 async fn chart(&self) -> Result<CallToolResult, McpError> {
-    let png_base64 = render_png(); // base64-encoded bytes
+    let png_base64 = render_png(); // base64-encoded image bytes
+    let wav_base64 = render_wav(); // base64-encoded audio bytes
 
     Ok(CallToolResult::success(vec![
         // Text
@@ -277,7 +278,7 @@ async fn chart(&self) -> Result<CallToolResult, McpError> {
         // Image — base64 data + MIME type
         ContentBlock::image(png_base64, "image/png"),
         // Audio — base64 data + MIME type
-        // ContentBlock::audio(wav_base64, "audio/wav"),
+        ContentBlock::audio(wav_base64, "audio/wav"),
         // Embedded resource — inline text (or ResourceContents::blob for binary)
         ContentBlock::resource(ResourceContents::text(
             "chart source data",
@@ -286,6 +287,7 @@ async fn chart(&self) -> Result<CallToolResult, McpError> {
     ]))
 }
 # fn render_png() -> String { String::new() }
+# fn render_wav() -> String { String::new() }
 ```
 
 Image and audio data are base64 strings with a MIME type. For embedded
@@ -412,6 +414,18 @@ impl ServerHandler for MyServer {
                         .with_mime_type("image/png"),
                 ]))
             }
+            // Template-expanded URI — the client fills in `{user_id}` from the
+            // `users://{user_id}/profile` template declared in
+            // `list_resource_templates`, and the server reads the concrete URI.
+            uri if uri.starts_with("users://") && uri.ends_with("/profile") => {
+                let user_id = uri
+                    .trim_start_matches("users://")
+                    .trim_end_matches("/profile");
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                    format!(r#"{{"id": "{user_id}", "name": "User {user_id}"}}"#),
+                    uri,
+                )]))
+            }
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
                 Some(json!({ "uri": request.uri })),
@@ -424,8 +438,12 @@ impl ServerHandler for MyServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
+        // Declare a URI template with a `{user_id}` parameter. Clients expand it
+        // (e.g. `users://42/profile`) and pass the concrete URI to `read_resource`.
         Ok(ListResourceTemplatesResult {
-            resource_templates: vec![],
+            resource_templates: vec![
+                ResourceTemplate::new("users://{user_id}/profile", "user-profile"),
+            ],
             next_cursor: None,
             meta: None,
         })
@@ -446,8 +464,12 @@ let result = client.read_resource(
     ReadResourceRequestParams::new("file:///config.json"),
 ).await?;
 
-// List resource templates
+// List resource templates, then read a resource through one by expanding its
+// parameters into a concrete URI (`users://{user_id}/profile` → `users://42/profile`).
 let templates = client.list_all_resource_templates().await?;
+let profile = client.read_resource(
+    ReadResourceRequestParams::new("users://42/profile"),
+).await?;
 ```
 
 ### Notifications
@@ -1000,6 +1022,7 @@ impl ServerHandler for MyServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, McpError> {
         let values = match &request.r#ref {
+            // Completion for a prompt argument (`ref/prompt`).
             Reference::Prompt(prompt_ref) if prompt_ref.name == "sql_query" => {
                 match request.argument.name.as_str() {
                     "operation" => vec!["SELECT", "INSERT", "UPDATE", "DELETE"],
@@ -1017,6 +1040,17 @@ impl ServerHandler for MyServer {
                             } else { vec![] }
                         } else { vec![] }
                     }
+                    _ => vec![],
+                }
+            }
+            // Completion for a resource-template argument (`ref/resource`). The
+            // `uri` identifies the template (e.g. `users://{user_id}/profile`)
+            // and `argument.name` is the template variable being completed.
+            Reference::Resource(resource_ref)
+                if resource_ref.uri == "users://{user_id}/profile" =>
+            {
+                match request.argument.name.as_str() {
+                    "user_id" => vec!["1", "2", "42"],
                     _ => vec![],
                 }
             }
@@ -1041,12 +1075,22 @@ impl ServerHandler for MyServer {
 ```rust
 use rmcp::model::*;
 
+// Completion for a prompt argument.
 let result = client.complete(CompleteRequestParams::new(
     Reference::for_prompt("sql_query"),
     ArgumentInfo::new("operation", "SEL"),
 )).await?;
 
 // result.completion.values contains suggestions like ["SELECT"]
+
+// Completion for a resource-template argument: reference the template by URI
+// and complete one of its variables (`user_id`).
+let resource_completion = client.complete(CompleteRequestParams::new(
+    Reference::for_resource("users://{user_id}/profile"),
+    ArgumentInfo::new("user_id", "4"),
+)).await?;
+
+// resource_completion.completion.values contains suggestions like ["42"]
 ```
 
 **Example:** [`examples/servers/src/completion_stdio.rs`](examples/servers/src/completion_stdio.rs)
@@ -1538,7 +1582,7 @@ let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/m
 let client = ClientInfo::default().serve(transport).await?;
 ```
 
-#### A note on SSE
+#### Server-Sent Events (SSE)
 
 Streamable HTTP responses arrive as either a single `application/json` body or a
 `text/event-stream` (Server-Sent Events) stream when the server pushes
@@ -1546,9 +1590,28 @@ notifications or requests before the result. `rmcp` handles both automatically
 (SSE parsing lives behind the `client-side-sse` feature). There is no separate
 "SSE transport" to configure — it's an implementation detail of Streamable HTTP.
 
-> The standalone HTTP+SSE transport from `2024-11-05` is superseded by Streamable
-> HTTP. For server-to-client streaming under `2026-07-28`, see
-> [Subscriptions](#subscriptions).
+#### Legacy HTTP+SSE transport (`2024-11-05`) — intentionally not provided
+
+The standalone two-endpoint **HTTP+SSE transport** defined in protocol revision
+`2024-11-05` (a separate `GET` SSE channel plus a `POST` message endpoint) is a
+**deliberate non-goal** for `rmcp`. It was [replaced by Streamable HTTP in the
+`2025-03-26` revision](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports),
+and `rmcp` targets current spec revisions (`2025-11-25` and `2026-07-28`), so it
+ships **no legacy HTTP+SSE client or server transport**.
+
+What to use instead:
+
+- **New client/server code** — use [Streamable HTTP](#streamable-http). It carries
+  the same SSE streaming semantics over a single endpoint and is the transport all
+  supported spec revisions expect.
+- **Server-to-client streaming** (push notifications, resource updates) — this is
+  built into Streamable HTTP; see [Subscriptions](#subscriptions).
+- **Talking to a legacy `2024-11-05`-only server** — front it with a proxy that
+  speaks Streamable HTTP, or pin a dependency to a release that predates the
+  transport's removal. `rmcp` will not add the legacy transport back.
+
+This is a supported-surface decision, not a missing feature: every transport
+`rmcp` implements is listed in the [Transports](#transports) table above.
 
 ---
 
