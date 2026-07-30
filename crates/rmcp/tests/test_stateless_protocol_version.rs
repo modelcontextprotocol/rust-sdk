@@ -1,7 +1,11 @@
 //! Tests for protocol version negotiation in stateless HTTP mode.
 //!
-//! Known versions are echoed back; unknown versions fall back to LATEST.
+//! Supported versions are echoed back; unknown versions, and versions outside
+//! the server's `supported_protocol_versions`, fall back to the handler's own
+//! version.
 #![cfg(not(feature = "local"))]
+
+use std::borrow::Cow;
 
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -15,12 +19,44 @@ use rmcp::{
 };
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct OverridingInitialize;
 
 impl ServerHandler for OverridingInitialize {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::default())
+    }
+
+    async fn initialize(
+        &self,
+        _request: InitializeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        Ok(self.get_info())
+    }
+}
+
+/// Every known version except `2026-07-28`, standing in for a server that has
+/// not implemented that revision.
+const NARROWED_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2024_11_05,
+    ProtocolVersion::V_2025_03_26,
+    ProtocolVersion::V_2025_06_18,
+    ProtocolVersion::V_2025_11_25,
+];
+
+/// Overrides `initialize`, so the handler-side default negotiation never runs,
+/// *and* narrows the supported versions.
+#[derive(Clone, Default)]
+struct NarrowedOverridingInitialize;
+
+impl ServerHandler for NarrowedOverridingInitialize {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::default())
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(NARROWED_VERSIONS)
     }
 
     async fn initialize(
@@ -46,9 +82,15 @@ fn stateless_json_config() -> StreamableHttpServerConfig {
 async fn spawn_server(
     config: StreamableHttpServerConfig,
 ) -> (reqwest::Client, String, CancellationToken) {
+    spawn_server_of::<OverridingInitialize>(config).await
+}
+
+async fn spawn_server_of<H: ServerHandler + Default>(
+    config: StreamableHttpServerConfig,
+) -> (reqwest::Client, String, CancellationToken) {
     let ct = config.cancellation_token.clone();
-    let service: StreamableHttpService<OverridingInitialize, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(OverridingInitialize), Default::default(), config);
+    let service: StreamableHttpService<H, LocalSessionManager> =
+        StreamableHttpService::new(|| Ok(H::default()), Default::default(), config);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -146,6 +188,38 @@ async fn stateless_json_init_preserves_handler_fallback_for_unknown_version() {
         resp["result"]["protocolVersion"],
         ProtocolVersion::LATEST.as_str(),
         "unknown version should preserve the handler's fallback"
+    );
+
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_json_init_echoes_versions_the_server_narrowed_to() {
+    let (client, url, ct) =
+        spawn_server_of::<NarrowedOverridingInitialize>(stateless_json_config()).await;
+
+    for version in NARROWED_VERSIONS {
+        let resp = post_init(&client, &url, version.as_str()).await;
+        assert_eq!(
+            resp["result"]["protocolVersion"],
+            version.as_str(),
+            "supported version {version} should be echoed back"
+        );
+    }
+
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_json_init_does_not_agree_to_version_outside_supported_list() {
+    let (client, url, ct) =
+        spawn_server_of::<NarrowedOverridingInitialize>(stateless_json_config()).await;
+
+    let resp = post_init(&client, &url, ProtocolVersion::V_2026_07_28.as_str()).await;
+    assert_eq!(
+        resp["result"]["protocolVersion"],
+        ProtocolVersion::V_2025_11_25.as_str(),
+        "a version outside supported_protocol_versions should not be echoed back"
     );
 
     ct.cancel();
