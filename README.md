@@ -1462,6 +1462,13 @@ let router = axum::Router::new().nest_service("/mcp", service);
 > Because there is no per-session state, the `service_factory` runs per request.
 > Keep shared state (DB pools, caches) in a `Clone` handle captured by the
 > closure; don't rely on in-memory state surviving between requests.
+>
+> Modern-only servers can additionally call
+> `with_stateless_protocol_metadata_required(true)` to reject the compatibility
+> fallback for requests missing their per-request protocol signals. rmcp clients
+> negotiated below `2026-07-28` do not attach that body metadata and will be
+> rejected, so pair this option with a `supported_protocol_versions`
+> implementation that advertises only `2026-07-28` and later.
 
 ### Client-side
 

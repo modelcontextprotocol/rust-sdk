@@ -529,6 +529,22 @@ async fn seam_mixed_mode_enforces_only_stateless_routed_requests() -> anyhow::Re
         .with_cancellation_token(CancellationToken::new());
     let (client, url, ct, lists) = spawn_counting(config).await;
 
+    let legacy_body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+    let unknown_response = post_seam(
+        &client,
+        &url,
+        legacy_body,
+        None,
+        &[("Mcp-Session-Id", "unknown-session")],
+    )
+    .await;
+    assert_eq!(
+        unknown_response.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "the stateless seam must not shadow the legacy unknown-session boundary"
+    );
+    assert_eq!(lists.load(Ordering::SeqCst), 0);
+
     let initialize = post_init(&client, &url, None, "2025-11-25").await;
     assert_eq!(initialize.status(), 200);
     let session_id = initialize
@@ -538,7 +554,6 @@ async fn seam_mixed_mode_enforces_only_stateless_routed_requests() -> anyhow::Re
         .expect("legacy initialize response must include a session id")
         .to_owned();
 
-    let legacy_body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
     let legacy_response = post_seam(
         &client,
         &url,
@@ -554,6 +569,28 @@ async fn seam_mixed_mode_enforces_only_stateless_routed_requests() -> anyhow::Re
         1,
         "legacy session routing must remain unchanged"
     );
+
+    let delete_response = client
+        .delete(&url)
+        .header("Mcp-Session-Id", &session_id)
+        .send()
+        .await?;
+    assert_eq!(delete_response.status(), reqwest::StatusCode::ACCEPTED);
+
+    let terminated_response = post_seam(
+        &client,
+        &url,
+        legacy_body,
+        None,
+        &[("Mcp-Session-Id", &session_id)],
+    )
+    .await;
+    assert_eq!(
+        terminated_response.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "the stateless seam must not shadow the legacy terminated-session boundary"
+    );
+    assert_eq!(lists.load(Ordering::SeqCst), 1);
 
     let modern_body = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}"#;
     let modern_response = post_seam(
@@ -682,21 +719,22 @@ async fn seam_opt_in_dispatches_when_header_and_meta_present() -> anyhow::Result
     Ok(())
 }
 
-// The seam requires version signals to be present and consistent; the
-// handler's supported-version policy remains responsible for version floors.
+// rmcp clients negotiated below 2026-07-28 send the protocol header but do
+// not attach per-request protocol metadata. Requiring the metadata therefore
+// rejects their real request shape even if the handler supports that version.
 #[tokio::test]
-async fn seam_opt_in_preserves_handler_supported_older_versions() -> anyhow::Result<()> {
+async fn seam_opt_in_rejects_older_rmcp_client_request_shape() -> anyhow::Result<()> {
     let (client, url, ct, lists) = spawn_counting(modern_required_config()).await;
 
-    let body = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}}"#;
+    let body = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}"#;
     let response = post_seam(&client, &url, body, Some("2025-11-25"), &[]).await;
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 400);
     let payload: serde_json::Value = response.json().await?;
-    assert!(payload.get("result").is_some());
+    assert_eq!(payload["error"]["code"], -32602);
     assert_eq!(
         lists.load(Ordering::SeqCst),
-        1,
-        "metadata enforcement must not override the handler's supported-version policy"
+        0,
+        "an older client request without per-request metadata must not dispatch"
     );
 
     ct.cancel();

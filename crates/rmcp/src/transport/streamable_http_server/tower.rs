@@ -142,10 +142,13 @@ pub struct StreamableHttpServerConfig {
     /// `legacy_session_mode` to `false` to ensure every request uses that path.
     /// Legacy session routing and its error precedence remain unchanged.
     ///
-    /// This is a presence requirement, not a protocol-version allowlist.
-    /// Override
+    /// The validator checks metadata presence rather than applying a version
+    /// allowlist. However, rmcp clients negotiated below `2026-07-28` do not
+    /// attach per-request protocol metadata, so enabling this option rejects
+    /// their ordinary requests. Servers using this option should normally
+    /// override
     /// [`ServerHandler::supported_protocol_versions`](crate::ServerHandler::supported_protocol_versions)
-    /// to restrict which declared versions the server accepts.
+    /// to advertise only `2026-07-28` and later.
     ///
     /// Default is `false`, preserving today's legacy behavior where an absent
     /// header is treated as protocol version `2025-03-26`.
