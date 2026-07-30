@@ -467,19 +467,27 @@ fn validate_request_protocol_version_meta(
         return Ok(());
     }
     let is_discover = matches!(&request.request, ClientRequest::DiscoverRequest(_));
-    let Some(meta_version) = request.request.get_meta().protocol_version() else {
-        if is_discover {
+    let meta = request.request.get_meta();
+    let header_version = headers
+        .get(HEADER_MCP_PROTOCOL_VERSION)
+        .and_then(|value| value.to_str().ok());
+    let Some(meta_version) = meta.protocol_version() else {
+        let requires_request_metadata = is_discover
+            || header_version
+                .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28.as_str());
+        if requires_request_metadata {
+            let missing = meta.missing_required_keys(&ProtocolVersion::V_2026_07_28);
             return Err(invalid_params_jsonrpc_response(
                 Some(request.id.clone()),
-                "Invalid params: server/discover requires protocolVersion in request _meta",
+                format!(
+                    "Invalid params: request _meta is missing or has malformed required fields: {}",
+                    missing.join(", ")
+                ),
             ));
         }
         return Ok(());
     };
-    let Some(header_version) = headers
-        .get(HEADER_MCP_PROTOCOL_VERSION)
-        .and_then(|value| value.to_str().ok())
-    else {
+    let Some(header_version) = header_version else {
         return Err(header_mismatch_jsonrpc_response(
             Some(request.id.clone()),
             "request _meta protocolVersion requires MCP-Protocol-Version header",

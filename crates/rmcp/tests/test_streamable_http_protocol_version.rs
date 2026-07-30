@@ -1,10 +1,11 @@
 #![cfg(not(feature = "local"))]
-//! Regression tests for the `MCP-Protocol-Version` header / initialize body consistency check.
+//! Streamable HTTP protocol-version and request-metadata validation tests.
 use std::sync::Arc;
 
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 mod common;
@@ -89,6 +90,31 @@ async fn post_non_initialize(client: &reqwest::Client, url: &str) -> reqwest::Re
         .send()
         .await
         .expect("send non-initialize request")
+}
+
+async fn post_modern_request(
+    client: &reqwest::Client,
+    url: &str,
+    method: &str,
+    name: Option<&str>,
+    params: Value,
+) -> reqwest::Response {
+    let mut request = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", method)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params,
+        }));
+    if let Some(name) = name {
+        request = request.header("Mcp-Name", name);
+    }
+    request.send().await.expect("send modern request")
 }
 
 #[tokio::test]
@@ -216,4 +242,141 @@ async fn stateless_missing_protocol_header_returns_header_mismatch() -> anyhow::
 
     ct.cancel();
     Ok(())
+}
+
+#[tokio::test]
+async fn stateless_tools_list_rejects_missing_request_meta() {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_modern_request(&client, &url, "tools/list", None, json!({})).await;
+
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["error"]["code"], -32602);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("io.modelcontextprotocol/protocolVersion")),
+        "expected error message to mention protocolVersion, got: {body}"
+    );
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_tools_call_rejects_missing_request_meta() {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_modern_request(
+        &client,
+        &url,
+        "tools/call",
+        Some("sum"),
+        json!({
+            "name": "sum",
+            "arguments": {
+                "a": 1,
+                "b": 2
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["error"]["code"], -32602);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("io.modelcontextprotocol/protocolVersion")),
+        "expected error message to mention protocolVersion, got: {body}"
+    );
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_request_rejects_missing_meta_protocol_version() {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_modern_request(
+        &client,
+        &url,
+        "tools/list",
+        None,
+        json!({
+            "_meta": {
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "test",
+                    "version": "1.0"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["error"]["code"], -32602);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("io.modelcontextprotocol/protocolVersion")),
+        "expected error message to mention protocolVersion, got: {body}"
+    );
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_request_rejects_missing_meta_client_capabilities() {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_modern_request(
+        &client,
+        &url,
+        "tools/list",
+        None,
+        json!({
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "test",
+                    "version": "1.0"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 400);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["error"]["code"], -32602);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("io.modelcontextprotocol/clientCapabilities")),
+        "expected error message to mention clientCapabilities, got: {body}"
+    );
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateless_request_accepts_missing_optional_meta_client_info() {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_modern_request(
+        &client,
+        &url,
+        "tools/list",
+        None,
+        json!({
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+    ct.cancel();
 }
