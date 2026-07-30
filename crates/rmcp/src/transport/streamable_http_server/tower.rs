@@ -127,6 +127,32 @@ pub struct StreamableHttpServerConfig {
     /// chunked transfer encoding, or HTTP version. Oversized payloads receive
     /// a `413 Payload Too Large` response.
     pub max_request_body_bytes: usize,
+    /// Require stateless JSON-RPC request POSTs to carry per-request protocol
+    /// signals before handler dispatch.
+    ///
+    /// Non-initialize requests must carry `MCP-Protocol-Version`; ordinary
+    /// non-discovery requests must also carry
+    /// `_meta.io.modelcontextprotocol/protocolVersion`. `server/discover`
+    /// retains its existing request-metadata validation. For `2026-07-28`
+    /// requests, the server handler continues to require the remaining
+    /// per-request metadata, including `clientCapabilities`. Initialize,
+    /// notifications, and other message kinds retain their existing rules.
+    ///
+    /// This option applies to requests routed statelessly. Set
+    /// `legacy_session_mode` to `false` to ensure every request uses that path.
+    /// Legacy session routing and its error precedence remain unchanged.
+    ///
+    /// The validator checks metadata presence rather than applying a version
+    /// allowlist. However, rmcp clients negotiated below `2026-07-28` do not
+    /// attach per-request protocol metadata, so enabling this option rejects
+    /// their ordinary requests. Servers using this option should normally
+    /// override
+    /// [`ServerHandler::supported_protocol_versions`](crate::ServerHandler::supported_protocol_versions)
+    /// to advertise only `2026-07-28` and later.
+    ///
+    /// Default is `false`, preserving today's legacy behavior where an absent
+    /// header is treated as protocol version `2025-03-26`.
+    pub stateless_protocol_metadata_required: bool,
 }
 
 impl std::fmt::Debug for dyn SessionStore {
@@ -147,6 +173,7 @@ impl Default for StreamableHttpServerConfig {
             allowed_origins: vec![],
             session_store: None,
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
+            stateless_protocol_metadata_required: false,
         }
     }
 }
@@ -204,6 +231,18 @@ impl StreamableHttpServerConfig {
     /// Set the maximum POST request body size in bytes.
     pub fn with_max_request_body_bytes(mut self, bytes: usize) -> Self {
         self.max_request_body_bytes = bytes;
+        self
+    }
+
+    /// Require per-request protocol signals on stateless JSON-RPC request
+    /// POSTs.
+    ///
+    /// See [`StreamableHttpServerConfig::stateless_protocol_metadata_required`].
+    pub fn with_stateless_protocol_metadata_required(
+        mut self,
+        stateless_protocol_metadata_required: bool,
+    ) -> Self {
+        self.stateless_protocol_metadata_required = stateless_protocol_metadata_required;
         self
     }
 }
@@ -502,6 +541,77 @@ fn validate_request_protocol_version_meta(
         ));
     }
     Ok(())
+}
+
+/// When `stateless_protocol_metadata_required` is enabled in stateless mode,
+/// every non-initialize Streamable HTTP JSON-RPC request POST must carry the
+/// `MCP-Protocol-Version` HTTP header. A missing header is rejected with
+/// HTTP 400 / JSON-RPC `-32020` before handler dispatch. `server/discover`
+/// is included so the seam aligns with the per-POST header contract; its
+/// body-metadata rule is preserved unchanged.
+#[expect(
+    clippy::result_large_err,
+    reason = "BoxResponse is intentionally large; matches other handlers in this file"
+)]
+fn validate_required_protocol_header(
+    config: &StreamableHttpServerConfig,
+    headers: &HeaderMap,
+    message: &ClientJsonRpcMessage,
+) -> Result<(), BoxResponse> {
+    if !config.stateless_protocol_metadata_required {
+        return Ok(());
+    }
+    let ClientJsonRpcMessage::Request(request) = message else {
+        // Notifications, response messages, and error messages are exempt.
+        return Ok(());
+    };
+    if matches!(&request.request, ClientRequest::InitializeRequest(_)) {
+        // Initialize keeps its own header-matching rule.
+        return Ok(());
+    }
+    if headers.contains_key(HEADER_MCP_PROTOCOL_VERSION) {
+        return Ok(());
+    }
+    Err(header_mismatch_jsonrpc_response(
+        Some(request.id.clone()),
+        "Missing MCP-Protocol-Version header for request requiring per-request protocol metadata",
+    ))
+}
+
+/// When `stateless_protocol_metadata_required` is enabled in stateless mode,
+/// every non-initialize, non-discover Streamable HTTP JSON-RPC request must
+/// carry `io.modelcontextprotocol/protocolVersion` in `_meta`. A missing entry
+/// is rejected with HTTP 400 / JSON-RPC `-32602` (invalid_params). `initialize`,
+/// `server/discover` (whose body-metadata rule is already enforced by
+/// `validate_request_protocol_version_meta`), notifications, and other message
+/// kinds are exempt.
+#[expect(
+    clippy::result_large_err,
+    reason = "BoxResponse is intentionally large; matches other handlers in this file"
+)]
+fn validate_required_protocol_meta(
+    config: &StreamableHttpServerConfig,
+    message: &ClientJsonRpcMessage,
+) -> Result<(), BoxResponse> {
+    if !config.stateless_protocol_metadata_required {
+        return Ok(());
+    }
+    let ClientJsonRpcMessage::Request(request) = message else {
+        return Ok(());
+    };
+    if matches!(
+        &request.request,
+        ClientRequest::InitializeRequest(_) | ClientRequest::DiscoverRequest(_)
+    ) {
+        return Ok(());
+    }
+    if request.request.get_meta().protocol_version().is_some() {
+        return Ok(());
+    }
+    Err(invalid_params_jsonrpc_response(
+        Some(request.id.clone()),
+        "Invalid params: request requires protocolVersion in request _meta",
+    ))
 }
 
 fn jsonrpc_http_status(message: &ServerJsonRpcMessage) -> http::StatusCode {
@@ -1809,6 +1919,10 @@ where
             // Stateless mode:
             // - on initialize: the header (if present) must match `params.protocolVersion`
             // - on every other request: the header must name a known version.
+            //
+            // The opt-in seam applies only here so legacy session routing and
+            // its error precedence remain unchanged.
+            validate_required_protocol_header(&self.config, &part.headers, &message)?;
             let has_per_request_version = message_has_per_request_protocol_version(&message);
             match &message {
                 ClientJsonRpcMessage::Request(req) => {
@@ -1829,6 +1943,7 @@ where
             // Validate SEP-2243 standard headers against the body
             validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
             validate_request_protocol_version_meta(&part.headers, &message)?;
+            validate_required_protocol_meta(&self.config, &message)?;
             let service = self
                 .get_service()
                 .map_err(internal_error_response("get service"))?;
