@@ -71,6 +71,81 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn input_required_result_with_meta_deserializes_to_correct_variant() {
+        let result = parse_result(wrap_response(json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "username": {
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "Please provide your username",
+                        "requestedSchema": {
+                            "type": "object",
+                            "properties": {
+                                "username": { "type": "string" }
+                            },
+                            "required": ["username"]
+                        }
+                    }
+                }
+            },
+            "requestState": "opaque-state",
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "test-server",
+                    "version": "1.0.0"
+                }
+            }
+        })));
+
+        let ServerResult::InputRequiredResult(result) = result else {
+            panic!("expected InputRequiredResult, got {result:?}");
+        };
+        assert!(
+            result.input_requests.is_some_and(|requests| {
+                requests.len() == 1 && requests.contains_key("username")
+            })
+        );
+        assert_eq!(result.request_state.as_deref(), Some("opaque-state"));
+        assert_eq!(
+            result
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("io.modelcontextprotocol/serverInfo")),
+            Some(&json!({
+                "name": "test-server",
+                "version": "1.0.0"
+            }))
+        );
+    }
+
+    #[test]
+    fn call_tool_result_rejects_input_required_discriminator() {
+        assert!(
+            serde_json::from_value::<CallToolResult>(json!({
+                "resultType": "input_required",
+                "requestState": "opaque-state",
+                "_meta": {}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invalid_input_required_result_falls_through_to_custom_result() {
+        let payload = json!({
+            "resultType": "input_required",
+            "_meta": {}
+        });
+        let result = parse_result(wrap_response(payload.clone()));
+
+        let ServerResult::CustomResult(result) = result else {
+            panic!("expected CustomResult, got {result:?}");
+        };
+        assert_eq!(result.0, payload);
+    }
+
+    #[test]
     fn empty_object_deserializes_to_empty_result() {
         let result = parse_result(wrap_response(json!({})));
         assert!(

@@ -274,6 +274,12 @@ impl<'de> Deserialize<'de> for InputRequiredResult {
             }
         }
 
+        if helper.input_requests.is_none() && helper.request_state.is_none() {
+            return Err(serde::de::Error::custom(
+                "InputRequiredResult requires at least one of inputRequests or requestState",
+            ));
+        }
+
         Ok(InputRequiredResult {
             result_type: ResultType::INPUT_REQUIRED,
             input_requests: helper.input_requests,
@@ -448,6 +454,19 @@ mod tests {
             assert_eq!(
                 result.request_state.as_deref(),
                 Some("eyJwcm9ncmVzcyI6IjUwJSJ9")
+            );
+        }
+
+        #[test]
+        fn rejects_missing_input_requests_and_request_state() {
+            let json = serde_json::json!({
+                "resultType": "input_required",
+                "_meta": {}
+            });
+            let err = serde_json::from_value::<InputRequiredResult>(json).unwrap_err();
+            assert!(
+                err.to_string().contains("inputRequests or requestState"),
+                "error should mention the required continuation fields, got: {err}"
             );
         }
 
