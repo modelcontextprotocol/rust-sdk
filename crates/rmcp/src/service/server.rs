@@ -472,15 +472,23 @@ pub(crate) fn negotiate_protocol_version(
     server_supported: &[ProtocolVersion],
 ) -> ProtocolVersion {
     if server_supported.contains(client_requested) {
-        client_requested.clone()
-    } else {
-        tracing::warn!(
-            client_requested = %client_requested,
-            server_fallback = %server_fallback,
-            "client requested unsupported protocol version; falling back to server default"
-        );
-        server_fallback
+        return client_requested.clone();
     }
+    let fallback = if server_supported.is_empty() || server_supported.contains(&server_fallback) {
+        server_fallback
+    } else {
+        server_supported
+            .iter()
+            .max_by(|a, b| a.as_str().cmp(b.as_str()))
+            .cloned()
+            .unwrap_or(server_fallback)
+    };
+    tracing::warn!(
+        client_requested = %client_requested,
+        server_fallback = %fallback,
+        "client requested unsupported protocol version; falling back to server default"
+    );
+    fallback
 }
 
 fn missing_request_metadata_error(missing: &[&str]) -> ErrorData {

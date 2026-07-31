@@ -10,6 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use rmcp::{
     ServiceExt,
+    model::{ClientInfo, ProtocolVersion},
     transport::{
         StreamableHttpClientTransport,
         streamable_http_client::StreamableHttpClientTransportConfig,
@@ -108,7 +109,10 @@ async fn test_session_state_persisted_to_store() -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientInfo::default()
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
+        .serve(transport)
+        .await?;
 
     // Make a real request so the session is fully active.
     let _resources = client.list_all_resources().await?;
@@ -170,7 +174,10 @@ async fn test_session_state_deleted_from_store_on_delete() -> anyhow::Result<()>
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientInfo::default()
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
+        .serve(transport)
+        .await?;
     let _resources = client.list_all_resources().await?;
 
     assert_eq!(store.len().await, 1, "store should have one entry");

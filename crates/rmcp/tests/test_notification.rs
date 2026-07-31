@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
-        ClientNotification, CustomNotification, ResourceUpdatedNotificationParam,
+        ClientNotification, CustomNotification, ProtocolVersion, ResourceUpdatedNotificationParam,
         ServerCapabilities, ServerInfo, ServerNotification, SubscribeRequestParams,
     },
 };
@@ -55,6 +55,10 @@ pub struct Client {
 }
 
 impl ClientHandler for Client {
+    fn get_info(&self) -> rmcp::model::ClientInfo {
+        rmcp::model::ClientInfo::default().with_protocol_version(ProtocolVersion::V_2025_11_25)
+    }
+
     async fn on_resource_updated(
         &self,
         params: rmcp::model::ResourceUpdatedNotificationParam,
