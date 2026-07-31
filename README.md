@@ -1151,6 +1151,55 @@ impl ServerHandler for MyServer {
 }
 ```
 
+### Ping
+
+Either side can send a `ping` request to check that its counterpart is still
+responsive and the connection is alive. A ping carries no parameters and the
+receiver replies with an empty result. Because pings can flow in both
+directions, `rmcp` handles them symmetrically:
+
+- **Sending a ping** — construct a `PingRequest` and send it over the peer.
+  A client pings the server with `ClientRequest::PingRequest`; a server pings
+  the client with `ServerRequest::PingRequest`. `send_request` resolves once the
+  empty response arrives, so a returned `Ok` confirms the peer is reachable:
+
+```rust
+use rmcp::model::{PingRequest, ServerRequest};
+
+// From a server, ping the connected client to verify it is still alive.
+context.peer
+    .send_request(ServerRequest::PingRequest(PingRequest::default()))
+    .await?;
+```
+
+```rust
+use rmcp::model::{ClientRequest, PingRequest};
+
+// From a client, ping the server. `running` is the value returned by serve().
+running
+    .send_request(ClientRequest::PingRequest(PingRequest::default()))
+    .await?;
+```
+
+- **Responding to a ping** — `rmcp` answers incoming pings automatically. The
+  default `ping` method on `ServerHandler` and `ClientHandler` returns an empty
+  result, so no code is required. Override it only if you want to run custom
+  logic (for example, health checks) when a ping arrives:
+
+```rust
+impl ServerHandler for MyServer {
+    async fn ping(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        // Custom liveness logic here, if any.
+        Ok(())
+    }
+}
+```
+
+**MCP Spec:** [Ping](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping)
+
 ### Initialized notification
 
 Legacy clients send `initialized` after the `initialize` handshake completes.
