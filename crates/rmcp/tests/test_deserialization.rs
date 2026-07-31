@@ -132,6 +132,20 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn invalid_input_required_result_falls_through_to_custom_result() {
+        let payload = json!({
+            "resultType": "input_required",
+            "_meta": {}
+        });
+        let result = parse_result(wrap_response(payload.clone()));
+
+        let ServerResult::CustomResult(result) = result else {
+            panic!("expected CustomResult, got {result:?}");
+        };
+        assert_eq!(result.0, payload);
+    }
+
+    #[test]
     fn empty_object_deserializes_to_empty_result() {
         let result = parse_result(wrap_response(json!({})));
         assert!(
