@@ -391,6 +391,11 @@ required-features = ["auth"]
 path = "tests/test_client_credentials.rs"
 
 [[test]]
+name = "test_auth_error_classification"
+required-features = ["auth", "client", "transport-streamable-http-client"]
+path = "tests/test_auth_error_classification.rs"
+
+[[test]]
 name = "test_unix_socket_transport"
 required-features = [
   "client",

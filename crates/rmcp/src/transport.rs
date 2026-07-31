@@ -272,6 +272,27 @@ impl DynamicTransportError {
         }
     }
 
+    pub(crate) fn is_authorization_required(&self) -> bool {
+        let mut error = Some(self.error.as_ref() as &(dyn std::error::Error + 'static));
+        while let Some(current) = error {
+            #[cfg(feature = "auth")]
+            if matches!(
+                current.downcast_ref::<auth::AuthError>(),
+                Some(auth::AuthError::AuthorizationRequired)
+            ) {
+                return true;
+            }
+
+            #[cfg(feature = "transport-streamable-http-client")]
+            if current.is::<streamable_http_client::AuthRequiredError>() {
+                return true;
+            }
+
+            error = current.source();
+        }
+        false
+    }
+
     pub fn downcast<T: Transport<R> + 'static, R: ServiceRole>(self) -> Result<T::Error, Self> {
         if !self.is::<T, R>() {
             Err(self)
