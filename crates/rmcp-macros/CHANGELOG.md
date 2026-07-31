@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.0.1...rmcp-macros-v3.1.0) - 2026-07-31
+
+### Added
+
+- add strict stateless protocol metadata validation ([#1091](https://github.com/modelcontextprotocol/rust-sdk/pull/1091))
+
+### Other
+
+- document the ping utility with examples ([#1106](https://github.com/modelcontextprotocol/rust-sdk/pull/1106))
+- complete Tier 1 feature docs and finalize roadmap ([#1101](https://github.com/modelcontextprotocol/rust-sdk/pull/1101))
+- *(conformance)* meeting requirements for tier 1 ([#1087](https://github.com/modelcontextprotocol/rust-sdk/pull/1087))
+
 ## [3.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.0.0-beta.5...rmcp-macros-v3.0.0) - 2026-07-28
 
 ### Other

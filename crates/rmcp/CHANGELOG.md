@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.1...rmcp-v3.1.0) - 2026-07-31
+
+### Added
+
+- classify authorization-required errors ([#1056](https://github.com/modelcontextprotocol/rust-sdk/pull/1056))
+- add strict stateless protocol metadata validation ([#1091](https://github.com/modelcontextprotocol/rust-sdk/pull/1091))
+- SEP-2260 stream-based enforcement of client receive-side request association ([#1055](https://github.com/modelcontextprotocol/rust-sdk/pull/1055))
+
+### Fixed
+
+- *(model)* decode metadata-bearing input-required results affecting mrtr ([#1097](https://github.com/modelcontextprotocol/rust-sdk/pull/1097))
+- require metadata for modern HTTP requests ([#1089](https://github.com/modelcontextprotocol/rust-sdk/pull/1089))
+- honor supported_protocol_versions when negotiating initialize ([#1093](https://github.com/modelcontextprotocol/rust-sdk/pull/1093))
+
+### Other
+
+- document the ping utility with examples ([#1106](https://github.com/modelcontextprotocol/rust-sdk/pull/1106))
+- complete Tier 1 feature docs and finalize roadmap ([#1101](https://github.com/modelcontextprotocol/rust-sdk/pull/1101))
+- *(conformance)* meeting requirements for tier 1 ([#1087](https://github.com/modelcontextprotocol/rust-sdk/pull/1087))
+
 ## [3.0.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.0...rmcp-v3.0.1) - 2026-07-29
 
 ### Fixed
