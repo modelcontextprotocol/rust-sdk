@@ -32,8 +32,9 @@ impl ServerHandler for EchoServer {
 }
 
 /// Every known version whose lifecycle still runs the `initialize` handshake.
-/// `2026-07-28` replaced the handshake with per-request metadata, so this is
-/// also the list a server that has not implemented that revision supports.
+/// [`ProtocolVersion::NO_INITIALIZE`] replaced the handshake with per-request
+/// metadata, so this is also the list a server that has not implemented that
+/// revision supports.
 const HANDSHAKE_VERSIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V_2024_11_05,
     ProtocolVersion::V_2025_03_26,
@@ -168,8 +169,8 @@ async fn handshake_never_agrees_to_a_version_that_dropped_it() {
     let negotiated = negotiated_version(ProtocolVersion::V_2026_07_28).await;
     assert_eq!(
         negotiated,
-        ProtocolVersion::LATEST,
-        "a version that dropped the handshake should fall back to the server's own"
+        ProtocolVersion::LATEST_WITH_INITIALIZE,
+        "a version that dropped the handshake should fall back to the server's newest handshake version"
     );
 }
 
@@ -197,13 +198,14 @@ async fn modern_only_server_rejects_the_handshake() {
 }
 
 #[tokio::test]
-async fn unknown_version_falls_back_to_latest() {
-    let unknown: ProtocolVersion = serde_json::from_str(r#""1999-01-01""#).unwrap();
+async fn unknown_version_falls_back_to_newest_handshake_version() {
+    let unknown: ProtocolVersion =
+        serde_json::from_str(r#""1999-01-01""#).expect("version literal should deserialize");
     let negotiated = negotiated_version(unknown).await;
     assert_eq!(
         negotiated,
-        ProtocolVersion::LATEST,
-        "unknown version should fall back to LATEST"
+        ProtocolVersion::LATEST_WITH_INITIALIZE,
+        "unknown version should fall back to the newest handshake version"
     );
 }
 

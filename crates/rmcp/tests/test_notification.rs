@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
-        ClientNotification, CustomNotification, ResourceUpdatedNotificationParam,
+        ClientNotification, CustomNotification, ProtocolVersion, ResourceUpdatedNotificationParam,
         ServerCapabilities, ServerConfig, ServerNotification, SubscribeRequestParams,
     },
 };
@@ -55,6 +55,13 @@ pub struct Client {
 }
 
 impl ClientHandler for Client {
+    // Pinned to the handshake lifecycle: this test drives subscriptions over a
+    // session, which `LATEST` no longer establishes.
+    fn get_info(&self) -> rmcp::model::ClientInfo {
+        rmcp::model::ClientInfo::default()
+            .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+    }
+
     async fn on_resource_updated(
         &self,
         params: rmcp::model::ResourceUpdatedNotificationParam,

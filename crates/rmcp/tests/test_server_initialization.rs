@@ -266,16 +266,18 @@ async fn server_echoes_client_protocol_version_when_known_old() {
     assert_eq!(negotiated, ProtocolVersion::V_2024_11_05);
 }
 
+// `initialize` can only answer with a version that still has a handshake, so a
+// client naming `LATEST` gets `LATEST_WITH_INITIALIZE` instead.
 #[tokio::test]
-async fn server_echoes_client_protocol_version_when_latest() {
-    let negotiated = negotiate_version(TestServer::new(), "2025-11-25").await;
-    assert_eq!(negotiated, ProtocolVersion::LATEST);
+async fn server_falls_back_to_newest_handshake_version_when_client_requests_latest() {
+    let negotiated = negotiate_version(TestServer::new(), ProtocolVersion::LATEST.as_str()).await;
+    assert_eq!(negotiated, ProtocolVersion::LATEST_WITH_INITIALIZE);
 }
 
 #[tokio::test]
 async fn server_falls_back_when_client_protocol_version_unknown() {
     let negotiated = negotiate_version(TestServer::new(), "2099-99-99").await;
-    assert_eq!(negotiated, ProtocolVersion::LATEST);
+    assert_eq!(negotiated, ProtocolVersion::LATEST_WITH_INITIALIZE);
 }
 
 struct PinnedServer;
@@ -289,8 +291,18 @@ impl ServerHandler for PinnedServer {
 
 #[tokio::test]
 async fn server_pinned_version_does_not_override_known_client_request() {
-    let negotiated = negotiate_version(PinnedServer, "2025-11-25").await;
-    assert_eq!(negotiated, ProtocolVersion::LATEST);
+    let negotiated = negotiate_version(
+        PinnedServer,
+        ProtocolVersion::LATEST_WITH_INITIALIZE.as_str(),
+    )
+    .await;
+    assert_eq!(negotiated, ProtocolVersion::LATEST_WITH_INITIALIZE);
+}
+
+#[tokio::test]
+async fn server_pinned_version_used_as_fallback_when_client_requests_latest() {
+    let negotiated = negotiate_version(PinnedServer, ProtocolVersion::LATEST.as_str()).await;
+    assert_eq!(negotiated, ProtocolVersion::V_2025_06_18);
 }
 
 #[tokio::test]

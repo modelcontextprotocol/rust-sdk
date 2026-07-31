@@ -39,8 +39,9 @@ impl ServerHandler for OverridingInitialize {
 }
 
 /// Every known version whose lifecycle still runs the `initialize` handshake.
-/// `2026-07-28` replaced the handshake with per-request metadata, so this is
-/// also the list a server that has not implemented that revision supports.
+/// [`ProtocolVersion::NO_INITIALIZE`] replaced the handshake with per-request
+/// metadata, so this is also the list a server that has not implemented that
+/// revision supports.
 const HANDSHAKE_VERSIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V_2024_11_05,
     ProtocolVersion::V_2025_03_26,
@@ -183,14 +184,15 @@ async fn stateless_sse_init_echoes_handshake_versions_when_handler_overrides_ini
 }
 
 #[tokio::test]
-async fn stateless_json_init_preserves_handler_fallback_for_unknown_version() {
+async fn stateless_json_init_substitutes_a_handshake_version_for_unknown_version() {
     let (client, url, ct) = spawn_server(stateless_json_config()).await;
 
     let resp = post_init(&client, &url, "1999-01-01").await;
     assert_eq!(
         resp["result"]["protocolVersion"],
-        ProtocolVersion::LATEST.as_str(),
-        "unknown version should preserve the handler's fallback"
+        ProtocolVersion::LATEST_WITH_INITIALIZE.as_str(),
+        "the handler's `LATEST` fallback has no handshake, so the newest version \
+         that does is substituted"
     );
 
     ct.cancel();
@@ -221,7 +223,7 @@ async fn stateless_json_init_does_not_agree_to_version_outside_supported_list() 
     let resp = post_init(&client, &url, ProtocolVersion::V_2026_07_28.as_str()).await;
     assert_eq!(
         resp["result"]["protocolVersion"],
-        ProtocolVersion::V_2025_11_25.as_str(),
+        ProtocolVersion::LATEST_WITH_INITIALIZE.as_str(),
         "a version outside supported_protocol_versions should not be echoed back"
     );
 
