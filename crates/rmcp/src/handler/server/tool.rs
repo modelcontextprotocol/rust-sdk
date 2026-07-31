@@ -38,6 +38,10 @@ pub struct ToolCallContext<'s, S> {
     pub service: &'s S,
     pub name: Cow<'static, str>,
     pub arguments: Option<JsonObject>,
+    /// Client responses to input requests from the previous MRTR round.
+    pub input_responses: Option<crate::model::InputResponses>,
+    /// Opaque state returned by the server during the previous MRTR round.
+    pub request_state: Option<String>,
 }
 
 impl<'s, S> ToolCallContext<'s, S> {
@@ -47,6 +51,8 @@ impl<'s, S> ToolCallContext<'s, S> {
             meta: _,
             name,
             arguments,
+            input_responses,
+            request_state,
             ..
         }: CallToolRequestParams,
         request_context: RequestContext<RoleServer>,
@@ -56,6 +62,8 @@ impl<'s, S> ToolCallContext<'s, S> {
             service,
             name,
             arguments,
+            input_responses,
+            request_state,
         }
     }
     pub fn name(&self) -> &str {
@@ -95,6 +103,12 @@ impl IntoCallToolResult for CallToolResult {
 impl IntoCallToolResult for InputRequiredResult {
     fn into_call_tool_result(self) -> Result<CallToolResponse, crate::ErrorData> {
         Ok(self.into())
+    }
+}
+
+impl IntoCallToolResult for CallToolResponse {
+    fn into_call_tool_result(self) -> Result<CallToolResponse, crate::ErrorData> {
+        Ok(self)
     }
 }
 
@@ -190,6 +204,26 @@ pub struct ToolName(pub Cow<'static, str>);
 impl<S> FromContextPart<ToolCallContext<'_, S>> for ToolName {
     fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
         Ok(Self(context.name.clone()))
+    }
+}
+
+/// Extracts the opaque state returned by the server during the previous MRTR round.
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+pub struct RequestState(pub Option<String>);
+
+impl<S> FromContextPart<ToolCallContext<'_, S>> for RequestState {
+    fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
+        Ok(Self(context.request_state.take()))
+    }
+}
+
+/// Extracts client responses to input requests from the previous MRTR round.
+#[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
+pub struct InputResponses(pub Option<crate::model::InputResponses>);
+
+impl<S> FromContextPart<ToolCallContext<'_, S>> for InputResponses {
+    fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, crate::ErrorData> {
+        Ok(Self(context.input_responses.take()))
     }
 }
 
