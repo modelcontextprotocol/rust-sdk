@@ -215,6 +215,13 @@ pub struct StoredCredentials {
     pub token_received_at: Option<u64>,
     #[serde(default)]
     pub issuer: Option<String>,
+    /// Protected-resource audience the token was requested for.
+    ///
+    /// Tokens without this binding are treated as legacy credentials. When
+    /// their issuer is known and still matches the authorization server, a
+    /// refresh token can migrate them to the current protected resource.
+    #[serde(default)]
+    pub resource: Option<String>,
 }
 
 impl std::fmt::Debug for StoredCredentials {
@@ -228,12 +235,16 @@ impl std::fmt::Debug for StoredCredentials {
             .field("granted_scopes", &self.granted_scopes)
             .field("token_received_at", &self.token_received_at)
             .field("issuer", &self.issuer)
+            .field("resource", &self.resource)
             .finish()
     }
 }
 
 impl StoredCredentials {
-    /// Create a new `StoredCredentials` instance.
+    /// Create a new `StoredCredentials` instance without issuer or resource provenance.
+    ///
+    /// Call [`Self::with_issuer`] and [`Self::with_resource`] with the values
+    /// captured when the token was issued before restoring cached credentials.
     pub fn new(
         client_id: String,
         token_response: Option<OAuthTokenResponse>,
@@ -246,11 +257,18 @@ impl StoredCredentials {
             granted_scopes,
             token_received_at,
             issuer: None,
+            resource: None,
         }
     }
 
     pub fn with_issuer(mut self, issuer: Option<String>) -> Self {
         self.issuer = issuer;
+        self
+    }
+
+    /// Bind these credentials to the protected-resource audience they were issued for.
+    pub fn with_resource(mut self, resource: Option<String>) -> Self {
+        self.resource = resource;
         self
     }
 }
@@ -1036,6 +1054,17 @@ pub struct AuthorizationManager {
     allow_missing_issuer: bool,
 }
 
+enum CredentialBindingMismatch {
+    Issuer {
+        stored: Option<String>,
+        current: Option<String>,
+    },
+    Resource {
+        stored: Option<String>,
+        current: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ClientRegistrationRequest {
     pub client_name: String,
@@ -1323,69 +1352,164 @@ impl AuthorizationManager {
     /// This should be called with
     /// [`AuthorizationMetadataResolution::metadata`] after
     /// [`Self::resolve_metadata`] and before creating an
-    /// [`AuthorizationSession`].
+    /// [`AuthorizationSession`]. Changing authorization-server identity or OAuth
+    /// endpoints invalidates any client configured for the previous server.
     pub fn set_metadata(&mut self, metadata: AuthorizationMetadata) {
+        if self.metadata.as_ref().is_some_and(|current| {
+            let issuer_matches = match (current.issuer.as_deref(), metadata.issuer.as_deref()) {
+                (None, None) => true,
+                (Some(current), Some(next)) => Self::issuer_identifiers_match(current, next),
+                _ => false,
+            };
+
+            !issuer_matches
+                || current.authorization_endpoint != metadata.authorization_endpoint
+                || current.token_endpoint != metadata.token_endpoint
+        }) {
+            self.oauth_client = None;
+        }
+
         self.metadata = Some(metadata);
     }
 
     /// Initialize from stored credentials if available
     ///
     /// This will load credentials from the credential store and configure
-    /// the client if credentials are found. Returns `false` when credentials
-    /// are absent or discarded after an authorization-server change.
+    /// the client if credentials are found. Legacy credentials with a verified
+    /// issuer and refresh token are refreshed for the current resource before
+    /// use. Returns `false` when credentials are absent, cannot be safely
+    /// migrated, or belong to another authorization server or resource.
     pub async fn initialize_from_store(&mut self) -> Result<bool, AuthError> {
         if let Some(stored) = self.credential_store.load().await?
             && stored.token_response.is_some()
         {
             if self.metadata.is_none() {
                 let resolution = self.resolve_metadata().await?;
-                self.metadata = Some(resolution.metadata);
+                self.set_metadata(resolution.metadata);
             }
 
-            if let (Some(stored_issuer), Some(current_issuer)) =
-                (stored.issuer.as_deref(), self.metadata_issuer().as_deref())
-            {
-                // A CIMD client ID is the client's metadata URL, so it is
-                // portable across authorization servers and exempt here.
-                if stored_issuer != current_issuer {
-                    if is_https_url(&stored.client_id) {
-                        // A CIMD client ID is the client's metadata URL, so it is
-                        // portable across authorization servers — but the tokens
-                        // were minted by the previous AS and must not be reused.
-                        tracing::warn!(
-                            stored_issuer,
-                            current_issuer,
-                            "authorization server issuer changed; discarding tokens but keeping portable CIMD client ID"
-                        );
-                        self.credential_store
-                            .save(
-                                StoredCredentials::new(
-                                    stored.client_id.clone(),
-                                    None,
-                                    vec![],
-                                    None,
-                                )
-                                .with_issuer(self.metadata_issuer()),
-                            )
-                            .await?;
+            if let Err(mismatch) = self.validate_stored_credential_binding(&stored).await {
+                if self.can_migrate_legacy_credentials(&stored) {
+                    if self.oauth_client.as_ref().is_none_or(|client| {
+                        client.client_id().as_str() != stored.client_id.as_str()
+                    }) {
                         self.configure_client_id(&stored.client_id)?;
-                        return Ok(false);
                     }
-
-                    tracing::warn!(
-                        stored_issuer,
-                        current_issuer,
-                        "authorization server issuer changed; clearing stored credentials bound to the previous issuer"
-                    );
-                    self.credential_store.clear().await?;
-                    return Ok(false);
+                    *self.current_scopes.write().await = stored.granted_scopes.clone();
+                    return Ok(self.get_stored_credentials().await?.is_some());
                 }
+
+                if self
+                    .discard_mismatched_credentials(&stored, mismatch)
+                    .await?
+                {
+                    self.configure_client_id(&stored.client_id)?;
+                }
+                return Ok(false);
             }
 
             self.configure_client_id(&stored.client_id)?;
             return Ok(true);
         }
         Ok(false)
+    }
+
+    fn can_migrate_legacy_credentials(&self, stored: &StoredCredentials) -> bool {
+        stored.resource.is_none()
+            && stored
+                .issuer
+                .as_deref()
+                .zip(self.metadata_issuer().as_deref())
+                .is_some_and(|(stored, current)| Self::issuer_identifiers_match(stored, current))
+            && stored
+                .token_response
+                .as_ref()
+                .and_then(TokenResponse::refresh_token)
+                .is_some()
+    }
+
+    async fn validate_stored_credential_binding(
+        &self,
+        stored: &StoredCredentials,
+    ) -> Result<String, CredentialBindingMismatch> {
+        let current_issuer = self.metadata_issuer();
+        match (stored.issuer.as_deref(), current_issuer.as_deref()) {
+            (None, None) => {}
+            (Some(stored_issuer), Some(current_issuer))
+                if Self::issuer_identifiers_match(stored_issuer, current_issuer) => {}
+            _ => {
+                return Err(CredentialBindingMismatch::Issuer {
+                    stored: stored.issuer.clone(),
+                    current: current_issuer,
+                });
+            }
+        }
+
+        let current_resource = self.oauth_resource().await;
+        if stored.resource.as_deref().is_some_and(|stored_resource| {
+            Self::resource_identifiers_match(stored_resource, &current_resource)
+        }) {
+            Ok(current_resource)
+        } else {
+            Err(CredentialBindingMismatch::Resource {
+                stored: stored.resource.clone(),
+                current: current_resource,
+            })
+        }
+    }
+
+    fn resource_identifiers_match(stored: &str, current: &str) -> bool {
+        Url::parse(stored)
+            .ok()
+            .zip(Url::parse(current).ok())
+            .is_some_and(|(stored, current)| stored == current)
+    }
+
+    async fn discard_mismatched_credentials(
+        &self,
+        stored: &StoredCredentials,
+        mismatch: CredentialBindingMismatch,
+    ) -> Result<bool, AuthError> {
+        let retain_client_id = match mismatch {
+            CredentialBindingMismatch::Issuer {
+                stored: stored_issuer,
+                current: current_issuer,
+            } => {
+                let retain_client_id = is_https_url(&stored.client_id);
+                tracing::warn!(
+                    stored_issuer = ?stored_issuer,
+                    current_issuer = ?current_issuer,
+                    retain_client_id,
+                    "authorization server issuer changed or stored credentials are unbound; discarding tokens"
+                );
+                retain_client_id
+            }
+            CredentialBindingMismatch::Resource {
+                stored: stored_resource,
+                current: current_resource,
+            } => {
+                tracing::warn!(
+                    stored_resource = ?stored_resource,
+                    current_resource,
+                    "protected resource changed or stored credentials are unbound; discarding tokens"
+                );
+                true
+            }
+        };
+
+        if retain_client_id {
+            self.credential_store
+                .save(
+                    StoredCredentials::new(stored.client_id.clone(), None, vec![], None)
+                        .with_issuer(self.metadata_issuer())
+                        .with_resource(Some(self.oauth_resource().await)),
+                )
+                .await?;
+        } else {
+            self.credential_store.clear().await?;
+        }
+
+        Ok(retain_client_id)
     }
 
     /// Use a caller-configured `reqwest::Client` for every OAuth HTTP operation,
@@ -1524,10 +1648,71 @@ impl AuthorizationManager {
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?
             .client_id();
 
-        let stored = self.credential_store.load().await?;
+        let stored = self.get_stored_credentials().await?;
         let token_response = stored.and_then(|s| s.token_response);
 
         Ok((client_id.to_string(), token_response))
+    }
+
+    /// Get stored credentials together with their original issuer and resource binding.
+    ///
+    /// Refreshes issuer-bound legacy credentials for the current resource before
+    /// returning them. Returns `None` after discarding tokens that cannot be
+    /// safely migrated or belong to another authorization server or resource.
+    /// Cached credentials remain untouched and unavailable until metadata has
+    /// identified the current authorization server.
+    pub async fn get_stored_credentials(&self) -> Result<Option<StoredCredentials>, AuthError> {
+        let Some(stored) = self.credential_store.load().await? else {
+            return Ok(None);
+        };
+
+        if stored.token_response.is_some() && self.metadata.is_none() {
+            return Ok(None);
+        }
+
+        if stored.token_response.is_some()
+            && let Err(mismatch) = self.validate_stored_credential_binding(&stored).await
+        {
+            if self.can_migrate_legacy_credentials(&stored) {
+                if self.oauth_client.is_none() {
+                    return Ok(None);
+                }
+
+                match self.refresh_token().await {
+                    Ok(_) => {
+                        let migrated = self.credential_store.load().await?;
+                        if let Some(migrated) = &migrated
+                            && let Err(mismatch) =
+                                self.validate_stored_credential_binding(migrated).await
+                        {
+                            self.discard_mismatched_credentials(migrated, mismatch)
+                                .await?;
+                            return Ok(None);
+                        }
+                        return Ok(migrated);
+                    }
+                    Err(AuthError::AuthorizationRequired | AuthError::TokenRefreshRejected(_)) => {
+                        if let Some(current) = self.credential_store.load().await?
+                            && current.token_response.is_some()
+                            && let Err(current_mismatch) =
+                                self.validate_stored_credential_binding(&current).await
+                            && self.can_migrate_legacy_credentials(&current)
+                        {
+                            self.discard_mismatched_credentials(&current, current_mismatch)
+                                .await?;
+                        }
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+
+            self.discard_mismatched_credentials(&stored, mismatch)
+                .await?;
+            return Ok(None);
+        }
+
+        Ok(Some(stored))
     }
 
     /// configure oauth2 client with client credentials
@@ -2032,10 +2217,11 @@ impl AuthorizationManager {
         debug!("client_id: {:?}", oauth_client.client_id());
 
         // exchange token
+        let resource = self.oauth_resource().await;
         let token_result = match oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
-            .add_extra_param("resource", self.oauth_resource().await)
+            .add_extra_param("resource", resource.clone())
             .request_async(&OAuth2HttpClient {
                 client: self.http_client.as_ref(),
                 redirect_policy: OAuthHttpRedirectPolicy::Stop,
@@ -2082,6 +2268,7 @@ impl AuthorizationManager {
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
             issuer: self.metadata_issuer(),
+            resource: Some(resource),
         };
         self.credential_store.save(stored).await?;
 
@@ -2111,7 +2298,7 @@ impl AuthorizationManager {
     /// Transient refresh failures return [`AuthError::TokenRefreshFailed`] so the
     /// caller can retry; other errors are propagated as-is.
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
-        let stored = self.credential_store.load().await?;
+        let stored = self.get_stored_credentials().await?;
         let Some(stored_creds) = stored else {
             return Err(AuthError::AuthorizationRequired);
         };
@@ -2160,13 +2347,75 @@ impl AuthorizationManager {
 
     /// refresh access token
     pub async fn refresh_token(&self) -> Result<OAuthTokenResponse, AuthError> {
-        let oauth_client = self
-            .oauth_client
+        self.oauth_client
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
         let stored = self.credential_store.load().await?;
         let stored_credentials = stored.ok_or(AuthError::AuthorizationRequired)?;
+        let is_legacy_migration = self.can_migrate_legacy_credentials(&stored_credentials);
+        match self
+            .refresh_stored_credentials(stored_credentials.clone())
+            .await
+        {
+            Err(AuthError::TokenRefreshRejected(_)) if is_legacy_migration => {
+                self.discard_mismatched_credentials(
+                    &stored_credentials,
+                    CredentialBindingMismatch::Resource {
+                        stored: None,
+                        current: self.oauth_resource().await,
+                    },
+                )
+                .await?;
+                Err(AuthError::AuthorizationRequired)
+            }
+            result => result,
+        }
+    }
+
+    async fn refresh_stored_credentials(
+        &self,
+        stored_credentials: StoredCredentials,
+    ) -> Result<OAuthTokenResponse, AuthError> {
+        let oauth_client = self
+            .oauth_client
+            .as_ref()
+            .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
+
+        let metadata = self
+            .metadata
+            .as_ref()
+            .ok_or(AuthError::AuthorizationRequired)?;
+        if !Self::resource_identifiers_match(
+            oauth_client.token_uri().url().as_str(),
+            &metadata.token_endpoint,
+        ) {
+            return Err(AuthError::AuthorizationRequired);
+        }
+
+        if stored_credentials.token_response.is_none() {
+            return Err(AuthError::AuthorizationRequired);
+        }
+        let (resource, legacy_migration) = match self
+            .validate_stored_credential_binding(&stored_credentials)
+            .await
+        {
+            Ok(resource) => (resource, false),
+            Err(CredentialBindingMismatch::Resource {
+                stored: None,
+                current,
+            }) if self.can_migrate_legacy_credentials(&stored_credentials) => {
+                if oauth_client.client_id().as_str() != stored_credentials.client_id {
+                    return Err(AuthError::AuthorizationRequired);
+                }
+                (current, true)
+            }
+            Err(mismatch) => {
+                self.discard_mismatched_credentials(&stored_credentials, mismatch)
+                    .await?;
+                return Err(AuthError::AuthorizationRequired);
+            }
+        };
         let current_credentials = stored_credentials
             .token_response
             .ok_or(AuthError::AuthorizationRequired)?;
@@ -2180,11 +2429,13 @@ impl AuthorizationManager {
         let mut refresh_request = oauth_client
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
-            .add_extra_param("resource", self.oauth_resource().await);
-        let mut refresh_scopes = stored_credentials.granted_scopes;
-        self.add_offline_access_if_supported(&mut refresh_scopes);
-        for scope in refresh_scopes {
-            refresh_request = refresh_request.add_scope(Scope::new(scope));
+            .add_extra_param("resource", resource.clone());
+        let mut refresh_scopes = stored_credentials.granted_scopes.clone();
+        if !legacy_migration {
+            self.add_offline_access_if_supported(&mut refresh_scopes);
+        }
+        for scope in &refresh_scopes {
+            refresh_request = refresh_request.add_scope(Scope::new(scope.clone()));
         }
         let mut token_result = refresh_request
             .request_async(&OAuth2HttpClient {
@@ -2194,12 +2445,22 @@ impl AuthorizationManager {
             .await
             .map_err(|error| match &error {
                 RequestTokenError::ServerResponse(response)
-                    if response.error() == &BasicErrorResponseType::InvalidGrant =>
+                    if response.error() == &BasicErrorResponseType::InvalidGrant
+                        || (legacy_migration
+                            && response.error() == &BasicErrorResponseType::InvalidScope)
+                        || matches!(
+                            response.error(),
+                            BasicErrorResponseType::Extension(error) if error == "invalid_target"
+                        ) =>
                 {
                     AuthError::TokenRefreshRejected(error.to_string())
                 }
                 _ => AuthError::TokenRefreshFailed(error.to_string()),
             })?;
+
+        if !Self::resource_identifiers_match(&resource, &self.oauth_resource().await) {
+            return Err(AuthError::AuthorizationRequired);
+        }
 
         // RFC 6749 section 6: issuing a new refresh token on refresh is optional.
         // When the response omits one, keep the existing refresh token rather than
@@ -2210,6 +2471,7 @@ impl AuthorizationManager {
 
         let granted_scopes: Vec<String> = match token_result.scopes() {
             Some(scopes) => scopes.iter().map(|s| s.to_string()).collect(),
+            None if legacy_migration => refresh_scopes,
             None => self.current_scopes.read().await.clone(),
         };
 
@@ -2222,8 +2484,13 @@ impl AuthorizationManager {
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
             issuer: self.metadata_issuer(),
+            resource: Some(resource.clone()),
         };
         self.credential_store.save(stored).await?;
+
+        if !Self::resource_identifiers_match(&resource, &self.oauth_resource().await) {
+            return Err(AuthError::AuthorizationRequired);
+        }
 
         Ok(token_result)
     }
@@ -2953,10 +3220,17 @@ impl AuthorizationManager {
         config: &ClientCredentialsConfig,
     ) -> Result<OAuthTokenResponse, AuthError> {
         // The MCP auth spec requires the `resource` parameter in all token requests.
-        if config.resource().is_none() {
+        let Some(resource) = config.resource() else {
             return Err(AuthError::ClientCredentialsError(
                 "resource parameter is required by the MCP auth spec".to_string(),
             ));
+        };
+
+        let protected_resource = self.oauth_resource().await;
+        if !Self::resource_identifiers_match(resource, &protected_resource) {
+            return Err(AuthError::ClientCredentialsError(format!(
+                "configured resource {resource} does not match protected resource {protected_resource}"
+            )));
         }
 
         // For private_key_jwt, use a separate path that omits client_id from the request
@@ -3029,6 +3303,7 @@ impl AuthorizationManager {
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
             issuer: self.metadata_issuer(),
+            resource: config.resource().map(str::to_string),
         };
         self.credential_store.save(stored).await?;
 
@@ -3150,6 +3425,7 @@ impl AuthorizationManager {
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
             issuer: self.metadata_issuer(),
+            resource: resource.clone(),
         };
         self.credential_store.save(stored).await?;
 
@@ -3551,8 +3827,25 @@ impl OAuthState {
         }
     }
 
+    /// Get stored credentials while preserving their issuer and resource provenance.
+    pub async fn get_stored_credentials(&self) -> Result<Option<StoredCredentials>, AuthError> {
+        match self {
+            OAuthState::Unauthorized(manager) | OAuthState::Authorized(manager) => {
+                manager.get_stored_credentials().await
+            }
+            OAuthState::Session(session) => session.auth_manager.get_stored_credentials().await,
+            OAuthState::AuthorizedHttpClient(client) => {
+                client.auth_manager.get_stored_credentials().await
+            }
+        }
+    }
+
     /// Manually set credentials and move into authorized state
-    /// Useful if you're caching credentials externally and wish to reuse them
+    ///
+    /// The caller is responsible for ensuring the supplied token was issued by
+    /// this state's authorization server for its protected resource. Use
+    /// [`Self::set_stored_credentials`] when cached issuer and resource
+    /// provenance is available.
     pub async fn set_credentials(
         &mut self,
         client_id: &str,
@@ -3575,7 +3868,8 @@ impl OAuthState {
             *manager.current_scopes.write().await = granted_scopes.clone();
 
             let resolution = manager.resolve_metadata().await?;
-            manager.metadata = Some(resolution.metadata);
+            manager.set_metadata(resolution.metadata);
+            let resource = manager.oauth_resource().await;
 
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
@@ -3583,6 +3877,7 @@ impl OAuthState {
                 granted_scopes,
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
                 issuer: manager.metadata_issuer(),
+                resource: Some(resource),
             };
             manager.credential_store.save(stored).await?;
 
@@ -3594,6 +3889,92 @@ impl OAuthState {
             Err(AuthError::InternalError(
                 "Cannot set credentials in this state".to_string(),
             ))
+        }
+    }
+
+    /// Restore cached credentials without discarding their original issuer or resource binding.
+    ///
+    /// Issuer-bound legacy credentials with a refresh token are refreshed for the
+    /// current protected resource before this state becomes authorized.
+    /// Credentials that cannot be safely migrated, or were issued for a
+    /// different authorization server or protected resource, are rejected.
+    /// Legacy authorization servers without issuer metadata remain supported
+    /// for credentials that already carry protected-resource provenance.
+    pub async fn set_stored_credentials(
+        &mut self,
+        credentials: StoredCredentials,
+    ) -> Result<(), AuthError> {
+        let placeholder = self.placeholder_state().await?;
+        let old = std::mem::replace(self, placeholder);
+        let OAuthState::Unauthorized(mut manager) = old else {
+            *self = old;
+            return Err(AuthError::InternalError(
+                "Cannot set credentials in this state".to_string(),
+            ));
+        };
+
+        let previous_metadata = manager.metadata.clone();
+        let previous_oauth_client = manager.oauth_client.clone();
+        let previous_scopes = manager.current_scopes.read().await.clone();
+        let previous_resource = manager.discovered_resource.read().await.clone();
+        let previous_resource_scopes = manager.resource_scopes.read().await.clone();
+        let previous_challenge_scopes = manager.www_auth_scopes.read().await.clone();
+
+        let result =
+            async {
+                if credentials.token_response.is_none() {
+                    return Err(AuthError::AuthorizationRequired);
+                }
+
+                let resolution = manager.resolve_metadata().await?;
+                manager.set_metadata(resolution.metadata);
+
+                let needs_migration = match manager
+                    .validate_stored_credential_binding(&credentials)
+                    .await
+                {
+                    Ok(_) => false,
+                    Err(_) if manager.can_migrate_legacy_credentials(&credentials) => true,
+                    Err(_) => return Err(AuthError::AuthorizationRequired),
+                };
+
+                if manager.oauth_client.as_ref().is_none_or(|client| {
+                    client.client_id().as_str() != credentials.client_id.as_str()
+                }) {
+                    manager.configure_client_id(&credentials.client_id)?;
+                }
+                *manager.current_scopes.write().await = credentials.granted_scopes.clone();
+                if needs_migration {
+                    match manager.refresh_stored_credentials(credentials).await {
+                        Ok(_) => {}
+                        Err(AuthError::TokenRefreshRejected(_)) => {
+                            return Err(AuthError::AuthorizationRequired);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    manager.credential_store.save(credentials).await?;
+                }
+
+                Ok(())
+            }
+            .await;
+
+        match result {
+            Ok(()) => {
+                *self = OAuthState::Authorized(manager);
+                Ok(())
+            }
+            Err(error) => {
+                manager.metadata = previous_metadata;
+                manager.oauth_client = previous_oauth_client;
+                *manager.current_scopes.write().await = previous_scopes;
+                *manager.discovered_resource.write().await = previous_resource;
+                *manager.resource_scopes.write().await = previous_resource_scopes;
+                *manager.www_auth_scopes.write().await = previous_challenge_scopes;
+                *self = OAuthState::Unauthorized(manager);
+                Err(error)
+            }
         }
     }
 
@@ -3639,7 +4020,7 @@ impl OAuthState {
                 return Err(e);
             }
         };
-        manager.metadata = Some(metadata);
+        manager.set_metadata(metadata);
         debug!("start session");
         match AuthorizationSession::new(manager, request).await {
             Ok(session) => {
@@ -3826,7 +4207,7 @@ impl OAuthState {
 
         // Discover metadata
         let resolution = manager.resolve_metadata().await?;
-        manager.metadata = Some(resolution.metadata);
+        manager.set_metadata(resolution.metadata);
 
         // Validate server supports the requested auth method
         manager.validate_client_credentials_metadata(&config)?;
@@ -4225,7 +4606,32 @@ mod tests {
             .exchange_code_for_token("authorization-code", state)
             .await
             .unwrap();
+
+        let initial_credentials = manager.get_stored_credentials().await.unwrap().unwrap();
+        assert_eq!(
+            (
+                initial_credentials.issuer.as_deref(),
+                initial_credentials.resource.as_deref(),
+            ),
+            (
+                Some("https://auth.example.com"),
+                Some("https://mcp.example.com"),
+            )
+        );
+
         manager.refresh_token().await.unwrap();
+
+        let refreshed_credentials = manager.get_stored_credentials().await.unwrap().unwrap();
+        assert_eq!(
+            (
+                refreshed_credentials.issuer.as_deref(),
+                refreshed_credentials.resource.as_deref(),
+            ),
+            (
+                Some("https://auth.example.com"),
+                Some("https://mcp.example.com"),
+            )
+        );
 
         let token_requests: Vec<HashMap<String, String>> = client
             .requests()
@@ -4811,6 +5217,375 @@ mod tests {
             .query_pairs()
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn oauth_state_restores_credentials_without_losing_issuer_or_resource_provenance() {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        let received_at = AuthorizationManager::now_epoch_secs();
+        let credentials = StoredCredentials::new(
+            "preregistered-client".to_string(),
+            Some(make_token_response("cached-access-token", Some(3600))),
+            vec!["read".to_string()],
+            Some(received_at),
+        )
+        .with_issuer(Some("https://auth.example.com".to_string()))
+        .with_resource(Some("https://mcp.example.com/mcp".to_string()));
+
+        state.set_stored_credentials(credentials).await.unwrap();
+
+        let restored = state.get_stored_credentials().await.unwrap().unwrap();
+        assert_eq!(restored.client_id, "preregistered-client");
+        assert_eq!(restored.granted_scopes, ["read"]);
+        assert_eq!(restored.token_received_at, Some(received_at));
+        assert_eq!(restored.issuer.as_deref(), Some("https://auth.example.com"));
+        assert_eq!(
+            restored.resource.as_deref(),
+            Some("https://mcp.example.com/mcp")
+        );
+        let super::OAuthState::Authorized(manager) = &state else {
+            panic!("restoring bound credentials should authorize the state");
+        };
+        assert_eq!(manager.get_current_scopes().await, ["read"]);
+        assert_eq!(client.requests().len(), 3);
+        assert!(
+            client
+                .requests()
+                .iter()
+                .all(|request| request.method == "GET")
+        );
+    }
+
+    #[rstest]
+    #[case::foreign_issuer(
+        Some("https://other-auth.example.com"),
+        Some("https://mcp.example.com/mcp"),
+        true
+    )]
+    #[case::missing_issuer(None, Some("https://mcp.example.com/mcp"), true)]
+    #[case::foreign_resource(
+        Some("https://auth.example.com"),
+        Some("https://mcp.example.com/other"),
+        true
+    )]
+    #[case::missing_resource(Some("https://auth.example.com"), None, true)]
+    #[case::missing_token(
+        Some("https://auth.example.com"),
+        Some("https://mcp.example.com/mcp"),
+        false
+    )]
+    #[tokio::test]
+    async fn oauth_state_rejects_imported_credentials_without_matching_provenance(
+        #[case] issuer: Option<&str>,
+        #[case] resource: Option<&str>,
+        #[case] include_token: bool,
+    ) {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new("existing-client".to_string(), None, vec![], None)
+                    .with_issuer(Some("https://auth.example.com".to_string()))
+                    .with_resource(Some("https://mcp.example.com/mcp".to_string())),
+            )
+            .await
+            .unwrap();
+        if let super::OAuthState::Unauthorized(manager) = &mut state {
+            manager.set_credential_store(store.clone());
+        }
+        let credentials = StoredCredentials::new(
+            "imported-client".to_string(),
+            include_token.then(|| make_token_response("foreign-access-token", Some(3600))),
+            vec!["read".to_string()],
+            Some(AuthorizationManager::now_epoch_secs()),
+        )
+        .with_issuer(issuer.map(str::to_string))
+        .with_resource(resource.map(str::to_string));
+
+        let error = state.set_stored_credentials(credentials).await.unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(matches!(state, super::OAuthState::Unauthorized(_)));
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(retained.client_id, "existing-client");
+        assert!(retained.token_response.is_none());
+        assert!(
+            client
+                .requests()
+                .iter()
+                .all(|request| request.method == "GET")
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_state_silently_migrates_imported_issuer_bound_legacy_credentials() {
+        let mut responses = preregistered_discovery_responses();
+        responses.push(http_response(
+            200,
+            serde_json::json!({
+                "access_token": "resource-bound-access-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        ));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        let credentials = StoredCredentials::new(
+            "preregistered-client".to_string(),
+            Some(make_token_response_with_refresh(
+                "legacy-access-token",
+                "legacy-refresh-token",
+            )),
+            vec!["read".to_string()],
+            Some(AuthorizationManager::now_epoch_secs()),
+        )
+        .with_issuer(Some("https://auth.example.com".to_string()));
+
+        state.set_stored_credentials(credentials).await.unwrap();
+
+        let migrated = state.get_stored_credentials().await.unwrap().unwrap();
+        assert_eq!(migrated.issuer.as_deref(), Some("https://auth.example.com"));
+        assert_eq!(
+            migrated.resource.as_deref(),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert!(matches!(state, super::OAuthState::Authorized(_)));
+        let requests = client.requests();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[3].uri, "https://auth.example.com/token");
+    }
+
+    #[rstest]
+    #[case::invalid_grant("invalid_grant")]
+    #[case::invalid_target("invalid_target")]
+    #[case::invalid_scope("invalid_scope")]
+    #[tokio::test]
+    async fn rejected_legacy_import_preserves_existing_credentials(#[case] rejection: &str) {
+        use oauth2::TokenResponse;
+
+        let mut responses = preregistered_discovery_responses();
+        responses.push(http_response(400, serde_json::json!({"error": rejection})));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "existing-client".to_string(),
+                    Some(make_token_response("existing-access-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com/mcp".to_string())),
+            )
+            .await
+            .unwrap();
+        if let super::OAuthState::Unauthorized(manager) = &mut state {
+            manager.set_metadata(AuthorizationMetadata {
+                authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+                token_endpoint: "https://auth.example.com/token".to_string(),
+                issuer: Some("https://auth.example.com".to_string()),
+                ..Default::default()
+            });
+            manager
+                .configure_client(OAuthClientConfig {
+                    client_id: "existing-client".to_string(),
+                    client_secret: Some("existing-client-secret".to_string()),
+                    scopes: vec![],
+                    redirect_uri: "http://localhost/callback".to_string(),
+                    application_type: None,
+                })
+                .unwrap();
+            *manager.current_scopes.write().await = vec!["existing-scope".to_string()];
+            manager.set_credential_store(store.clone());
+        }
+        let credentials = StoredCredentials::new(
+            "imported-client".to_string(),
+            Some(make_token_response_with_refresh(
+                "legacy-access-token",
+                "legacy-refresh-token",
+            )),
+            vec![],
+            Some(AuthorizationManager::now_epoch_secs()),
+        )
+        .with_issuer(Some("https://auth.example.com".to_string()));
+
+        let error = state.set_stored_credentials(credentials).await.unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(matches!(state, super::OAuthState::Unauthorized(_)));
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(retained.client_id, "existing-client");
+        assert!(retained.token_response.is_some());
+        let (client_id, token) = state.get_credentials().await.unwrap();
+        assert_eq!(client_id, "existing-client");
+        assert_eq!(
+            token.unwrap().access_token().secret(),
+            "existing-access-token"
+        );
+        let super::OAuthState::Unauthorized(manager) = &state else {
+            panic!("a failed migration must preserve the unauthorized state");
+        };
+        assert_eq!(manager.get_current_scopes().await, ["existing-scope"]);
+        assert_eq!(client.requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn legacy_import_does_not_reuse_a_client_from_a_different_issuer() {
+        let mut responses = preregistered_discovery_responses();
+        responses.push(http_response(
+            200,
+            serde_json::json!({
+                "access_token": "resource-bound-access-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        ));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        if let super::OAuthState::Unauthorized(manager) = &mut state {
+            manager.set_metadata(AuthorizationMetadata {
+                authorization_endpoint: "https://old.example.com/authorize".to_string(),
+                token_endpoint: "https://old.example.com/token".to_string(),
+                issuer: Some("https://old.example.com".to_string()),
+                ..Default::default()
+            });
+            manager
+                .configure_client(OAuthClientConfig {
+                    client_id: "preregistered-client".to_string(),
+                    client_secret: Some("old-client-secret".to_string()),
+                    scopes: vec![],
+                    redirect_uri: "http://localhost/callback".to_string(),
+                    application_type: None,
+                })
+                .unwrap();
+        }
+        let credentials = StoredCredentials::new(
+            "preregistered-client".to_string(),
+            Some(make_token_response_with_refresh(
+                "legacy-access-token",
+                "legacy-refresh-token",
+            )),
+            vec![],
+            Some(AuthorizationManager::now_epoch_secs()),
+        )
+        .with_issuer(Some("https://auth.example.com".to_string()));
+
+        state.set_stored_credentials(credentials).await.unwrap();
+
+        let requests = client.requests();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[3].uri, "https://auth.example.com/token");
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.uri.starts_with("https://old.example.com"))
+        );
+    }
+
+    #[rstest]
+    #[case::different_token_endpoint("https://old.example.com/token")]
+    #[case::shared_token_endpoint("https://auth.example.com/token")]
+    #[tokio::test]
+    async fn failed_authorization_invalidates_a_previous_issuers_oauth_client(
+        #[case] previous_token_endpoint: &str,
+    ) {
+        let mut responses = preregistered_discovery_responses();
+        responses.extend(preregistered_discovery_responses());
+        responses.push(http_response(
+            200,
+            serde_json::json!({
+                "access_token": "resource-bound-access-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        ));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        if let super::OAuthState::Unauthorized(manager) = &mut state {
+            manager.set_metadata(AuthorizationMetadata {
+                authorization_endpoint: previous_token_endpoint.replace("/token", "/authorize"),
+                token_endpoint: previous_token_endpoint.to_string(),
+                issuer: Some("https://old.example.com".to_string()),
+                ..Default::default()
+            });
+            manager
+                .configure_client(OAuthClientConfig {
+                    client_id: "preregistered-client".to_string(),
+                    client_secret: Some("old-client-secret".to_string()),
+                    scopes: vec![],
+                    redirect_uri: "http://localhost/callback".to_string(),
+                    application_type: None,
+                })
+                .unwrap();
+        }
+
+        let error = state
+            .start_authorization(
+                AuthorizationRequest::new("http://localhost/callback")
+                    .with_client_secret("orphan-client-secret"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::RegistrationFailed(_)));
+        let super::OAuthState::Unauthorized(manager) = &state else {
+            panic!("a failed authorization must preserve the unauthorized state");
+        };
+        assert!(
+            manager.oauth_client.is_none(),
+            "discovery of a different issuer must invalidate its previous OAuth client"
+        );
+
+        let credentials = StoredCredentials::new(
+            "preregistered-client".to_string(),
+            Some(make_token_response_with_refresh(
+                "legacy-access-token",
+                "legacy-refresh-token",
+            )),
+            vec!["read".to_string()],
+            Some(AuthorizationManager::now_epoch_secs()),
+        )
+        .with_issuer(Some("https://auth.example.com".to_string()));
+
+        state.set_stored_credentials(credentials).await.unwrap();
+
+        let requests = client.requests();
+        assert_eq!(requests.len(), 7);
+        assert_eq!(requests[6].uri, "https://auth.example.com/token");
+        assert!(matches!(state, super::OAuthState::Authorized(_)));
     }
 
     #[tokio::test]
@@ -6000,12 +6775,43 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: None,
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         let debug_output = format!("{:?}", creds);
 
         assert!(!debug_output.contains("super-secret-access-token"));
         assert!(debug_output.contains("[REDACTED]"));
         assert!(debug_output.contains("my-client"));
+        assert!(debug_output.contains("resource"));
+    }
+
+    #[test]
+    fn stored_credentials_deserialize_without_legacy_resource_binding() {
+        let json = serde_json::json!({
+            "client_id": "legacy-client",
+            "token_response": null,
+            "granted_scopes": [],
+            "token_received_at": null,
+            "issuer": "https://auth.example.com"
+        });
+
+        let credentials: StoredCredentials = serde_json::from_value(json).unwrap();
+
+        assert_eq!(
+            (credentials.client_id.as_str(), credentials.resource),
+            ("legacy-client", None)
+        );
+    }
+
+    #[test]
+    fn stored_credentials_resource_builder_preserves_audience() {
+        let credentials = StoredCredentials::new("my-client".to_string(), None, vec![], None)
+            .with_resource(Some("https://mcp.example.com/tenant".to_string()));
+
+        assert_eq!(
+            credentials.resource.as_deref(),
+            Some("https://mcp.example.com/tenant")
+        );
     }
 
     #[test]
@@ -6195,6 +7001,7 @@ mod tests {
                 granted_scopes: vec![],
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
                 issuer: Some("https://old.example.com".to_string()),
+                resource: Some("http://localhost/".to_string()),
             })
             .await
             .unwrap();
@@ -6317,6 +7124,623 @@ mod tests {
             AuthType::BasicAuth
         ));
     }
+
+    #[tokio::test]
+    async fn initialize_from_store_rejects_credentials_without_issuer_binding() {
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(StoredCredentials {
+                client_id: "preregistered-client".to_string(),
+                token_response: Some(make_token_response("unbound-token", Some(3600))),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+                issuer: None,
+                resource: Some("http://localhost/".to_string()),
+            })
+            .await
+            .unwrap();
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.set_credential_store(store.clone());
+
+        assert!(!manager.initialize_from_store().await.unwrap());
+        assert!(store.load().await.unwrap().is_none());
+    }
+
+    #[rstest]
+    #[case::issuer_bound(Some("https://auth.example.com"))]
+    #[case::legacy_without_issuer(None)]
+    #[tokio::test]
+    async fn credential_lookup_never_releases_tokens_before_metadata_discovery(
+        #[case] stored_issuer: Option<&str>,
+    ) {
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response("cached-access-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(stored_issuer.map(str::to_string))
+                .with_resource(Some("https://mcp.example.com/mcp".to_string())),
+            )
+            .await
+            .unwrap();
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/mcp")
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+
+        assert!(manager.get_stored_credentials().await.unwrap().is_none());
+        assert!(
+            store
+                .load()
+                .await
+                .unwrap()
+                .unwrap()
+                .token_response
+                .is_some()
+        );
+
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        let restored = manager.get_stored_credentials().await.unwrap();
+        if stored_issuer.is_some() {
+            assert_eq!(restored.unwrap().client_id, "registered-client");
+        } else {
+            assert!(restored.is_none());
+            assert!(store.load().await.unwrap().is_none());
+        }
+    }
+
+    #[rstest]
+    #[case::different_paths("https://mcp.example.com/alpha", "https://mcp.example.com/beta")]
+    #[case::root_does_not_cover_path("https://mcp.example.com", "https://mcp.example.com/beta")]
+    #[case::different_queries(
+        "https://mcp.example.com/mcp?tenant=alpha",
+        "https://mcp.example.com/mcp?tenant=beta"
+    )]
+    #[tokio::test]
+    async fn initialize_from_store_rejects_a_different_protected_resource(
+        #[case] stored_resource: &str,
+        #[case] active_resource: &str,
+    ) {
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response("foreign-resource-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some(stored_resource.to_string())),
+            )
+            .await
+            .unwrap();
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/mcp")
+            .await
+            .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        *manager.discovered_resource.write().await = Some(active_resource.to_string());
+        manager.set_credential_store(store.clone());
+
+        assert!(!manager.initialize_from_store().await.unwrap());
+
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(retained.client_id, "registered-client");
+        assert!(retained.token_response.is_none());
+        assert_eq!(retained.issuer.as_deref(), Some("https://auth.example.com"));
+        assert_eq!(retained.resource.as_deref(), Some(active_resource));
+    }
+
+    #[tokio::test]
+    async fn initialize_from_store_accepts_a_shared_protected_resource() {
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response("shared-resource-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/another-endpoint")
+            .await
+            .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        *manager.discovered_resource.write().await = Some("https://mcp.example.com/".to_string());
+        manager.set_credential_store(store);
+
+        assert!(manager.initialize_from_store().await.unwrap());
+        assert_eq!(
+            manager.get_access_token().await.unwrap(),
+            "shared-resource-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_from_store_rejects_legacy_credentials_without_resource_binding() {
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response("unbound-resource-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.set_credential_store(store.clone());
+
+        assert!(!manager.initialize_from_store().await.unwrap());
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(retained.client_id, "registered-client");
+        assert!(retained.token_response.is_none());
+        assert_eq!(retained.resource.as_deref(), Some("http://localhost/"));
+    }
+
+    #[derive(Clone, Copy)]
+    enum LegacyCredentialRestorePath {
+        Initialize,
+        AccessToken,
+        RefreshToken,
+    }
+
+    #[rstest]
+    #[case::initialize(LegacyCredentialRestorePath::Initialize)]
+    #[case::access_token(LegacyCredentialRestorePath::AccessToken)]
+    #[case::refresh_token(LegacyCredentialRestorePath::RefreshToken)]
+    #[tokio::test]
+    async fn issuer_bound_legacy_credentials_are_refreshed_before_being_used(
+        #[case] restore_path: LegacyCredentialRestorePath,
+    ) {
+        use oauth2::TokenResponse;
+
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            200,
+            serde_json::json!({
+                "access_token": "resource-bound-access-token",
+                "token_type": "bearer",
+                "refresh_token": "resource-bound-refresh-token",
+                "expires_in": 3600
+            }),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            scopes_supported: Some(vec!["read".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        });
+        manager.configure_client_id("registered-client").unwrap();
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "legacy-access-token",
+                        "legacy-refresh-token",
+                    )),
+                    vec!["read".to_string()],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+        *manager.current_scopes.write().await = vec!["admin".to_string()];
+
+        match restore_path {
+            LegacyCredentialRestorePath::Initialize => {
+                assert!(manager.initialize_from_store().await.unwrap());
+            }
+            LegacyCredentialRestorePath::AccessToken => {
+                assert_eq!(
+                    manager.get_access_token().await.unwrap(),
+                    "resource-bound-access-token"
+                );
+            }
+            LegacyCredentialRestorePath::RefreshToken => {
+                let refreshed = manager.refresh_token().await.unwrap();
+                assert_eq!(
+                    refreshed.access_token().secret(),
+                    "resource-bound-access-token"
+                );
+            }
+        }
+
+        let migrated = store.load().await.unwrap().unwrap();
+        assert_eq!(migrated.issuer.as_deref(), Some("https://auth.example.com"));
+        assert_eq!(
+            migrated.resource.as_deref(),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert_eq!(migrated.granted_scopes, ["read"]);
+        assert_eq!(
+            migrated
+                .token_response
+                .as_ref()
+                .unwrap()
+                .access_token()
+                .secret(),
+            "resource-bound-access-token"
+        );
+
+        let requests = client.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].uri, "https://auth.example.com/token");
+        let request: HashMap<String, String> = url::form_urlencoded::parse(&requests[0].body)
+            .into_owned()
+            .collect();
+        assert_eq!(
+            request.get("grant_type").map(String::as_str),
+            Some("refresh_token")
+        );
+        assert_eq!(
+            request.get("resource").map(String::as_str),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert_eq!(
+            request.get("refresh_token").map(String::as_str),
+            Some("legacy-refresh-token")
+        );
+        assert_eq!(request.get("scope").map(String::as_str), Some("read"));
+    }
+
+    #[rstest]
+    #[case::different_issuer(
+        Some("https://other-auth.example.com"),
+        Some("https://auth.example.com")
+    )]
+    #[case::missing_stored_issuer(None, Some("https://auth.example.com"))]
+    #[case::missing_current_issuer(Some("https://auth.example.com"), None)]
+    #[case::issuerless_metadata(None, None)]
+    #[tokio::test]
+    async fn legacy_credentials_without_a_verified_issuer_are_never_refreshed(
+        #[case] stored_issuer: Option<&str>,
+        #[case] current_issuer: Option<&str>,
+    ) {
+        let client = RecordingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: current_issuer.map(str::to_string),
+            ..Default::default()
+        });
+        manager.configure_client_id("registered-client").unwrap();
+        manager
+            .credential_store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "legacy-access-token",
+                        "legacy-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(stored_issuer.map(str::to_string)),
+            )
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(
+            client.requests().is_empty(),
+            "refresh tokens cannot migrate without a verified authorization-server issuer"
+        );
+    }
+
+    #[rstest]
+    #[case::initialize_invalid_grant("invalid_grant", LegacyCredentialRestorePath::Initialize)]
+    #[case::initialize_invalid_target("invalid_target", LegacyCredentialRestorePath::Initialize)]
+    #[case::initialize_invalid_scope("invalid_scope", LegacyCredentialRestorePath::Initialize)]
+    #[case::direct_invalid_grant("invalid_grant", LegacyCredentialRestorePath::RefreshToken)]
+    #[case::direct_invalid_target("invalid_target", LegacyCredentialRestorePath::RefreshToken)]
+    #[case::direct_invalid_scope("invalid_scope", LegacyCredentialRestorePath::RefreshToken)]
+    #[tokio::test]
+    async fn rejected_legacy_refresh_requires_reauthorization(
+        #[case] rejection: &str,
+        #[case] restore_path: LegacyCredentialRestorePath,
+    ) {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            400,
+            serde_json::json!({"error": rejection}),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "legacy-access-token",
+                        "legacy-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+
+        match restore_path {
+            LegacyCredentialRestorePath::Initialize => {
+                assert!(!manager.initialize_from_store().await.unwrap());
+            }
+            LegacyCredentialRestorePath::RefreshToken => {
+                manager.configure_client_id("registered-client").unwrap();
+                let error = manager.refresh_token().await.unwrap_err();
+                assert!(matches!(error, AuthError::AuthorizationRequired));
+            }
+            LegacyCredentialRestorePath::AccessToken => unreachable!(),
+        }
+
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(retained.client_id, "registered-client");
+        assert!(retained.token_response.is_none());
+        assert_eq!(
+            retained.resource.as_deref(),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert_eq!(client.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_legacy_refresh_discards_credentials_only_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Clone, Default)]
+        struct SingleCleanupCredentialStore {
+            inner: InMemoryCredentialStore,
+            cleanup_count: Arc<AtomicUsize>,
+        }
+
+        #[async_trait::async_trait]
+        impl CredentialStore for SingleCleanupCredentialStore {
+            async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+                self.inner.load().await
+            }
+
+            async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+                if self.cleanup_count.fetch_add(1, Ordering::SeqCst) > 0 {
+                    return Err(AuthError::InternalError(
+                        "legacy credentials were discarded twice".to_string(),
+                    ));
+                }
+                self.inner.save(credentials).await
+            }
+
+            async fn clear(&self) -> Result<(), AuthError> {
+                self.inner.clear().await
+            }
+        }
+
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            400,
+            serde_json::json!({"error": "invalid_grant"}),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        let store = SingleCleanupCredentialStore::default();
+        store
+            .inner
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "legacy-access-token",
+                        "legacy-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+
+        assert!(!manager.initialize_from_store().await.unwrap());
+        assert_eq!(store.cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn temporary_legacy_refresh_failure_preserves_credentials_for_retry() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            503,
+            serde_json::json!({"error": "temporarily_unavailable"}),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "legacy-access-token",
+                        "legacy-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+
+        let error = manager.initialize_from_store().await.unwrap_err();
+
+        assert!(matches!(error, AuthError::TokenRefreshFailed(_)));
+        let retained = store.load().await.unwrap().unwrap();
+        assert!(retained.token_response.is_some());
+        assert!(retained.resource.is_none());
+        assert_eq!(client.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_refresh_rejects_a_different_configured_client_identity() {
+        let client = RecordingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client_id("different-client").unwrap();
+        manager
+            .credential_store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "legacy-access-token",
+                        "legacy-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(client.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn issuer_migration_preserves_cimd_client_id_but_discards_tokens() {
+        let store = InMemoryCredentialStore::new();
+        let portable_client_id = "https://client.example.com/metadata.json";
+        store
+            .save(
+                StoredCredentials::new(
+                    portable_client_id.to_string(),
+                    Some(make_token_response("foreign-issuer-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://old.example.com".to_string()))
+                .with_resource(Some("http://localhost/".to_string())),
+            )
+            .await
+            .unwrap();
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://new.example.com/authorize".to_string(),
+            token_endpoint: "https://new.example.com/token".to_string(),
+            issuer: Some("https://new.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.set_credential_store(store.clone());
+
+        assert!(!manager.initialize_from_store().await.unwrap());
+
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(retained.client_id, portable_client_id);
+        assert!(retained.token_response.is_none());
+        assert_eq!(retained.issuer.as_deref(), Some("https://new.example.com"));
+    }
+
     // -- metadata deserialization --
 
     #[test]
@@ -7057,13 +8481,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_access_token_returns_token_when_not_expired() {
-        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+        let manager = manager_with_metadata(None).await;
         let stored = StoredCredentials {
             client_id: "test".to_string(),
             token_response: Some(make_token_response("my-access-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7082,6 +8507,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 7200),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7094,18 +8520,85 @@ mod tests {
 
     #[tokio::test]
     async fn get_access_token_returns_token_without_expiry_info() {
-        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+        let manager = manager_with_metadata(None).await;
         let stored = StoredCredentials {
             client_id: "test".to_string(),
             token_response: Some(make_token_response("no-expiry-token", None)),
             granted_scopes: vec![],
             token_received_at: None,
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
         let token = manager.get_access_token().await.unwrap();
         assert_eq!(token, "no-expiry-token");
+    }
+
+    #[rstest]
+    #[case::dynamically_registered("dcr-client")]
+    #[case::portable_client_metadata("https://client.example.com/metadata.json")]
+    #[tokio::test]
+    async fn get_access_token_rejects_credentials_from_a_different_issuer(#[case] client_id: &str) {
+        let manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://new.example.com/authorize".to_string(),
+            token_endpoint: "https://new.example.com/token".to_string(),
+            issuer: Some("https://new.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: client_id.to_string(),
+                token_response: Some(make_token_response("foreign-access-token", Some(3600))),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+                issuer: Some("https://old.example.com".to_string()),
+                resource: Some("http://localhost/".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let error = manager.get_access_token().await.unwrap_err();
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+    }
+
+    #[tokio::test]
+    async fn credential_getters_reject_tokens_for_a_different_protected_resource() {
+        let store = InMemoryCredentialStore::new();
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/beta")
+            .await
+            .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client_id("registered-client").unwrap();
+        manager.set_credential_store(store.clone());
+
+        store
+            .save(
+                StoredCredentials::new(
+                    "registered-client".to_string(),
+                    Some(make_token_response("foreign-resource-token", Some(3600))),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com/alpha".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let (client_id, credentials) = manager.get_credentials().await.unwrap();
+        assert_eq!(client_id, "registered-client");
+        assert!(credentials.is_none());
+
+        let error = manager.get_access_token().await.unwrap_err();
+        assert!(matches!(error, AuthError::AuthorizationRequired));
     }
 
     #[tokio::test]
@@ -7119,6 +8612,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 3590),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7131,13 +8625,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_access_token_propagates_internal_errors() {
-        let manager = AuthorizationManager::new("http://localhost").await.unwrap();
+        let manager = manager_with_metadata(None).await;
         let stored = StoredCredentials {
             client_id: "test".to_string(),
             token_response: Some(make_token_response("stale-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 7200),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7338,6 +8833,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_credentials_persist_the_configured_resource_audience() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            200,
+            serde_json::json!({
+                "access_token": "machine-access-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        *manager.discovered_resource.write().await = Some("https://mcp.example.com/".to_string());
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "machine-client".to_string(),
+            client_secret: "machine-secret".to_string(),
+            scopes: vec!["read".to_string()],
+            resource: Some("https://mcp.example.com".to_string()),
+        };
+        manager.configure_client_credentials(&config).unwrap();
+
+        manager.exchange_client_credentials(&config).await.unwrap();
+
+        let stored = manager.get_stored_credentials().await.unwrap().unwrap();
+        assert_eq!(stored.issuer.as_deref(), Some("https://auth.example.com"));
+        assert_eq!(stored.resource.as_deref(), Some("https://mcp.example.com"));
+        assert_eq!(
+            manager.get_access_token().await.unwrap(),
+            "machine-access-token"
+        );
+        let requests = client.requests();
+        assert_eq!(requests.len(), 1);
+        let form: HashMap<String, String> = url::form_urlencoded::parse(&requests[0].body)
+            .into_owned()
+            .collect();
+        assert_eq!(
+            form.get("resource").map(String::as_str),
+            Some("https://mcp.example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn client_credentials_reject_a_different_protected_resource_before_sending_secrets() {
+        let client = RecordingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "machine-client".to_string(),
+            client_secret: "machine-secret".to_string(),
+            scopes: vec![],
+            resource: Some("https://api.example.com/tenant".to_string()),
+        };
+        manager.configure_client_credentials(&config).unwrap();
+
+        let error = manager
+            .exchange_client_credentials(&config)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::ClientCredentialsError(ref reason)
+                if reason.contains("does not match protected resource")),
+            "unexpected resource mismatch error: {error}"
+        );
+        assert!(manager.get_stored_credentials().await.unwrap().is_none());
+        assert!(client.requests().is_empty());
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[tokio::test]
+    async fn jwt_client_credentials_reject_a_different_resource_before_signing_or_sending() {
+        let client = RecordingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        let config = super::ClientCredentialsConfig::PrivateKeyJwt {
+            client_id: "machine-client".to_string(),
+            signing_key: Vec::new(),
+            signing_algorithm: super::JwtSigningAlgorithm::ES256,
+            token_endpoint_audience: None,
+            scopes: vec![],
+            resource: Some("https://api.example.com/tenant".to_string()),
+        };
+        manager.configure_client_credentials(&config).unwrap();
+
+        let error = manager
+            .exchange_client_credentials(&config)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::ClientCredentialsError(ref reason)
+                if reason.contains("does not match protected resource")),
+            "the audience must be checked before attempting JWT signing: {error}"
+        );
+        assert!(client.requests().is_empty());
+    }
+
+    #[tokio::test]
     async fn configure_client_credentials_returns_error_without_metadata() {
         let mut mgr = AuthorizationManager::new("http://localhost").await.unwrap();
         let config = super::ClientCredentialsConfig::ClientSecret {
@@ -7520,6 +9142,7 @@ mod tests {
                 granted_scopes: vec![],
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
                 issuer: None,
+                resource: Some("http://localhost/".to_string()),
             })
             .await
             .unwrap();
@@ -7549,6 +9172,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: None,
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7570,6 +9194,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7577,6 +9202,397 @@ mod tests {
         assert!(
             matches!(err, AuthError::AuthorizationRequired),
             "expected AuthorizationRequired when no refresh token, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_foreign_issuer_before_sending_refresh_token() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://new.example.com/authorize".to_string(),
+            token_endpoint: "https://new.example.com/token".to_string(),
+            issuer: Some("https://new.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: "my-client".to_string(),
+                token_response: Some(make_token_response_with_refresh(
+                    "foreign-access-token",
+                    "foreign-refresh-token",
+                )),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+                issuer: Some("https://old.example.com".to_string()),
+                resource: Some("https://mcp.example.com/mcp".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(
+            client.requests().is_empty(),
+            "refresh credentials must not be sent to a different issuer"
+        );
+    }
+
+    #[tokio::test]
+    async fn updating_metadata_preserves_client_for_the_same_authorization_server() {
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com/".to_string()),
+            scopes_supported: Some(vec!["read".to_string()]),
+            ..Default::default()
+        });
+
+        assert_eq!(
+            manager.oauth_client.as_ref().unwrap().client_id().as_str(),
+            "my-client"
+        );
+    }
+
+    #[rstest]
+    #[case::issuer_changes_at_shared_endpoint(
+        "https://old.example.com",
+        "https://new.example.com",
+        "https://shared.example.com/token",
+        "https://shared.example.com/token"
+    )]
+    #[case::token_endpoint_changes_for_same_issuer(
+        "https://auth.example.com",
+        "https://auth.example.com",
+        "https://old.example.com/token",
+        "https://new.example.com/token"
+    )]
+    #[tokio::test]
+    async fn changing_authorization_servers_invalidates_the_configured_oauth_client(
+        #[case] previous_issuer: &str,
+        #[case] current_issuer: &str,
+        #[case] previous_token_endpoint: &str,
+        #[case] current_token_endpoint: &str,
+    ) {
+        let client = RecordingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://shared.example.com/authorize".to_string(),
+            token_endpoint: previous_token_endpoint.to_string(),
+            issuer: Some(previous_issuer.to_string()),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://shared.example.com/authorize".to_string(),
+            token_endpoint: current_token_endpoint.to_string(),
+            issuer: Some(current_issuer.to_string()),
+            ..Default::default()
+        });
+        manager
+            .credential_store
+            .save(
+                StoredCredentials::new(
+                    "my-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "current-access-token",
+                        "current-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some(current_issuer.to_string()))
+                .with_resource(Some("https://mcp.example.com/mcp".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(matches!(error, AuthError::InternalError(_)));
+        assert!(manager.oauth_client.is_none());
+        assert!(
+            client.requests().is_empty(),
+            "a token bound to the new issuer must not reach the old OAuth client"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_an_oauth_client_with_a_stale_token_endpoint() {
+        let client = RecordingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://old.example.com/authorize".to_string(),
+            token_endpoint: "https://old.example.com/token".to_string(),
+            issuer: Some("https://old.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+
+        // Defend the refresh sink even if another state transition left metadata
+        // and its configured OAuth client inconsistent.
+        manager.metadata = Some(AuthorizationMetadata {
+            authorization_endpoint: "https://new.example.com/authorize".to_string(),
+            token_endpoint: "https://new.example.com/token".to_string(),
+            issuer: Some("https://new.example.com".to_string()),
+            ..Default::default()
+        });
+        manager
+            .credential_store
+            .save(
+                StoredCredentials::new(
+                    "my-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "current-access-token",
+                        "current-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://new.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com/mcp".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(
+            client.requests().is_empty(),
+            "a refresh token must never reach an OAuth client from another issuer"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_foreign_resource_before_sending_refresh_token() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/beta",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(
+                StoredCredentials::new(
+                    "my-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "foreign-access-token",
+                        "foreign-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com/alpha".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        assert!(
+            client.requests().is_empty(),
+            "refresh credentials must not be sent for a different resource"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_tokens_when_the_protected_resource_changes_in_flight() {
+        #[derive(Clone, Default)]
+        struct PausingOAuthHttpClient {
+            request_started: Arc<tokio::sync::Notify>,
+            release_response: Arc<tokio::sync::Notify>,
+        }
+
+        impl OAuthHttpClient for PausingOAuthHttpClient {
+            fn execute(&self, _request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+                let request_started = Arc::clone(&self.request_started);
+                let release_response = Arc::clone(&self.release_response);
+                Box::pin(async move {
+                    request_started.notify_one();
+                    release_response.notified().await;
+                    Ok(http_response(
+                        200,
+                        serde_json::json!({
+                            "access_token": "wrong-resource-token",
+                            "token_type": "bearer",
+                            "expires_in": 3600
+                        }),
+                    ))
+                })
+            }
+        }
+
+        let client = PausingOAuthHttpClient::default();
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/alpha",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(
+                StoredCredentials::new(
+                    "my-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "old-access-token",
+                        "old-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com/alpha".to_string())),
+            )
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+        let manager = Arc::new(manager);
+        let refresh_manager = Arc::clone(&manager);
+        let refresh = tokio::spawn(async move { refresh_manager.refresh_token().await });
+
+        client.request_started.notified().await;
+        *manager.discovered_resource.write().await =
+            Some("https://mcp.example.com/beta".to_string());
+        client.release_response.notify_one();
+
+        let error = refresh.await.unwrap().unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(
+            retained.resource.as_deref(),
+            Some("https://mcp.example.com/alpha")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_tokens_when_the_protected_resource_changes_during_storage() {
+        #[derive(Clone, Default)]
+        struct PausingCredentialStore {
+            inner: InMemoryCredentialStore,
+            save_started: Arc<tokio::sync::Notify>,
+            release_save: Arc<tokio::sync::Notify>,
+        }
+
+        #[async_trait::async_trait]
+        impl CredentialStore for PausingCredentialStore {
+            async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+                self.inner.load().await
+            }
+
+            async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+                self.save_started.notify_one();
+                self.release_save.notified().await;
+                self.inner.save(credentials).await
+            }
+
+            async fn clear(&self) -> Result<(), AuthError> {
+                self.inner.clear().await
+            }
+        }
+
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            200,
+            serde_json::json!({
+                "access_token": "wrong-resource-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/alpha",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+        let store = PausingCredentialStore::default();
+        store
+            .inner
+            .save(
+                StoredCredentials::new(
+                    "my-client".to_string(),
+                    Some(make_token_response_with_refresh(
+                        "old-access-token",
+                        "old-refresh-token",
+                    )),
+                    vec![],
+                    Some(AuthorizationManager::now_epoch_secs()),
+                )
+                .with_issuer(Some("https://auth.example.com".to_string()))
+                .with_resource(Some("https://mcp.example.com/alpha".to_string())),
+            )
+            .await
+            .unwrap();
+        manager.set_credential_store(store.clone());
+        let manager = Arc::new(manager);
+        let refresh_manager = Arc::clone(&manager);
+        let refresh = tokio::spawn(async move { refresh_manager.refresh_token().await });
+
+        store.save_started.notified().await;
+        *manager.discovered_resource.write().await =
+            Some("https://mcp.example.com/beta".to_string());
+        store.release_save.notify_one();
+
+        let error = refresh.await.unwrap().unwrap_err();
+
+        assert!(matches!(error, AuthError::AuthorizationRequired));
+        let retained = store.load().await.unwrap().unwrap();
+        assert_eq!(
+            retained.resource.as_deref(),
+            Some("https://mcp.example.com/alpha")
         );
     }
 
@@ -7661,6 +9677,7 @@ mod tests {
                 granted_scopes: vec![],
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
                 issuer: None,
+                resource: Some("http://localhost/".to_string()),
             })
             .await
             .unwrap();
@@ -7867,6 +9884,7 @@ mod tests {
             granted_scopes: vec!["read".to_string(), "write".to_string()],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7905,6 +9923,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7943,6 +9962,7 @@ mod tests {
             granted_scopes: vec!["read".to_string()],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -7981,6 +10001,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -8020,6 +10041,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
@@ -8084,6 +10106,7 @@ mod tests {
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
+            resource: Some("http://localhost/".to_string()),
         };
         manager.credential_store.save(stored).await.unwrap();
 
