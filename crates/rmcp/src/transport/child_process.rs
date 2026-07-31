@@ -168,6 +168,12 @@ impl TokioChildProcessBuilder {
 impl Transport<RoleClient> for TokioChildProcess {
     type Error = std::io::Error;
 
+    /// stdio: the spec makes a probe that goes unanswered "within a reasonable
+    /// timeout" positive evidence of an initialization-era server.
+    fn startup_compat_profile(&self) -> crate::transport::StartupCompatProfile {
+        crate::transport::StartupCompatProfile::SilenceMeansLegacy
+    }
+
     fn send(
         &mut self,
         item: TxJsonRpcMessage<RoleClient>,

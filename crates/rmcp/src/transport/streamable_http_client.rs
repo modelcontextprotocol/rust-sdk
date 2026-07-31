@@ -25,7 +25,9 @@ use crate::{
     },
     service::InboundStreamOrigin,
     transport::{
-        common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
+        common::{
+            client_side_sse::SseAutoReconnectStream, http_header::JSON_MIME_TYPE, mcp_headers,
+        },
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
     },
 };
@@ -33,6 +35,26 @@ use crate::{
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 type SseTaskResult<E> = (Option<RequestId>, Result<(), StreamableHttpError<E>>);
 const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Where a client connection is in its startup sequence.
+///
+/// A dual-era client may open with a modern `server/discover` bootstrap and then
+/// fall back to a legacy `initialize` if the server turns out to be
+/// initialization-era. The worker has to treat that one `initialize` differently
+/// from every later request -- it establishes the session and switches the
+/// connection to legacy framing -- so the phase is tracked explicitly rather
+/// than inferred from whether some other field happens to be unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HttpStartupState {
+    /// Opened with a `server/discover` bootstrap. No session exists yet, and an
+    /// `initialize` arriving now is the legacy fallback.
+    AwaitingModernRequest,
+    /// A fallback `initialize` has been answered; the handshake completes when
+    /// `notifications/initialized` is sent.
+    AwaitingLegacyInitialize,
+    /// Startup is complete. An `initialize` now is an ordinary request.
+    Ready,
+}
 
 fn build_request_headers(
     base: &HashMap<HeaderName, HeaderValue>,
@@ -232,15 +254,74 @@ pub enum StreamableHttpProtocolError {
     MissingSessionIdInResponse,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "boxing the streaming response would add an allocation to the common response path"
-)]
+// `large_enum_variant` no longer fires here: `ErrorResponse` is comparable in
+// size to `Json`, so no single variant is an outlier. Neither is boxed --
+// boxing would add an allocation to the common response path.
 #[non_exhaustive]
 pub enum StreamableHttpPostResponse {
     Accepted,
     Json(ServerJsonRpcMessage, Option<String>),
     Sse(BoxedSseStream, Option<String>),
+    /// A non-success HTTP response, with its status preserved.
+    ///
+    /// The MCP 2026-07-28 [Streamable HTTP backward-compatibility rules][http]
+    /// scope era detection to `400 Bad Request` specifically: a `400` carrying a
+    /// recognized modern JSON-RPC error identifies a modern server, while a `400`
+    /// with an empty or unrecognized body identifies an initialization-era
+    /// server. Every other status is neither.
+    ///
+    /// Distinguishing those cases requires the status and the body *together*,
+    /// so this variant keeps them paired rather than collapsing a non-2xx
+    /// response into either a bare [`Json`](Self::Json) (which loses the status)
+    /// or a stringified transport error (which loses the body's structure).
+    ///
+    /// [http]: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#backward-compatibility
+    ErrorResponse {
+        /// The HTTP status code.
+        status: u16,
+        /// The response body, as read from the wire.
+        body: String,
+        /// The body parsed as a JSON-RPC error response, when it was one.
+        jsonrpc_error: Option<ServerJsonRpcMessage>,
+        /// The `Mcp-Session-Id` header, if the server sent one.
+        session_id: Option<String>,
+    },
+}
+
+/// Normalize a non-success HTTP response into
+/// [`StreamableHttpPostResponse::ErrorResponse`].
+///
+/// Shared by every [`StreamableHttpClient`] backend in this crate so they cannot
+/// drift: before this existed, the reqwest and Unix-socket backends had
+/// independently-written non-2xx paths that disagreed about whether the status
+/// survived.
+pub(crate) fn normalize_error_response(
+    status: u16,
+    body: String,
+    content_type: Option<&str>,
+    session_id: Option<String>,
+) -> StreamableHttpPostResponse {
+    // Only inspect the body as JSON-RPC when the server said it was JSON.
+    let jsonrpc_error = content_type
+        .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
+        .then(
+            || match serde_json::from_str::<ServerJsonRpcMessage>(&body) {
+                Ok(message @ ServerJsonRpcMessage::Error(_)) => Some(message),
+                _ => None,
+            },
+        )
+        .flatten();
+
+    if jsonrpc_error.is_none() {
+        debug!("HTTP {status}: body is not a JSON-RPC error response");
+    }
+
+    StreamableHttpPostResponse::ErrorResponse {
+        status,
+        body,
+        jsonrpc_error,
+        session_id,
+    }
 }
 
 impl std::fmt::Debug for StreamableHttpPostResponse {
@@ -249,6 +330,18 @@ impl std::fmt::Debug for StreamableHttpPostResponse {
             Self::Accepted => write!(f, "Accepted"),
             Self::Json(arg0, arg1) => f.debug_tuple("Json").field(arg0).field(arg1).finish(),
             Self::Sse(_, arg1) => f.debug_tuple("Sse").field(arg1).finish(),
+            Self::ErrorResponse {
+                status,
+                body,
+                jsonrpc_error,
+                session_id,
+            } => f
+                .debug_struct("ErrorResponse")
+                .field("status", status)
+                .field("body", body)
+                .field("jsonrpc_error", jsonrpc_error)
+                .field("session_id", session_id)
+                .finish(),
         }
     }
 }
@@ -262,6 +355,21 @@ impl StreamableHttpPostResponse {
     {
         match self {
             Self::Json(message, session_id) => Ok((message, session_id)),
+            // A non-2xx that carried a JSON-RPC error is delivered in-band, so
+            // the service layer sees a correlated protocol error rather than an
+            // opaque transport failure. This is the behavior released before
+            // `ErrorResponse` existed, when such a response was reported as
+            // `Json`.
+            Self::ErrorResponse {
+                jsonrpc_error: Some(message),
+                session_id,
+                ..
+            } => Ok((message, session_id)),
+            Self::ErrorResponse { status, body, .. } => {
+                Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                    format!("HTTP {status}: {body}"),
+                )))
+            }
             Self::Sse(mut stream, session_id) => {
                 while let Some(event) = stream.next().await {
                     let event = event?;
@@ -298,6 +406,17 @@ impl StreamableHttpPostResponse {
     {
         match self {
             Self::Json(message, ..) => Ok(message),
+            // Same in-band delivery as `expect_initialized`: preserves the
+            // pre-`ErrorResponse` behavior for a non-2xx JSON-RPC error body.
+            Self::ErrorResponse {
+                jsonrpc_error: Some(message),
+                ..
+            } => Ok(message),
+            Self::ErrorResponse { status, body, .. } => {
+                Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                    format!("HTTP {status}: {body}"),
+                )))
+            }
             got => Err(StreamableHttpError::UnexpectedServerResponse(
                 format!("expect json, got {got:?}").into(),
             )),
@@ -312,6 +431,14 @@ impl StreamableHttpPostResponse {
             Self::Accepted => Ok(()),
             // Tolerate servers that return 200 with JSON for notifications
             Self::Json(..) => Ok(()),
+            // A notification or response cannot be answered with a JSON-RPC
+            // error correlated to anything, so a non-2xx here is a transport
+            // failure either way -- matching the released behavior.
+            Self::ErrorResponse { status, body, .. } => {
+                Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                    format!("HTTP {status}: {body}"),
+                )))
+            }
             got => Err(StreamableHttpError::UnexpectedServerResponse(
                 format!("expect accepted or json, got {got:?}").into(),
             )),
@@ -964,7 +1091,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let mut streams = tokio::task::JoinSet::new();
         let mut pending_stream_response_ids = HashSet::new();
         let mut request_stream_cancellations = HashMap::<RequestId, CancellationToken>::new();
-        let mut awaiting_fallback_initialized = false;
+        // A legacy connection finished its handshake in the prologue above; a
+        // discover bootstrap may still be followed by a fallback `initialize`.
+        let mut startup_state = if is_legacy_startup {
+            HttpStartupState::Ready
+        } else {
+            HttpStartupState::AwaitingModernRequest
+        };
         if let Some(session_id) = &session_id {
             Self::spawn_common_stream(
                 &mut streams,
@@ -1037,7 +1170,8 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         let _ = responder.send(Ok(()));
                         continue;
                     }
-                    let is_fallback_initialize = saved_init_request.is_none()
+                    let is_fallback_initialize = startup_state
+                        == HttpStartupState::AwaitingModernRequest
                         && matches!(
                             &message,
                             ClientJsonRpcMessage::Request(request)
@@ -1106,7 +1240,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 protocol_headers: protocol_headers.clone(),
                             });
                         context.send_to_handler(initialize_response).await?;
-                        awaiting_fallback_initialized = true;
+                        startup_state = HttpStartupState::AwaitingLegacyInitialize;
                         continue;
                     }
 
@@ -1264,6 +1398,31 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                                 context.send_to_handler(msg).await?;
                                                 Ok(())
                                             }
+                                            // In-band, as above: preserves the
+                                            // released behavior for a non-2xx
+                                            // JSON-RPC error body on the replayed
+                                            // message after re-initialization.
+                                            Ok(StreamableHttpPostResponse::ErrorResponse {
+                                                jsonrpc_error: Some(mut msg),
+                                                ..
+                                            }) => {
+                                                cache_tools_from_response(
+                                                    &mut tool_header_cache,
+                                                    &mut msg,
+                                                    &negotiated_version,
+                                                );
+                                                context.send_to_handler(msg).await?;
+                                                Ok(())
+                                            }
+                                            Ok(StreamableHttpPostResponse::ErrorResponse {
+                                                status,
+                                                body,
+                                                ..
+                                            }) => {
+                                                Err(StreamableHttpError::UnexpectedServerResponse(
+                                                    Cow::Owned(format!("HTTP {status}: {body}")),
+                                                ))
+                                            }
                                             Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
                                                 let stream_request_id = request_id.clone();
                                                 Self::mark_stream_response_pending(
@@ -1336,6 +1495,27 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             context.send_to_handler(message).await?;
                             Ok(())
                         }
+                        // A non-2xx carrying a JSON-RPC error is delivered in-band
+                        // so the service layer sees a protocol error correlated to
+                        // the outstanding request. Identical to the released
+                        // behavior, where this response arrived as `Json`.
+                        Ok(StreamableHttpPostResponse::ErrorResponse {
+                            jsonrpc_error: Some(mut message),
+                            ..
+                        }) => {
+                            cache_tools_from_response(
+                                &mut tool_header_cache,
+                                &mut message,
+                                &negotiated_version,
+                            );
+                            context.send_to_handler(message).await?;
+                            Ok(())
+                        }
+                        Ok(StreamableHttpPostResponse::ErrorResponse { status, body, .. }) => {
+                            Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                                format!("HTTP {status}: {body}"),
+                            )))
+                        }
                         Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
                             let stream_request_id = request_id.clone();
                             Self::mark_stream_response_pending(
@@ -1375,7 +1555,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         }
                     };
                     if send_result.is_ok()
-                        && awaiting_fallback_initialized
+                        && startup_state == HttpStartupState::AwaitingLegacyInitialize
                         && is_initialized_notification
                     {
                         if let Some(session_id) = &session_id {
@@ -1389,7 +1569,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 transport_task_ct.clone(),
                             );
                         }
-                        awaiting_fallback_initialized = false;
+                        startup_state = HttpStartupState::Ready;
                     }
                     let _ = responder.send(send_result);
                 }
@@ -1796,6 +1976,134 @@ mod tests {
         },
         service::InboundStreamOrigin,
     };
+
+    /// The status must survive normalization: era detection keys on `400`
+    /// specifically, so a `400` and a `500` carrying the same JSON-RPC error body
+    /// have to remain distinguishable. Before `ErrorResponse` existed both
+    /// collapsed to `Json`, which made them identical downstream.
+    #[test]
+    fn normalize_error_response_preserves_status_and_parsed_body() {
+        let body =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        for status in [400u16, 404, 500, 503] {
+            let normalized = normalize_error_response(
+                status,
+                body.to_owned(),
+                Some("application/json"),
+                Some("sess-1".to_owned()),
+            );
+            match normalized {
+                StreamableHttpPostResponse::ErrorResponse {
+                    status: got_status,
+                    jsonrpc_error: Some(ServerJsonRpcMessage::Error(error)),
+                    session_id,
+                    ..
+                } => {
+                    assert_eq!(got_status, status);
+                    assert_eq!(error.error.code, crate::model::ErrorCode::METHOD_NOT_FOUND);
+                    assert_eq!(session_id.as_deref(), Some("sess-1"));
+                }
+                other => panic!("HTTP {status} must normalize to a parsed error, got {other:?}"),
+            }
+        }
+    }
+
+    /// Bodies that are not JSON-RPC error responses leave `jsonrpc_error` empty
+    /// while still preserving the raw body for diagnostics. Ported from the
+    /// `parse_json_rpc_error` unit tests that this helper replaced.
+    #[test]
+    fn normalize_error_response_rejects_non_error_bodies() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            "not json at all",
+            "",
+            r#"{"broken":"#,
+        ] {
+            match normalize_error_response(400, body.to_owned(), Some("application/json"), None) {
+                StreamableHttpPostResponse::ErrorResponse {
+                    jsonrpc_error,
+                    body: got_body,
+                    ..
+                } => {
+                    assert!(
+                        jsonrpc_error.is_none(),
+                        "body {body:?} is not a JSON-RPC error response"
+                    );
+                    assert_eq!(got_body, body, "the raw body must be preserved");
+                }
+                other => panic!("expected ErrorResponse, got {other:?}"),
+            }
+        }
+    }
+
+    /// A JSON-RPC error body is only trusted when the server labeled it JSON, so
+    /// an HTML error page that happens to contain JSON is not mistaken for a
+    /// protocol-level error.
+    #[test]
+    fn normalize_error_response_ignores_body_without_json_content_type() {
+        let body =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        for content_type in [None, Some("text/html"), Some("text/plain")] {
+            match normalize_error_response(400, body.to_owned(), content_type, None) {
+                StreamableHttpPostResponse::ErrorResponse { jsonrpc_error, .. } => assert!(
+                    jsonrpc_error.is_none(),
+                    "content-type {content_type:?} must not be parsed as JSON-RPC"
+                ),
+                other => panic!("expected ErrorResponse, got {other:?}"),
+            }
+        }
+    }
+
+    /// Content types carrying parameters (`application/json; charset=utf-8`) are
+    /// still JSON.
+    #[test]
+    fn normalize_error_response_accepts_json_content_type_with_parameters() {
+        let body =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        match normalize_error_response(
+            400,
+            body.to_owned(),
+            Some("application/json; charset=utf-8"),
+            None,
+        ) {
+            StreamableHttpPostResponse::ErrorResponse { jsonrpc_error, .. } => {
+                assert!(jsonrpc_error.is_some())
+            }
+            other => panic!("expected ErrorResponse, got {other:?}"),
+        }
+    }
+
+    /// Behavior preservation: a non-2xx JSON-RPC error body is still delivered
+    /// in-band, exactly as when this response arrived as `Json`. This is what
+    /// keeps `test_streamable_http_4xx_error_body` passing.
+    #[test]
+    fn error_response_with_jsonrpc_body_is_delivered_in_band() {
+        let body =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let normalized =
+            normalize_error_response(404, body.to_owned(), Some("application/json"), None);
+        let message = normalized
+            .expect_json::<std::io::Error>()
+            .expect("a JSON-RPC error body must be surfaced in-band, not as a transport error");
+        assert!(matches!(message, ServerJsonRpcMessage::Error(_)));
+    }
+
+    /// The converse: without a JSON-RPC body there is nothing to correlate, so it
+    /// remains a transport error carrying the status and body for diagnostics.
+    #[test]
+    fn error_response_without_jsonrpc_body_is_a_transport_error() {
+        let normalized = normalize_error_response(502, "upstream boom".to_owned(), None, None);
+        let error = normalized
+            .expect_json::<std::io::Error>()
+            .expect_err("a non-JSON-RPC body must remain a transport error");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("502") && rendered.contains("upstream boom"),
+            "the status and body must survive for diagnostics, got {rendered:?}"
+        );
+    }
 
     #[expect(
         deprecated,

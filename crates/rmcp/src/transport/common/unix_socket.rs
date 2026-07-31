@@ -267,18 +267,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::SessionExpired);
         }
 
-        if !status.is_success() {
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
-            return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("HTTP {status}: {body}"),
-            )));
-        }
-
+        // Read the headers before consuming the body: the non-2xx path below
+        // needs the content type and session id, and `into_body` takes ownership.
         let content_type = response.headers().get(http::header::CONTENT_TYPE).cloned();
         let content_length = response
             .headers()
@@ -290,6 +280,25 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
+
+        // Normalized through the same helper the reqwest backend uses, so the two
+        // backends cannot disagree about whether a non-2xx status survives. They
+        // previously had independently-written paths here and did disagree: this
+        // one discarded a JSON-RPC error body that the other delivered in-band.
+        if !status.is_success() {
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
+                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            return Ok(normalize_error_response(
+                status.as_u16(),
+                body,
+                content_type.as_ref().and_then(|ct| ct.to_str().ok()),
+                session_id,
+            ));
+        }
 
         if status.is_success()
             && content_length == Some(0)

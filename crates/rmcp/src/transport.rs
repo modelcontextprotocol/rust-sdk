@@ -124,6 +124,39 @@ pub use streamable_http_client::StreamableHttpClientTransport;
 /// Common use codes
 pub mod common;
 
+/// Startup compatibility facts for a transport binding.
+///
+/// Reports a *fact* about the binding, not an era verdict: the client lifecycle
+/// decides whether a peer is modern or initialization-era (see
+/// [`Transport::startup_compat_profile`]).
+///
+/// The distinction that matters is whether the absence of a response carries
+/// meaning. The MCP 2026-07-28
+/// [stdio backward-compatibility rules][stdio] say a server that "does not
+/// respond within a reasonable timeout" is initialization-era, because a local
+/// pipe has no other explanation for silence. The
+/// [Streamable HTTP rules][http] key era detection to an HTTP `400` body
+/// instead, so on HTTP silence is an outage.
+///
+/// [stdio]: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio#backward-compatibility
+/// [http]: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#backward-compatibility
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StartupCompatProfile {
+    /// Silence or EOF during startup indicates an initialization-era peer.
+    ///
+    /// Appropriate for stdio and bare bidirectional byte streams, where the
+    /// only participants are the client and one server process.
+    SilenceMeansLegacy,
+
+    /// Only an explicit response settles the era; silence is a failure.
+    ///
+    /// The conservative default. Appropriate for HTTP and any binding with
+    /// intermediaries, where a timeout may mean a proxy, an outage, or a
+    /// captive portal rather than an old server.
+    ResponseRequired,
+}
+
 pub trait Transport<R>: Send
 where
     R: ServiceRole,
@@ -131,6 +164,21 @@ where
     type Error: std::error::Error + Send + Sync + 'static;
     fn name() -> Cow<'static, str> {
         std::any::type_name::<Self>().into()
+    }
+
+    /// Startup compatibility facts for this binding.
+    ///
+    /// Consulted only during client startup, and only to interpret the
+    /// *absence* of a response to the `server/discover` probe. Transports
+    /// report facts; they never decide the peer's era.
+    ///
+    /// The default is [`StartupCompatProfile::ResponseRequired`], under which a
+    /// silent probe fails rather than silently downgrading to the legacy
+    /// `initialize` handshake. Bare byte-stream transports that carry stdio
+    /// compatibility semantics should override this to
+    /// [`StartupCompatProfile::SilenceMeansLegacy`].
+    fn startup_compat_profile(&self) -> StartupCompatProfile {
+        StartupCompatProfile::ResponseRequired
     }
     /// Send a message to the transport
     ///

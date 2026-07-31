@@ -1,6 +1,7 @@
 // Sampling/Roots/Logging are SEP-2577-deprecated; internal references are expected.
 #![expect(deprecated)]
 pub(super) mod cache;
+mod era;
 
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
 
@@ -31,7 +32,7 @@ use crate::{
         SubscriptionsListenResult, UnsubscribeRequest, UnsubscribeRequestParams, UpdateTaskParams,
         UpdateTaskRequest,
     },
-    transport::DynamicTransportError,
+    transport::{DynamicTransportError, StartupCompatProfile},
 };
 
 /// It represents the error that may occur when serving the client.
@@ -71,6 +72,17 @@ pub enum ClientInitializeError {
 
     #[error("discover startup requires at least one preferred protocol version")]
     NoPreferredProtocolVersion,
+
+    /// The `server/discover` probe was not answered within
+    /// [`DISCOVER_STARTUP_TIMEOUT`].
+    ///
+    /// On bindings where silence is legacy evidence (see
+    /// [`StartupCompatProfile::SilenceMeansLegacy`]) this is handled internally
+    /// as a fallback signal and never surfaces. It is returned only when the
+    /// binding requires an explicit response, or when no legacy fallback is
+    /// available.
+    #[error("no response to server/discover within {DISCOVER_STARTUP_TIMEOUT:?}")]
+    DiscoverProbeTimeout,
 
     #[error("Cancelled")]
     Cancelled,
@@ -195,6 +207,22 @@ pub struct RoleClient;
 /// Select the first client-preferred protocol version supported by the server.
 ///
 /// Returns `None` when no version is shared.
+/// How long the client waits for a response to the `server/discover` startup
+/// probe before treating it as unanswered.
+///
+/// The MCP 2026-07-28 [stdio backward-compatibility rules][stdio] make a probe
+/// that goes unanswered "within a reasonable timeout" positive evidence of an
+/// initialization-era server, but do not specify a value. This bound is what
+/// makes that outcome reachable at all: without it, a legacy server that
+/// silently drops the unknown pre-`initialize` request would hang startup
+/// forever.
+///
+/// The value matches the Python SDK's `DISCOVER_TIMEOUT_SECONDS`, for
+/// cross-SDK consistency.
+///
+/// [stdio]: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio#backward-compatibility
+pub const DISCOVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub fn select_protocol_version(
     client_preference: &[ProtocolVersion],
     server_supported: &[ProtocolVersion],
@@ -703,6 +731,8 @@ where
             legacy_startup(&service, &mut transport, &id_provider, &peer, client_info).await?;
         }
         ClientLifecycleMode::Discover { preferred_versions } => {
+            // Explicit modern mode: a legacy verdict is a lifecycle error, not a
+            // transition, so fallback is not available.
             discover_startup(
                 &service,
                 &mut transport,
@@ -710,6 +740,7 @@ where
                 &peer,
                 &client_info,
                 preferred_versions,
+                false,
             )
             .await?;
         }
@@ -717,28 +748,24 @@ where
             preferred_versions,
             legacy_version,
         } => {
-            let discover_result = discover_startup(
+            let outcome = discover_startup(
                 &service,
                 &mut transport,
                 &id_provider,
                 &peer,
                 &client_info,
                 preferred_versions,
+                true,
             )
-            .await;
-            match discover_result {
-                Ok(()) => {}
-                Err(ClientInitializeError::JsonRpcError(error))
-                    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
-                {
-                    let mut legacy_info = client_info;
-                    if let Some(version) = legacy_version {
-                        legacy_info.protocol_version = version;
-                    }
-                    legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
-                        .await?;
+            .await?;
+            // Fallback happens only on a positive legacy verdict from the
+            // classifier -- never inferred from a generic failure.
+            if matches!(outcome, DiscoverOutcome::LegacyPeer) {
+                let mut legacy_info = client_info;
+                if let Some(version) = legacy_version {
+                    legacy_info.protocol_version = version;
                 }
-                Err(error) => return Err(error),
+                legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info).await?;
             }
         }
     }
@@ -801,6 +828,24 @@ where
     Ok(())
 }
 
+/// Whether a startup probe settled the era as modern, or proved the peer is
+/// initialization-era.
+#[derive(Debug)]
+enum DiscoverOutcome {
+    /// Modern startup completed; peer info and request metadata are recorded.
+    Modern,
+    /// The peer positively identified itself as initialization-era.
+    ///
+    /// Only ever returned when the caller passed `fallback_available: true`.
+    LegacyPeer,
+}
+
+/// Run the `server/discover` startup probe, retrying protocol versions as the
+/// peer directs.
+///
+/// Era policy lives in [`era::classify_probe_outcome`]; this function owns only
+/// the I/O, request IDs, and retry bookkeeping. See
+/// `docs/discovery-startup-compatibility.md` for the governing specification.
 async fn discover_startup<S, T>(
     service: &S,
     transport: &mut T,
@@ -808,7 +853,8 @@ async fn discover_startup<S, T>(
     peer: &Peer<RoleClient>,
     client_info: &ClientInfo,
     preferred_versions: Vec<ProtocolVersion>,
-) -> Result<(), ClientInitializeError>
+    fallback_available: bool,
+) -> Result<DiscoverOutcome, ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: Transport<RoleClient> + 'static,
@@ -816,6 +862,13 @@ where
     if preferred_versions.is_empty() {
         return Err(ClientInitializeError::NoPreferredProtocolVersion);
     }
+
+    // Whether silence is legacy evidence is a fact about the transport binding,
+    // reported by the transport. The service still owns the era decision.
+    let silence_is_legacy = matches!(
+        transport.startup_compat_profile(),
+        StartupCompatProfile::SilenceMeansLegacy
+    );
 
     let mut attempted = Vec::new();
     let mut candidate = preferred_versions[0].clone();
@@ -840,7 +893,24 @@ where
                 ClientInitializeError::transport::<T>(error, "send discover request")
             })?;
 
-        match expect_response(transport, "discover response", service, peer.clone()).await {
+        // Collect the facts. Nothing here decides the era.
+        //
+        // The probe is bounded: the spec makes "does not respond within a
+        // reasonable timeout" a legal probe outcome, so waiting forever is not an
+        // option. Expiry is reported as a fact (`NoResponse`); only the
+        // classifier decides what it means, using the transport's profile.
+        let mut discover_result = None;
+        let mut unexpected_response = None;
+        let response = match tokio::time::timeout(
+            DISCOVER_STARTUP_TIMEOUT,
+            expect_response(transport, "discover response", service, peer.clone()),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(_elapsed) => Err(ClientInitializeError::DiscoverProbeTimeout),
+        };
+        let outcome = match response {
             Ok((ServerResult::DiscoverResult(result), response_id)) => {
                 if !id.matches_response_id(&response_id) {
                     return Err(ClientInitializeError::ConflictInitResponseId(
@@ -848,60 +918,82 @@ where
                         response_id,
                     ));
                 }
-                let Some(selected) =
-                    select_protocol_version(&preferred_versions, &result.supported_versions)
-                else {
-                    return Err(ClientInitializeError::NoCompatibleProtocolVersion {
-                        client_supported: preferred_versions,
-                        server_supported: result.supported_versions,
-                    });
-                };
+                let supported_versions = result.supported_versions.clone();
+                discover_result = Some(result);
+                era::DiscoverProbeOutcome::DiscoverResult { supported_versions }
+            }
+            Ok((response, _)) => {
+                unexpected_response = Some(response);
+                era::DiscoverProbeOutcome::UnparseableResult
+            }
+            Err(ClientInitializeError::JsonRpcError(error)) => {
+                era::DiscoverProbeOutcome::RpcError(error)
+            }
+            Err(ClientInitializeError::ConnectionClosed(_)) => era::DiscoverProbeOutcome::Closed,
+            Err(ClientInitializeError::DiscoverProbeTimeout) => {
+                era::DiscoverProbeOutcome::NoResponse
+            }
+            // Transport failures and cancellation are never era evidence.
+            Err(error) => return Err(error),
+        };
+
+        let ctx = era::ProbeContext {
+            preferred_versions: preferred_versions.clone(),
+            attempted: attempted.clone(),
+            requested_version: candidate.clone(),
+            fallback_available,
+            silence_is_legacy,
+        };
+
+        match era::classify_probe_outcome(outcome, &ctx) {
+            era::ProbeVerdict::Modern { version } => {
+                let result = discover_result
+                    .expect("a Modern verdict is only produced from a DiscoverResult");
                 peer.set_peer_info(ServerPeerInfo::from_discover_result(
-                    selected.clone(),
+                    version.clone(),
                     result,
                 ));
                 peer.set_client_request_metadata(ClientRequestMetadata {
-                    protocol_version: selected,
+                    protocol_version: version,
                     client_info: client_info.client_info.clone(),
                     client_capabilities: client_info.capabilities.clone(),
                 });
-                return Ok(());
+                return Ok(DiscoverOutcome::Modern);
             }
-            Ok((response, _)) => {
-                return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
+            era::ProbeVerdict::RetryVersion { version } => {
+                candidate = version;
             }
-            Err(ClientInitializeError::JsonRpcError(error))
-                if error.code == crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION =>
-            {
-                let supported = error
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("supported"))
-                    .cloned()
-                    .and_then(|value| serde_json::from_value::<Vec<ProtocolVersion>>(value).ok())
-                    .unwrap_or_default();
-                let may_retry_current = attempted
-                    .iter()
-                    .filter(|version| *version == &candidate)
-                    .count()
-                    == 1;
-                let next = preferred_versions
-                    .iter()
-                    .find(|version| {
-                        supported.contains(version)
-                            && (!attempted.contains(version)
-                                || (may_retry_current && *version == &candidate))
-                    })
-                    .cloned();
-                let Some(next) = next else {
-                    return Err(ClientInitializeError::NoCompatibleProtocolVersion {
-                        client_supported: preferred_versions,
-                        server_supported: supported,
-                    });
-                };
-                candidate = next;
+            era::ProbeVerdict::Legacy => return Ok(DiscoverOutcome::LegacyPeer),
+            era::ProbeVerdict::Error(error) => {
+                // Preserve the released error for a well-formed but non-discover
+                // response.
+                if let Some(response) = unexpected_response {
+                    return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
+                }
+                return Err(probe_error_into_init_error(error, preferred_versions));
             }
-            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Map a classifier error onto the public startup error type.
+fn probe_error_into_init_error(
+    error: era::ProbeError,
+    client_supported: Vec<ProtocolVersion>,
+) -> ClientInitializeError {
+    match error {
+        era::ProbeError::NoOverlap { server_supported } => {
+            ClientInitializeError::NoCompatibleProtocolVersion {
+                client_supported,
+                server_supported,
+            }
+        }
+        era::ProbeError::Rpc(data) => ClientInitializeError::JsonRpcError(data),
+        era::ProbeError::NoResponse => ClientInitializeError::ConnectionClosed(
+            "no response to server/discover within the startup timeout".to_string(),
+        ),
+        era::ProbeError::Closed => {
+            ClientInitializeError::ConnectionClosed("discover response".to_string())
         }
     }
 }

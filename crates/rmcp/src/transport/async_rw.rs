@@ -104,6 +104,13 @@ where
 {
     type Error = std::io::Error;
 
+    /// A bare bidirectional byte stream carries stdio compatibility semantics:
+    /// the only participants are this client and one server, so a probe nobody
+    /// answers indicates an initialization-era peer rather than an outage.
+    fn startup_compat_profile(&self) -> crate::transport::StartupCompatProfile {
+        crate::transport::StartupCompatProfile::SilenceMeansLegacy
+    }
+
     fn send(
         &mut self,
         item: TxJsonRpcMessage<Role>,

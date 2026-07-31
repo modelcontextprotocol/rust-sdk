@@ -196,7 +196,9 @@ auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+# `test-util` gates `#[tokio::test(start_paused = true)]`, used to cross the
+# `server/discover` startup timeout without spending real wall-clock time.
+tokio = { version = "1", features = ["full", "test-util"] }
 schemars = { version = "1.1.0", features = ["chrono04"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 hyper = { version = "1", features = ["server", "http1"] }
@@ -312,6 +314,11 @@ path = "tests/test_protocol_version_negotiation.rs"
 name = "test_client_lifecycle_modes"
 required-features = ["client", "server"]
 path = "tests/test_client_lifecycle_modes.rs"
+
+[[test]]
+name = "test_discover_era_detection_matrix"
+required-features = ["client", "server"]
+path = "tests/test_discover_era_detection_matrix.rs"
 
 [[test]]
 name = "test_stateless_server_requests"

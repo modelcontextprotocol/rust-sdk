@@ -6,7 +6,7 @@ use reqwest::header::ACCEPT;
 use sse_stream::Sse;
 
 use crate::{
-    model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
+    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
@@ -35,15 +35,6 @@ fn apply_custom_headers(
         builder = builder.header(name, value);
     }
     Ok(builder)
-}
-
-/// Attempts to parse `body` as a JSON-RPC error message.
-/// Returns `None` if the body is not parseable or is not a `JsonRpcMessage::Error`.
-fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
-    match serde_json::from_str::<ServerJsonRpcMessage>(body) {
-        Ok(message @ JsonRpcMessage::Error(_)) => Some(message),
-        _ => None,
-    }
 }
 
 impl StreamableHttpClient for reqwest::Client {
@@ -244,27 +235,22 @@ impl StreamableHttpClient for reqwest::Client {
         }
         // Non-success responses may carry valid JSON-RPC error payloads that
         // should be surfaced as McpError rather than lost in TransportSend.
+        //
+        // The status is preserved alongside the body: the MCP 2026-07-28
+        // Streamable HTTP binding keys era detection to `400` specifically, so
+        // collapsing every non-2xx into a bare `Json` would make `400` and `500`
+        // indistinguishable to the client lifecycle.
         if !status.is_success() {
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
-            if content_type
-                .as_deref()
-                .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
-            {
-                match parse_json_rpc_error(&body) {
-                    Some(message) => {
-                        return Ok(StreamableHttpPostResponse::Json(message, session_id));
-                    }
-                    None => tracing::warn!(
-                        "HTTP {status}: could not parse JSON body as a JSON-RPC error"
-                    ),
-                }
-            }
-            return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("HTTP {status}: {body}"),
-            )));
+            return Ok(normalize_error_response(
+                status.as_u16(),
+                body,
+                content_type.as_deref(),
+                session_id,
+            ));
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
@@ -358,11 +344,8 @@ impl StreamableHttpClientTransport<reqwest::Client> {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
-
-    use super::parse_json_rpc_error;
     use crate::{
-        model::{ClientJsonRpcMessage, ClientRequest, JsonRpcMessage, PingRequest, RequestId},
+        model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
         transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
     };
 
@@ -385,28 +368,6 @@ mod tests {
             InsufficientScopeError::new("Bearer error=\"insufficient_scope\"".to_string(), None);
         assert!(!without_scope.can_upgrade());
         assert_eq!(without_scope.get_required_scope(), None);
-    }
-
-    #[test]
-    fn parse_json_rpc_error_returns_error_variant() {
-        let body =
-            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}"#;
-        assert!(matches!(
-            parse_json_rpc_error(body),
-            Some(JsonRpcMessage::Error(_))
-        ));
-    }
-
-    #[rstest]
-    #[case::non_error_request(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#)]
-    #[case::notification(
-        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#
-    )]
-    #[case::plain_text("not json at all")]
-    #[case::empty("")]
-    #[case::truncated_json(r#"{"broken":"#)]
-    fn parse_json_rpc_error_rejects_non_error_bodies(#[case] body: &str) {
-        assert!(parse_json_rpc_error(body).is_none());
     }
 
     #[tokio::test]
