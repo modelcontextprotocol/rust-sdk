@@ -3814,8 +3814,7 @@ pub struct CallToolResult {
 // 2. Requires at least one known field to be present, so that `CallToolResult` doesn't
 //    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
 //    (e.g. `ServerResult`), which would shadow `CustomResult`.
-// 3. Rejects `resultType: "input_required"` so untagged `ServerResult`
-//    decoding selects `InputRequiredResult` and preserves input requests and state.
+// 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
 impl<'de> Deserialize<'de> for CallToolResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -3838,10 +3837,10 @@ impl<'de> Deserialize<'de> for CallToolResult {
         if helper
             .result_type
             .as_ref()
-            .is_some_and(ResultType::is_input_required)
+            .is_some_and(|result_type| !result_type.is_complete())
         {
             return Err(serde::de::Error::custom(
-                "CallToolResult cannot use resultType \"input_required\"",
+                "CallToolResult requires resultType to be \"complete\" when present",
             ));
         }
 
