@@ -45,7 +45,7 @@ features = [
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-async-trait = "0.1.89"
+async-trait = { version = "0.1.89", optional = true }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2"
@@ -187,11 +187,12 @@ transport-streamable-http-server = [
 ]
 transport-streamable-http-server-session = [
   "transport-async-rw",
+  "dep:async-trait",
   "dep:tokio-stream",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
-auth = ["dep:oauth2", "__reqwest", "dep:url"]
+auth = ["dep:async-trait", "dep:oauth2", "__reqwest", "dep:url"]
 auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
 schemars = ["dep:schemars"]
 
