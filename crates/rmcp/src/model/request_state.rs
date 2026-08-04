@@ -179,73 +179,41 @@ impl<'a> SealOptions<'a> {
 /// A keyed codec that seals and opens SEP-2322 `requestState` values with
 /// HMAC-SHA256 integrity protection.
 ///
-/// [`new`](Self::new) preserves the legacy single-key `rs1` behavior. A codec
-/// built with [`keyring`](Self::keyring) emits keyed `rs2` values and opens
-/// them with one exact key lookup. [`with_rs1_signing`](Self::with_rs1_signing)
-/// supports a rolling format migration by retaining `rs1` output while the
-/// ring can already verify `rs2`; [`add_rs1_fallback`](Self::add_rs1_fallback)
-/// retains explicitly selected keys for opening in-flight `rs1` values.
+/// [`new`](Self::new) preserves `rs1`; [`keyring`](Self::keyring) emits `rs2`.
+/// Use [`with_rs1_signing`](Self::with_rs1_signing) and
+/// [`add_rs1_fallback`](Self::add_rs1_fallback) for rolling migrations.
 ///
-/// Keys may be any length because HMAC internally normalizes them. For
-/// meaningful security use high-entropy keys of at least 32 bytes and keep
-/// them stable across every replica that may continue an MRTR exchange.
+/// Use high-entropy keys of at least 32 bytes and configure the same keyring on
+/// every replica that may continue an MRTR exchange.
 /// This codec provides integrity, not confidentiality: both the `rs2` key id
 /// and payload are base64url-readable by clients and are not encrypted.
 ///
 /// # Key rotation
 ///
-/// Keyring codecs emit the keyed `rs2` format and select one verification key
-/// from the token's authenticated key id. Migrating a rolling deployment from
-/// the unkeyed `rs1` format takes two deployments so an upgraded replica never
-/// emits a token that another serving replica cannot open:
+/// Rotate in stages so every serving replica can open tokens emitted by peers:
 ///
-/// 1. Deploy every replica with both keys and [`with_rs1_signing`](Self::with_rs1_signing).
-///    The codec keeps emitting `rs1`, but can already open `rs2` with either
-///    ring key.
-/// 2. After every serving replica has that configuration, redeploy without
-///    `with_rs1_signing`, select the new key for `rs2`, and retain the old key
-///    through [`add_rs1_fallback`](Self::add_rs1_fallback).
-/// 3. After that deployment finishes, wait longer than the maximum effective
-///    lifetime of old request states before removing the old key and fallback.
+/// 1. Deploy both keys everywhere while continuing to sign `rs1` with the old key.
+/// 2. Activate the new key for `rs2`, retaining the old key as an `rs1` fallback.
+/// 3. Wait out the maximum request-state lifetime, then remove the old key.
 ///
 /// ```
-/// use rmcp::model::{RequestStateCodec, RequestStateError};
-///
+/// # use rmcp::model::{RequestStateCodec, RequestStateError};
 /// # fn configure() -> Result<(), RequestStateError> {
-/// let old_key = b"old-request-state-key-at-least-32b";
-/// let new_key = b"new-request-state-key-at-least-32b";
-///
-/// // First deployment: publish rs2 support and the new key, but emit rs1.
-/// let transitional = RequestStateCodec::keyring(
-///     "new",
-///     [("old", old_key.as_slice()), ("new", new_key.as_slice())],
-/// )?
-/// .with_rs1_signing("old")?;
-/// assert!(transitional.seal(b"state").starts_with("rs1."));
-///
-/// // Second deployment: emit rs2/new while accepting in-flight rs1/old.
-/// let promoted = RequestStateCodec::keyring(
-///     "new",
-///     [("old", old_key.as_slice()), ("new", new_key.as_slice())],
-/// )?
-/// .add_rs1_fallback("old")?;
-/// assert!(promoted.seal(b"state").starts_with("rs2."));
+/// # let old = b"old-request-state-key-at-least-32b".as_slice();
+/// # let new = b"new-request-state-key-at-least-32b".as_slice();
+/// # let keys = [("old", old), ("new", new)];
+/// let transitional =
+///     RequestStateCodec::keyring("new", keys)?.with_rs1_signing("old")?;
+/// let promoted = RequestStateCodec::keyring("new", keys)?.add_rs1_fallback("old")?;
 /// # Ok(())
 /// # }
 /// # configure().unwrap();
 /// ```
 ///
-/// The codec defaults to no TTL. If old states have no other bounded effective
-/// lifetime, their verification key cannot be retired safely. Runtime keyring
-/// replacement is not built in; rebuild and redeploy the codec when keys
-/// change.
-///
-/// If more than one legacy `rs1` key is still valid, add each with
-/// [`add_rs1_fallback`](Self::add_rs1_fallback); trial verification is
-/// unavoidable because `rs1` carries no kid. For later `rs2`-to-`rs2`
-/// rotations, first deploy every replica with both keys while the old kid
-/// remains selected, then promote the new kid, wait for old states to drain,
-/// and finally remove the old key.
+/// For later `rs2` rotations, deploy both keys with the old key active, promote
+/// the new key, wait for old states to drain, and then remove the old key.
+/// The codec has no default TTL or runtime key reload. Without a bounded state
+/// lifetime, an old verification key cannot be retired safely.
 #[derive(Clone)]
 pub struct RequestStateCodec {
     keys: Keys,
@@ -301,11 +269,11 @@ impl RequestStateCodec {
     }
 
     /// Creates a keyring codec that seals `rs2` with `active_kid` and opens
-    /// `rs2` by exact key-id lookup.
+    /// `rs2` values for configured key ids.
     ///
-    /// Ring codecs do not open legacy `rs1` values unless a fallback is added
-    /// with [`add_rs1_fallback`](Self::add_rs1_fallback), or transitional
-    /// `rs1` sealing is enabled with
+    /// Keyring codecs do not open legacy `rs1` values unless a fallback is
+    /// added with [`add_rs1_fallback`](Self::add_rs1_fallback), or transitional
+    /// signing is enabled with
     /// [`with_rs1_signing`](Self::with_rs1_signing).
     ///
     /// Key ids are opaque, case-sensitive UTF-8 strings of 1 to 255 bytes.
@@ -359,16 +327,16 @@ impl RequestStateCodec {
         })
     }
 
-    /// Switches a Ring into transitional mode that seals `rs1` with `kid`.
+    /// Switches a keyring codec to transitional `rs1` signing with `kid`.
     ///
     /// The selected key is also added to the legacy `rs1` fallback set, so the
-    /// resulting codec can open its own output. The Ring can still open `rs2`
-    /// tokens for every key id it contains.
+    /// codec can open its own output while continuing to accept `rs2` values.
     ///
     /// # Errors
     ///
-    /// Returns [`RequestStateError::InvalidKeyring`] when called on a codec
-    /// created by [`new`](Self::new), or if the Ring does not contain `kid`.
+    /// Returns [`RequestStateError::InvalidKeyring`] when called on a
+    /// single-key codec created by [`new`](Self::new), or if the keyring does
+    /// not contain `kid`.
     pub fn with_rs1_signing(mut self, kid: impl AsRef<str>) -> Result<Self, RequestStateError> {
         let kid = kid.as_ref();
         match &mut self.keys {
@@ -398,16 +366,15 @@ impl RequestStateCodec {
         }
     }
 
-    /// Adds `kid` to the keys tried when opening legacy `rs1` values.
+    /// Adds `kid` as an accepted key for legacy `rs1` values.
     ///
-    /// Because `rs1` carries no key id, multiple fallbacks require one HMAC per
-    /// configured key until a match is found. Adding the same id more than once
-    /// is idempotent. `rs2` verification always uses one exact lookup.
+    /// Adding the same id more than once has no effect.
     ///
     /// # Errors
     ///
-    /// Returns [`RequestStateError::InvalidKeyring`] when called on a codec
-    /// created by [`new`](Self::new), or if the Ring does not contain `kid`.
+    /// Returns [`RequestStateError::InvalidKeyring`] when called on a
+    /// single-key codec created by [`new`](Self::new), or if the keyring does
+    /// not contain `kid`.
     pub fn add_rs1_fallback(mut self, kid: impl AsRef<str>) -> Result<Self, RequestStateError> {
         let kid = kid.as_ref();
         match &mut self.keys {
@@ -498,13 +465,8 @@ impl RequestStateCodec {
     /// - [`RequestStateError::InvalidKeyId`] if an `rs2` key id is empty, too
     ///   long, or not valid UTF-8.
     ///
-    /// Version and segment-count validation happens first. For `rs2`, kid
-    /// validation and key selection happen before body/tag decoding, so an
-    /// unknown kid takes precedence over errors in later sections. A Ring with
-    /// no `rs1` fallbacks likewise returns `UnknownKeyId` after validating the
-    /// three-segment `rs1` structure and before decoding its body or tag.
-    /// Applications should expose a common client-facing error for every open
-    /// failure and reserve the detailed variants for internal diagnostics.
+    /// Callers should expose a single client-facing failure and reserve the
+    /// detailed variants for internal diagnostics.
     pub fn open_with(
         &self,
         sealed: &str,
