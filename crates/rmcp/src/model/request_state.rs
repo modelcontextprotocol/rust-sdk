@@ -465,8 +465,9 @@ impl RequestStateCodec {
     /// - [`RequestStateError::InvalidKeyId`] if an `rs2` key id is empty, too
     ///   long, or not valid UTF-8.
     ///
-    /// Callers should expose a single client-facing failure and reserve the
-    /// detailed variants for internal diagnostics.
+    /// Applications MUST map all token-opening failures to a single
+    /// client-facing error and reserve the detailed variants for internal
+    /// diagnostics.
     pub fn open_with(
         &self,
         sealed: &str,
@@ -610,6 +611,7 @@ impl RequestStateCodec {
             .decode(tag_b64)
             .map_err(|_| RequestStateError::InvalidEncoding)?;
 
+        // `verify_slice` compares tags in constant time and rejects wrong-length tags.
         match &self.keys {
             Keys::Single(key) => Self::mac_v1(key, associated_data, &body)
                 .verify_slice(&tag)
@@ -619,12 +621,15 @@ impl RequestStateCodec {
                 rs1_fallbacks,
                 ..
             } => {
-                let verified = rs1_fallbacks.iter().any(|kid| {
+                // Evaluate every fallback so the HMAC count does not reveal which key matched.
+                let mut verified = false;
+                for kid in rs1_fallbacks {
                     let key = keys.get(kid).expect("validated rs1 fallback key");
-                    Self::mac_v1(key, associated_data, &body)
+                    let matches = Self::mac_v1(key, associated_data, &body)
                         .verify_slice(&tag)
-                        .is_ok()
-                });
+                        .is_ok();
+                    verified |= matches;
+                }
                 if !verified {
                     return Err(RequestStateError::IntegrityCheckFailed);
                 }
@@ -672,6 +677,7 @@ impl RequestStateCodec {
             .decode(tag_b64)
             .map_err(|_| RequestStateError::InvalidEncoding)?;
 
+        // `verify_slice` compares tags in constant time and rejects wrong-length tags.
         Self::mac_v2(key, kid.as_bytes(), associated_data, &body)
             .verify_slice(&tag)
             .map_err(|_| RequestStateError::IntegrityCheckFailed)?;
@@ -809,10 +815,10 @@ mod tests {
     }
 
     #[test]
-    fn wrong_version_prefix_is_malformed() {
+    fn unsupported_version_is_malformed() {
         let codec = RequestStateCodec::new(b"key".to_vec());
         let sealed = codec.seal(b"state");
-        let bumped = sealed.replacen("rs1.", "rs2.", 1);
+        let bumped = sealed.replacen("rs1.", "rs3.", 1);
         assert!(matches!(
             codec.open(&bumped),
             Err(RequestStateError::MalformedFormat)
