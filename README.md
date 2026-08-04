@@ -1363,16 +1363,21 @@ async fn call_tool(&self, request: CallToolRequestParams, _ctx: RequestContext<R
 }
 ```
 
-> **`requestState` is untrusted.** The client echoes it back verbatim, so a
-> stateless server that stores meaningful data in it MUST verify integrity
-> first. Enable the `request-state` feature and use `RequestStateCodec` to seal
-> and open it (HMAC-tagged), or keep state server-side and use `requestState`
-> only as an opaque handle.
+> **`requestState` is untrusted.** [SEP-2322 requires servers to validate
+> it](https://modelcontextprotocol.io/seps/2322-MRTR#protocol-requirements-for-ephemeral-workflow)
+> because the client echoes it back verbatim. A stateless server that stores
+> meaningful data in it MUST verify integrity first. Enable the `request-state`
+> feature and use `RequestStateCodec` to seal and open it (HMAC-tagged), or keep
+> state server-side and use `requestState` only as an opaque handle.
 
-For multi-replica deployments, use a `RequestStateCodec` keyring to rotate
-signing keys without invalidating in-flight requests. Follow the
-[`RequestStateCodec` key-rotation rustdocs](https://docs.rs/rmcp/latest/rmcp/model/struct.RequestStateCodec.html#key-rotation)
-for the rolling-safe `rs1`-to-`rs2` migration and key-retirement procedure.
+For multi-replica deployments, use `RequestStateCodec::new_with_keyring` to
+rotate signing keys without invalidating in-flight requests:
+
+1. Deploy the old and new keys everywhere, continuing to emit `rs1` with the
+   old key via `with_rs1_signing("old")`.
+2. Start emitting `rs2` with the new key while retaining the old key via
+   `with_rs1_fallback("old")`.
+3. After the maximum `requestState` lifetime has elapsed, remove the old key.
 
 ### Client-side
 
