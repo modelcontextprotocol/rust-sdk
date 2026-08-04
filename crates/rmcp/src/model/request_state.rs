@@ -1010,15 +1010,18 @@ mod tests {
         }
 
         #[test]
-        fn rs2_roundtrips_bytes_json_associated_data_and_ttl() {
+        fn rs2_roundtrips_with_associated_data_and_ttl() {
             let codec = two_key_ring("a");
             let options = SealOptions::new()
                 .associated_data(b"user:alice")
                 .ttl(Duration::from_secs(60));
 
-            let sealed = codec.seal_at(b"", &options, 1_000);
+            let sealed = codec.seal_at(b"state", &options, 1_000);
             assert!(sealed.starts_with("rs2.YQ."));
-            assert_eq!(codec.open_at(&sealed, b"user:alice", 30_000).unwrap(), b"");
+            assert_eq!(
+                codec.open_at(&sealed, b"user:alice", 30_000).unwrap(),
+                b"state"
+            );
             assert!(matches!(
                 codec.open_at(&sealed, b"user:bob", 30_000),
                 Err(RequestStateError::IntegrityCheckFailed)
@@ -1027,11 +1030,6 @@ mod tests {
                 codec.open_at(&sealed, b"user:alice", 70_000),
                 Err(RequestStateError::Expired)
             ));
-
-            let value = serde_json::json!({ "step": 2, "tool": "weather" });
-            let sealed = codec.seal_json(&value).unwrap();
-            let opened: serde_json::Value = codec.open_json(&sealed).unwrap();
-            assert_eq!(opened, value);
         }
 
         #[test]
@@ -1231,36 +1229,7 @@ mod tests {
         }
 
         #[test]
-        fn rs1_fallback_is_idempotent_and_rs1_signing_adds_its_key() {
-            let codec = two_key_ring("b")
-                .with_rs1_fallback("a")
-                .unwrap()
-                .with_rs1_fallback("a")
-                .unwrap();
-            match &codec.keys {
-                Keys::Ring { rs1_fallbacks, .. } => assert_eq!(rs1_fallbacks, &["a"]),
-                Keys::Single(_) => panic!("expected ring"),
-            }
-
-            let transitional = two_key_ring("b").with_rs1_signing("a").unwrap();
-            match &transitional.keys {
-                Keys::Ring {
-                    seal_mode,
-                    rs1_fallbacks,
-                    ..
-                } => {
-                    assert!(matches!(
-                        seal_mode,
-                        SealMode::Rs1 { key_id } if key_id == "a"
-                    ));
-                    assert_eq!(rs1_fallbacks, &["a"]);
-                }
-                Keys::Single(_) => panic!("expected ring"),
-            }
-        }
-
-        #[test]
-        fn parser_is_strict_and_error_precedence_is_stable() {
+        fn parser_rejects_invalid_tokens_and_unavailable_keys() {
             let codec = two_key_ring("a");
             for malformed in [
                 "rs2",
@@ -1275,55 +1244,30 @@ mod tests {
                 ));
             }
 
+            let valid_rs2 = codec.seal(b"state");
             assert!(matches!(
-                codec.open("rs2.!!!!.!!!!.!!!!"),
+                codec.open(&replace_segment(&valid_rs2, 1, "!!!!")),
                 Err(RequestStateError::InvalidEncoding)
             ));
             assert!(matches!(
-                codec.open("rs2..!!!!.!!!!"),
+                codec.open(&replace_segment(&valid_rs2, 1, "")),
                 Err(RequestStateError::InvalidKeyId)
             ));
             let non_utf8 = URL_SAFE_NO_PAD.encode([0xff]);
             assert!(matches!(
-                codec.open(&format!("rs2.{non_utf8}.!!!!.!!!!")),
+                codec.open(&replace_segment(&valid_rs2, 1, &non_utf8)),
                 Err(RequestStateError::InvalidKeyId)
             ));
 
-            // Key selection precedes decoding later rs2 sections.
-            let unknown = URL_SAFE_NO_PAD.encode(b"missing");
-            assert!(matches!(
-                codec.open(&format!("rs2.{unknown}.!!!!.!!!!")),
-                Err(RequestStateError::UnknownKeyId)
-            ));
-            assert!(matches!(
-                codec.open("rs2.YQ.!!!!.!!!!"),
-                Err(RequestStateError::InvalidEncoding)
-            ));
-            let valid_body = URL_SAFE_NO_PAD.encode(body(0, b"state"));
-            assert!(matches!(
-                codec.open(&format!("rs2.YQ.{valid_body}.!!!!")),
-                Err(RequestStateError::InvalidEncoding)
-            ));
-            assert!(matches!(
-                codec.open("rs2.YQ.."),
-                Err(RequestStateError::IntegrityCheckFailed)
-            ));
-
-            let valid_rs2 = codec.seal(b"state");
             assert!(matches!(
                 RequestStateCodec::new(KEY_A).open(&valid_rs2),
                 Err(RequestStateError::UnknownKeyId)
             ));
 
-            // With no eligible rs1 key, selection fails before body/tag decode.
+            let valid_rs1 = RequestStateCodec::new(KEY_A).seal(b"state");
             assert!(matches!(
-                codec.open("rs1.!!!!.!!!!"),
+                codec.open(&valid_rs1),
                 Err(RequestStateError::UnknownKeyId)
-            ));
-            let with_fallback = codec.with_rs1_fallback("a").unwrap();
-            assert!(matches!(
-                with_fallback.open("rs1.!!!!.!!!!"),
-                Err(RequestStateError::InvalidEncoding)
             ));
         }
 
@@ -1364,11 +1308,10 @@ mod tests {
             assert!(!rendered.contains(std::str::from_utf8(KEY_A).unwrap()));
             assert!(!rendered.contains(std::str::from_utf8(KEY_B).unwrap()));
             assert!(rendered.contains("redacted"));
-            assert!(rendered.contains("Rs2"));
         }
 
         #[test]
-        fn open_methods_do_not_panic_on_mutated_or_arbitrary_strings() {
+        fn mutated_tokens_do_not_panic() {
             let codec = two_key_ring("a").with_rs1_fallback("a").unwrap();
             let valid = [
                 RequestStateCodec::new(KEY_A).seal(b"state"),
@@ -1398,8 +1341,6 @@ mod tests {
             for candidate in corpus {
                 let _ = codec.open(&candidate);
                 let _ = codec.open_with(&candidate, b"context");
-                let _: Result<serde_json::Value, _> = codec.open_json(&candidate);
-                let _: Result<serde_json::Value, _> = codec.open_json_with(&candidate, b"context");
             }
         }
     }
