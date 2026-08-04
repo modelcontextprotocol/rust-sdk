@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add `RequestStateCodec` keyrings and authenticated `rs2` key identifiers for
+  rolling-safe key rotation while preserving `new()` and the legacy `rs1`
+  format
+
 ## [3.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.1...rmcp-v3.1.0) - 2026-07-31
 
 ### Added

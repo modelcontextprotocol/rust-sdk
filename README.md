@@ -1369,6 +1369,11 @@ async fn call_tool(&self, request: CallToolRequestParams, _ctx: RequestContext<R
 > and open it (HMAC-tagged), or keep state server-side and use `requestState`
 > only as an opaque handle.
 
+For multi-replica deployments, use a `RequestStateCodec` keyring to rotate
+signing keys without invalidating in-flight requests. Follow the
+[`RequestStateCodec` key-rotation rustdocs](https://docs.rs/rmcp/latest/rmcp/model/struct.RequestStateCodec.html#key-rotation)
+for the rolling-safe `rs1`-to-`rs2` migration and key-retirement procedure.
+
 ### Client-side
 
 The high-level `call_tool`, `get_prompt`, and `read_resource` helpers drive MRTR
