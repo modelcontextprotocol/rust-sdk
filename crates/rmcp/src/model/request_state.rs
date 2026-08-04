@@ -73,10 +73,8 @@ use thiserror::Error;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Legacy version tag used by single-key and transitional codecs.
 const VERSION_V1: &str = "rs1";
 
-/// Keyed version tag used by keyring codecs after promotion.
 const VERSION_V2: &str = "rs2";
 
 /// Domain-separation label mixed into the HMAC so a `requestState` tag can never
@@ -90,7 +88,6 @@ const DOMAIN_V2: &[u8] = b"rmcp/mrtr/request-state/v2";
 /// front of every sealed body. `0` means "no expiry".
 const EXPIRY_LEN: usize = 8;
 
-/// Maximum decoded UTF-8 byte length of an rs2 key id.
 const MAX_KID_LEN: usize = 255;
 
 /// Maximum unpadded base64url length for [`MAX_KID_LEN`] bytes.
@@ -127,8 +124,7 @@ pub enum RequestStateError {
     #[error("request state contains an invalid key identifier")]
     InvalidKeyId,
 
-    /// A keyring constructor or builder was given an invalid configuration.
-    /// The message is for diagnostics and should not be matched programmatically.
+    /// An invalid keyring configuration; the message is diagnostic only.
     #[error("invalid keyring configuration: {0}")]
     InvalidKeyring(&'static str),
 
@@ -177,55 +173,16 @@ impl<'a> SealOptions<'a> {
     }
 }
 
-/// A keyed codec that seals and opens SEP-2322 `requestState` values with
-/// HMAC-SHA256 integrity protection.
+/// A keyed codec for integrity-protected SEP-2322 `requestState` values.
 ///
-/// [`new`](Self::new) preserves `rs1`;
-/// [`new_with_keyring`](Self::new_with_keyring) emits `rs2`.
+/// [`new`](Self::new) preserves `rs1`; [`new_with_keyring`](Self::new_with_keyring)
+/// emits `rs2`.
 /// Use [`with_rs1_signing`](Self::with_rs1_signing) and
 /// [`with_rs1_fallback`](Self::with_rs1_fallback) for rolling migrations.
 ///
-/// Use high-entropy keys of at least 32 bytes and configure the same keyring on
-/// every replica that may continue an MRTR exchange.
-/// This codec provides integrity, not confidentiality: both the `rs2` key id
-/// and payload are base64url-readable by clients and are not encrypted.
-///
-/// # Wire format
-///
-/// Keyring codecs emit
-/// `rs2.<base64url(kid)>.<base64url(expiry || payload)>.<base64url(tag)>`.
-/// The expiry is a signed big-endian Unix timestamp in milliseconds, or zero
-/// for no expiry. The tag authenticates the key id, associated data, and body
-/// under an `rs2`-specific domain. Key ids are visible, authenticated,
-/// case-sensitive UTF-8 strings; they are not confidential.
-///
-/// # Key rotation
-///
-/// Rotate in stages so every serving replica can open tokens emitted by peers:
-///
-/// 1. Deploy both keys everywhere while continuing to sign `rs1` with the old key.
-/// 2. Activate the new key for `rs2`, retaining the old key as an `rs1` fallback.
-/// 3. Wait out the maximum request-state lifetime, then remove the old key.
-///
-/// ```
-/// # use rmcp::model::{RequestStateCodec, RequestStateError};
-/// # fn configure() -> Result<(), RequestStateError> {
-/// # let old = b"old-request-state-key-at-least-32b".as_slice();
-/// # let new = b"new-request-state-key-at-least-32b".as_slice();
-/// # let keys = [("old", old), ("new", new)];
-/// let transitional =
-///     RequestStateCodec::new_with_keyring("new", keys)?.with_rs1_signing("old")?;
-/// let promoted =
-///     RequestStateCodec::new_with_keyring("new", keys)?.with_rs1_fallback("old")?;
-/// # Ok(())
-/// # }
-/// # configure().unwrap();
-/// ```
-///
-/// For later `rs2` rotations, deploy both keys with the old key active, promote
-/// the new key, wait for old states to drain, and then remove the old key.
-/// The codec has no default TTL or runtime key reload. Without a bounded state
-/// lifetime, an old verification key cannot be retired safely.
+/// Configure the same high-entropy keys of at least 32 bytes on every replica.
+/// Values are authenticated, not encrypted; key ids and payloads remain
+/// readable. Retain old keys until every value they signed has expired.
 #[derive(Clone)]
 pub struct RequestStateCodec {
     keys: Keys,
@@ -282,16 +239,10 @@ impl RequestStateCodec {
 
     /// Creates a keyring codec that seals `rs2` with `active_kid`.
     ///
-    /// Opening an `rs2` value selects the named key from all configured keys;
-    /// successful tag verification authenticates that key id. `active_kid`
-    /// affects sealing only.
-    ///
-    /// Keyring codecs do not open legacy `rs1` values unless a fallback is
-    /// added with [`with_rs1_fallback`](Self::with_rs1_fallback), or
-    /// transitional signing is enabled with
+    /// All configured keys can open matching `rs2` values. Legacy `rs1` values
+    /// require [`with_rs1_fallback`](Self::with_rs1_fallback) or
     /// [`with_rs1_signing`](Self::with_rs1_signing).
-    ///
-    /// Key ids are opaque, case-sensitive UTF-8 strings of 1 to 255 bytes.
+    /// Key ids are case-sensitive UTF-8 strings of 1 to 255 bytes.
     ///
     /// # Errors
     ///
@@ -342,10 +293,8 @@ impl RequestStateCodec {
         })
     }
 
-    /// Switches a keyring codec to transitional `rs1` signing with `kid`.
-    ///
-    /// The selected key is also added to the legacy `rs1` fallback set, so the
-    /// codec can open its own output while continuing to accept `rs2` values.
+    /// Uses `kid` to sign legacy `rs1` values during a rolling migration.
+    /// The codec accepts its own `rs1` output and configured `rs2` values.
     ///
     /// # Errors
     ///
@@ -381,12 +330,9 @@ impl RequestStateCodec {
         }
     }
 
-    /// Adds `kid` as an accepted key for legacy `rs1` values.
-    ///
-    /// Adding the same id more than once has no effect.
-    ///
-    /// Opening `rs1` evaluates every configured fallback before returning, so
-    /// keep the fallback set small and remove it after old values have drained.
+    /// Accepts legacy `rs1` values signed with `kid`.
+    /// Adding the same id more than once has no effect; remove fallbacks after
+    /// old values have drained.
     ///
     /// # Errors
     ///
@@ -472,16 +418,8 @@ impl RequestStateCodec {
     ///
     /// # Errors
     ///
-    /// - [`RequestStateError::UnknownKeyId`] if the codec cannot select a key
-    ///   for a structurally valid value.
-    /// - [`RequestStateError::IntegrityCheckFailed`] if the tag does not match
-    ///   the selected key or the associated data differs.
-    /// - [`RequestStateError::Expired`] if the value's TTL has elapsed.
-    /// - [`RequestStateError::MalformedFormat`] or
-    ///   [`RequestStateError::InvalidEncoding`] if it is not a well-formed sealed
-    ///   value.
-    /// - [`RequestStateError::InvalidKeyId`] if an `rs2` key id is empty, too
-    ///   long, or not valid UTF-8.
+    /// Returns a [`RequestStateError`] if the value is malformed, cannot be
+    /// verified, names an unavailable key, or has expired.
     ///
     /// Applications MUST map all token-opening failures to a single
     /// client-facing error and reserve the detailed variants for internal
@@ -629,7 +567,7 @@ impl RequestStateCodec {
             .decode(tag_b64)
             .map_err(|_| RequestStateError::InvalidEncoding)?;
 
-        // `verify_slice` compares tags in constant time and rejects wrong-length tags.
+        // Authentication must not short-circuit based on tag bytes.
         match &self.keys {
             Keys::Single(key) => Self::mac_v1(key, associated_data, &body)
                 .verify_slice(&tag)
@@ -639,7 +577,7 @@ impl RequestStateCodec {
                 rs1_fallbacks,
                 ..
             } => {
-                // Evaluate every fallback so the HMAC count does not reveal which key matched.
+                // Try every fallback so timing does not identify the matching key.
                 let mut verified = false;
                 for kid in rs1_fallbacks {
                     let key = keys.get(kid).expect("validated rs1 fallback key");
@@ -695,7 +633,7 @@ impl RequestStateCodec {
             .decode(tag_b64)
             .map_err(|_| RequestStateError::InvalidEncoding)?;
 
-        // `verify_slice` compares tags in constant time and rejects wrong-length tags.
+        // Authentication must not short-circuit based on tag bytes.
         Self::mac_v2(key, kid.as_bytes(), associated_data, &body)
             .verify_slice(&tag)
             .map_err(|_| RequestStateError::IntegrityCheckFailed)?;
