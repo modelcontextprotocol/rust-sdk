@@ -128,6 +128,7 @@ pub enum RequestStateError {
     InvalidKeyId,
 
     /// A keyring constructor or builder was given an invalid configuration.
+    /// The message is for diagnostics and should not be matched programmatically.
     #[error("invalid keyring configuration: {0}")]
     InvalidKeyring(&'static str),
 
@@ -179,14 +180,24 @@ impl<'a> SealOptions<'a> {
 /// A keyed codec that seals and opens SEP-2322 `requestState` values with
 /// HMAC-SHA256 integrity protection.
 ///
-/// [`new`](Self::new) preserves `rs1`; [`keyring`](Self::keyring) emits `rs2`.
+/// [`new`](Self::new) preserves `rs1`;
+/// [`new_with_keyring`](Self::new_with_keyring) emits `rs2`.
 /// Use [`with_rs1_signing`](Self::with_rs1_signing) and
-/// [`add_rs1_fallback`](Self::add_rs1_fallback) for rolling migrations.
+/// [`with_rs1_fallback`](Self::with_rs1_fallback) for rolling migrations.
 ///
 /// Use high-entropy keys of at least 32 bytes and configure the same keyring on
 /// every replica that may continue an MRTR exchange.
 /// This codec provides integrity, not confidentiality: both the `rs2` key id
 /// and payload are base64url-readable by clients and are not encrypted.
+///
+/// # Wire format
+///
+/// Keyring codecs emit
+/// `rs2.<base64url(kid)>.<base64url(expiry || payload)>.<base64url(tag)>`.
+/// The expiry is a signed big-endian Unix timestamp in milliseconds, or zero
+/// for no expiry. The tag authenticates the key id, associated data, and body
+/// under an `rs2`-specific domain. Key ids are visible, authenticated,
+/// case-sensitive UTF-8 strings; they are not confidential.
 ///
 /// # Key rotation
 ///
@@ -203,8 +214,9 @@ impl<'a> SealOptions<'a> {
 /// # let new = b"new-request-state-key-at-least-32b".as_slice();
 /// # let keys = [("old", old), ("new", new)];
 /// let transitional =
-///     RequestStateCodec::keyring("new", keys)?.with_rs1_signing("old")?;
-/// let promoted = RequestStateCodec::keyring("new", keys)?.add_rs1_fallback("old")?;
+///     RequestStateCodec::new_with_keyring("new", keys)?.with_rs1_signing("old")?;
+/// let promoted =
+///     RequestStateCodec::new_with_keyring("new", keys)?.with_rs1_fallback("old")?;
 /// # Ok(())
 /// # }
 /// # configure().unwrap();
@@ -268,12 +280,15 @@ impl RequestStateCodec {
         }
     }
 
-    /// Creates a keyring codec that seals `rs2` with `active_kid` and opens
-    /// `rs2` values for configured key ids.
+    /// Creates a keyring codec that seals `rs2` with `active_kid`.
+    ///
+    /// Opening an `rs2` value selects the named key from all configured keys;
+    /// successful tag verification authenticates that key id. `active_kid`
+    /// affects sealing only.
     ///
     /// Keyring codecs do not open legacy `rs1` values unless a fallback is
-    /// added with [`add_rs1_fallback`](Self::add_rs1_fallback), or transitional
-    /// signing is enabled with
+    /// added with [`with_rs1_fallback`](Self::with_rs1_fallback), or
+    /// transitional signing is enabled with
     /// [`with_rs1_signing`](Self::with_rs1_signing).
     ///
     /// Key ids are opaque, case-sensitive UTF-8 strings of 1 to 255 bytes.
@@ -282,7 +297,7 @@ impl RequestStateCodec {
     ///
     /// Returns [`RequestStateError::InvalidKeyring`] if the keyring is empty,
     /// contains duplicate or invalid key ids, or does not contain `active_kid`.
-    pub fn keyring<K, V>(
+    pub fn new_with_keyring<K, V>(
         active_kid: impl Into<String>,
         keys: impl IntoIterator<Item = (K, V)>,
     ) -> Result<Self, RequestStateError>
@@ -370,12 +385,15 @@ impl RequestStateCodec {
     ///
     /// Adding the same id more than once has no effect.
     ///
+    /// Opening `rs1` evaluates every configured fallback before returning, so
+    /// keep the fallback set small and remove it after old values have drained.
+    ///
     /// # Errors
     ///
     /// Returns [`RequestStateError::InvalidKeyring`] when called on a
     /// single-key codec created by [`new`](Self::new), or if the keyring does
     /// not contain `kid`.
-    pub fn add_rs1_fallback(mut self, kid: impl AsRef<str>) -> Result<Self, RequestStateError> {
+    pub fn with_rs1_fallback(mut self, kid: impl AsRef<str>) -> Result<Self, RequestStateError> {
         let kid = kid.as_ref();
         match &mut self.keys {
             Keys::Single(_) => Err(RequestStateError::InvalidKeyring(
@@ -968,7 +986,7 @@ mod tests {
         const KAT_NOW_MS: i64 = 1_700_000_000_000;
 
         fn two_key_ring(active: &str) -> RequestStateCodec {
-            RequestStateCodec::keyring(active, [("a", KEY_A), ("b", KEY_B)]).unwrap()
+            RequestStateCodec::new_with_keyring(active, [("a", KEY_A), ("b", KEY_B)]).unwrap()
         }
 
         fn body(expiry: i64, payload: &[u8]) -> Vec<u8> {
@@ -1039,7 +1057,7 @@ mod tests {
         #[test]
         fn rs2_known_answer_matches_wire_specification() {
             // Independently checked with Python stdlib HMAC and Ruby OpenSSL.
-            let codec = RequestStateCodec::keyring(KAT_KID, [(KAT_KID, KAT_KEY)]).unwrap();
+            let codec = RequestStateCodec::new_with_keyring(KAT_KID, [(KAT_KID, KAT_KEY)]).unwrap();
             let sealed = codec.seal_at(
                 b"step=2",
                 &SealOptions::new()
@@ -1089,7 +1107,7 @@ mod tests {
             assert!(token_b.starts_with("rs2.Yg."));
             assert_eq!(signer_b.open(&token_b).unwrap(), b"state-b");
 
-            let without_a = RequestStateCodec::keyring("b", [("b", KEY_B)]).unwrap();
+            let without_a = RequestStateCodec::new_with_keyring("b", [("b", KEY_B)]).unwrap();
             assert!(matches!(
                 without_a.open(&token_a),
                 Err(RequestStateError::UnknownKeyId)
@@ -1099,15 +1117,17 @@ mod tests {
         #[test]
         fn rolling_migration_is_bidirectionally_compatible() {
             let old = RequestStateCodec::new(KEY_A);
-            let transitional = RequestStateCodec::keyring("new", [("old", KEY_A), ("new", KEY_B)])
-                .unwrap()
-                .with_rs1_signing("old")
-                .unwrap();
-            let promoted = RequestStateCodec::keyring("new", [("old", KEY_A), ("new", KEY_B)])
-                .unwrap()
-                .add_rs1_fallback("old")
-                .unwrap();
-            let retired = RequestStateCodec::keyring("new", [("new", KEY_B)]).unwrap();
+            let transitional =
+                RequestStateCodec::new_with_keyring("new", [("old", KEY_A), ("new", KEY_B)])
+                    .unwrap()
+                    .with_rs1_signing("old")
+                    .unwrap();
+            let promoted =
+                RequestStateCodec::new_with_keyring("new", [("old", KEY_A), ("new", KEY_B)])
+                    .unwrap()
+                    .with_rs1_fallback("old")
+                    .unwrap();
+            let retired = RequestStateCodec::new_with_keyring("new", [("new", KEY_B)]).unwrap();
 
             let old_token = old.seal(b"old");
             assert_eq!(transitional.open(&old_token).unwrap(), b"old");
@@ -1132,13 +1152,15 @@ mod tests {
             let legacy_a = RequestStateCodec::new(KEY_A).seal(b"a");
             let legacy_b = RequestStateCodec::new(KEY_B).seal(b"b");
             let legacy_c = RequestStateCodec::new(KEY_C).seal(b"c");
-            let ring =
-                RequestStateCodec::keyring("new", [("a", KEY_A), ("b", KEY_B), ("new", KEY_C)])
-                    .unwrap()
-                    .add_rs1_fallback("a")
-                    .unwrap()
-                    .add_rs1_fallback("b")
-                    .unwrap();
+            let ring = RequestStateCodec::new_with_keyring(
+                "new",
+                [("a", KEY_A), ("b", KEY_B), ("new", KEY_C)],
+            )
+            .unwrap()
+            .with_rs1_fallback("a")
+            .unwrap()
+            .with_rs1_fallback("b")
+            .unwrap();
 
             assert_eq!(ring.open(&legacy_a).unwrap(), b"a");
             assert_eq!(ring.open(&legacy_b).unwrap(), b"b");
@@ -1150,7 +1172,8 @@ mod tests {
 
         #[test]
         fn kid_is_authenticated_even_when_ids_share_key_bytes() {
-            let codec = RequestStateCodec::keyring("a", [("a", KEY_A), ("b", KEY_A)]).unwrap();
+            let codec =
+                RequestStateCodec::new_with_keyring("a", [("a", KEY_A), ("b", KEY_A)]).unwrap();
             let sealed = codec.seal(b"state");
             let swapped = replace_segment(&sealed, 1, &URL_SAFE_NO_PAD.encode(b"b"));
             assert!(matches!(
@@ -1197,29 +1220,31 @@ mod tests {
 
         #[test]
         fn constructor_invariants_are_enforced() {
-            let empty = RequestStateCodec::keyring("a", std::iter::empty::<(&str, &[u8])>());
+            let empty =
+                RequestStateCodec::new_with_keyring("a", std::iter::empty::<(&str, &[u8])>());
             assert!(matches!(empty, Err(RequestStateError::InvalidKeyring(_))));
 
-            let duplicate = RequestStateCodec::keyring("a", [("a", KEY_A), ("a", KEY_B)]);
+            let duplicate = RequestStateCodec::new_with_keyring("a", [("a", KEY_A), ("a", KEY_B)]);
             assert!(matches!(
                 duplicate,
                 Err(RequestStateError::InvalidKeyring(_))
             ));
 
-            let empty_kid = RequestStateCodec::keyring("", [("", KEY_A)]);
+            let empty_kid = RequestStateCodec::new_with_keyring("", [("", KEY_A)]);
             assert!(matches!(
                 empty_kid,
                 Err(RequestStateError::InvalidKeyring(_))
             ));
 
             let oversized = "x".repeat(MAX_KID_LEN + 1);
-            let oversized_kid = RequestStateCodec::keyring(oversized.clone(), [(oversized, KEY_A)]);
+            let oversized_kid =
+                RequestStateCodec::new_with_keyring(oversized.clone(), [(oversized, KEY_A)]);
             assert!(matches!(
                 oversized_kid,
                 Err(RequestStateError::InvalidKeyring(_))
             ));
 
-            let absent_active = RequestStateCodec::keyring("missing", [("a", KEY_A)]);
+            let absent_active = RequestStateCodec::new_with_keyring("missing", [("a", KEY_A)]);
             assert!(matches!(
                 absent_active,
                 Err(RequestStateError::InvalidKeyring(_))
@@ -1234,11 +1259,11 @@ mod tests {
                 Err(RequestStateError::InvalidKeyring(_))
             ));
             assert!(matches!(
-                RequestStateCodec::new(KEY_A).add_rs1_fallback("a"),
+                RequestStateCodec::new(KEY_A).with_rs1_fallback("a"),
                 Err(RequestStateError::InvalidKeyring(_))
             ));
             assert!(matches!(
-                two_key_ring("a").add_rs1_fallback("missing"),
+                two_key_ring("a").with_rs1_fallback("missing"),
                 Err(RequestStateError::InvalidKeyring(_))
             ));
         }
@@ -1246,7 +1271,8 @@ mod tests {
         #[test]
         fn maximum_length_kid_roundtrips_and_oversized_wire_kid_is_rejected() {
             let max_kid = "x".repeat(MAX_KID_LEN);
-            let codec = RequestStateCodec::keyring(max_kid.clone(), [(max_kid, KEY_A)]).unwrap();
+            let codec =
+                RequestStateCodec::new_with_keyring(max_kid.clone(), [(max_kid, KEY_A)]).unwrap();
             let token = codec.seal(b"state");
             assert_eq!(codec.open(&token).unwrap(), b"state");
 
@@ -1267,11 +1293,11 @@ mod tests {
         }
 
         #[test]
-        fn fallback_addition_is_idempotent_and_rs1_signing_adds_its_key() {
+        fn rs1_fallback_is_idempotent_and_rs1_signing_adds_its_key() {
             let codec = two_key_ring("b")
-                .add_rs1_fallback("a")
+                .with_rs1_fallback("a")
                 .unwrap()
-                .add_rs1_fallback("a")
+                .with_rs1_fallback("a")
                 .unwrap();
             match &codec.keys {
                 Keys::Ring { rs1_fallbacks, .. } => assert_eq!(rs1_fallbacks, &["a"]),
@@ -1356,7 +1382,7 @@ mod tests {
                 codec.open("rs1.!!!!.!!!!"),
                 Err(RequestStateError::UnknownKeyId)
             ));
-            let with_fallback = codec.add_rs1_fallback("a").unwrap();
+            let with_fallback = codec.with_rs1_fallback("a").unwrap();
             assert!(matches!(
                 with_fallback.open("rs1.!!!!.!!!!"),
                 Err(RequestStateError::InvalidEncoding)
@@ -1395,7 +1421,7 @@ mod tests {
 
         #[test]
         fn ring_debug_redacts_all_key_material() {
-            let codec = two_key_ring("b").add_rs1_fallback("a").unwrap();
+            let codec = two_key_ring("b").with_rs1_fallback("a").unwrap();
             let rendered = format!("{codec:?}");
             assert!(!rendered.contains(std::str::from_utf8(KEY_A).unwrap()));
             assert!(!rendered.contains(std::str::from_utf8(KEY_B).unwrap()));
@@ -1405,7 +1431,7 @@ mod tests {
 
         #[test]
         fn open_methods_do_not_panic_on_mutated_or_arbitrary_strings() {
-            let codec = two_key_ring("a").add_rs1_fallback("a").unwrap();
+            let codec = two_key_ring("a").with_rs1_fallback("a").unwrap();
             let valid = [
                 RequestStateCodec::new(KEY_A).seal(b"state"),
                 codec.seal(b"state"),
