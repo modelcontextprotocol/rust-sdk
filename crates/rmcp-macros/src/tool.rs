@@ -284,7 +284,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
             if let Some(receiver) = fn_item.sig.receiver()
-                && let Some((_, receiver_lt)) = receiver.reference.as_ref()
+                && let syn::ReceiverKind::Reference(_, receiver_lt, _) = &receiver.kind
             {
                 if let Some(receiver_lt) = receiver_lt {
                     lt = quote! { #receiver_lt };
@@ -339,6 +339,20 @@ mod test {
         };
         let _input = tool(attr, input)?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_async_tool_preserves_receiver_lifetime() -> syn::Result<()> {
+        let attr = quote! {};
+        let input = quote! {
+            async fn test_tool_with_lifetime<'a>(&'a self) -> String {
+                "ok".to_string()
+            }
+        };
+        let result = tool(attr, input)?;
+
+        assert!(result.to_string().contains("+ 'a"));
         Ok(())
     }
 

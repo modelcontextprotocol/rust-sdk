@@ -16,11 +16,11 @@ documentation = "https://docs.rs/rmcp-macros"
 proc-macro = true
 
 [dependencies]
-syn = {version = "2", features = ["full"]}
+syn = {version = "3", features = ["full"]}
 quote = "1"
 proc-macro2 = "1"
 serde_json = "1.0"
-darling = { version = "0.23" }
+darling = { version = "0.24" }
 
 [features]
 local = []
