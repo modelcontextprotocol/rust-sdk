@@ -277,8 +277,7 @@ async fn discover_startup_omits_initialize() {
     server_task.await.expect("server task");
 }
 
-#[tokio::test]
-async fn auto_startup_falls_back_after_discover_method_not_found() {
+async fn run_auto_discover_error_scenario(error: ErrorData, expect_fallback: bool) {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
     let server_task = tokio::spawn(async move {
@@ -292,38 +291,39 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
             ClientRequest::DiscoverRequest(_)
         ));
         server
-            .send(ServerJsonRpcMessage::error(
-                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None),
-                Some(discover.id),
-            ))
+            .send(ServerJsonRpcMessage::error(error, Some(discover.id)))
             .await
-            .expect("send method-not-found");
+            .expect("send discover error");
 
-        let ClientJsonRpcMessage::Request(initialize) =
-            server.receive().await.expect("expected initialize request")
-        else {
-            panic!("expected request");
-        };
-        assert!(matches!(
-            initialize.request,
-            ClientRequest::InitializeRequest(_)
-        ));
-        server
-            .send(ServerJsonRpcMessage::response(
-                ServerResult::InitializeResult(
-                    InitializeResult::new(ServerCapabilities::default()),
-                ),
-                initialize.id,
-            ))
-            .await
-            .expect("send initialize response");
-        assert!(matches!(
-            server.receive().await,
-            Some(ClientJsonRpcMessage::Notification(_))
-        ));
+        if expect_fallback {
+            let ClientJsonRpcMessage::Request(initialize) =
+                server.receive().await.expect("expected initialize request")
+            else {
+                panic!("expected request");
+            };
+            assert!(matches!(
+                initialize.request,
+                ClientRequest::InitializeRequest(_)
+            ));
+            server
+                .send(ServerJsonRpcMessage::response(
+                    ServerResult::InitializeResult(InitializeResult::new(
+                        ServerCapabilities::default(),
+                    )),
+                    initialize.id,
+                ))
+                .await
+                .expect("send initialize response");
+            assert!(matches!(
+                server.receive().await,
+                Some(ClientJsonRpcMessage::Notification(_))
+            ));
+        } else if let Some(message) = server.receive().await {
+            panic!("modern discover error should close the client, got {message:?}");
+        }
     });
 
-    let client = DiscoverClient
+    let client_result = DiscoverClient
         .serve_with_lifecycle(
             client_transport,
             ClientLifecycleMode::Auto {
@@ -331,10 +331,62 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
                 legacy_version: Some(ProtocolVersion::V_2025_11_25),
             },
         )
-        .await
-        .expect("auto client should fall back");
-    client.cancel().await.expect("cancel client");
+        .await;
+
+    if expect_fallback {
+        let client = client_result.expect("auto client should fall back");
+        client.cancel().await.expect("cancel client");
+    } else {
+        assert!(
+            client_result.is_err(),
+            "modern discover error should be surfaced"
+        );
+    }
     server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_after_discover_method_not_found() {
+    run_auto_discover_error_scenario(
+        ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_after_discover_implementation_defined_error() {
+    run_auto_discover_error_scenario(
+        ErrorData::new(
+            ErrorCode(-32000),
+            "Bad Request: The MCP-Protocol-Version header value '2026-07-28' is not supported.",
+            None,
+        ),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_after_missing_required_capability() {
+    run_auto_discover_error_scenario(
+        ErrorData::new(
+            ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "Missing required client capability",
+            None,
+        ),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_after_header_mismatch() {
+    run_auto_discover_error_scenario(
+        ErrorData::new(ErrorCode::HEADER_MISMATCH, "Header mismatch", None),
+        false,
+    )
+    .await;
 }
 
 #[tokio::test]

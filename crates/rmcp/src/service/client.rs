@@ -740,7 +740,7 @@ where
             match discover_result {
                 Ok(()) => {}
                 Err(ClientInitializeError::JsonRpcError(error))
-                    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
+                    if !is_modern_server_json_rpc_error(&error) =>
                 {
                     let mut legacy_info = client_info;
                     if let Some(version) = legacy_version {
@@ -754,6 +754,17 @@ where
         }
     }
     Ok(serve_inner(service, transport, peer, peer_rx, ct))
+}
+
+// Only specification-defined modern errors prove that the peer understands
+// per-request metadata; other JSON-RPC errors are legacy fallback signals.
+fn is_modern_server_json_rpc_error(error: &ErrorData) -> bool {
+    matches!(
+        error.code,
+        crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+            | crate::model::ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
+            | crate::model::ErrorCode::HEADER_MISMATCH
+    )
 }
 
 async fn legacy_startup<S, T>(

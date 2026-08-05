@@ -111,8 +111,8 @@ let client = ClientInfo::default()
     )
     .await?;
 
-// Or probe the discover lifecycle and fall back when a legacy server reports
-// that server/discover is not implemented.
+// Or probe the discover lifecycle and fall back when the response does not
+// positively identify a modern server.
 let client = ClientInfo::default()
     .serve_with_lifecycle(
         transport,
@@ -127,7 +127,9 @@ let client = ClientInfo::default()
 `ClientLifecycleMode::Initialize` is equivalent to the existing `serve()` behavior.
 Discover startup does not send `notifications/initialized`; discovery completes
 startup, and each subsequent request carries its protocol version, client
-information, and capabilities in `_meta`.
+information, and capabilities in `_meta`. Auto mode preserves authentication,
+transport, and recognized modern-protocol errors instead of treating them as
+legacy-server signals.
 
 ### Build a Server
 
