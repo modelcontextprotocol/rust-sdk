@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.0...rmcp-macros-v3.1.1) - 2026-08-05
+
+### Fixed
+
+- emit cache hints from handler macros ([#1120](https://github.com/modelcontextprotocol/rust-sdk/pull/1120))
+
+### Other
+
+- upgrade darling and syn ([#1138](https://github.com/modelcontextprotocol/rust-sdk/pull/1138))
+
 ## [3.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.0.1...rmcp-macros-v3.1.0) - 2026-07-31
 
 ### Added
