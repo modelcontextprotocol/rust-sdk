@@ -34,9 +34,13 @@ pub fn parse_json_object<T: DeserializeOwned>(input: JsonObject) -> Result<T, cr
 }
 #[non_exhaustive]
 pub struct ToolCallContext<'s, S> {
+    /// The request-specific context for this tool call.
     pub request_context: RequestContext<RoleServer>,
+    /// The server handling this tool call.
     pub service: &'s S,
+    /// The name of the tool being called.
     pub name: Cow<'static, str>,
+    /// The arguments supplied for the tool call.
     pub arguments: Option<JsonObject>,
     /// Client responses to input requests from the previous MRTR round.
     pub input_responses: Option<crate::model::InputResponses>,
