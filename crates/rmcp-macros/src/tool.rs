@@ -5,8 +5,8 @@ use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
 
 use crate::common::extract_doc_line;
 
-/// Check if a type is Json<T> or StructuredOnly<T> and extract the inner type T
-fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+/// Extract `T` from a `Json<T>` or `StructuredOnly<T>` return type.
+fn extract_structured_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     if let syn::Type::Path(type_path) = ty
         && let Some(last_segment) = type_path.path.segments.last()
         && (last_segment.ident == "Json" || last_segment.ident == "StructuredOnly")
@@ -18,19 +18,15 @@ fn extract_json_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     None
 }
 
-/// Extract schema expression from a function's return type
-/// Handles patterns like Json<T> and Result<Json<T>, E>, and the same
-/// shapes with StructuredOnly<T>
+/// Extract a schema expression from a structured function return type.
 fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
-    // First, try direct Json<T>
-    if let Some(inner_type) = extract_json_inner_type(ret_type) {
+    if let Some(inner_type) = extract_structured_inner_type(ret_type) {
         return syn::parse2::<Expr>(quote! {
             rmcp::handler::server::tool::schema_for_output::<#inner_type>()
         })
         .ok();
     }
 
-    // Then, try Result<Json<T>, E>
     let type_path = match ret_type {
         syn::Type::Path(path) => path,
         _ => return None,
@@ -52,7 +48,7 @@ fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
         _ => return None,
     };
 
-    let inner_type = extract_json_inner_type(ok_type)?;
+    let inner_type = extract_structured_inner_type(ok_type)?;
 
     syn::parse2::<Expr>(quote! {
         rmcp::handler::server::tool::schema_for_output::<#inner_type>()

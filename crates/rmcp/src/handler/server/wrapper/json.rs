@@ -15,8 +15,8 @@ use crate::{
 /// The framework will place the JSON in the `structured_content` field
 /// of the tool result, and also mirror it into the regular `content` field
 /// as serialized text for clients that do not read `structured_content`.
-/// To skip that text mirror, use [`StructuredOnly`](crate::StructuredOnly)
-/// instead.
+/// For object-shaped results, use [`StructuredOnly`](crate::StructuredOnly)
+/// to skip the optional text mirror.
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Json<T>(pub T);
 

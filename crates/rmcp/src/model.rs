@@ -3996,14 +3996,17 @@ impl CallToolResult {
             meta: None,
         }
     }
-    /// Create a successful tool result with structured content only, without
-    /// mirroring it into `content` as serialized text.
+    /// Create a successful tool result without the optional serialized text mirror.
     ///
     /// [`CallToolResult::structured`] duplicates the value as a text content
     /// block so that clients which do not read `structuredContent` still see
-    /// the result. Skipping that mirror halves the payload for large values,
-    /// but such clients will receive an empty `content` array — only opt out
-    /// when you know your callers consume `structuredContent`.
+    /// the result. For object-shaped values, skipping that mirror halves the
+    /// payload, but those clients receive an empty `content` array — only opt
+    /// out when you know your callers consume `structuredContent`.
+    ///
+    /// SEP-2106 requires arrays, primitives, and `null` to retain a serialized
+    /// JSON [`TextContent`] fallback for older clients. For those values this
+    /// constructor behaves like [`CallToolResult::structured`].
     ///
     /// To send a custom rendering instead of none (for example a short text
     /// summary of a large value), chain [`CallToolResult::with_content`].
@@ -4022,26 +4025,35 @@ impl CallToolResult {
     /// assert!(result.content.is_empty());
     /// ```
     pub fn structured_only(value: Value) -> Self {
+        let content = Self::required_non_object_fallback(&value);
         CallToolResult {
-            result_type: ResultType::default(),
-            content: vec![],
+            result_type: Some(ResultType::COMPLETE),
+            content,
             structured_content: Some(value),
             is_error: Some(false),
             meta: None,
         }
     }
-    /// Create an error tool result with structured content only, without
-    /// mirroring it into `content` as serialized text.
+    /// Create an error tool result without the optional serialized text mirror.
     ///
-    /// The same caveat as [`CallToolResult::structured_only`] applies: clients
-    /// that do not read `structuredContent` will see an empty error result.
+    /// The same compatibility behavior as [`CallToolResult::structured_only`]
+    /// applies, including the required fallback for non-object values.
     pub fn structured_error_only(value: Value) -> Self {
+        let content = Self::required_non_object_fallback(&value);
         CallToolResult {
-            result_type: ResultType::default(),
-            content: vec![],
+            result_type: Some(ResultType::COMPLETE),
+            content,
             structured_content: Some(value),
             is_error: Some(true),
             meta: None,
+        }
+    }
+
+    fn required_non_object_fallback(value: &Value) -> Vec<ContentBlock> {
+        if value.is_object() {
+            Vec::new()
+        } else {
+            vec![ContentBlock::text(value.to_string())]
         }
     }
 
@@ -4051,6 +4063,8 @@ impl CallToolResult {
     /// data: pairing a hand-written rendering with a structured value is
     /// valid, e.g. a short text summary in `content` while
     /// `structured_content` holds the full value.
+    /// For non-object structured values, retain the serialized JSON text block
+    /// required by SEP-2106 when replacing content.
     ///
     /// # Example
     ///

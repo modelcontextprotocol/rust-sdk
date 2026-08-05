@@ -220,7 +220,6 @@ async fn test_structured_error_in_call_result() {
 
 #[tokio::test]
 async fn test_structured_only_in_call_result() {
-    // structured_only skips the text mirror: structured content, empty content
     let structured_data = json!({
         "sum": 7,
         "product": 12
@@ -236,6 +235,18 @@ async fn test_structured_only_in_call_result() {
     let serialized = serde_json::to_value(&result).unwrap();
     assert_eq!(serialized["content"], json!([]));
     assert_eq!(serialized["structuredContent"]["sum"], 7);
+}
+
+#[tokio::test]
+async fn test_structured_only_retains_required_fallback_for_non_object_value() {
+    let structured_data = json!([1, 2, 3]);
+
+    let result = CallToolResult::structured_only(structured_data.clone());
+
+    assert_eq!(
+        result.content.first().and_then(ContentBlock::as_text),
+        Some(&rmcp::model::TextContent::new(structured_data.to_string()))
+    );
 }
 
 #[tokio::test]
@@ -344,8 +355,6 @@ async fn test_structured_return_conversion() {
 
 #[tokio::test]
 async fn test_structured_only_return_conversion() {
-    // StructuredOnly<T> converts to CallToolResult with structured_content but
-    // no text mirror in content
     let calc_result = CalculationResult {
         sum: 7,
         product: 12,
@@ -365,6 +374,20 @@ async fn test_structured_only_return_conversion() {
     let structured_value = call_result.structured_content.unwrap();
     assert_eq!(structured_value["sum"], 7);
     assert_eq!(structured_value["product"], 12);
+}
+
+#[tokio::test]
+async fn test_structured_only_wrapper_retains_required_fallback_for_primitive() {
+    let result = StructuredOnly(42).into_call_tool_result();
+
+    let CallToolResponse::Complete(call_result) = result.unwrap() else {
+        panic!("expected complete CallToolResult");
+    };
+
+    assert_eq!(
+        call_result.content.first().and_then(ContentBlock::as_text),
+        Some(&rmcp::model::TextContent::new("42"))
+    );
 }
 
 #[tokio::test]
