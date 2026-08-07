@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rolling-safe key rotation while preserving `new()` and the legacy `rs1`
   format
 
+## [3.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.1.0...rmcp-v3.1.1) - 2026-08-05
+
+### Fixed
+
+- emit cache hints from handler macros ([#1120](https://github.com/modelcontextprotocol/rust-sdk/pull/1120))
+- expose MRTR state to tool handlers ([#1104](https://github.com/modelcontextprotocol/rust-sdk/pull/1104))
+- disambiguate input-required results ([#1103](https://github.com/modelcontextprotocol/rust-sdk/pull/1103))
+
+### Other
+
+- make async-trait optional ([#1119](https://github.com/modelcontextprotocol/rust-sdk/pull/1119))
+
 ## [3.1.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.0.1...rmcp-v3.1.0) - 2026-07-31
 
 ### Added

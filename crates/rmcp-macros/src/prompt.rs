@@ -133,7 +133,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
             if let Some(receiver) = fn_item.sig.receiver()
-                && let Some((_, receiver_lt)) = receiver.reference.as_ref()
+                && let syn::ReceiverKind::Reference(_, receiver_lt, _) = &receiver.kind
             {
                 if let Some(receiver_lt) = receiver_lt {
                     lt = quote! { #receiver_lt };
@@ -256,6 +256,20 @@ mod test {
         } else {
             assert!(result_str.contains("+ Send +"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_async_prompt_preserves_receiver_lifetime() -> syn::Result<()> {
+        let attr = quote! {};
+        let input = quote! {
+            async fn test_prompt_with_lifetime<'a>(&'a self) -> String {
+                "ok".to_string()
+            }
+        };
+        let result = prompt(attr, input)?;
+
+        assert!(result.to_string().contains("+ 'a"));
         Ok(())
     }
 
