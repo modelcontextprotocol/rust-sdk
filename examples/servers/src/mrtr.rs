@@ -38,12 +38,24 @@ use rmcp::{
     model::*,
     service::{RequestContext, RoleClient, RoleServer},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// A stable, high-entropy secret. In a real deployment, load this from your
 /// secret manager and keep it out of clients' reach. It must stay constant for
 /// the lifetime of any in-flight MRTR exchange.
 const REQUEST_STATE_KEY: &[u8] = b"example-request-state-signing-key-32b!";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WeatherRequestState {
+    awaiting: WeatherInput,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WeatherInput {
+    City,
+}
 
 /// A server that needs a city name before it can answer a weather query.
 #[derive(Clone)]
@@ -57,6 +69,47 @@ impl Default for WeatherServer {
             codec: RequestStateCodec::new(REQUEST_STATE_KEY),
         }
     }
+}
+
+impl WeatherServer {
+    fn open_request_state(&self, sealed: &str) -> Result<WeatherRequestState, ErrorData> {
+        self.codec
+            .open_json(sealed)
+            .map_err(|_| ErrorData::invalid_params("tampered or unknown request state", None))
+    }
+}
+
+fn finish_weather_request(
+    input_responses: Option<&InputResponses>,
+) -> Result<CallToolResult, ErrorData> {
+    let response = input_responses
+        .and_then(|responses| responses.get("city"))
+        .ok_or_else(|| ErrorData::invalid_params("missing city elicitation response", None))?;
+    let response = ElicitResult::deserialize(response)
+        .map_err(|_| ErrorData::invalid_params("invalid city elicitation response", None))?;
+
+    let message = match response.action {
+        ElicitationAction::Accept => {
+            let city = response
+                .content
+                .as_ref()
+                .and_then(|content| content["city"].as_str())
+                .ok_or_else(|| {
+                    ErrorData::invalid_params("accepted elicitation did not include a city", None)
+                })?;
+            format!("It is sunny in {city}.")
+        }
+        ElicitationAction::Decline => "I cannot look up the weather without a city.".into(),
+        ElicitationAction::Cancel => "Weather lookup cancelled.".into(),
+        _ => {
+            return Err(ErrorData::invalid_params(
+                "unsupported elicitation action",
+                None,
+            ));
+        }
+    };
+
+    Ok(CallToolResult::success(vec![ContentBlock::text(message)]))
 }
 
 impl ServerHandler for WeatherServer {
@@ -78,7 +131,9 @@ impl ServerHandler for WeatherServer {
             None => {
                 let sealed = self
                     .codec
-                    .seal_json(&json!({ "awaiting": "city" }))
+                    .seal_json(&WeatherRequestState {
+                        awaiting: WeatherInput::City,
+                    })
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
                 let mut input_requests = InputRequests::new();
@@ -103,21 +158,11 @@ impl ServerHandler for WeatherServer {
             // Retry round: verify the echoed state before trusting it, read the
             // elicited city, and return the final result.
             Some(sealed) => {
-                let _state: serde_json::Value = self.codec.open_json(&sealed).map_err(|_| {
-                    ErrorData::invalid_params("tampered or unknown request state", None)
-                })?;
-
-                let city = request
-                    .input_responses
-                    .as_ref()
-                    .and_then(|r| r.get("city"))
-                    .and_then(|v| v["content"]["city"].as_str())
-                    .unwrap_or("your area");
-
-                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                    "It is sunny in {city}."
-                ))])
-                .into())
+                let state = self.open_request_state(&sealed)?;
+                match state.awaiting {
+                    WeatherInput::City => finish_weather_request(request.input_responses.as_ref())
+                        .map(CallToolResponse::from),
+                }
             }
         }
     }
@@ -196,4 +241,92 @@ async fn main() -> anyhow::Result<()> {
 
     client.cancel().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input_responses(response: ElicitResult) -> InputResponses {
+        [("city".into(), serde_json::to_value(response).unwrap())].into()
+    }
+
+    #[test]
+    fn finish_weather_request_uses_city_when_elicitation_is_accepted() {
+        let responses = input_responses(
+            ElicitResult::new(ElicitationAction::Accept).with_content(json!({ "city": "Paris" })),
+        );
+
+        let result = finish_weather_request(Some(&responses)).unwrap();
+
+        assert_eq!(
+            result.content[0].as_text().unwrap().text,
+            "It is sunny in Paris."
+        );
+    }
+
+    #[test]
+    fn finish_weather_request_ignores_content_when_elicitation_is_declined() {
+        let responses = input_responses(
+            ElicitResult::new(ElicitationAction::Decline).with_content(json!({ "city": "Paris" })),
+        );
+
+        let result = finish_weather_request(Some(&responses)).unwrap();
+
+        assert_eq!(
+            result.content[0].as_text().unwrap().text,
+            "I cannot look up the weather without a city."
+        );
+    }
+
+    #[test]
+    fn finish_weather_request_stops_lookup_when_elicitation_is_cancelled() {
+        let responses = input_responses(ElicitResult::new(ElicitationAction::Cancel));
+
+        let result = finish_weather_request(Some(&responses)).unwrap();
+
+        assert_eq!(
+            result.content[0].as_text().unwrap().text,
+            "Weather lookup cancelled."
+        );
+    }
+
+    #[test]
+    fn finish_weather_request_rejects_accepted_elicitation_without_city() {
+        let responses =
+            input_responses(ElicitResult::new(ElicitationAction::Accept).with_content(json!({})));
+
+        let error = finish_weather_request(Some(&responses)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorData::invalid_params("accepted elicitation did not include a city", None)
+        );
+    }
+
+    #[test]
+    fn finish_weather_request_rejects_missing_city_response() {
+        let error = finish_weather_request(None).unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorData::invalid_params("missing city elicitation response", None)
+        );
+    }
+
+    #[test]
+    fn open_request_state_rejects_unknown_phase() {
+        let server = WeatherServer::default();
+        let sealed = server
+            .codec
+            .seal_json(&json!({ "awaiting": "country" }))
+            .unwrap();
+
+        let error = server.open_request_state(&sealed).unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorData::invalid_params("tampered or unknown request state", None)
+        );
+    }
 }
