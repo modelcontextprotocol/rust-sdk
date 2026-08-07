@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.1.1...rmcp-v3.1.2) - 2026-08-07
+
+### Fixed
+
+- *(auth)* map 401/403 challenges on the SSE GET stream ([#1152](https://github.com/modelcontextprotocol/rust-sdk/pull/1152))
+- *(sse)* loop instead of recursing when skipping SSE events ([#1146](https://github.com/modelcontextprotocol/rust-sdk/pull/1146))
+- *(auth)* preserve issuer trailing slash during discovery ([#1145](https://github.com/modelcontextprotocol/rust-sdk/pull/1145))
+
 ## [3.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.1.0...rmcp-v3.1.1) - 2026-08-05
 
 ### Fixed
