@@ -16,8 +16,9 @@
 //!     .build();
 //! ```
 
-use std::{borrow::Cow, collections::BTreeMap, marker::PhantomData};
+use std::{borrow::Cow, marker::PhantomData};
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{const_string, model::ConstString};
@@ -1123,7 +1124,7 @@ pub struct ElicitationSchema {
     pub title: Option<Cow<'static, str>>,
 
     /// Property definitions (must be primitive types)
-    pub properties: BTreeMap<String, PrimitiveSchemaDefinition>,
+    pub properties: IndexMap<String, PrimitiveSchemaDefinition>,
 
     /// List of required property names
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1136,7 +1137,7 @@ pub struct ElicitationSchema {
 
 impl ElicitationSchema {
     /// Create a new elicitation schema with the given properties
-    pub fn new(properties: BTreeMap<String, PrimitiveSchemaDefinition>) -> Self {
+    pub fn new(properties: IndexMap<String, PrimitiveSchemaDefinition>) -> Self {
         Self {
             type_: ObjectTypeConst,
             title: None,
@@ -1259,7 +1260,7 @@ impl ElicitationSchema {
 #[derive(Debug, Default)]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct ElicitationSchemaBuilder {
-    pub properties: BTreeMap<String, PrimitiveSchemaDefinition>,
+    pub properties: IndexMap<String, PrimitiveSchemaDefinition>,
     pub required: Vec<String>,
     pub title: Option<Cow<'static, str>>,
     pub description: Option<Cow<'static, str>>,
@@ -1821,6 +1822,28 @@ mod tests {
             output["properties"]["choice"]["enumNames"],
             serde_json::json!(["Option One", "Option Two", "Option Three"]),
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_elicitation_schema_roundtrip_preserves_property_order() -> anyhow::Result<()> {
+        let input = r#"{"type":"object","properties":{"firstName":{"type":"string"},"lastName":{"type":"string"},"email":{"type":"string"}}}"#;
+        let schema: ElicitationSchema = serde_json::from_str(input)?;
+
+        assert_eq!(
+            schema
+                .properties
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["firstName", "lastName", "email"],
+        );
+
+        let output = serde_json::to_string(&schema)?;
+        let first_name = output.find("firstName").unwrap();
+        let last_name = output.find("lastName").unwrap();
+        let email = output.find("email").unwrap();
+        assert!(first_name < last_name && last_name < email);
         Ok(())
     }
 
