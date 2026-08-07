@@ -1439,7 +1439,7 @@ impl AuthorizationManager {
             });
         }
 
-        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
+        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url, None).await? {
             return Ok(AuthorizationMetadataResolution {
                 metadata,
                 source: AuthorizationMetadataSource::AuthorizationServerMetadata,
@@ -2298,9 +2298,13 @@ impl AuthorizationManager {
     async fn try_discover_oauth_server(
         &self,
         base_url: &Url,
+        expected_issuer: Option<&str>,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         for discovery_url in Self::generate_discovery_urls(base_url) {
-            if let Some(metadata) = self.fetch_authorization_metadata(&discovery_url).await? {
+            if let Some(metadata) = self
+                .fetch_authorization_metadata(&discovery_url, expected_issuer)
+                .await?
+            {
                 return Ok(Some(metadata));
             }
         }
@@ -2310,6 +2314,7 @@ impl AuthorizationManager {
     async fn fetch_authorization_metadata(
         &self,
         discovery_url: &Url,
+        expected_issuer: Option<&str>,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         debug!("discovery url: {:?}", discovery_url);
         let response = self
@@ -2324,7 +2329,11 @@ impl AuthorizationManager {
 
         match serde_json::from_slice::<AuthorizationMetadata>(response.body()) {
             Ok(metadata) => {
-                self.validate_authorization_metadata_issuer(discovery_url, &metadata)?;
+                self.validate_authorization_metadata_issuer(
+                    discovery_url,
+                    expected_issuer,
+                    &metadata,
+                )?;
                 Ok(Some(metadata))
             }
             Err(err) => {
@@ -2388,11 +2397,13 @@ impl AuthorizationManager {
     fn validate_authorization_metadata_issuer(
         &self,
         discovery_url: &Url,
+        expected_issuer: Option<&str>,
         metadata: &AuthorizationMetadata,
     ) -> Result<(), AuthError> {
-        let Some(expected_issuer) =
-            Self::expected_issuer_for_authorization_metadata_url(discovery_url)
-        else {
+        let expected_issuer = expected_issuer
+            .map(str::to_owned)
+            .or_else(|| Self::expected_issuer_for_authorization_metadata_url(discovery_url));
+        let Some(expected_issuer) = expected_issuer else {
             return Ok(());
         };
         let Some(received_issuer) = metadata.issuer.as_deref() else {
@@ -2477,13 +2488,21 @@ impl AuthorizationManager {
             }
 
             if candidate_url.path().contains("/.well-known/") {
-                if let Some(metadata) = self.fetch_authorization_metadata(&candidate_url).await? {
+                if let Some(metadata) = self
+                    .fetch_authorization_metadata(&candidate_url, None)
+                    .await?
+                {
                     return Ok(Some(metadata));
                 }
                 continue;
             }
 
-            if let Some(metadata) = self.try_discover_oauth_server(&candidate_url).await? {
+            // Discovery URL construction removes a non-root trailing slash. Keep the issuer
+            // advertised by protected resource metadata for the exact RFC 8414 comparison.
+            if let Some(metadata) = self
+                .try_discover_oauth_server(&candidate_url, Some(candidate_url.as_str()))
+                .await?
+            {
                 return Ok(Some(metadata));
             }
         }
@@ -4318,6 +4337,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn protected_resource_metadata_preserves_non_root_issuer_trailing_slash() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1/"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1/"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com/tenant1/",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
+
+        assert_eq!(
+            (
+                metadata.issuer.as_deref(),
+                client.requests().last().map(|request| request.uri.as_str()),
+            ),
+            (
+                Some("https://auth.example.com/tenant1/"),
+                Some("https://auth.example.com/.well-known/oauth-authorization-server/tenant1"),
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn authorization_metadata_rejects_mismatched_issuer() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             empty_response(401),
@@ -4382,7 +4449,7 @@ mod tests {
             .unwrap();
 
         manager
-            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
             .unwrap();
     }
 
@@ -4414,7 +4481,7 @@ mod tests {
             .unwrap();
 
         manager
-            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
             .unwrap();
     }
 
@@ -4436,7 +4503,7 @@ mod tests {
         manager.set_allow_missing_issuer(true);
 
         manager
-            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
             .unwrap();
     }
 
@@ -4456,7 +4523,7 @@ mod tests {
             .unwrap();
 
         let error = manager
-            .validate_authorization_metadata_issuer(&discovery_url, &metadata)
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
             .unwrap_err();
 
         assert!(
