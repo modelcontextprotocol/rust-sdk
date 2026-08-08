@@ -310,8 +310,8 @@ impl SqlQueryServer {
 
 #[prompt_handler]
 impl ServerHandler for SqlQueryServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()

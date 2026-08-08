@@ -114,8 +114,8 @@ impl MacroMrtrServer {
 
 #[tool_handler]
 impl ServerHandler for MacroMrtrServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> InitializeResult {
+        let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info
     }
@@ -221,8 +221,8 @@ impl MrtrServer {
 }
 
 impl ServerHandler for MrtrServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        let mut info = InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -328,16 +328,16 @@ impl ClientHandler for MrtrClient {
 // Harness
 // =============================================================================
 
-fn client_info(protocol_version: ProtocolVersion) -> ClientInfo {
-    ClientInfo::new(
+fn client_info(protocol_version: ProtocolVersion) -> InitializeRequestParams {
+    InitializeRequestParams::new(
         ClientCapabilities::builder().enable_elicitation().build(),
         Implementation::new("mrtr-test-client", "0.0.0"),
     )
     .with_protocol_version(protocol_version)
 }
 
-fn server_info(protocol_version: ProtocolVersion) -> ServerInfo {
-    let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+fn server_info(protocol_version: ProtocolVersion) -> InitializeResult {
+    let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
     info.protocol_version = protocol_version;
     info
 }
@@ -605,8 +605,9 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
     struct SealingServer;
 
     impl ServerHandler for SealingServer {
-        fn get_info(&self) -> ServerInfo {
-            let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        fn get_info(&self) -> InitializeResult {
+            let mut info =
+                InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
             info.protocol_version = ProtocolVersion::V_2026_07_28;
             info
         }

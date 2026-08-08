@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use rmcp::{
     ClientHandler, ErrorData, RoleServer, ServerHandler, ServiceExt,
-    model::{ClientInfo, InitializeRequestParams, InitializeResult, ProtocolVersion, ServerInfo},
+    model::{InitializeRequestParams, InitializeResult, ProtocolVersion},
     service::RequestContext,
 };
 
@@ -16,8 +16,8 @@ use rmcp::{
 struct EchoServer;
 
 impl ServerHandler for EchoServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default()
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::default()
     }
 }
 
@@ -34,8 +34,8 @@ const NARROWED_VERSIONS: &[ProtocolVersion] = &[
 struct NarrowedServer;
 
 impl ServerHandler for NarrowedServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default()
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::default()
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -50,8 +50,8 @@ impl ServerHandler for NarrowedServer {
 struct NarrowedOverridingServer;
 
 impl ServerHandler for NarrowedOverridingServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::default()
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::default()
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -73,8 +73,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }
