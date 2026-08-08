@@ -589,7 +589,8 @@ pub enum ClientLifecycleMode {
     Discover {
         preferred_versions: Vec<ProtocolVersion>,
     },
-    /// Probe with `server/discover`, falling back only when the peer proves it is legacy.
+    /// Probe with `server/discover`, falling back to legacy initialization on failures that do
+    /// not identify a modern server.
     Auto {
         preferred_versions: Vec<ProtocolVersion>,
         legacy_version: Option<ProtocolVersion>,
@@ -739,9 +740,17 @@ where
             .await;
             match discover_result {
                 Ok(()) => {}
-                Err(ClientInitializeError::JsonRpcError(error))
-                    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
-                {
+                // `UnsupportedProtocolVersionError` is handled by `discover_startup`, which
+                // retries with an advertised compatible version. Reaching this point with no
+                // compatible version therefore positively identifies a modern server and must
+                // not trigger the legacy handshake.
+                Err(error @ ClientInitializeError::NoCompatibleProtocolVersion { .. }) => {
+                    return Err(error);
+                }
+                // On stdio, legacy servers may reject an unknown pre-initialize request with
+                // any implementation-defined error (or not respond at all). Treat every
+                // failure not recognized as modern version negotiation as a legacy peer.
+                Err(_) => {
                     let mut legacy_info = client_info;
                     if let Some(version) = legacy_version {
                         legacy_info.protocol_version = version;
@@ -749,7 +758,6 @@ where
                     legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
                         .await?;
                 }
-                Err(error) => return Err(error),
             }
         }
     }
