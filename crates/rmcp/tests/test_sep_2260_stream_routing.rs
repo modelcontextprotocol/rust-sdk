@@ -2,9 +2,10 @@
 //! POST's SSE stream, never the standalone GET stream.
 #![cfg(not(feature = "local"))]
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
+use indexmap::IndexMap;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -38,7 +39,7 @@ impl ServerHandler for ElicitingServer {
             .create_elicitation(ElicitRequestParams::FormElicitationParams {
                 meta: None,
                 message: "need input".to_string(),
-                requested_schema: ElicitationSchema::new(BTreeMap::new()),
+                requested_schema: ElicitationSchema::new(IndexMap::new()),
             })
             .await;
         Ok(CallToolResult::success(vec![ContentBlock::text("done")]).into())
