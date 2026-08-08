@@ -1082,7 +1082,18 @@ impl InitializeResult {
     }
 }
 
+/// Full server initialize payload (`InitializeResult`).
+///
+/// Prefer [`InitializeResult`]. The name collides with the protocol's
+/// `serverInfo` field, which is only the [`Implementation`] identity (#1082).
+#[deprecated(note = "use `InitializeResult` instead")]
 pub type ServerInfo = InitializeResult;
+
+/// Full client initialize params (`InitializeRequestParams`).
+///
+/// Prefer [`InitializeRequestParams`]. The name collides with the protocol's
+/// `clientInfo` field, which is only the [`Implementation`] identity (#1082).
+#[deprecated(note = "use `InitializeRequestParams` instead")]
 pub type ClientInfo = InitializeRequestParams;
 
 /// Information negotiated about a server peer.
@@ -1245,9 +1256,9 @@ impl DiscoverResult {
     /// Create a discovery result from the server's initialization information.
     pub fn from_server_info(
         supported_versions: Vec<ProtocolVersion>,
-        server_info: ServerInfo,
+        server_info: InitializeResult,
     ) -> Self {
-        let ServerInfo {
+        let InitializeResult {
             capabilities,
             server_info,
             instructions,
@@ -1295,9 +1306,9 @@ impl ServerPeerInfo {
 }
 
 #[allow(clippy::derivable_impls)]
-impl Default for ServerInfo {
+impl Default for InitializeResult {
     fn default() -> Self {
-        ServerInfo {
+        InitializeResult {
             protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::default(),
             server_info: Implementation::from_build_env(),
@@ -1308,9 +1319,9 @@ impl Default for ServerInfo {
 }
 
 #[allow(clippy::derivable_impls)]
-impl Default for ClientInfo {
+impl Default for InitializeRequestParams {
     fn default() -> Self {
-        ClientInfo {
+        InitializeRequestParams {
             meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),

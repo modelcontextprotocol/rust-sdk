@@ -10,7 +10,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolRequestParams, ClientInfo, ServerCapabilities, ServerInfo},
+    model::{CallToolRequestParams, InitializeRequestParams, InitializeResult, ServerCapabilities},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -287,8 +287,8 @@ fn test_optional_field_schema_generation_via_macro() {
 struct DummyClientHandler {}
 
 impl ClientHandler for DummyClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::default()
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::default()
     }
 }
 
@@ -549,8 +549,8 @@ impl ManualInfoServer {
 
 #[tool_handler]
 impl ServerHandler for ManualInfoServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

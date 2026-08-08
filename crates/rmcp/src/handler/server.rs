@@ -550,8 +550,8 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::default()
+        fn get_info(&self) -> InitializeResult {
+            InitializeResult::default()
         }
 
         /// SEP-2663 `tasks/get`: return the current [`DetailedTask`] state.
@@ -782,7 +782,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_custom_notification(notification, context)
             }
 
-            fn get_info(&self) -> ServerInfo {
+            fn get_info(&self) -> InitializeResult {
                 (**self).get_info()
             }
 

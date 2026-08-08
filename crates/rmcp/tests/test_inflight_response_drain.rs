@@ -14,7 +14,7 @@ use std::{
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolRequestParams, ClientInfo, ServerCapabilities, ServerInfo},
+    model::{CallToolRequestParams, InitializeRequestParams, InitializeResult, ServerCapabilities},
     service::QuitReason,
     tool, tool_handler, tool_router,
 };
@@ -55,8 +55,8 @@ impl SlowToolServer {
 
 #[tool_handler]
 impl ServerHandler for SlowToolServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 }
 
@@ -64,8 +64,8 @@ impl ServerHandler for SlowToolServer {
 struct DummyClientHandler;
 
 impl rmcp::ClientHandler for DummyClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::default()
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::default()
     }
 }
 
