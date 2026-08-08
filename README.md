@@ -99,10 +99,10 @@ Use [`ClientServiceExt::serve_with_lifecycle`](crates/rmcp/src/service/client.rs
 select another lifecycle explicitly:
 
 ```rust, ignore
-use rmcp::{ClientInfo, ClientLifecycleMode, ClientServiceExt, ProtocolVersion};
+use rmcp::{ClientLifecycleMode, ClientServiceExt, InitializeRequestParams, ProtocolVersion};
 
 // Start directly with server/discover and include client metadata on every request.
-let client = ClientInfo::default()
+let client = InitializeRequestParams::default()
     .serve_with_lifecycle(
         transport,
         ClientLifecycleMode::Discover {
@@ -113,7 +113,7 @@ let client = ClientInfo::default()
 
 // Or probe the discover lifecycle and fall back when a legacy server reports
 // that server/discover is not implemented.
-let client = ClientInfo::default()
+let client = InitializeRequestParams::default()
     .serve_with_lifecycle(
         transport,
         ClientLifecycleMode::Auto {
@@ -369,8 +369,8 @@ use serde_json::json;
 struct MyServer;
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_resources()
                 .build(),
@@ -582,8 +582,8 @@ impl MyServer {
 
 #[prompt_handler]
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_prompts().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_prompts().build())
     }
 }
 ```
@@ -934,8 +934,8 @@ Enable the logging capability, handle level changes from the client, and send lo
 use rmcp::{ServerHandler, model::*, service::RequestContext};
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_logging()
                 .build(),
@@ -1007,8 +1007,8 @@ Enable the completions capability and implement the `complete()` handler. Use `r
 use rmcp::{ErrorData as McpError, ServerHandler, model::*, service::RequestContext, RoleServer};
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()
@@ -1253,8 +1253,8 @@ use rmcp::{
 };
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -1574,7 +1574,7 @@ use rmcp::transport::StreamableHttpClientTransport;
 
 // Defaults are stateless-friendly.
 let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
-let client = ClientInfo::default().serve(transport).await?;
+let client = InitializeRequestParams::default().serve(transport).await?;
 ```
 
 **Example:** [`examples/servers/src/counter_streamhttp.rs`](examples/servers/src/counter_streamhttp.rs) (server), [`examples/clients/src/streamable_http.rs`](examples/clients/src/streamable_http.rs) (client)
@@ -1628,7 +1628,7 @@ server example). The client transport connects with a single URI:
 use rmcp::transport::StreamableHttpClientTransport;
 
 let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
-let client = ClientInfo::default().serve(transport).await?;
+let client = InitializeRequestParams::default().serve(transport).await?;
 ```
 
 #### Server-Sent Events (SSE)
@@ -1714,10 +1714,10 @@ knows what the other supports. Declare yours with the `ServerCapabilities`
 builder in `get_info()`:
 
 ```rust,ignore
-use rmcp::model::{ServerCapabilities, ServerInfo};
+use rmcp::model::{InitializeResult, ServerCapabilities};
 
-fn get_info(&self) -> ServerInfo {
-    ServerInfo::new(
+fn get_info(&self) -> InitializeResult {
+    InitializeResult::new(
         ServerCapabilities::builder()
             .enable_tools()
             .enable_prompts()

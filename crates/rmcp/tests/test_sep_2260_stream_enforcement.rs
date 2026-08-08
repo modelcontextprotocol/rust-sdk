@@ -26,8 +26,9 @@ use http::{HeaderName, HeaderValue};
 use rmcp::{
     ClientHandler,
     model::{
-        ClientInfo, ClientJsonRpcMessage, CreateMessageRequestParams, CreateMessageResult,
-        ProtocolVersion, SamplingMessage, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
+        ClientJsonRpcMessage, CreateMessageRequestParams, CreateMessageResult,
+        InitializeRequestParams, InitializeResult, ProtocolVersion, SamplingMessage,
+        ServerCapabilities, ServerJsonRpcMessage,
     },
     service::{ClientLifecycleMode, RequestContext, RoleClient, serve_client_with_lifecycle},
     transport::streamable_http_client::{
@@ -80,7 +81,7 @@ impl StreamableHttpClient for ScriptedServer {
         // Receiver drop is normal at test teardown; never panic in the transport task.
         let _ = self.posted.send(value.clone());
         if value["method"] == "initialize" {
-            let mut info = ServerInfo::new(ServerCapabilities::default());
+            let mut info = InitializeResult::new(ServerCapabilities::default());
             info.protocol_version = ProtocolVersion::V_2026_07_28;
             let response = ServerJsonRpcMessage::response(
                 rmcp::model::ServerResult::InitializeResult(info),
@@ -152,8 +153,8 @@ impl ClientHandler for SamplingClient {
         ))
     }
 
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::default()
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::default()
     }
 }
 

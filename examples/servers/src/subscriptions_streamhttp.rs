@@ -2,7 +2,7 @@ use std::{borrow::Cow, time::Duration};
 
 use rmcp::{
     ErrorData, ServerHandler,
-    model::{ProtocolVersion, ServerCapabilities, ServerInfo, SubscriptionFilter},
+    model::{InitializeResult, ProtocolVersion, ServerCapabilities, SubscriptionFilter},
     service::SubscriptionContext,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -18,8 +18,8 @@ impl ServerHandler for SubscriptionServer {
         Cow::Borrowed(&[ProtocolVersion::V_2026_07_28])
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()

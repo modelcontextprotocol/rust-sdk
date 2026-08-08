@@ -15,9 +15,9 @@ use http::{HeaderName, HeaderValue};
 use rmcp::{
     ServiceError, ServiceExt,
     model::{
-        CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, ClientRequest, ErrorCode,
-        ErrorData, InitializeResult, PingRequest, ProtocolVersion, RequestId, ServerCapabilities,
-        ServerJsonRpcMessage, ServerResult,
+        CallToolRequestParams, ClientJsonRpcMessage, ClientRequest, ErrorCode, ErrorData,
+        InitializeRequestParams, InitializeResult, PingRequest, ProtocolVersion, RequestId,
+        ServerCapabilities, ServerJsonRpcMessage, ServerResult,
     },
     transport::{
         StreamableHttpClientTransport,
@@ -205,7 +205,7 @@ async fn test_reinitialization_completes_accepted_sse_request_instead_of_hanging
         mock_client,
         StreamableHttpClientTransportConfig::with_uri("mock://mcp"),
     );
-    let mut client = ClientInfo::default().serve(transport).await?;
+    let mut client = InitializeRequestParams::default().serve(transport).await?;
 
     let peer = client.peer().clone();
     let pending_call = tokio::spawn(async move {
