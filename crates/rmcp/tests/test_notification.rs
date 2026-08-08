@@ -5,8 +5,8 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
-        ClientNotification, CustomNotification, ResourceUpdatedNotificationParam,
-        ServerCapabilities, ServerInfo, ServerNotification, SubscribeRequestParams,
+        ClientNotification, CustomNotification, InitializeResult, ResourceUpdatedNotificationParam,
+        ServerCapabilities, ServerNotification, SubscribeRequestParams,
     },
 };
 use serde_json::json;
@@ -16,8 +16,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 struct Server {}
 
 impl ServerHandler for Server {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()

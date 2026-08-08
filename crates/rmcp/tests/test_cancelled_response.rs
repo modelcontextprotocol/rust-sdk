@@ -8,8 +8,8 @@ use std::{collections::BTreeSet, process::Stdio, time::Duration};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
-        ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InitializeResult,
+        ServerCapabilities,
     },
     service::RequestContext,
 };
@@ -91,8 +91,8 @@ async fn cancelled_request_receives_no_response() -> anyhow::Result<()> {
 struct WaitForCancelServer;
 
 impl ServerHandler for WaitForCancelServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(

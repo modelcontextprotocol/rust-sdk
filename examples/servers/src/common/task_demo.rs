@@ -151,8 +151,8 @@ impl ServerHandler for TaskDemo {
         self.tasks.cancel_task(&request.task_id)
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tasks()

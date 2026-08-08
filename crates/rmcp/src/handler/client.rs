@@ -274,8 +274,8 @@ macro_rules! client_handler_methods {
             std::future::ready(())
         }
 
-        fn get_info(&self) -> ClientInfo {
-            ClientInfo::default()
+        fn get_info(&self) -> InitializeRequestParams {
+            InitializeRequestParams::default()
         }
     };
 }
@@ -296,8 +296,8 @@ pub trait ClientHandler: Sized + 'static {
 impl ClientHandler for () {}
 
 /// Do nothing, with a specific client info.
-impl ClientHandler for ClientInfo {
-    fn get_info(&self) -> ClientInfo {
+impl ClientHandler for InitializeRequestParams {
+    fn get_info(&self) -> InitializeRequestParams {
         self.clone()
     }
 }
@@ -422,7 +422,7 @@ macro_rules! impl_client_handler_for_wrapper {
                 (**self).on_custom_notification(notification, context)
             }
 
-            fn get_info(&self) -> ClientInfo {
+            fn get_info(&self) -> InitializeRequestParams {
                 (**self).get_info()
             }
         }

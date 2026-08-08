@@ -113,8 +113,8 @@ fn finish_weather_request(
 }
 
 impl ServerHandler for WeatherServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> InitializeResult {
+        let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
         // MRTR requires 2026-07-28 or newer.
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info
@@ -173,8 +173,8 @@ impl ServerHandler for WeatherServer {
 struct InteractiveClient;
 
 impl ClientHandler for InteractiveClient {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::new(
             ClientCapabilities::builder().enable_elicitation().build(),
             Implementation::new("mrtr-example-client", env!("CARGO_PKG_VERSION")),
         )

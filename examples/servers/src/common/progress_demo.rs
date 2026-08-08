@@ -131,8 +131,8 @@ impl ProgressDemo {
 
 #[tool_handler]
 impl ServerHandler for ProgressDemo {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::from_build_env())
             .with_instructions(

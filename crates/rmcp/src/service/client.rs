@@ -13,13 +13,13 @@ use crate::{
     model::{
         ArgumentInfo, CacheScope, CallToolRequest, CallToolRequestParams, CallToolResponse,
         CallToolResult, CancelTaskParams, CancelTaskRequest, CancelledNotification,
-        CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
-        ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
-        CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
-        DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
+        CancelledNotificationParam, ClientJsonRpcMessage, ClientNotification, ClientRequest,
+        ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult, CompletionContext,
+        CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest, DiscoverRequestParams,
+        DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskRequest,
-        GetTaskResult, InitializeRequest, InitializedNotification, InputRequest,
-        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
+        GetTaskResult, InitializeRequest, InitializeRequestParams, InitializedNotification,
+        InputRequest, InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
         ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
         ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
         NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
@@ -266,7 +266,7 @@ impl ServiceRole for RoleClient {
     type PeerReq = ServerRequest;
     type PeerResp = ServerResult;
     type PeerNot = ServerNotification;
-    type Info = ClientInfo;
+    type Info = InitializeRequestParams;
     type PeerInfo = ServerPeerInfo;
     type InitializeError = ClientInitializeError;
     const IS_CLIENT: bool = true;
@@ -870,7 +870,7 @@ async fn legacy_startup<S, T>(
     transport: &mut T,
     id_provider: &Arc<AtomicU32RequestIdProvider>,
     peer: &Peer<RoleClient>,
-    client_info: ClientInfo,
+    client_info: InitializeRequestParams,
 ) -> Result<(), ClientInitializeError>
 where
     S: Service<RoleClient>,
@@ -919,7 +919,7 @@ async fn discover_startup<S, T>(
     transport: &mut T,
     id_provider: &Arc<AtomicU32RequestIdProvider>,
     peer: &Peer<RoleClient>,
-    client_info: &ClientInfo,
+    client_info: &InitializeRequestParams,
     preferred_versions: Vec<ProtocolVersion>,
 ) -> Result<DiscoverOutcome, ClientInitializeError>
 where

@@ -10,9 +10,7 @@ use std::borrow::Cow;
 
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
-    model::{
-        InitializeRequestParams, InitializeResult, ProtocolVersion, ServerCapabilities, ServerInfo,
-    },
+    model::{InitializeRequestParams, InitializeResult, ProtocolVersion, ServerCapabilities},
     service::RequestContext,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -24,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 struct OverridingInitialize;
 
 impl ServerHandler for OverridingInitialize {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::default())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::default())
     }
 
     async fn initialize(
@@ -53,8 +51,8 @@ const HANDSHAKE_VERSIONS: &[ProtocolVersion] = &[
 struct NarrowedOverridingInitialize;
 
 impl ServerHandler for NarrowedOverridingInitialize {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::default())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::default())
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {

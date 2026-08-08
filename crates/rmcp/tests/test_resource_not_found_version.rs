@@ -8,8 +8,8 @@
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError,
     model::{
-        ClientInfo, ErrorCode, ErrorData, ProtocolVersion, ReadResourceRequestParams,
-        ReadResourceResponse, ServerInfo,
+        ErrorCode, ErrorData, InitializeRequestParams, InitializeResult, ProtocolVersion,
+        ReadResourceRequestParams, ReadResourceResponse,
     },
     service::{RequestContext, serve_directly},
 };
@@ -33,8 +33,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }
@@ -49,7 +49,7 @@ async fn not_found_code(client_version: ProtocolVersion) -> ErrorCode {
     let client_handler = VersionedClient {
         protocol_version: client_version.clone(),
     };
-    let mut server_peer_info = ServerInfo::default();
+    let mut server_peer_info = InitializeResult::default();
     server_peer_info.protocol_version = client_version;
 
     let server = serve_directly::<RoleServer, _, _, _, _>(

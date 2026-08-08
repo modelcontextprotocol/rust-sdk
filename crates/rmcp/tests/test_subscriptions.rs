@@ -18,8 +18,8 @@ use rmcp::{
     ClientHandler, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
         ClientNotification, ClientRequest, DiscoverResult, GetMeta, Implementation,
-        NotificationMetaObject, PromptListChangedNotification, ProtocolVersion, ServerCapabilities,
-        ServerInfo, ServerNotification, ServerResult, SubscriptionFilter,
+        InitializeResult, NotificationMetaObject, PromptListChangedNotification, ProtocolVersion,
+        ServerCapabilities, ServerNotification, ServerResult, SubscriptionFilter,
         SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
         SubscriptionsListenResult,
     },
@@ -44,8 +44,8 @@ impl ClientHandler for CountingClient {
 }
 
 impl ServerHandler for ToolsOnlyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -80,8 +80,8 @@ impl ServerHandler for ToolsOnlyServer {
 struct ToolsAndPromptsServer;
 
 impl ServerHandler for ToolsAndPromptsServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -120,8 +120,8 @@ impl ServerHandler for ToolsAndPromptsServer {
 struct ResourceSubscriptionServer;
 
 impl ServerHandler for ResourceSubscriptionServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()
@@ -182,8 +182,8 @@ impl ServerHandler for RemoteCancellationServer {
 struct FloodServer;
 
 impl ServerHandler for FloodServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -217,8 +217,8 @@ struct ClosedSinkServer {
 struct LeakyServer;
 
 impl ServerHandler for LeakyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -314,14 +314,14 @@ impl rmcp::service::Service<RoleServer> for MalformedAcknowledgmentServer {
         Ok(())
     }
 
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        ServerInfo::default()
+    fn get_info(&self) -> rmcp::model::InitializeResult {
+        InitializeResult::default()
     }
 }
 
 impl ServerHandler for ClosedSinkServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()

@@ -719,7 +719,7 @@ async fn test_server_rejects_unsupported_protocol_version() {
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
-        model::{ServerCapabilities, ServerInfo},
+        model::{InitializeResult, ServerCapabilities},
         transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         },
@@ -730,8 +730,8 @@ async fn test_server_rejects_unsupported_protocol_version() {
     struct TestHandler;
 
     impl ServerHandler for TestHandler {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().build())
+        fn get_info(&self) -> InitializeResult {
+            InitializeResult::new(ServerCapabilities::builder().build())
         }
     }
 
@@ -891,7 +891,7 @@ async fn test_server_validates_host_header_for_dns_rebinding_protection() {
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
-        model::{ServerCapabilities, ServerInfo},
+        model::{InitializeResult, ServerCapabilities},
         transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         },
@@ -902,8 +902,8 @@ async fn test_server_validates_host_header_for_dns_rebinding_protection() {
     struct TestHandler;
 
     impl ServerHandler for TestHandler {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().build())
+        fn get_info(&self) -> InitializeResult {
+            InitializeResult::new(ServerCapabilities::builder().build())
         }
     }
 
@@ -974,7 +974,7 @@ async fn test_server_validates_host_header_port_for_dns_rebinding_protection() {
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
-        model::{ServerCapabilities, ServerInfo},
+        model::{InitializeResult, ServerCapabilities},
         transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         },
@@ -985,8 +985,8 @@ async fn test_server_validates_host_header_port_for_dns_rebinding_protection() {
     struct TestHandler;
 
     impl ServerHandler for TestHandler {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().build())
+        fn get_info(&self) -> InitializeResult {
+            InitializeResult::new(ServerCapabilities::builder().build())
         }
     }
 
@@ -1045,7 +1045,7 @@ async fn test_server_falls_back_to_uri_authority_when_host_header_missing() {
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
-        model::{ServerCapabilities, ServerInfo},
+        model::{InitializeResult, ServerCapabilities},
         transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         },
@@ -1056,8 +1056,8 @@ async fn test_server_falls_back_to_uri_authority_when_host_header_missing() {
     struct TestHandler;
 
     impl ServerHandler for TestHandler {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().build())
+        fn get_info(&self) -> InitializeResult {
+            InitializeResult::new(ServerCapabilities::builder().build())
         }
     }
 
@@ -1131,7 +1131,7 @@ mod origin_validation {
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
-        model::{ServerCapabilities, ServerInfo},
+        model::{InitializeResult, ServerCapabilities},
         transport::streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         },
@@ -1142,8 +1142,8 @@ mod origin_validation {
     struct TestHandler;
 
     impl ServerHandler for TestHandler {
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::new(ServerCapabilities::builder().build())
+        fn get_info(&self) -> InitializeResult {
+            InitializeResult::new(ServerCapabilities::builder().build())
         }
     }
 

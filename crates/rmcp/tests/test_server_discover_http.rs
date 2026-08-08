@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use rmcp::{
     ServerHandler,
-    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    model::{Implementation, InitializeResult, ProtocolVersion, ServerCapabilities},
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -20,8 +20,8 @@ use tokio_util::sync::CancellationToken;
 struct DiscoveryServer;
 
 impl ServerHandler for DiscoveryServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("discovery-server", "1.0.0"))
             .with_instructions("Use the tools carefully")
     }
