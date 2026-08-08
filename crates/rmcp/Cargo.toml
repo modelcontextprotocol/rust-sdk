@@ -51,6 +51,7 @@ serde_json = "1.0"
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 futures = "0.3"
+indexmap = { version = "2", features = ["serde"] }
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
@@ -61,7 +62,7 @@ oauth2 = { version = "5.0", optional = true, default-features = false }
 jsonwebtoken = { version = "11", optional = true, features = ["aws_lc_rs"] }
 
 # for auto generate schema
-schemars = { version = "1.0", optional = true, features = ["chrono04"] }
+schemars = { version = "1.0", optional = true, features = ["chrono04", "indexmap2"] }
 
 # for image encoding
 base64 = { version = "0.23", optional = true }
