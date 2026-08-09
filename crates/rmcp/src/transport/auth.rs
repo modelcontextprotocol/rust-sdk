@@ -3682,7 +3682,7 @@ impl OAuthState {
             Err(AuthError::InternalError("Not in session state".to_string()))
         }
     }
-    /// covert to authorized http client
+    /// convert to authorized http client
     pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
         let placeholder = self.placeholder_state().await?;
         if let OAuthState::Authorized(manager) = std::mem::replace(self, placeholder) {
