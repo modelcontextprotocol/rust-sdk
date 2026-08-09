@@ -1086,6 +1086,14 @@ impl InitializeResult {
 ///
 /// Prefer [`InitializeResult`]. The name collides with the protocol's
 /// `serverInfo` field, which is only the [`Implementation`] identity (#1082).
+//
+// The signatures this crate publishes (`ServerHandler::get_info`,
+// `DiscoverResult::from_server_info`, and the `ClientInfo` equivalents below)
+// keep spelling the alias. It resolves to the same type, so the spelling makes
+// no difference to callers, but rustdoc records the name as written and the
+// public API check treats a respelling as a changed item. Moving those
+// signatures onto the canonical names is a documented API change and belongs in
+// the next major release.
 #[deprecated(note = "use `InitializeResult` instead")]
 pub type ServerInfo = InitializeResult;
 
@@ -1256,7 +1264,7 @@ impl DiscoverResult {
     /// Create a discovery result from the server's initialization information.
     pub fn from_server_info(
         supported_versions: Vec<ProtocolVersion>,
-        server_info: InitializeResult,
+        server_info: ServerInfo,
     ) -> Self {
         let InitializeResult {
             capabilities,
