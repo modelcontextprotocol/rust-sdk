@@ -18,7 +18,8 @@
 
 use std::{borrow::Cow, collections::BTreeMap, marker::PhantomData};
 
-use serde::{Deserialize, Serialize};
+use indexmap::IndexMap;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{const_string, model::ConstString};
 
@@ -1109,9 +1110,10 @@ impl EnumSchema {
 ///     .optional_bool("newsletter", false)
 ///     .build();
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", schemars(!into))]
+#[serde(rename_all = "camelCase", into = "ElicitationSchemaWire")]
 #[non_exhaustive]
 pub struct ElicitationSchema {
     /// Always "object" for elicitation schemas
@@ -1125,6 +1127,11 @@ pub struct ElicitationSchema {
     /// Property definitions (must be primitive types)
     pub properties: BTreeMap<String, PrimitiveSchemaDefinition>,
 
+    /// Property names in wire order. Schemas constructed from a `BTreeMap`
+    /// use the map's sorted key order.
+    #[serde(skip)]
+    pub property_order: Option<Vec<String>>,
+
     /// List of required property names
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<Vec<String>>,
@@ -1134,13 +1141,75 @@ pub struct ElicitationSchema {
     pub description: Option<Cow<'static, str>>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ElicitationSchemaWire {
+    #[serde(rename = "type")]
+    type_: ObjectTypeConst,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<Cow<'static, str>>,
+    properties: IndexMap<String, PrimitiveSchemaDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<Cow<'static, str>>,
+}
+
+impl From<ElicitationSchemaWire> for ElicitationSchema {
+    fn from(schema: ElicitationSchemaWire) -> Self {
+        Self {
+            type_: schema.type_,
+            title: schema.title,
+            property_order: Some(schema.properties.keys().cloned().collect()),
+            properties: schema.properties.into_iter().collect(),
+            required: schema.required,
+            description: schema.description,
+        }
+    }
+}
+
+impl From<ElicitationSchema> for ElicitationSchemaWire {
+    fn from(schema: ElicitationSchema) -> Self {
+        let mut remaining = schema.properties;
+        let mut properties = IndexMap::with_capacity(remaining.len());
+
+        if let Some(property_order) = schema.property_order {
+            for name in property_order {
+                if let Some(definition) = remaining.remove(&name) {
+                    properties.insert(name, definition);
+                }
+            }
+        }
+        properties.extend(remaining);
+
+        Self {
+            type_: schema.type_,
+            title: schema.title,
+            properties,
+            required: schema.required,
+            description: schema.description,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ElicitationSchema {
+    fn deserialize<__D>(__deserializer: __D) -> Result<Self, __D::Error>
+    where
+        __D: Deserializer<'de>,
+    {
+        ElicitationSchemaWire::deserialize(__deserializer).map(Into::into)
+    }
+}
+
 impl ElicitationSchema {
     /// Create a new elicitation schema with the given properties
     pub fn new(properties: BTreeMap<String, PrimitiveSchemaDefinition>) -> Self {
+        let property_order = Some(properties.keys().cloned().collect());
         Self {
             type_: ObjectTypeConst,
             title: None,
             properties,
+            property_order,
             required: None,
             description: None,
         }
@@ -1632,10 +1701,12 @@ impl ElicitationSchemaBuilder {
             }
         }
 
+        let property_order = Some(self.properties.keys().cloned().collect());
         Ok(ElicitationSchema {
             type_: ObjectTypeConst,
             title: self.title,
             properties: self.properties,
+            property_order,
             required: if self.required.is_empty() {
                 None
             } else {
@@ -1821,6 +1892,13 @@ mod tests {
             output["properties"]["choice"]["enumNames"],
             serde_json::json!(["Option One", "Option Two", "Option Three"]),
         );
+        let input = r#"{"type":"object","properties":{"firstName":{"type":"string"},"lastName":{"type":"string"},"email":{"type":"string"}}}"#;
+        let ordered: ElicitationSchema = serde_json::from_str(input)?;
+        assert_eq!(
+            ordered.property_order.as_ref().unwrap().join(","),
+            "firstName,lastName,email",
+        );
+        assert_eq!(serde_json::to_string(&ordered)?, input);
         Ok(())
     }
 
