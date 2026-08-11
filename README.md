@@ -1,4 +1,6 @@
 # RMCP
+
+[![MCP Toplist](https://mcptoplist.com/badge/github.com%2Fmodelcontextprotocol%2Frust-sdk.svg)](https://mcptoplist.com/server/github.com%2Fmodelcontextprotocol%2Frust-sdk)
 [![Crates.io Version](https://img.shields.io/crates/v/rmcp)](https://crates.io/crates/rmcp)
 [![docs.rs](https://img.shields.io/docsrs/rmcp)](https://docs.rs/rmcp/latest/rmcp)
 [![CI](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/modelcontextprotocol/rust-sdk/actions/workflows/ci.yml)
