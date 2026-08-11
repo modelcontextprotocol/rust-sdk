@@ -632,12 +632,15 @@ pub enum ClientLifecycleMode {
     Discover {
         preferred_versions: Vec<ProtocolVersion>,
     },
-    /// Probe with `server/discover`, falling back only when the peer proves it is legacy.
+    /// Probe with `server/discover`, falling back when the peer reports that it is legacy or does
+    /// not respond within 10 seconds.
     Auto {
         preferred_versions: Vec<ProtocolVersion>,
         legacy_version: Option<ProtocolVersion>,
     },
 }
+
+const DEFAULT_AUTO_DISCOVER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Client-specific lifecycle entry points.
 pub trait ClientServiceExt: Service<RoleClient> + Sized {
@@ -730,7 +733,13 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     tokio::select! {
-        result = serve_client_with_ct_inner(service, transport.into_transport(), lifecycle, ct.clone()) => { result }
+        result = serve_client_with_ct_inner(
+            service,
+            transport.into_transport(),
+            lifecycle,
+            ct.clone(),
+            DEFAULT_AUTO_DISCOVER_TIMEOUT,
+        ) => { result }
         _ = ct.cancelled() => {
             Err(ClientInitializeError::Cancelled)
         }
@@ -742,6 +751,7 @@ async fn serve_client_with_ct_inner<S, T>(
     transport: T,
     lifecycle: ClientLifecycleMode,
     ct: CancellationToken,
+    auto_discover_timeout: Duration,
 ) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
 where
     S: Service<RoleClient>,
@@ -776,18 +786,21 @@ where
             preferred_versions,
             legacy_version,
         } => {
-            match discover_startup(
-                &service,
-                &mut transport,
-                &id_provider,
-                &peer,
-                &client_info,
-                preferred_versions,
+            let discover_result = tokio::time::timeout(
+                auto_discover_timeout,
+                discover_startup(
+                    &service,
+                    &mut transport,
+                    &id_provider,
+                    &peer,
+                    &client_info,
+                    preferred_versions,
+                ),
             )
-            .await
-            {
-                Ok(DiscoverOutcome::Modern) => {}
-                Ok(DiscoverOutcome::Legacy(discover_error)) => {
+            .await;
+            match discover_result {
+                Ok(Ok(DiscoverOutcome::Modern)) => {}
+                Ok(Ok(DiscoverOutcome::Legacy(discover_error))) => {
                     let mut legacy_info = client_info;
                     if let Some(version) = legacy_version {
                         legacy_info.protocol_version = version;
@@ -802,7 +815,15 @@ where
                         });
                     }
                 }
-                Err(error) => return Err(error),
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    let mut legacy_info = client_info;
+                    if let Some(version) = legacy_version {
+                        legacy_info.protocol_version = version;
+                    }
+                    legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
+                        .await?;
+                }
             }
         }
     }
@@ -2171,6 +2192,74 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn auto_startup_falls_back_when_discover_is_ignored() {
+        use crate::model::{InitializeResult, ServerCapabilities};
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let (server_transport, client_transport) = tokio::io::duplex(4096);
+                let mut server =
+                    crate::transport::IntoTransport::<RoleServer, _, _>::into_transport(
+                        server_transport,
+                    );
+                let server_task = tokio::task::spawn_local(async move {
+                    let ClientJsonRpcMessage::Request(discover) =
+                        server.receive().await.expect("expected discover request")
+                    else {
+                        panic!("expected discover request");
+                    };
+                    assert!(matches!(
+                        discover.request,
+                        ClientRequest::DiscoverRequest(_)
+                    ));
+
+                    let ClientJsonRpcMessage::Request(initialize) =
+                        server.receive().await.expect("expected initialize request")
+                    else {
+                        panic!("expected initialize request");
+                    };
+                    assert!(matches!(
+                        initialize.request,
+                        ClientRequest::InitializeRequest(_)
+                    ));
+                    server
+                        .send(ServerJsonRpcMessage::response(
+                            ServerResult::InitializeResult(InitializeResult::new(
+                                ServerCapabilities::default(),
+                            )),
+                            initialize.id,
+                        ))
+                        .await
+                        .expect("send initialize response");
+                    assert!(matches!(
+                        server.receive().await,
+                        Some(ClientJsonRpcMessage::Notification(_))
+                    ));
+                });
+
+                let client_transport =
+                    crate::transport::IntoTransport::<RoleClient, _, _>::into_transport(
+                        client_transport,
+                    );
+                let client = serve_client_with_ct_inner(
+                    (),
+                    client_transport,
+                    ClientLifecycleMode::Auto {
+                        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+                    },
+                    CancellationToken::new(),
+                    Duration::from_millis(25),
+                )
+                .await
+                .expect("auto client should fall back after discover timeout");
+                client.cancel().await.expect("cancel client");
+                server_task.await.expect("server task");
+            })
+            .await;
+    }
 
     fn disconnected_peer() -> Peer<RoleClient> {
         let (peer, receiver) =
