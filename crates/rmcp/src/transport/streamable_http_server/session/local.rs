@@ -335,7 +335,14 @@ impl CachedTx {
             .as_deref()
             .unwrap_or_default()
             .parse::<EventId>()?;
-        let sync_index = index.saturating_sub(front_event_id.index);
+        if index < front_event_id.index {
+            return Err(SessionError::InvalidEventId);
+        }
+        // Last-Event-ID is the last event the client received, so resume only
+        // with events that follow it.
+        let sync_index = index
+            .saturating_sub(front_event_id.index)
+            .saturating_add(1);
         if sync_index > self.cache.len() {
             // invalid index
             return Err(SessionError::InvalidEventId);
@@ -638,8 +645,14 @@ impl LocalSessionWorker {
             OutboundChannel::RequestWise { id, close } => {
                 if let Some(request_wise) = self.tx_router.get_mut(&id) {
                     request_wise.tx.send(message).await?;
-                    if close && let Some(channel) = self.tx_router.remove(&id) {
-                        for resource in channel.resources {
+                    if close {
+                        let resources: Vec<_> = request_wise.resources.drain().collect();
+                        request_wise.completed_at = Some(Instant::now());
+                        // Retain the completed channel until TTL eviction so a
+                        // disconnected client can resume its final response.
+                        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
+                        request_wise.tx.tx = closed_tx;
+                        for resource in resources {
                             self.resource_router.remove(&resource);
                         }
                     }
@@ -1370,5 +1383,28 @@ mod sep2260_routing_tests {
 
         let channel = worker.resolve_outbound_channel(&roots_request(Some(originating_id)));
         assert!(matches!(channel, OutboundChannel::Common));
+    }
+
+    #[tokio::test]
+    async fn completed_request_channel_retains_cache_for_resume() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let request_id = RequestId::Number(7);
+        worker.register_resource(
+            ResourceKey::McpRequestId(request_id.clone()),
+            http_request_id,
+        );
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::error(
+                crate::model::ErrorData::internal_error("failed", None),
+                Some(request_id),
+            ))
+            .await
+            .unwrap();
+
+        assert!(worker.tx_router[&http_request_id].completed_at.is_some());
+        assert!(worker.tx_router[&http_request_id].resources.is_empty());
     }
 }
