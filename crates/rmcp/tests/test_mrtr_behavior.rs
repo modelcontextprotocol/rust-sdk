@@ -598,7 +598,10 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
 
     fn codec() -> &'static RequestStateCodec {
         static CODEC: OnceLock<RequestStateCodec> = OnceLock::new();
-        CODEC.get_or_init(|| RequestStateCodec::new(KEY))
+        CODEC.get_or_init(|| {
+            RequestStateCodec::try_new(KEY)
+                .expect("test request-state key meets the minimum length")
+        })
     }
 
     #[derive(Clone, Default)]

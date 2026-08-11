@@ -70,7 +70,8 @@ impl ConformanceServer {
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
             next_subscription: Arc::new(AtomicU64::new(0)),
             log_level: Arc::new(Mutex::new(LoggingLevel::Debug)),
-            request_state_codec: RequestStateCodec::new(REQUEST_STATE_KEY),
+            request_state_codec: RequestStateCodec::try_new(REQUEST_STATE_KEY)
+                .expect("conformance request-state key meets the minimum length"),
             tasks: TaskManager::new(),
         }
     }

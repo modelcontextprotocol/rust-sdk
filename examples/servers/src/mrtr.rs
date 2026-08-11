@@ -66,7 +66,8 @@ struct WeatherServer {
 impl Default for WeatherServer {
     fn default() -> Self {
         Self {
-            codec: RequestStateCodec::new(REQUEST_STATE_KEY),
+            codec: RequestStateCodec::try_new(REQUEST_STATE_KEY)
+                .expect("example request-state key meets the minimum length"),
         }
     }
 }

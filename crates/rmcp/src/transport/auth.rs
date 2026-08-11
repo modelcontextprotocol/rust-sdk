@@ -914,7 +914,7 @@ impl JwtSigningAlgorithm {
 /// This supports two authentication methods:
 /// - `ClientSecret`: credentials sent in the request body
 /// - `PrivateKeyJwt`: RFC 7523 signed JWT assertion (requires `auth-client-credentials-jwt` feature)
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum ClientCredentialsConfig {
     /// Client secret authentication (credentials in request body)
@@ -935,6 +935,42 @@ pub enum ClientCredentialsConfig {
         scopes: Vec<String>,
         resource: Option<String>,
     },
+}
+
+impl std::fmt::Debug for ClientCredentialsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ClientSecret {
+                client_id,
+                scopes,
+                resource,
+                ..
+            } => f
+                .debug_struct("ClientSecret")
+                .field("client_id", client_id)
+                .field("client_secret", &"<redacted>")
+                .field("scopes", scopes)
+                .field("resource", resource)
+                .finish(),
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            Self::PrivateKeyJwt {
+                client_id,
+                signing_algorithm,
+                token_endpoint_audience,
+                scopes,
+                resource,
+                ..
+            } => f
+                .debug_struct("PrivateKeyJwt")
+                .field("client_id", client_id)
+                .field("signing_key", &"<redacted>")
+                .field("signing_algorithm", signing_algorithm)
+                .field("token_endpoint_audience", token_endpoint_audience)
+                .field("scopes", scopes)
+                .field("resource", resource)
+                .finish(),
+        }
+    }
 }
 
 #[cfg(feature = "auth-client-credentials-jwt")]
@@ -7499,6 +7535,40 @@ mod tests {
         mgr.configure_client_credentials(&config).unwrap();
         let oauth_client = mgr.oauth_client.as_ref().unwrap();
         assert!(matches!(oauth_client.auth_type(), AuthType::RequestBody));
+    }
+
+    #[test]
+    fn client_secret_credentials_debug_redacts_secret() {
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "client-id".to_string(),
+            client_secret: "client-secret-value".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains("client-secret-value"), "{rendered}");
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn private_key_jwt_credentials_debug_redacts_signing_key() {
+        let config = super::ClientCredentialsConfig::PrivateKeyJwt {
+            client_id: "client-id".to_string(),
+            signing_key: b"private-signing-key-value".to_vec(),
+            signing_algorithm: super::JwtSigningAlgorithm::RS256,
+            token_endpoint_audience: None,
+            scopes: vec![],
+            resource: None,
+        };
+
+        let rendered = format!("{config:?}");
+
+        assert!(
+            !rendered.contains("private-signing-key-value"),
+            "{rendered}"
+        );
     }
 
     #[tokio::test]
