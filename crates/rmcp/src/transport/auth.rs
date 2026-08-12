@@ -2018,10 +2018,12 @@ impl AuthorizationManager {
                 AuthError::InternalError("Authorization state not found".to_string())
             })?;
 
-        // Delete state after retrieval (one-time use)
-        self.state_store.delete(csrf_token).await?;
-
         Self::validate_authorization_response_issuer(&stored_state, received_issuer)?;
+
+        // Consume state only after the callback is bound to the expected issuer.
+        // A callback with the correct state but a forged or missing required `iss`
+        // must not discard the PKCE verifier needed by the legitimate callback.
+        self.state_store.delete(csrf_token).await?;
 
         // capture requested scopes before the state is consumed
         let requested_scopes = stored_state.requested_scopes.clone();
@@ -6760,6 +6762,75 @@ mod tests {
             stored_state.expected_issuer.as_deref(),
             Some("https://auth.example.com")
         );
+    }
+
+    #[rstest]
+    #[case::missing_required_issuer(None)]
+    #[case::mismatched_issuer(Some("https://evil.example.com"))]
+    #[tokio::test]
+    async fn invalid_issuer_does_not_consume_authorization_state(
+        #[case] invalid_issuer: Option<&str>,
+    ) {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            200,
+            serde_json::json!({
+                "access_token": "access-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            true,
+        );
+        manager.state_store.save("csrf", state).await.unwrap();
+
+        manager
+            .exchange_code_for_token_with_issuer("forged-code", "csrf", invalid_issuer)
+            .await
+            .unwrap_err();
+
+        assert!(
+            manager.state_store.load("csrf").await.unwrap().is_some(),
+            "issuer validation failures must leave state available for the legitimate callback"
+        );
+        assert!(
+            client.requests().is_empty(),
+            "issuer validation failures must not reach the token endpoint"
+        );
+
+        manager
+            .exchange_code_for_token_with_issuer(
+                "legitimate-code",
+                "csrf",
+                Some("https://auth.example.com"),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            manager.state_store.load("csrf").await.unwrap().is_none(),
+            "a valid callback must consume its one-time authorization state"
+        );
+        assert_eq!(client.requests().len(), 1);
     }
 
     // -- scope management --
