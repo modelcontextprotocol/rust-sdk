@@ -284,8 +284,9 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
         context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
     fn get_info(&self) -> R::Info;
-    /// The protocol versions this service can speak, bounding what `initialize`
-    /// negotiation may agree to.
+    /// The protocol versions this service can speak, bounding which legacy
+    /// revisions `initialize` negotiation may agree to and which revisions the
+    /// discover lifecycle may select.
     ///
     /// Servers normally override
     /// [`ServerHandler::supported_protocol_versions`] instead of this method;
