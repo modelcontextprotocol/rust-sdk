@@ -335,14 +335,13 @@ impl CachedTx {
             .as_deref()
             .unwrap_or_default()
             .parse::<EventId>()?;
-        if index < front_event_id.index {
+        // Last-Event-ID is the last event the client received. The resume is
+        // valid as long as the next event has not already fallen out of cache.
+        let next_index = index.saturating_add(1);
+        if next_index < front_event_id.index {
             return Err(SessionError::InvalidEventId);
         }
-        // Last-Event-ID is the last event the client received, so resume only
-        // with events that follow it.
-        let sync_index = index
-            .saturating_sub(front_event_id.index)
-            .saturating_add(1);
+        let sync_index = next_index.saturating_sub(front_event_id.index);
         if sync_index > self.cache.len() {
             // invalid index
             return Err(SessionError::InvalidEventId);
@@ -668,6 +667,9 @@ impl LocalSessionWorker {
         &mut self,
         last_event_id: EventId,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        // A resume request can be the first event after a completed entry's
+        // TTL expires, so enforce eviction here before looking up its cache.
+        self.evict_expired_channels();
         // Clean up closed shadow senders before processing
         self.shadow_txs.retain(|tx| !tx.is_closed());
 
@@ -1406,5 +1408,69 @@ mod sep2260_routing_tests {
 
         assert!(worker.tx_router[&http_request_id].completed_at.is_some());
         assert!(worker.tx_router[&http_request_id].resources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resume_accepts_event_immediately_before_cache_front() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut cached_tx = CachedTx::new(tx, None, 0, "test-stream".into(), None);
+        cached_tx.cache.push_back(ServerSseMessage {
+            event_id: Some("5".into()),
+            ..Default::default()
+        });
+        cached_tx.cache.push_back(ServerSseMessage {
+            event_id: Some("6".into()),
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            cached_tx.sync(3).await,
+            Err(SessionError::InvalidEventId)
+        ));
+        cached_tx.sync(4).await.unwrap();
+
+        assert_eq!(rx.recv().await.unwrap().event_id.as_deref(), Some("5"));
+        assert_eq!(rx.recv().await.unwrap().event_id.as_deref(), Some("6"));
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_expired_completed_request_cache() {
+        let config = SessionConfig {
+            completed_cache_ttl: Duration::ZERO,
+            ..SessionConfig::default()
+        };
+        let (_handle, mut worker) = create_local_session("test-session", config);
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let request_id = RequestId::Number(7);
+        worker.register_resource(
+            ResourceKey::McpRequestId(request_id.clone()),
+            http_request_id,
+        );
+        worker
+            .handle_server_message(ServerJsonRpcMessage::error(
+                crate::model::ErrorData::internal_error("failed", None),
+                Some(request_id),
+            ))
+            .await
+            .unwrap();
+
+        let last_event_id = worker.tx_router[&http_request_id]
+            .tx
+            .cache
+            .front()
+            .unwrap()
+            .event_id
+            .as_deref()
+            .unwrap()
+            .parse::<EventId>()
+            .unwrap();
+        let result = worker.resume(last_event_id).await;
+
+        assert!(matches!(
+            result,
+            Err(SessionError::ChannelClosed(Some(id))) if id == http_request_id
+        ));
+        assert!(!worker.tx_router.contains_key(&http_request_id));
     }
 }
