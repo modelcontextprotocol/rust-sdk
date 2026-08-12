@@ -355,6 +355,17 @@ impl CachedTx {
         }
         Ok(())
     }
+
+    async fn replay_cached(&mut self) -> Result<(), SessionError> {
+        for message in &self.cache {
+            let send_result = self.tx.send(message.clone()).await;
+            if send_result.is_err() {
+                let event_id: EventId = message.event_id.as_deref().unwrap_or_default().parse()?;
+                return Err(SessionError::ChannelClosed(Some(event_id.index as u64)));
+            }
+        }
+        Ok(())
+    }
 }
 
 struct HttpRequestWise {
@@ -705,17 +716,16 @@ impl LocalSessionWorker {
     async fn establish_common_channel(
         &mut self,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
-        let last_event_index = self.event_store.is_none().then_some(0);
-        self.resume_or_shadow_common(last_event_index).await
+        self.resume_or_shadow_common(None).await
     }
 
     /// Resume the common channel, or create a shadow stream if the primary is
     /// still active.
     ///
     /// When the primary common channel is dead (receiver dropped), replace it
-    /// so this stream becomes the new primary notification channel. Cached
-    /// messages are replayed from `last_event_index` so the client receives
-    /// any events it missed (including server-initiated requests).
+    /// so this stream becomes the new primary notification channel. Resume
+    /// requests replay events after `last_event_index`; fresh GETs without a
+    /// Last-Event-ID replay the locally retained cache.
     ///
     /// When the primary is still active, create a "shadow" stream — an idle SSE
     /// connection kept alive by keep-alive pings. This prevents multiple
@@ -736,8 +746,10 @@ impl LocalSessionWorker {
             // Primary common channel is dead — replace it.
             tracing::debug!("Replacing dead common channel with new primary");
             self.common.tx = tx;
-            if let Some(last_event_index) = last_event_index {
-                self.common.sync(last_event_index).await?;
+            match last_event_index {
+                Some(last_event_index) => self.common.sync(last_event_index).await?,
+                None if self.event_store.is_none() => self.common.replay_cached().await?,
+                None => {}
             }
         } else {
             // Primary common channel is still active. Create a shadow stream
