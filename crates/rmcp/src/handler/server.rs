@@ -155,9 +155,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                         );
                     };
                     let server_info = self.get_info();
-                    let advertised = requested.supported_by(&server_info.capabilities);
                     let handler_accepted = requested.intersection(&candidate);
-                    let accepted = handler_accepted.intersection(&advertised);
+                    let accepted = handler_accepted.supported_by(&server_info.capabilities);
                     if accepted != handler_accepted {
                         tracing::debug!(
                             requested_resource_count = requested
@@ -405,9 +404,10 @@ macro_rules! server_handler_methods {
         /// Return the subset of a requested notification filter this server accepts.
         ///
         /// Returning `None` leaves `subscriptions/listen` unimplemented. The SDK
-        /// intersects the returned filter with both `requested` and the notification
-        /// capabilities advertised by [`Self::get_info`] before acknowledging it.
-        /// Categories that were not requested or advertised are always removed.
+        /// intersects the returned filter with `requested`, then filters the core
+        /// notification categories against capabilities advertised by [`Self::get_info`].
+        /// Extension-owned fields returned by this handler are preserved when the
+        /// client requested the same field because the SDK does not own their schema.
         fn accepted_subscription_filter(
             &self,
             requested: &SubscriptionFilter,

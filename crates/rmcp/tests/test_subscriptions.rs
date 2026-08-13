@@ -117,6 +117,33 @@ impl ServerHandler for ToolsAndPromptsServer {
     }
 }
 
+struct ExtensionFilterServer;
+
+impl ServerHandler for ExtensionFilterServer {
+    fn accepted_subscription_filter(
+        &self,
+        _requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(
+            serde_json::from_value(serde_json::json!({
+                "taskIds": ["task-a"],
+                "com.example/filter": {"channels": ["alpha"]}
+            }))
+            .expect("extension filter candidate"),
+        )
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
+        let accepted = serde_json::to_value(context.accepted()).expect("serialize accepted filter");
+        assert_eq!(accepted["taskIds"], serde_json::json!(["task-a"]));
+        assert_eq!(
+            accepted["com.example/filter"],
+            serde_json::json!({"channels": ["alpha"]})
+        );
+        Ok(())
+    }
+}
+
 struct ResourceSubscriptionServer;
 
 impl ServerHandler for ResourceSubscriptionServer {
@@ -398,6 +425,28 @@ async fn modern_client<S: ServerHandler>(
     )
     .await
     .map_err(Into::into)
+}
+
+#[tokio::test]
+async fn extension_subscription_acknowledges_handler_accepted_subset() -> anyhow::Result<()> {
+    let client = modern_client(ExtensionFilterServer).await?;
+    let requested: SubscriptionFilter = serde_json::from_value(serde_json::json!({
+        "taskIds": ["task-a", "task-b"],
+        "com.example/filter": {"channels": ["alpha", "beta"]}
+    }))?;
+    let mut subscription = client.listen(requested).await?;
+
+    assert_eq!(
+        serde_json::to_value(subscription.acknowledged())?,
+        serde_json::json!({
+            "taskIds": ["task-a"],
+            "com.example/filter": {"channels": ["alpha"]}
+        })
+    );
+    assert!(subscription.next().await?.is_none());
+
+    client.cancel().await?;
+    Ok(())
 }
 
 #[tokio::test]

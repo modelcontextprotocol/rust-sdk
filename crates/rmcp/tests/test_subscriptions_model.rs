@@ -39,6 +39,24 @@ fn subscription_filter_subset_is_order_independent_and_ignores_false_flags() {
 }
 
 #[test]
+fn subscription_filter_preserves_extension_owned_fields_through_serde() {
+    let input = json!({
+        "taskIds": ["task-a", "task-b"],
+        "com.example/filter": {
+            "channels": ["alpha", "beta"],
+            "nested": {"enabled": true}
+        }
+    });
+
+    let filter: SubscriptionFilter =
+        serde_json::from_value(input.clone()).expect("deserialize extension filter");
+    let output = serde_json::to_value(filter).expect("serialize extension filter");
+
+    assert_eq!(output["taskIds"], input["taskIds"]);
+    assert_eq!(output["com.example/filter"], input["com.example/filter"]);
+}
+
+#[test]
 fn subscription_filter_omits_empty_resource_intersection() {
     let requested = SubscriptionFilter::builder()
         .resource_subscription("file:///requested")
