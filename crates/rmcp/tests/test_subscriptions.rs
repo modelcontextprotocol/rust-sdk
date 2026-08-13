@@ -17,12 +17,12 @@ use std::{
 use rmcp::{
     ClientHandler, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
-        ClientNotification, ClientRequest, DetailedTask, DiscoverResult, GetMeta, Implementation,
-        JsonObject, NotificationMetaObject, PromptListChangedNotification, ProtocolVersion,
-        ServerCapabilities, ServerInfo, ServerNotification, ServerResult, SubscriptionFilter,
-        SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
-        SubscriptionsListenResult, TASKS_EXTENSION_ID, Task, TaskPayload, TaskStatus,
-        TaskStatusNotification, TaskStatusNotificationParams,
+        ClientNotification, ClientRequest, CustomNotification, DetailedTask, DiscoverResult,
+        GetMeta, Implementation, JsonObject, NotificationMetaObject, PromptListChangedNotification,
+        ProtocolVersion, ServerCapabilities, ServerInfo, ServerNotification, ServerResult,
+        SubscriptionFilter, SubscriptionsAcknowledgedNotification,
+        SubscriptionsAcknowledgedNotificationParams, SubscriptionsListenResult, TASKS_EXTENSION_ID,
+        Task, TaskPayload, TaskStatus, TaskStatusNotification, TaskStatusNotificationParams,
     },
     service::{
         NotificationContext, RequestContext, RoleClient, RoleServer, ServiceError,
@@ -32,6 +32,30 @@ use rmcp::{
 use tokio::sync::{Mutex, Notify};
 
 struct ToolsOnlyServer;
+
+struct ExtensionNotificationServer;
+
+impl ServerHandler for ExtensionNotificationServer {
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
+        context
+            .sink()
+            .send_custom_notification(CustomNotification::new(
+                "com.example/changed",
+                Some(serde_json::json!({ "revision": 1 })),
+            ))
+            .await
+            .expect("send explicitly authorized extension notification");
+        context.cancelled().await;
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
 struct CountingClient {
@@ -519,6 +543,34 @@ async fn extension_subscription_acknowledges_handler_accepted_subset() -> anyhow
     );
     assert!(subscription.next().await?.is_none());
 
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn custom_subscription_notifications_require_an_explicit_method_allowlist()
+-> anyhow::Result<()> {
+    let client = modern_client(ExtensionNotificationServer).await?;
+    let mut requested = SubscriptionFilter::new();
+    requested.additional_fields.insert(
+        "com.example/channels".to_string(),
+        serde_json::json!(["alpha"]),
+    );
+
+    let mut subscription = client
+        .listen_with_custom_methods(requested, ["com.example/changed"])
+        .await?;
+    let Some(ServerNotification::CustomNotification(notification)) = subscription.next().await?
+    else {
+        panic!("expected explicitly allowed custom subscription notification");
+    };
+    assert_eq!(notification.method, "com.example/changed");
+    assert_eq!(
+        notification.params,
+        Some(serde_json::json!({ "revision": 1 }))
+    );
+
+    subscription.cancel().await?;
     client.cancel().await?;
     Ok(())
 }

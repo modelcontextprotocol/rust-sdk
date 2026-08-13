@@ -15,13 +15,14 @@ use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData, ListRootsRequest,
-        ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
-        ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
-        ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
-        ResourceUpdatedNotificationParam, ServerInfo, ServerNotification, ServerRequest,
-        ServerResult, SubscriptionFilter, SubscriptionsAcknowledgedNotification,
-        SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
+        CreateMessageRequestParams, CreateMessageResult, CustomNotification, EmptyResult,
+        ErrorData, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
+        LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
+        PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
+        ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo,
+        ServerNotification, ServerRequest, ServerResult, SubscriptionFilter,
+        SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
+        ToolListChangedNotification,
     },
     transport::DynamicTransportError,
 };
@@ -144,6 +145,17 @@ pub struct SubscriptionSink {
 }
 
 impl SubscriptionSink {
+    async fn send_scoped(
+        &self,
+        mut notification: ServerNotification,
+    ) -> Result<(), SubscriptionSendError> {
+        notification
+            .get_meta_mut()
+            .set_subscription_id(self.id.clone());
+        self.peer.send_notification(notification).await?;
+        Ok(())
+    }
+
     fn new(
         peer: Peer<RoleServer>,
         id: RequestId,
@@ -176,7 +188,7 @@ impl SubscriptionSink {
     /// ends, a filter error for disallowed notifications, or a transport error.
     pub async fn send(
         &self,
-        mut notification: ServerNotification,
+        notification: ServerNotification,
     ) -> Result<(), SubscriptionSendError> {
         if self.active.is_cancelled() {
             return Err(SubscriptionSendError::SubscriptionClosed);
@@ -260,11 +272,23 @@ impl SubscriptionSink {
             }
         }
 
-        notification
-            .get_meta_mut()
-            .set_subscription_id(self.id.clone());
-        self.peer.send_notification(notification).await?;
-        Ok(())
+        self.send_scoped(notification).await
+    }
+
+    /// Send a custom extension notification on this subscription stream.
+    ///
+    /// RMCP cannot infer open-world extension method ownership from arbitrary
+    /// subscription filter fields. The caller is responsible for verifying that
+    /// the method is owned by an extension accepted for this subscription.
+    pub async fn send_custom_notification(
+        &self,
+        notification: CustomNotification,
+    ) -> Result<(), SubscriptionSendError> {
+        if self.active.is_cancelled() {
+            return Err(SubscriptionSendError::SubscriptionClosed);
+        }
+        self.send_scoped(ServerNotification::CustomNotification(notification))
+            .await
     }
 
     /// Send `notifications/tools/list_changed`.

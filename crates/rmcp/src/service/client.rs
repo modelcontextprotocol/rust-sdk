@@ -2,7 +2,7 @@
 #![expect(deprecated)]
 pub(super) mod cache;
 
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use cache::CacheGeneration;
 pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
@@ -376,6 +376,7 @@ pub enum SubscriptionEnd {
 pub struct Subscription {
     id: RequestId,
     acknowledged: SubscriptionFilter,
+    custom_methods: HashSet<String>,
     notifications: tokio::sync::mpsc::Receiver<ServerNotification>,
     request: Option<RequestHandle<RoleClient>>,
     end: Option<SubscriptionEnd>,
@@ -572,8 +573,10 @@ impl Subscription {
             ServerNotification::SubscriptionsAcknowledgedNotification(_)
             | ServerNotification::CancelledNotification(_)
             | ServerNotification::ProgressNotification(_)
-            | ServerNotification::LoggingMessageNotification(_)
-            | ServerNotification::CustomNotification(_) => false,
+            | ServerNotification::LoggingMessageNotification(_) => false,
+            ServerNotification::CustomNotification(notification) => {
+                self.custom_methods.contains(notification.method.as_str())
+            }
         }
     }
 
@@ -1201,6 +1204,29 @@ impl Peer<RoleClient> {
         self.listen_with_channel_capacity_inner(
             notifications,
             DEFAULT_SUBSCRIPTION_CHANNEL_CAPACITY,
+            HashSet::new(),
+        )
+        .await
+    }
+
+    /// Open a subscription that explicitly permits the listed custom notification methods.
+    ///
+    /// RMCP cannot infer extension method ownership from open-world subscription filter fields.
+    /// Callers must therefore opt in to each extension notification method they have negotiated
+    /// and validated. Core notification filtering remains unchanged.
+    pub async fn listen_with_custom_methods<I, S>(
+        &self,
+        notifications: SubscriptionFilter,
+        custom_methods: I,
+    ) -> Result<Subscription, ServiceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.listen_with_channel_capacity_inner(
+            notifications,
+            DEFAULT_SUBSCRIPTION_CHANNEL_CAPACITY,
+            custom_methods.into_iter().map(Into::into).collect(),
         )
         .await
     }
@@ -1219,14 +1245,19 @@ impl Peer<RoleClient> {
         notifications: SubscriptionFilter,
         channel_capacity: NonZeroUsize,
     ) -> Result<Subscription, ServiceError> {
-        self.listen_with_channel_capacity_inner(notifications, channel_capacity.get())
-            .await
+        self.listen_with_channel_capacity_inner(
+            notifications,
+            channel_capacity.get(),
+            HashSet::new(),
+        )
+        .await
     }
 
     async fn listen_with_channel_capacity_inner(
         &self,
         notifications: SubscriptionFilter,
         channel_capacity: usize,
+        custom_methods: HashSet<String>,
     ) -> Result<Subscription, ServiceError> {
         let request = ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
             SubscriptionsListenRequestParams::new(notifications.clone()),
@@ -1265,6 +1296,7 @@ impl Peer<RoleClient> {
                 Ok(Subscription {
                     id,
                     acknowledged: accepted,
+                    custom_methods,
                     notifications: subscription_notifications,
                     request: Some(handle),
                     end: None,
