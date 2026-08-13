@@ -17,11 +17,12 @@ use std::{
 use rmcp::{
     ClientHandler, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
-        ClientNotification, ClientRequest, DiscoverResult, GetMeta, Implementation,
-        NotificationMetaObject, PromptListChangedNotification, ProtocolVersion, ServerCapabilities,
-        ServerInfo, ServerNotification, ServerResult, SubscriptionFilter,
+        ClientNotification, ClientRequest, DetailedTask, DiscoverResult, GetMeta, Implementation,
+        JsonObject, NotificationMetaObject, PromptListChangedNotification, ProtocolVersion,
+        ServerCapabilities, ServerInfo, ServerNotification, ServerResult, SubscriptionFilter,
         SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
-        SubscriptionsListenResult,
+        SubscriptionsListenResult, TASKS_EXTENSION_ID, Task, TaskPayload, TaskStatus,
+        TaskStatusNotification, TaskStatusNotificationParams,
     },
     service::{
         NotificationContext, RequestContext, RoleClient, RoleServer, ServiceError,
@@ -162,6 +163,58 @@ impl ServerHandler for ContextRejectingFilterServer {
             "Missing required client capability",
             Some(serde_json::json!({"requiredCapabilities": {"extensions": {}}})),
         ))
+    }
+}
+
+struct TaskStatusFilterServer;
+
+impl TaskStatusFilterServer {
+    fn notification(task_id: &str) -> ServerNotification {
+        ServerNotification::TaskStatusNotification(TaskStatusNotification::new(
+            TaskStatusNotificationParams::new(DetailedTask::new(
+                Task::new(
+                    task_id,
+                    TaskStatus::Working,
+                    "2026-08-13T16:00:00Z",
+                    "2026-08-13T16:00:00Z",
+                ),
+                TaskPayload::Working,
+            )),
+        ))
+    }
+}
+
+impl ServerHandler for TaskStatusFilterServer {
+    fn get_info(&self) -> ServerInfo {
+        let mut capabilities = ServerCapabilities::default();
+        capabilities.extensions = Some(
+            [(TASKS_EXTENSION_ID.to_string(), JsonObject::new())]
+                .into_iter()
+                .collect(),
+        );
+        ServerInfo::new(capabilities)
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
+        context
+            .sink()
+            .send(Self::notification("task-a"))
+            .await
+            .expect("accepted task status notification");
+        assert!(matches!(
+            context.sink().send(Self::notification("task-b")).await,
+            Err(SubscriptionSendError::NotificationNotAccepted(
+                "notifications/tasks"
+            ))
+        ));
+        Ok(())
     }
 }
 
@@ -487,6 +540,28 @@ async fn subscription_acceptance_can_reject_with_request_context_before_acknowle
         anyhow::bail!("expected MCP error, got {error:?}");
     };
     assert_eq!(error.code, rmcp::model::ErrorCode(-32003));
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_status_notifications_are_enforced_by_accepted_task_ids() -> anyhow::Result<()> {
+    let client = modern_client(TaskStatusFilterServer).await?;
+    let mut requested = SubscriptionFilter::new();
+    requested
+        .additional_fields
+        .insert("taskIds".to_string(), serde_json::json!(["task-a"]));
+    let mut subscription = client.listen(requested).await?;
+
+    let notification = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+        .await??
+        .expect("accepted task status notification");
+    let ServerNotification::TaskStatusNotification(notification) = notification else {
+        anyhow::bail!("expected task status notification");
+    };
+    assert_eq!(notification.params.task.task.task_id, "task-a");
+    assert!(subscription.next().await?.is_none());
 
     client.cancel().await?;
     Ok(())

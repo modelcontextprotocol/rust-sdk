@@ -557,11 +557,22 @@ impl Subscription {
                 .resource_subscriptions
                 .as_ref()
                 .is_some_and(|uris| uris.contains(&update.params.uri)),
+            ServerNotification::TaskStatusNotification(notification) => {
+                let task_id = notification.params.task.task.task_id.as_str();
+                self.acknowledged
+                    .additional_fields
+                    .get("taskIds")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|task_ids| {
+                        task_ids
+                            .iter()
+                            .any(|accepted| accepted.as_str() == Some(task_id))
+                    })
+            }
             ServerNotification::SubscriptionsAcknowledgedNotification(_)
             | ServerNotification::CancelledNotification(_)
             | ServerNotification::ProgressNotification(_)
             | ServerNotification::LoggingMessageNotification(_)
-            | ServerNotification::TaskStatusNotification(_)
             | ServerNotification::CustomNotification(_) => false,
         }
     }
