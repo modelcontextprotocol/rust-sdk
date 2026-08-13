@@ -1033,13 +1033,25 @@ const RESOURCE_LIST_CACHE_PREFIX: &str = "resources/list:";
 const RESOURCE_TEMPLATE_LIST_CACHE_PREFIX: &str = "resources/templates/list:";
 const RESOURCE_READ_CACHE_PREFIX: &str = "resources/read:";
 
-// Cache keys are built only from the request method plus the parameters that
-// affect the result (SEP-2549). Request `_meta` (progress tokens, trace
-// context, etc.) does not affect the result, so it is deliberately excluded to
-// avoid fragmenting the cache across otherwise-identical requests.
-fn discover_cache_key() -> String {
-    // `server/discover` carries no result-affecting parameters.
-    DISCOVER_CACHE_PREFIX.to_string()
+// Cache keys are built only from the request method plus the parameters or
+// reserved request metadata that affect the result (SEP-2549 / SEP-2575).
+// Trace context and client identity are deliberately excluded; discovery may
+// vary by protocol revision and the complete open client capability document.
+fn discover_cache_key(meta: &RequestMetaObject) -> String {
+    let mut result_affecting_meta = serde_json::Map::new();
+    for key in [
+        "io.modelcontextprotocol/protocolVersion",
+        "io.modelcontextprotocol/clientCapabilities",
+    ] {
+        if let Some(value) = meta.get(key) {
+            result_affecting_meta.insert(key.to_string(), value.clone());
+        }
+    }
+    let canonical =
+        serde_json_canonicalizer::to_vec(&serde_json::Value::Object(result_affecting_meta))
+            .expect("request metadata is already valid JSON");
+    let canonical = String::from_utf8(canonical).expect("canonical JSON is UTF-8");
+    format!("{DISCOVER_CACHE_PREFIX}{canonical}")
 }
 
 fn list_response_cache_key(prefix: &str, params: &Option<PaginatedRequestParams>) -> String {
@@ -1267,7 +1279,7 @@ impl Peer<RoleClient> {
     /// The high-level client currently exposes this peer only after initialization;
     /// pre-initialization probing is planned as follow-up work.
     pub async fn discover(&self, meta: RequestMetaObject) -> Result<DiscoverResult, ServiceError> {
-        let cache_key = discover_cache_key();
+        let cache_key = discover_cache_key(&meta);
         if let Some(ServerResult::DiscoverResult(result)) = self.cached_response(&cache_key).await {
             return Ok(result);
         }
@@ -2387,11 +2399,45 @@ mod tests {
         assert_eq!(peer.list_tools(params).await.unwrap(), expected);
     }
 
+    #[test]
+    fn discover_cache_key_tracks_result_affecting_request_metadata_canonically() {
+        let mut first = RequestMetaObject::new();
+        first.set_protocol_version(ProtocolVersion::V_2026_07_28);
+        first.set_client_capabilities(
+            serde_json::from_value(serde_json::json!({
+                "sampling": {},
+                "com.example/future": {"b": 2, "a": 1}
+            }))
+            .expect("open client capability fixture"),
+        );
+        let mut reordered = RequestMetaObject::new();
+        reordered.set_protocol_version(ProtocolVersion::V_2026_07_28);
+        reordered.set_client_capabilities(
+            serde_json::from_value(serde_json::json!({
+                "com.example/future": {"a": 1, "b": 2},
+                "sampling": {}
+            }))
+            .expect("reordered open client capability fixture"),
+        );
+        let mut changed = RequestMetaObject::new();
+        changed.set_protocol_version(ProtocolVersion::V_2026_07_28);
+        changed.set_client_capabilities(
+            serde_json::from_value(serde_json::json!({
+                "sampling": {},
+                "com.example/future": {"a": 1, "b": 3}
+            }))
+            .expect("changed open client capability fixture"),
+        );
+
+        assert_eq!(discover_cache_key(&first), discover_cache_key(&reordered));
+        assert_ne!(discover_cache_key(&first), discover_cache_key(&changed));
+    }
+
     #[tokio::test]
     async fn discover_serves_a_fresh_cached_response_without_transport_io() {
         let peer = disconnected_peer();
         let meta = RequestMetaObject::default();
-        let key = discover_cache_key();
+        let key = discover_cache_key(&meta);
         let expected = DiscoverResult::new(vec![ProtocolVersion::default()], Default::default())
             .with_server_info(crate::model::Implementation::from_build_env())
             .with_ttl_ms(5_000)
