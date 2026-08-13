@@ -149,7 +149,10 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>())
                 } else {
                     let requested = request.params.notifications;
-                    let Some(candidate) = self.accepted_subscription_filter(&requested) else {
+                    let Some(candidate) = self
+                        .accept_subscription_filter(requested.clone(), context.clone())
+                        .await?
+                    else {
                         return Err(
                             McpError::method_not_found::<SubscriptionsListenRequestMethod>(),
                         );
@@ -413,6 +416,21 @@ macro_rules! server_handler_methods {
             requested: &SubscriptionFilter,
         ) -> Option<SubscriptionFilter> {
             None
+        }
+        /// Asynchronously accept a requested notification filter with full request context.
+        ///
+        /// Gateways and other policy-aware servers can override this hook when subscription
+        /// authorization depends on request-scoped client capabilities or other contextual
+        /// metadata. The default preserves source compatibility by delegating to
+        /// [`Self::accepted_subscription_filter`]. Returning an error rejects the request
+        /// before the acknowledgement notification is emitted.
+        fn accept_subscription_filter(
+            &self,
+            requested: SubscriptionFilter,
+            _context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<Option<SubscriptionFilter>, McpError>> + MaybeSendFuture + '_ {
+            let accepted = self.accepted_subscription_filter(&requested);
+            std::future::ready(Ok(accepted))
         }
         /// Run one established subscription until it is cancelled or closed gracefully.
         ///
@@ -691,6 +709,14 @@ macro_rules! impl_server_handler_for_wrapper {
                 requested: &SubscriptionFilter,
             ) -> Option<SubscriptionFilter> {
                 (**self).accepted_subscription_filter(requested)
+            }
+
+            fn accept_subscription_filter(
+                &self,
+                requested: SubscriptionFilter,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<Option<SubscriptionFilter>, McpError>> + MaybeSendFuture + '_ {
+                (**self).accept_subscription_filter(requested, context)
             }
 
             fn listen(

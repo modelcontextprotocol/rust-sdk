@@ -24,8 +24,8 @@ use rmcp::{
         SubscriptionsListenResult,
     },
     service::{
-        NotificationContext, RequestContext, RoleClient, RoleServer, SubscriptionContext,
-        SubscriptionEnd, SubscriptionSendError, SubscriptionSink,
+        NotificationContext, RequestContext, RoleClient, RoleServer, ServiceError,
+        SubscriptionContext, SubscriptionEnd, SubscriptionSendError, SubscriptionSink,
     },
 };
 use tokio::sync::{Mutex, Notify};
@@ -141,6 +141,27 @@ impl ServerHandler for ExtensionFilterServer {
             serde_json::json!({"channels": ["alpha"]})
         );
         Ok(())
+    }
+}
+
+struct ContextRejectingFilterServer;
+
+impl ServerHandler for ContextRejectingFilterServer {
+    async fn accept_subscription_filter(
+        &self,
+        _requested: SubscriptionFilter,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Option<SubscriptionFilter>, rmcp::ErrorData> {
+        assert_eq!(
+            context.protocol_version(),
+            Some(ProtocolVersion::V_2026_07_28),
+            "subscription acceptance must receive the request-scoped protocol context"
+        );
+        Err(rmcp::ErrorData::new(
+            rmcp::model::ErrorCode(-32003),
+            "Missing required client capability",
+            Some(serde_json::json!({"requiredCapabilities": {"extensions": {}}})),
+        ))
     }
 }
 
@@ -444,6 +465,28 @@ async fn extension_subscription_acknowledges_handler_accepted_subset() -> anyhow
         })
     );
     assert!(subscription.next().await?.is_none());
+
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscription_acceptance_can_reject_with_request_context_before_acknowledgment()
+-> anyhow::Result<()> {
+    let client = modern_client(ContextRejectingFilterServer).await?;
+    let mut requested = SubscriptionFilter::new();
+    requested
+        .additional_fields
+        .insert("taskIds".to_string(), serde_json::json!(["task-a"]));
+
+    let error = client
+        .listen(requested)
+        .await
+        .expect_err("context-aware subscription acceptance should reject before acknowledgment");
+    let ServiceError::McpError(error) = error else {
+        anyhow::bail!("expected MCP error, got {error:?}");
+    };
+    assert_eq!(error.code, rmcp::model::ErrorCode(-32003));
 
     client.cancel().await?;
     Ok(())
