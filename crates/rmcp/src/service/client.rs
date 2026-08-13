@@ -1284,11 +1284,17 @@ impl Peer<RoleClient> {
             return Ok(result);
         }
         let generation = self.capture_response_cache_generation().await;
-        let mut request = DiscoverRequest::new(DiscoverRequestParams {});
-        request.extensions.insert(meta);
-        let result = self
-            .send_request(ClientRequest::DiscoverRequest(request))
-            .await;
+        let request = DiscoverRequest::new(DiscoverRequestParams {});
+        let result = match self
+            .send_request_with_option(
+                ClientRequest::DiscoverRequest(request),
+                PeerRequestOptions::no_options().with_meta(meta),
+            )
+            .await
+        {
+            Ok(handle) => handle.await_response().await,
+            Err(error) => Err(error),
+        };
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -2397,6 +2403,53 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(5)).await;
 
         assert_eq!(peer.list_tools(params).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn discover_explicit_client_context_overrides_channel_startup_metadata() {
+        let (peer, mut outbound) =
+            Peer::<RoleClient>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
+        let startup_capabilities = serde_json::from_value(serde_json::json!({
+            "extensions": {"com.example/startup": {}}
+        }))
+        .expect("startup capabilities");
+        peer.set_client_request_metadata(ClientRequestMetadata {
+            protocol_version: ProtocolVersion::V_2026_07_28,
+            client_info: crate::model::Implementation::from_build_env(),
+            client_capabilities: startup_capabilities,
+        });
+        let contextual_capabilities = serde_json::from_value(serde_json::json!({
+            "extensions": {"com.example/contextual": {"enabled": true}}
+        }))
+        .expect("contextual capabilities");
+        let meta = RequestMetaObject::with_client_context(
+            ProtocolVersion::V_2026_07_28,
+            crate::model::Implementation::from_build_env(),
+            contextual_capabilities,
+        );
+
+        let discover = tokio::spawn({
+            let peer = peer.clone();
+            async move { peer.discover(meta).await }
+        });
+        let PeerSinkMessage::Request { request, .. } =
+            outbound.recv().await.expect("discover request")
+        else {
+            panic!("expected discover request");
+        };
+        let ClientRequest::DiscoverRequest(request) = request else {
+            panic!("expected server/discover request");
+        };
+        let capabilities = request
+            .extensions
+            .get::<RequestMetaObject>()
+            .expect("request metadata")
+            .client_capabilities()
+            .expect("request-scoped client capabilities");
+        let raw = serde_json::to_value(capabilities).expect("serialize client capabilities");
+        assert!(raw["extensions"].get("com.example/startup").is_none());
+        assert_eq!(raw["extensions"]["com.example/contextual"]["enabled"], true);
+        discover.abort();
     }
 
     #[test]
