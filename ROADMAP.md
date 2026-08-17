@@ -2,8 +2,9 @@
 
 This roadmap tracks the path to [SEP-1730](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1730) Tier 1 for the Rust MCP SDK.
 
-**Status (2026-07-30): all SEP-1730 Tier 1 requirements are met.** Conformance is
-100% across every date-versioned suite, the stable **v3.0.1** release has shipped,
+**Status: all SEP-1730 Tier 1 requirements are met.** Conformance is
+100% across every date-versioned suite, a stable ≥1.0.0 release has shipped
+([Releases](https://github.com/modelcontextprotocol/rust-sdk/releases)),
 issue triage and critical-bug (P0) resolution are within the Tier 1 SLAs, the
 governance documents (`VERSIONING.md`, `DEPENDENCY_POLICY.md`, this `ROADMAP.md`) are
 published, and all 48 non-experimental features are documented with examples. This
@@ -15,7 +16,7 @@ document now serves as the ongoing tracker for spec conformance and SDK health.
 | Client conformance 100% (date-versioned)            | ✅     | 39/39 scored — see below |
 | Issue triage ≥90% within 2 business days            | ✅     | 95.2% (20/21) |
 | All P0 bugs resolved within 7 days                  | ✅     | 0 open; last P0 (#741) resolved in 3 days |
-| Stable release ≥1.0.0 (no pre-release suffix)       | ✅     | `rmcp-v3.0.1` (see tooling note below) |
+| Stable release ≥1.0.0 (no pre-release suffix)       | ✅     | [latest release](https://github.com/modelcontextprotocol/rust-sdk/releases/latest) (see tooling note below) |
 | Clear versioning + breaking-change policy           | ✅     | [`VERSIONING.md`](VERSIONING.md) |
 | All non-experimental features documented w/ examples| ✅     | 48/48 in [`README.md`](README.md) |
 | Published dependency update policy                  | ✅     | [`DEPENDENCY_POLICY.md`](DEPENDENCY_POLICY.md) + [`.github/dependabot.yml`](.github/dependabot.yml) |
@@ -31,8 +32,9 @@ and `extension` scenarios are informational and reported separately below.
 
 > **Tooling note — `stable_release`:** the SEP-1730 `tier-check` CLI may report
 > `stable_release` as failing because it does not parse the workspace tag prefix
-> `rmcp-v` (as in `rmcp-v3.0.1`). `rmcp-v3.0.1` is a genuine stable, non-pre-release
-> release ([Releases](https://github.com/modelcontextprotocol/rust-sdk/releases)); the
+> `rmcp-v` (as in `rmcp-vX.Y.Z`). The published releases are genuine stable,
+> non-pre-release versions ≥1.0.0
+> ([Releases](https://github.com/modelcontextprotocol/rust-sdk/releases)); the
 > flag is a tooling artifact, not an unmet requirement.
 
 ---
@@ -75,8 +77,7 @@ the milestone:
 ### Tier 1 requirements
 
 - [x] **v3.0.0 stable released** (2026-07-28) — MRTR, SEP-2549 cache hints, SEP-2243
-      standard headers, SEP-2575 stateless MCP, and SEP-2106 relaxations; **v3.0.1**
-      is the current stable release
+      standard headers, SEP-2575 stateless MCP, and SEP-2106 relaxations
 - [x] 2025-11-25 server conformance 100% (30/30)
 - [x] 2025-11-25 client conformance 100%
 - [x] 2026-07-28 server conformance 100% (30/30 dated)
