@@ -2559,14 +2559,12 @@ impl AuthorizationManager {
         let expected_path = expected.path();
         let actual_path = actual.path();
 
-        // URL query part supported, even if it is discouraged in RFC 8707
-        if expected_path == actual_path && expected.query() == actual.query() {
+        // Query parameters may carry transport hints rather than resource identity.
+        if expected_path == actual_path {
             return true;
         }
 
         expected_path.starts_with(actual_path)
-            && expected.query().is_none()
-            && actual.query().is_none()
             && (actual_path.ends_with('/')
                 || expected_path.as_bytes().get(actual_path.len()) == Some(&b'/'))
     }
@@ -4914,6 +4912,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preregistered_client_uses_metadata_resource_when_server_url_has_query() {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp?oauth=initialize",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_preregistered_client("preregistered-client");
+        state.start_authorization(request).await.unwrap();
+
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        assert_eq!(
+            query.get("resource").map(String::as_str),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert_eq!(
+            client.requests()[0].uri,
+            "https://mcp.example.com/mcp?oauth=initialize"
+        );
+    }
+
+    #[tokio::test]
     async fn authorization_session_selects_default_scopes_when_none_provided() {
         let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
         let mut manager = AuthorizationManager::new_with_oauth_http_client(
@@ -5549,6 +5573,22 @@ mod tests {
             &Url::parse("https://mcp.example.com/mcp?query=param").unwrap(),
             &Url::parse("https://mcp.example.com/mcp?query=param").unwrap()
         ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?oauth=initialize").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value2").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp/tools?oauth=initialize").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
+        ));
 
         assert!(!AuthorizationManager::is_resource_identifier_valid(
             &Url::parse("https://mcp.example.com/mcp").unwrap(),
@@ -5571,12 +5611,12 @@ mod tests {
             &Url::parse("https://real.example.com/mcp").unwrap()
         ));
         assert!(!AuthorizationManager::is_resource_identifier_valid(
-            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp-tools?oauth=initialize").unwrap(),
             &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
         ));
         assert!(!AuthorizationManager::is_resource_identifier_valid(
-            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap(),
-            &Url::parse("https://mcp.example.com/mcp?query=value2").unwrap()
+            &Url::parse("https://mcp.example.com/mcp?oauth=initialize").unwrap(),
+            &Url::parse("https://real.example.com/mcp?oauth=initialize").unwrap()
         ));
     }
 
