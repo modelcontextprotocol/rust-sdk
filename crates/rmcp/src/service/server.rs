@@ -483,6 +483,16 @@ pub(crate) fn negotiate_protocol_version(
     }
 }
 
+fn missing_request_metadata_error(missing: &[&str]) -> ErrorData {
+    ErrorData::invalid_params(
+        format!(
+            "request _meta is missing or has malformed required fields: {}",
+            missing.join(", ")
+        ),
+        None,
+    )
+}
+
 async fn serve_server_with_ct_inner<S, T>(
     service: S,
     transport: T,
@@ -528,11 +538,22 @@ where
     let initialize_request = match request {
         ClientRequest::InitializeRequest(request) => request,
         mut request => {
-            if !request
+            let missing_metadata = request
                 .get_meta()
-                .missing_required_keys(&ProtocolVersion::V_2026_07_28)
-                .is_empty()
-            {
+                .missing_required_keys(&ProtocolVersion::V_2026_07_28);
+            if !missing_metadata.is_empty() {
+                transport
+                    .send(ServerJsonRpcMessage::error(
+                        missing_request_metadata_error(&missing_metadata),
+                        Some(id.clone()),
+                    ))
+                    .await
+                    .map_err(|error| {
+                        ServerInitializeError::transport::<T>(
+                            error,
+                            "sending pre-init metadata error response",
+                        )
+                    })?;
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     ClientJsonRpcMessage::request(request, id),
                 )));
