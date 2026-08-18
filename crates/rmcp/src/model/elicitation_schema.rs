@@ -1121,7 +1121,8 @@ pub struct ElicitationSchema {
     /// The 2025-11-25 protocol revision allows a `requestedSchema` to declare its
     /// dialect. It is preserved verbatim so a declared dialect survives a
     /// decode/re-encode round-trip instead of being silently dropped.
-    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
     pub schema: Option<Cow<'static, str>>,
 
     /// Always "object" for elicitation schemas
@@ -1152,7 +1153,7 @@ pub struct ElicitationSchema {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ElicitationSchemaWire {
-    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
     schema: Option<Cow<'static, str>>,
     #[serde(rename = "type")]
     type_: ObjectTypeConst,

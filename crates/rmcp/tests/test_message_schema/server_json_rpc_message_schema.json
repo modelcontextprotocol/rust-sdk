@@ -965,10 +965,7 @@
       "properties": {
         "$schema": {
           "description": "Optional JSON Schema dialect identifier (the `$schema` keyword).\n\nThe 2025-11-25 protocol revision allows a `requestedSchema` to declare its\ndialect. It is preserved verbatim so a declared dialect survives a\ndecode/re-encode round-trip instead of being silently dropped.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "description": {
           "description": "Optional description of what this schema represents",
