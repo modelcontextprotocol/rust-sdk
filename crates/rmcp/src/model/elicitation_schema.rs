@@ -18,7 +18,8 @@
 
 use std::{borrow::Cow, collections::BTreeMap, marker::PhantomData};
 
-use serde::{Deserialize, Serialize};
+use indexmap::IndexMap;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{const_string, model::ConstString};
 
@@ -1109,11 +1110,21 @@ impl EnumSchema {
 ///     .optional_bool("newsletter", false)
 ///     .build();
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", schemars(!into))]
+#[serde(rename_all = "camelCase", into = "ElicitationSchemaWire")]
 #[non_exhaustive]
 pub struct ElicitationSchema {
+    /// Optional JSON Schema dialect identifier (the `$schema` keyword).
+    ///
+    /// The 2025-11-25 protocol revision allows a `requestedSchema` to declare its
+    /// dialect. It is preserved verbatim so a declared dialect survives a
+    /// decode/re-encode round-trip instead of being silently dropped.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "String"))]
+    pub schema: Option<Cow<'static, str>>,
+
     /// Always "object" for elicitation schemas
     #[serde(rename = "type")]
     pub type_: ObjectTypeConst,
@@ -1125,6 +1136,11 @@ pub struct ElicitationSchema {
     /// Property definitions (must be primitive types)
     pub properties: BTreeMap<String, PrimitiveSchemaDefinition>,
 
+    /// Property names in wire order. Schemas constructed from a `BTreeMap`
+    /// use the map's sorted key order.
+    #[serde(skip)]
+    pub property_order: Option<Vec<String>>,
+
     /// List of required property names
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<Vec<String>>,
@@ -1134,13 +1150,80 @@ pub struct ElicitationSchema {
     pub description: Option<Cow<'static, str>>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ElicitationSchemaWire {
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    schema: Option<Cow<'static, str>>,
+    #[serde(rename = "type")]
+    type_: ObjectTypeConst,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<Cow<'static, str>>,
+    properties: IndexMap<String, PrimitiveSchemaDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<Cow<'static, str>>,
+}
+
+impl From<ElicitationSchemaWire> for ElicitationSchema {
+    fn from(schema: ElicitationSchemaWire) -> Self {
+        Self {
+            schema: schema.schema,
+            type_: schema.type_,
+            title: schema.title,
+            property_order: Some(schema.properties.keys().cloned().collect()),
+            properties: schema.properties.into_iter().collect(),
+            required: schema.required,
+            description: schema.description,
+        }
+    }
+}
+
+impl From<ElicitationSchema> for ElicitationSchemaWire {
+    fn from(schema: ElicitationSchema) -> Self {
+        let mut remaining = schema.properties;
+        let mut properties = IndexMap::with_capacity(remaining.len());
+
+        if let Some(property_order) = schema.property_order {
+            for name in property_order {
+                if let Some(definition) = remaining.remove(&name) {
+                    properties.insert(name, definition);
+                }
+            }
+        }
+        properties.extend(remaining);
+
+        Self {
+            schema: schema.schema,
+            type_: schema.type_,
+            title: schema.title,
+            properties,
+            required: schema.required,
+            description: schema.description,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ElicitationSchema {
+    fn deserialize<__D>(__deserializer: __D) -> Result<Self, __D::Error>
+    where
+        __D: Deserializer<'de>,
+    {
+        ElicitationSchemaWire::deserialize(__deserializer).map(Into::into)
+    }
+}
+
 impl ElicitationSchema {
     /// Create a new elicitation schema with the given properties
     pub fn new(properties: BTreeMap<String, PrimitiveSchemaDefinition>) -> Self {
+        let property_order = Some(properties.keys().cloned().collect());
         Self {
+            schema: None,
             type_: ObjectTypeConst,
             title: None,
             properties,
+            property_order,
             required: None,
             description: None,
         }
@@ -1229,6 +1312,12 @@ impl ElicitationSchema {
     /// Set the description
     pub fn with_description(mut self, description: impl Into<Cow<'static, str>>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set the JSON Schema dialect identifier (the `$schema` keyword).
+    pub fn with_schema(mut self, schema: impl Into<Cow<'static, str>>) -> Self {
+        self.schema = Some(schema.into());
         self
     }
 
@@ -1632,10 +1721,13 @@ impl ElicitationSchemaBuilder {
             }
         }
 
+        let property_order = Some(self.properties.keys().cloned().collect());
         Ok(ElicitationSchema {
+            schema: None,
             type_: ObjectTypeConst,
             title: self.title,
             properties: self.properties,
+            property_order,
             required: if self.required.is_empty() {
                 None
             } else {
@@ -1820,6 +1912,61 @@ mod tests {
         assert_eq!(
             output["properties"]["choice"]["enumNames"],
             serde_json::json!(["Option One", "Option Two", "Option Three"]),
+        );
+        let input = r#"{"type":"object","properties":{"firstName":{"type":"string"},"lastName":{"type":"string"},"email":{"type":"string"}}}"#;
+        let ordered: ElicitationSchema = serde_json::from_str(input)?;
+        assert_eq!(
+            ordered.property_order.as_ref().unwrap().join(","),
+            "firstName,lastName,email",
+        );
+        assert_eq!(serde_json::to_string(&ordered)?, input);
+        Ok(())
+    }
+
+    #[test]
+    fn test_elicitation_schema_preserves_schema_dialect_roundtrip() -> anyhow::Result<()> {
+        // Regression test for #1168: a top-level `$schema` dialect declaration on a
+        // `requestedSchema` was silently dropped, because the wire bridge struct had
+        // no field to hold it. It must survive a decode/re-encode round-trip.
+        let input = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            }
+        });
+        let schema: ElicitationSchema = serde_json::from_value(input.clone())?;
+        assert_eq!(
+            schema.schema.as_deref(),
+            Some("https://json-schema.org/draft/2020-12/schema"),
+        );
+        let output = serde_json::to_value(&schema)?;
+        assert_eq!(output, input);
+        Ok(())
+    }
+
+    #[test]
+    fn test_elicitation_schema_omits_schema_dialect_when_absent() -> anyhow::Result<()> {
+        // A schema with no dialect must not emit a `$schema` key (no `"$schema": null`).
+        let input = serde_json::json!({
+            "type": "object",
+            "properties": { "name": { "type": "string" } }
+        });
+        let schema: ElicitationSchema = serde_json::from_value(input)?;
+        assert!(schema.schema.is_none());
+        let json = serde_json::to_value(&schema)?;
+        assert!(json.get("$schema").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_elicitation_schema_with_schema_setter_serializes_dialect() -> anyhow::Result<()> {
+        let schema = ElicitationSchema::new(BTreeMap::new())
+            .with_schema("https://json-schema.org/draft/2020-12/schema");
+        let json = serde_json::to_value(&schema)?;
+        assert_eq!(
+            json["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
         );
         Ok(())
     }

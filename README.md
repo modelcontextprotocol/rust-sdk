@@ -112,7 +112,7 @@ let client = ClientInfo::default()
     .await?;
 
 // Or probe the discover lifecycle and fall back when a legacy server reports
-// that server/discover is not implemented.
+// that server/discover is not implemented or does not respond within 10 seconds.
 let client = ClientInfo::default()
     .serve_with_lifecycle(
         transport,

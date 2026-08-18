@@ -51,6 +51,7 @@ serde_json = "1.0"
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 futures = "0.3"
+indexmap = { version = "2", features = ["serde"] }
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
@@ -69,6 +70,7 @@ base64 = { version = "0.23", optional = true }
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
 sha2 = { version = "0.11", optional = true }
+zeroize = { version = "1", optional = true }
 
 # for HTTP client
 reqwest = { version = "0.13.2", default-features = false, features = [
@@ -127,7 +129,7 @@ macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
-request-state = ["dep:hmac", "dep:sha2", "base64"]
+request-state = ["dep:hmac", "dep:sha2", "dep:zeroize", "base64"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]

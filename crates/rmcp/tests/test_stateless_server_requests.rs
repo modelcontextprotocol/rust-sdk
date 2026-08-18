@@ -162,7 +162,7 @@ async fn stateless_server_uses_each_requests_client_context() {
 }
 
 #[tokio::test]
-async fn stateless_server_rejects_malformed_metadata_opener() {
+async fn stateless_server_rejects_malformed_metadata_opener_with_error_response() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_task = tokio::spawn(async move { StatelessServer.serve(server_transport).await });
     let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
@@ -186,6 +186,24 @@ async fn stateless_server_rejects_malformed_metadata_opener() {
         ))
         .await
         .expect("send list tools");
+    let Some(ServerJsonRpcMessage::Error(error)) = client.receive().await else {
+        panic!("expected invalid params");
+    };
+    assert_eq!(error.id, Some(RequestId::Number(1)));
+    assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
+    assert!(
+        error
+            .error
+            .message
+            .contains("request _meta is missing or has malformed required fields")
+    );
+    assert!(
+        error
+            .error
+            .message
+            .contains("io.modelcontextprotocol/clientCapabilities")
+    );
+
     let Err(error) = server_task.await.expect("server task") else {
         panic!("malformed opener should not start a session");
     };

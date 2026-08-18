@@ -40,9 +40,10 @@
 //!
 //! ```
 //! use rmcp::model::{RequestStateCodec, SealOptions};
+//! # fn main() -> Result<(), rmcp::model::RequestStateError> {
 //!
 //! // Derive the key from a per-process secret; keep it out of client reach.
-//! let codec = RequestStateCodec::new(b"a-32-byte-or-longer-secret-key!!!");
+//! let codec = RequestStateCodec::try_new(b"a-32-byte-or-longer-secret-key!!!")?;
 //!
 //! // Bind the state to the caller and the originating request.
 //! let context = b"user:alice|tools/call:weather";
@@ -53,11 +54,13 @@
 //!
 //! // On retry the client echoes `sealed` back untouched; the server re-derives
 //! // the same context and opens it.
-//! let opened = codec.open_with(&sealed, context).expect("integrity check passes");
+//! let opened = codec.open_with(&sealed, context)?;
 //! assert_eq!(opened, b"step=2");
 //!
 //! // A different principal (different context) is rejected.
 //! assert!(codec.open_with(&sealed, b"user:bob|tools/call:weather").is_err());
+//! # Ok(())
+//! # }
 //! ```
 
 use std::{
@@ -70,6 +73,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -93,11 +97,17 @@ const MAX_KID_LEN: usize = 255;
 /// Maximum unpadded base64url length for [`MAX_KID_LEN`] bytes.
 const MAX_ENCODED_KID_LEN: usize = 340;
 
-/// Errors returned when configuring, sealing, or opening a
-/// [`RequestStateCodec`] value.
+/// Errors returned when constructing or configuring a
+/// [`RequestStateCodec`], or when processing a sealed value.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RequestStateError {
+    /// The signing key is shorter than [`RequestStateCodec::MIN_KEY_LENGTH`].
+    #[error(
+        "request state signing key is too short: expected at least {minimum} bytes, got {actual}"
+    )]
+    KeyTooShort { minimum: usize, actual: usize },
+
     /// The value is not a well-formed sealed request state (wrong prefix or
     /// missing sections).
     #[error("request state is malformed or uses an unsupported format")]
@@ -180,7 +190,12 @@ impl<'a> SealOptions<'a> {
 /// Use [`with_rs1_signing`](Self::with_rs1_signing) and
 /// [`with_rs1_fallback`](Self::with_rs1_fallback) for rolling migrations.
 ///
-/// Configure the same high-entropy keys of at least 32 bytes on every replica.
+/// Use [`try_new`](Self::try_new) and
+/// [`new_with_keyring`](Self::new_with_keyring) to require at least
+/// [`MIN_KEY_LENGTH`](Self::MIN_KEY_LENGTH) bytes of high-entropy key material.
+/// Configure the same keys on every replica. Stored key material is zeroized
+/// when the codec is dropped.
+///
 /// Values are authenticated, not encrypted; key ids and payloads remain
 /// readable. Retain old keys until every value they signed has expired.
 ///
@@ -221,9 +236,9 @@ pub struct RequestStateCodec {
 
 #[derive(Clone)]
 enum Keys {
-    Single(Box<[u8]>),
+    Single(Zeroizing<Vec<u8>>),
     Ring {
-        keys: HashMap<String, Box<[u8]>>,
+        keys: HashMap<String, Zeroizing<Vec<u8>>>,
         seal_mode: SealMode,
         rs1_fallbacks: Vec<String>,
     },
@@ -261,11 +276,41 @@ impl std::fmt::Debug for RequestStateCodec {
 }
 
 impl RequestStateCodec {
-    /// Creates a legacy single-key codec that seals and opens `rs1` values.
+    /// Minimum accepted signing-key length in bytes.
+    pub const MIN_KEY_LENGTH: usize = 32;
+
+    /// Creates a legacy single-key codec that seals and opens `rs1` values
+    /// without validating the signing-key length.
+    #[deprecated(
+        since = "3.1.4",
+        note = "use RequestStateCodec::try_new to enforce the minimum signing-key length"
+    )]
     pub fn new(key: impl Into<Vec<u8>>) -> Self {
+        Self::new_unchecked(key)
+    }
+
+    /// Creates a codec without validating the signing-key length.
+    ///
+    /// Prefer [`try_new`](Self::try_new) unless the key length has already been
+    /// validated.
+    pub fn new_unchecked(key: impl Into<Vec<u8>>) -> Self {
         Self {
-            keys: Keys::Single(key.into().into_boxed_slice()),
+            keys: Keys::Single(Zeroizing::new(key.into())),
         }
+    }
+
+    /// Creates a legacy single-key codec after validating its signing-key length.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RequestStateError::KeyTooShort`] when `key` contains fewer
+    /// than [`MIN_KEY_LENGTH`](Self::MIN_KEY_LENGTH) bytes.
+    pub fn try_new(key: impl Into<Vec<u8>>) -> Result<Self, RequestStateError> {
+        let key = Zeroizing::new(key.into());
+        Self::validate_key_length(&key)?;
+        Ok(Self {
+            keys: Keys::Single(key),
+        })
     }
 
     /// Creates a keyring codec that seals `rs2` with `active_kid`.
@@ -277,8 +322,10 @@ impl RequestStateCodec {
     ///
     /// # Errors
     ///
-    /// Returns [`RequestStateError::InvalidKeyring`] if the keyring is empty,
-    /// contains duplicate or invalid key ids, or does not contain `active_kid`.
+    /// Returns [`RequestStateError::KeyTooShort`] if a configured key contains
+    /// fewer than [`MIN_KEY_LENGTH`](Self::MIN_KEY_LENGTH) bytes. Returns
+    /// [`RequestStateError::InvalidKeyring`] if the keyring is empty, contains
+    /// duplicate or invalid key ids, or does not contain `active_kid`.
     pub fn new_with_keyring<K, V>(
         active_kid: impl Into<String>,
         keys: impl IntoIterator<Item = (K, V)>,
@@ -290,10 +337,12 @@ impl RequestStateCodec {
         let mut ring = HashMap::new();
         for (kid, key) in keys {
             let kid = kid.into();
+            let key = Zeroizing::new(key.into());
             Self::validate_config_kid(&kid)?;
+            Self::validate_key_length(&key)?;
             match ring.entry(kid) {
                 Entry::Vacant(entry) => {
-                    entry.insert(key.into().into_boxed_slice());
+                    entry.insert(key);
                 }
                 Entry::Occupied(_) => {
                     return Err(RequestStateError::InvalidKeyring("duplicate key id"));
@@ -329,9 +378,8 @@ impl RequestStateCodec {
     ///
     /// # Errors
     ///
-    /// Returns [`RequestStateError::InvalidKeyring`] when called on a
-    /// single-key codec created by [`new`](Self::new), or if the keyring does
-    /// not contain `kid`.
+    /// Returns [`RequestStateError::InvalidKeyring`] when called on a single-key
+    /// codec, or if the keyring does not contain `kid`.
     pub fn with_rs1_signing(mut self, kid: impl AsRef<str>) -> Result<Self, RequestStateError> {
         let kid = kid.as_ref();
         match &mut self.keys {
@@ -367,9 +415,8 @@ impl RequestStateCodec {
     ///
     /// # Errors
     ///
-    /// Returns [`RequestStateError::InvalidKeyring`] when called on a
-    /// single-key codec created by [`new`](Self::new), or if the keyring does
-    /// not contain `kid`.
+    /// Returns [`RequestStateError::InvalidKeyring`] when called on a single-key
+    /// codec, or if the keyring does not contain `kid`.
     pub fn with_rs1_fallback(mut self, kid: impl AsRef<str>) -> Result<Self, RequestStateError> {
         let kid = kid.as_ref();
         match &mut self.keys {
@@ -705,6 +752,16 @@ impl RequestStateCodec {
         mac
     }
 
+    fn validate_key_length(key: &[u8]) -> Result<(), RequestStateError> {
+        if key.len() < Self::MIN_KEY_LENGTH {
+            return Err(RequestStateError::KeyTooShort {
+                minimum: Self::MIN_KEY_LENGTH,
+                actual: key.len(),
+            });
+        }
+        Ok(())
+    }
+
     fn validate_config_kid(kid: &str) -> Result<(), RequestStateError> {
         if kid.is_empty() {
             return Err(RequestStateError::InvalidKeyring(
@@ -734,8 +791,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn try_new_accepts_key_at_minimum_length() {
+        let result = RequestStateCodec::try_new(vec![0; RequestStateCodec::MIN_KEY_LENGTH]);
+
+        assert!(result.is_ok(), "unexpected result: {result:?}");
+    }
+
+    #[test]
+    fn try_new_rejects_key_below_minimum_length() {
+        let actual = RequestStateCodec::MIN_KEY_LENGTH - 1;
+        let error = RequestStateCodec::try_new(vec![0; actual]).unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                RequestStateError::KeyTooShort {
+                    minimum: RequestStateCodec::MIN_KEY_LENGTH,
+                    actual: error_actual,
+                } if *error_actual == actual
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn new_accepts_short_key_for_backward_compatibility() {
+        let codec = RequestStateCodec::new(b"key".to_vec());
+
+        assert_eq!(codec.open(&codec.seal(b"state")).unwrap(), b"state");
+    }
+
+    #[test]
     fn seal_open_roundtrips_bytes() {
-        let codec = RequestStateCodec::new(b"test-key-test-key-test-key-32byte".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"test-key-test-key-test-key-32byte".to_vec()).unwrap();
         let sealed = codec.seal(b"hello world");
         assert!(sealed.starts_with("rs1."));
         assert_eq!(codec.open(&sealed).unwrap(), b"hello world");
@@ -748,7 +838,8 @@ mod tests {
             tool: String,
             round: u32,
         }
-        let codec = RequestStateCodec::new(b"another-strong-signing-key-here!!".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"another-strong-signing-key-here!!".to_vec()).unwrap();
         let state = State {
             tool: "weather".into(),
             round: 3,
@@ -760,14 +851,16 @@ mod tests {
 
     #[test]
     fn empty_payload_roundtrips() {
-        let codec = RequestStateCodec::new(b"k".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"empty-payload-test-signing-key!!".to_vec()).unwrap();
         let sealed = codec.seal(b"");
         assert_eq!(codec.open(&sealed).unwrap(), b"");
     }
 
     #[test]
     fn tampered_payload_is_rejected() {
-        let codec = RequestStateCodec::new(b"signing-key-signing-key-signing!!".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"signing-key-signing-key-signing!!".to_vec()).unwrap();
         let sealed = codec.seal(b"amount=100");
 
         // Replace the body section but keep the original tag.
@@ -784,8 +877,10 @@ mod tests {
 
     #[test]
     fn different_key_is_rejected() {
-        let signer = RequestStateCodec::new(b"the-real-signing-key-value-here!!".to_vec());
-        let attacker = RequestStateCodec::new(b"a-totally-different-forged-key!!!".to_vec());
+        let signer =
+            RequestStateCodec::try_new(b"the-real-signing-key-value-here!!".to_vec()).unwrap();
+        let attacker =
+            RequestStateCodec::try_new(b"a-totally-different-forged-key!!!".to_vec()).unwrap();
         let sealed = signer.seal(b"trusted");
         assert!(matches!(
             attacker.open(&sealed),
@@ -795,7 +890,8 @@ mod tests {
 
     #[test]
     fn appended_bytes_are_rejected() {
-        let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
         let mut sealed = codec.seal(b"state");
         sealed.push('x');
         assert!(codec.open(&sealed).is_err());
@@ -803,7 +899,8 @@ mod tests {
 
     #[test]
     fn unsupported_version_is_malformed() {
-        let codec = RequestStateCodec::new(b"key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"wrong-version-test-signing-key!!".to_vec()).unwrap();
         let sealed = codec.seal(b"state");
         let bumped = sealed.replacen("rs1.", "rs3.", 1);
         assert!(matches!(
@@ -814,7 +911,8 @@ mod tests {
 
     #[test]
     fn missing_sections_are_malformed() {
-        let codec = RequestStateCodec::new(b"key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"missing-sections-test-signing-key".to_vec()).unwrap();
         assert!(matches!(
             codec.open("rs1"),
             Err(RequestStateError::MalformedFormat)
@@ -831,7 +929,8 @@ mod tests {
 
     #[test]
     fn non_base64_sections_are_invalid_encoding() {
-        let codec = RequestStateCodec::new(b"key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"invalid-base64-test-signing-key!!".to_vec()).unwrap();
         assert!(matches!(
             codec.open("rs1.!!!!.!!!!"),
             Err(RequestStateError::InvalidEncoding)
@@ -840,7 +939,8 @@ mod tests {
 
     #[test]
     fn debug_does_not_leak_key() {
-        let codec = RequestStateCodec::new(b"super-secret-key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"super-secret-key-super-secret-key!!".to_vec()).unwrap();
         let rendered = format!("{codec:?}");
         assert!(!rendered.contains("super-secret-key"));
         assert!(rendered.contains("redacted"));
@@ -851,7 +951,8 @@ mod tests {
 
         #[test]
         fn matching_context_opens() {
-            let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+            let codec =
+                RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
             let ctx = b"user:alice|tools/call:weather";
             let sealed = codec.seal_with(b"state", &SealOptions::new().associated_data(ctx));
             assert_eq!(codec.open_with(&sealed, ctx).unwrap(), b"state");
@@ -859,7 +960,8 @@ mod tests {
 
         #[test]
         fn different_context_is_rejected() {
-            let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+            let codec =
+                RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
             let sealed =
                 codec.seal_with(b"state", &SealOptions::new().associated_data(b"user:alice"));
             assert!(matches!(
@@ -870,7 +972,8 @@ mod tests {
 
         #[test]
         fn missing_context_is_rejected() {
-            let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+            let codec =
+                RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
             let sealed =
                 codec.seal_with(b"state", &SealOptions::new().associated_data(b"user:alice"));
             // Opening without the associated data must fail closed.
@@ -888,7 +991,7 @@ mod tests {
 
         #[test]
         fn within_ttl_opens() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let sealed = codec.seal_at(
                 b"state",
                 &SealOptions::new().ttl(Duration::from_secs(60)),
@@ -900,7 +1003,7 @@ mod tests {
 
         #[test]
         fn past_ttl_is_expired() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let sealed = codec.seal_at(
                 b"state",
                 &SealOptions::new().ttl(Duration::from_secs(60)),
@@ -915,14 +1018,14 @@ mod tests {
 
         #[test]
         fn no_ttl_never_expires() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let sealed = codec.seal_at(b"state", &SealOptions::new(), 1_000);
             assert_eq!(codec.open_at(&sealed, &[], i64::MAX).unwrap(), b"state");
         }
 
         #[test]
         fn ttl_and_associated_data_combine() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let ctx = b"user:alice";
             let sealed = codec.seal_at(
                 b"state",
@@ -1009,7 +1112,7 @@ mod tests {
         #[test]
         fn rs1_known_answer_is_unchanged() {
             // Independently checked with Python stdlib HMAC and Ruby OpenSSL.
-            let codec = RequestStateCodec::new(KAT_KEY);
+            let codec = RequestStateCodec::try_new(KAT_KEY).unwrap();
             let sealed = codec.seal_at(
                 b"step=2",
                 &SealOptions::new()
@@ -1083,7 +1186,7 @@ mod tests {
 
         #[test]
         fn rolling_migration_is_bidirectionally_compatible() {
-            let old = RequestStateCodec::new(KEY_A);
+            let old = RequestStateCodec::try_new(KEY_A).unwrap();
             let transitional =
                 RequestStateCodec::new_with_keyring("new", [("old", KEY_A), ("new", KEY_B)])
                     .unwrap()
@@ -1116,9 +1219,9 @@ mod tests {
 
         #[test]
         fn multiple_legacy_fallbacks_are_supported() {
-            let legacy_a = RequestStateCodec::new(KEY_A).seal(b"a");
-            let legacy_b = RequestStateCodec::new(KEY_B).seal(b"b");
-            let legacy_c = RequestStateCodec::new(KEY_C).seal(b"c");
+            let legacy_a = RequestStateCodec::try_new(KEY_A).unwrap().seal(b"a");
+            let legacy_b = RequestStateCodec::try_new(KEY_B).unwrap().seal(b"b");
+            let legacy_c = RequestStateCodec::try_new(KEY_C).unwrap().seal(b"c");
             let ring = RequestStateCodec::new_with_keyring(
                 "new",
                 [("a", KEY_A), ("b", KEY_B), ("new", KEY_C)],
@@ -1180,7 +1283,7 @@ mod tests {
             let wrong_v1_tag = test_mac(KEY_A, DOMAIN_V2, None, b"", &token_body);
             let wrong_v1 = raw_rs1(&token_body, &wrong_v1_tag);
             assert!(matches!(
-                RequestStateCodec::new(KEY_A).open(&wrong_v1),
+                RequestStateCodec::try_new(KEY_A).unwrap().open(&wrong_v1),
                 Err(RequestStateError::IntegrityCheckFailed)
             ));
         }
@@ -1217,8 +1320,19 @@ mod tests {
                 Err(RequestStateError::InvalidKeyring(_))
             ));
 
+            let short_key = RequestStateCodec::new_with_keyring(
+                "a",
+                [("a", vec![0; RequestStateCodec::MIN_KEY_LENGTH - 1])],
+            );
             assert!(matches!(
-                RequestStateCodec::new(KEY_A).with_rs1_signing("a"),
+                short_key,
+                Err(RequestStateError::KeyTooShort { .. })
+            ));
+
+            assert!(matches!(
+                RequestStateCodec::try_new(KEY_A)
+                    .unwrap()
+                    .with_rs1_signing("a"),
                 Err(RequestStateError::InvalidKeyring(_))
             ));
             assert!(matches!(
@@ -1226,7 +1340,9 @@ mod tests {
                 Err(RequestStateError::InvalidKeyring(_))
             ));
             assert!(matches!(
-                RequestStateCodec::new(KEY_A).with_rs1_fallback("a"),
+                RequestStateCodec::try_new(KEY_A)
+                    .unwrap()
+                    .with_rs1_fallback("a"),
                 Err(RequestStateError::InvalidKeyring(_))
             ));
             assert!(matches!(
@@ -1291,11 +1407,11 @@ mod tests {
             ));
 
             assert!(matches!(
-                RequestStateCodec::new(KEY_A).open(&valid_rs2),
+                RequestStateCodec::try_new(KEY_A).unwrap().open(&valid_rs2),
                 Err(RequestStateError::UnknownKeyId)
             ));
 
-            let valid_rs1 = RequestStateCodec::new(KEY_A).seal(b"state");
+            let valid_rs1 = RequestStateCodec::try_new(KEY_A).unwrap().seal(b"state");
             assert!(matches!(
                 codec.open(&valid_rs1),
                 Err(RequestStateError::UnknownKeyId)
@@ -1345,7 +1461,7 @@ mod tests {
         fn mutated_tokens_do_not_panic() {
             let codec = two_key_ring("a").with_rs1_fallback("a").unwrap();
             let valid = [
-                RequestStateCodec::new(KEY_A).seal(b"state"),
+                RequestStateCodec::try_new(KEY_A).unwrap().seal(b"state"),
                 codec.seal(b"state"),
             ];
             let mut corpus = vec![

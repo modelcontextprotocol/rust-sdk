@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.2...rmcp-macros-v3.1.3) - 2026-08-17
+
+### Fixed
+
+- time out auto discovery probe ([#1149](https://github.com/modelcontextprotocol/rust-sdk/pull/1149))
+
 ## [3.1.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.0...rmcp-macros-v3.1.1) - 2026-08-05
 
 ### Fixed
