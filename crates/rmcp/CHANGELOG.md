@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.1.3...rmcp-v3.1.4) - 2026-08-18
+
+### Fixed
+
+- *(rmcp)* preserve elicitation requestedSchema $schema dialect ([#1176](https://github.com/modelcontextprotocol/rust-sdk/pull/1176))
+- harden signing key handling ([#1166](https://github.com/modelcontextprotocol/rust-sdk/pull/1166))
+- report pre-init metadata errors ([#1160](https://github.com/modelcontextprotocol/rust-sdk/pull/1160))
+
 ## [3.1.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.1.2...rmcp-v3.1.3) - 2026-08-17
 
 ### Fixed
