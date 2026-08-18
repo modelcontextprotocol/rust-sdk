@@ -41,8 +41,8 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// A stable, high-entropy secret. In a real deployment, load this from your
-/// secret manager and keep it out of clients' reach. It must stay constant for
+/// A fixed key for this example. Real deployments should load at least 32 bytes
+/// of random secret key material from a secret manager and keep it stable for
 /// the lifetime of any in-flight MRTR exchange.
 const REQUEST_STATE_KEY: &[u8] = b"example-request-state-signing-key-32b!";
 
@@ -63,12 +63,11 @@ struct WeatherServer {
     codec: RequestStateCodec,
 }
 
-impl Default for WeatherServer {
-    fn default() -> Self {
-        Self {
-            codec: RequestStateCodec::try_new(REQUEST_STATE_KEY)
-                .expect("example request-state key meets the minimum length"),
-        }
+impl WeatherServer {
+    fn new(key: impl Into<Vec<u8>>) -> Result<Self, RequestStateError> {
+        Ok(Self {
+            codec: RequestStateCodec::try_new(key)?,
+        })
     }
 }
 
@@ -198,10 +197,11 @@ impl ClientHandler for InteractiveClient {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let (server_transport, client_transport) = tokio::io::duplex(8192);
+    let server = WeatherServer::new(REQUEST_STATE_KEY)?;
 
     // Spin up the server side.
     tokio::spawn(async move {
-        let server = WeatherServer::default()
+        let server = server
             .serve(server_transport)
             .await
             .expect("server should start");
@@ -209,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Connect the client (this performs the initialize handshake).
-    let client = InteractiveClient::default().serve(client_transport).await?;
+    let client = InteractiveClient.serve(client_transport).await?;
 
     // 1. High-level auto mode: the SDK fulfils the elicitation and retries for us.
     println!("== auto mode (call_tool) ==");
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn open_request_state_rejects_unknown_phase() {
-        let server = WeatherServer::default();
+        let server = WeatherServer::new(REQUEST_STATE_KEY).unwrap();
         let sealed = server
             .codec
             .seal_json(&json!({ "awaiting": "country" }))

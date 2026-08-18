@@ -189,8 +189,19 @@ impl RequestStateCodec {
     pub const MIN_KEY_LENGTH: usize = 32;
 
     /// Creates a codec from a signing key without validating its length.
-    /// Prefer [`try_new`](Self::try_new) for new integrations.
+    #[deprecated(
+        since = "3.1.4",
+        note = "use RequestStateCodec::try_new to enforce the minimum signing-key length"
+    )]
     pub fn new(key: impl Into<Vec<u8>>) -> Self {
+        Self::new_unchecked(key)
+    }
+
+    /// Creates a codec without validating the signing-key length.
+    ///
+    /// Prefer [`try_new`](Self::try_new) unless the key length has already been
+    /// validated.
+    pub fn new_unchecked(key: impl Into<Vec<u8>>) -> Self {
         Self {
             key: Zeroizing::new(key.into()),
         }
@@ -424,6 +435,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn new_accepts_short_key_for_backward_compatibility() {
         let codec = RequestStateCodec::new(b"key".to_vec());
 

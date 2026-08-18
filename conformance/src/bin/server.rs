@@ -52,6 +52,10 @@ fn custom_header_tool() -> Tool {
 /// Signing key for SEP-2322 `requestState` sealing. A fixed key is fine for a
 /// conformance harness; real servers must load a secret out of clients' reach.
 const REQUEST_STATE_KEY: &[u8] = b"rust-sdk-conformance-request-state-key!!";
+const _: () = assert!(
+    REQUEST_STATE_KEY.len() >= RequestStateCodec::MIN_KEY_LENGTH,
+    "REQUEST_STATE_KEY is shorter than RequestStateCodec::MIN_KEY_LENGTH",
+);
 
 #[derive(Clone)]
 struct ConformanceServer {
@@ -70,8 +74,7 @@ impl ConformanceServer {
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
             next_subscription: Arc::new(AtomicU64::new(0)),
             log_level: Arc::new(Mutex::new(LoggingLevel::Debug)),
-            request_state_codec: RequestStateCodec::try_new(REQUEST_STATE_KEY)
-                .expect("conformance request-state key meets the minimum length"),
+            request_state_codec: RequestStateCodec::new_unchecked(REQUEST_STATE_KEY),
             tasks: TaskManager::new(),
         }
     }

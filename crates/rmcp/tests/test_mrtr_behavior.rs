@@ -594,14 +594,15 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
     use rmcp::model::RequestStateCodec;
 
     // A shared per-process signing key, mirroring how a real server would derive one.
-    static KEY: &[u8] = b"integration-signing-key-32-bytes!";
+    const KEY: &[u8] = b"integration-signing-key-32-bytes!";
+    const _: () = assert!(
+        KEY.len() >= RequestStateCodec::MIN_KEY_LENGTH,
+        "KEY is shorter than RequestStateCodec::MIN_KEY_LENGTH",
+    );
 
     fn codec() -> &'static RequestStateCodec {
         static CODEC: OnceLock<RequestStateCodec> = OnceLock::new();
-        CODEC.get_or_init(|| {
-            RequestStateCodec::try_new(KEY)
-                .expect("test request-state key meets the minimum length")
-        })
+        CODEC.get_or_init(|| RequestStateCodec::new_unchecked(KEY))
     }
 
     #[derive(Clone, Default)]
