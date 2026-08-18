@@ -7,7 +7,7 @@ use std::{
     io,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     },
     time::Duration,
 };
@@ -16,11 +16,12 @@ use futures::{StreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
     model::{
-        CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, ClientRequest, DiscoverResult,
-        ProtocolVersion, Request, ServerJsonRpcMessage,
+        CallToolRequestParams, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
+        ClientRequest, DiscoverResult, ProtocolVersion, Request, RequestId, RequestMetaObject,
+        ServerJsonRpcMessage,
     },
     service::{
-        ClientLifecycleMode, PeerRequestOptions, RoleClient, RunningService,
+        ClientLifecycleMode, PeerRequestOptions, RequestHandle, RoleClient, RunningService,
         serve_client_with_lifecycle,
     },
     transport::streamable_http_client::{
@@ -31,18 +32,22 @@ use rmcp::{
 use serde_json::{Value, json};
 use sse_stream::{Error as SseError, Sse};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
     time::timeout,
 };
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 type PostResult = Result<StreamableHttpPostResponse, StreamableHttpError<io::Error>>;
 type Call = JoinHandle<anyhow::Result<()>>;
+type SseReceiver = mpsc::UnboundedReceiver<Result<Sse, SseError>>;
 
 #[derive(Default)]
 struct Counts {
     initialized: AtomicUsize,
+    hold_reinitialization: AtomicBool,
+    manual_controls: AtomicBool,
     deleted: AtomicUsize,
     cancelled: AtomicUsize,
     posted: AtomicUsize,
@@ -63,11 +68,34 @@ struct Posted {
     name: String,
     session: Option<Arc<str>>,
     reply: oneshot::Sender<PostResult>,
+    returned: oneshot::Receiver<()>,
+}
+
+struct ControlPost {
+    message: Value,
+    session: Option<Arc<str>>,
+    reply: oneshot::Sender<PostResult>,
 }
 
 fn response(id: Value, result: Value) -> ServerJsonRpcMessage {
     serde_json::from_value(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
         .expect("valid scripted response")
+}
+
+fn sse(message: Value) -> Result<Sse, SseError> {
+    Ok(Sse {
+        event: Some("message".into()),
+        data: Some(message.to_string()),
+        id: None,
+        retry: None,
+    })
+}
+
+async fn next_event<T>(receiver: &mut mpsc::UnboundedReceiver<T>) -> T {
+    timeout(TEST_TIMEOUT, receiver.recv())
+        .await
+        .expect("expected scripted event")
+        .expect("scripted client remains connected")
 }
 
 impl Posted {
@@ -91,28 +119,58 @@ impl Posted {
         self.finish(Err(StreamableHttpError::SessionExpired));
     }
 
-    fn start_sse(self) -> oneshot::Sender<()> {
-        let data = serde_json::to_string(&self.result()).unwrap();
+    async fn finish_and_wait(self, result: PostResult) -> anyhow::Result<()> {
+        let Self {
+            reply, returned, ..
+        } = self;
+        reply.send(result).expect("POST is still waiting");
+        timeout(TEST_TIMEOUT, returned).await??;
+        Ok(())
+    }
+
+    async fn expire_and_wait(self) -> anyhow::Result<()> {
+        self.finish_and_wait(Err(StreamableHttpError::SessionExpired))
+            .await
+    }
+
+    async fn start_sse(self) -> anyhow::Result<oneshot::Sender<()>> {
+        let message = serde_json::to_value(self.result()).unwrap();
         let (release, released) = oneshot::channel();
         let stream = futures::stream::once(async move {
             released.await.expect("release the SSE response");
-            Ok(Sse {
-                event: Some("message".into()),
-                data: Some(data),
-                id: None,
-                retry: None,
-            })
+            sse(message)
         })
         .boxed();
-        self.finish(Ok(StreamableHttpPostResponse::Sse(stream, None)));
-        release
+        self.finish_and_wait(Ok(StreamableHttpPostResponse::Sse(stream, None)))
+            .await?;
+        Ok(release)
     }
 }
 
 #[derive(Clone)]
 struct ScriptedClient {
     started: mpsc::UnboundedSender<Posted>,
+    controls: mpsc::UnboundedSender<ControlPost>,
+    incoming: Arc<Mutex<Option<SseReceiver>>>,
+    reinitializing: mpsc::UnboundedSender<oneshot::Sender<()>>,
     counts: Arc<Counts>,
+}
+
+impl ScriptedClient {
+    async fn control_post(&self, message: Value, session: Option<Arc<str>>) -> PostResult {
+        if !self.counts.manual_controls.load(SeqCst) {
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
+        let (reply, result) = oneshot::channel();
+        self.controls
+            .send(ControlPost {
+                message,
+                session,
+                reply,
+            })
+            .expect("test remains connected");
+        result.await.expect("test answers the control POST")
+    }
 }
 
 impl StreamableHttpClient for ScriptedClient {
@@ -141,6 +199,13 @@ impl StreamableHttpClient for ScriptedClient {
             )),
             Some("initialize") => {
                 let generation = self.counts.initialized.fetch_add(1, SeqCst) + 1;
+                if generation > 1 && self.counts.hold_reinitialization.load(SeqCst) {
+                    let (release, released) = oneshot::channel();
+                    self.reinitializing
+                        .send(release)
+                        .expect("test remains connected");
+                    released.await.expect("test releases reinitialization");
+                }
                 Ok(StreamableHttpPostResponse::Json(
                     response(
                         value["id"].clone(),
@@ -156,7 +221,7 @@ impl StreamableHttpClient for ScriptedClient {
             Some("notifications/initialized") => Ok(StreamableHttpPostResponse::Accepted),
             Some("notifications/cancelled") => {
                 self.counts.cancelled.fetch_add(1, SeqCst);
-                Ok(StreamableHttpPostResponse::Accepted)
+                self.control_post(value, session).await
             }
             Some("tools/call") => {
                 self.counts.posted.fetch_add(1, SeqCst);
@@ -164,15 +229,22 @@ impl StreamableHttpClient for ScriptedClient {
                 self.counts.peak.fetch_max(active, SeqCst);
                 let _active = ActivePost(self.counts.clone());
                 let (reply, response) = oneshot::channel();
+                let (finished, returned) = oneshot::channel();
                 self.started
                     .send(Posted {
                         id: value["id"].clone(),
                         name: value["params"]["name"].as_str().unwrap().to_owned(),
                         session,
                         reply,
+                        returned,
                     })
                     .expect("test remains connected");
-                response.await.expect("test answers each POST")
+                let response = response.await.expect("test answers each POST");
+                let _ = finished.send(());
+                response
+            }
+            None if value.get("result").is_some() || value.get("error").is_some() => {
+                self.control_post(value, session).await
             }
             method => panic!("unexpected scripted method: {method:?}"),
         }
@@ -202,18 +274,44 @@ impl StreamableHttpClient for ScriptedClient {
         _auth_header: Option<String>,
         _custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
-        Ok(futures::stream::pending().boxed())
+        Ok(match self.incoming.lock().await.take() {
+            Some(incoming) => UnboundedReceiverStream::new(incoming).boxed(),
+            None => futures::stream::pending().boxed(),
+        })
     }
 }
 
 struct Harness {
     client: RunningService<RoleClient, ClientInfo>,
     started: mpsc::UnboundedReceiver<Posted>,
+    controls: mpsc::UnboundedReceiver<ControlPost>,
+    incoming: mpsc::UnboundedSender<Result<Sse, SseError>>,
+    reinitializations: mpsc::UnboundedReceiver<oneshot::Sender<()>>,
     counts: Arc<Counts>,
 }
 
 fn config() -> StreamableHttpClientTransportConfig {
     StreamableHttpClientTransportConfig::with_uri("http://scripted/mcp")
+}
+
+fn transport_error(error: &anyhow::Error) -> &StreamableHttpError<io::Error> {
+    let service_error = error
+        .downcast_ref::<rmcp::ServiceError>()
+        .expect("expected a service error");
+    let rmcp::ServiceError::TransportSend(transport_error) = service_error else {
+        panic!("expected a transport error, got {service_error:?}");
+    };
+    transport_error
+        .error
+        .downcast_ref::<StreamableHttpError<io::Error>>()
+        .expect("expected a streamable http error")
+}
+
+fn assert_recovery_timeout(error: anyhow::Error) {
+    assert!(matches!(
+        transport_error(&error),
+        StreamableHttpError::SessionRecoveryTimeout
+    ));
 }
 
 impl Harness {
@@ -226,10 +324,16 @@ impl Harness {
         lifecycle: ClientLifecycleMode,
     ) -> anyhow::Result<Self> {
         let (started, requests) = mpsc::unbounded_channel();
+        let (control_tx, controls) = mpsc::unbounded_channel();
+        let (incoming, incoming_rx) = mpsc::unbounded_channel();
+        let (reinitializing, reinitializations) = mpsc::unbounded_channel();
         let counts = Arc::new(Counts::default());
         let transport = StreamableHttpClientTransport::with_client(
             ScriptedClient {
                 started,
+                controls: control_tx,
+                incoming: Arc::new(Mutex::new(Some(incoming_rx))),
+                reinitializing,
                 counts: counts.clone(),
             },
             config,
@@ -239,6 +343,9 @@ impl Harness {
         Ok(Self {
             client,
             started: requests,
+            controls,
+            incoming,
+            reinitializations,
             counts,
         })
     }
@@ -255,11 +362,54 @@ impl Harness {
         })
     }
 
-    async fn next(&mut self) -> Posted {
-        timeout(TEST_TIMEOUT, self.started.recv())
+    async fn cancellable(&self, name: &'static str) -> anyhow::Result<RequestHandle<RoleClient>> {
+        self.cancellable_with_options(name, PeerRequestOptions::no_options())
             .await
-            .expect("expected POST to start")
-            .expect("scripted client remains connected")
+    }
+
+    async fn cancellable_with_options(
+        &self,
+        name: &'static str,
+        options: PeerRequestOptions,
+    ) -> anyhow::Result<RequestHandle<RoleClient>> {
+        Ok(self
+            .client
+            .peer()
+            .send_cancellable_request(
+                ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(name))),
+                options,
+            )
+            .await?)
+    }
+
+    fn notify_cancellation(&self, id: RequestId) -> JoinHandle<Result<(), rmcp::ServiceError>> {
+        let peer = self.client.peer().clone();
+        tokio::spawn(async move {
+            peer.notify_cancelled(CancelledNotificationParam::new(Some(id), None))
+                .await
+        })
+    }
+
+    async fn next(&mut self) -> Posted {
+        next_event(&mut self.started).await
+    }
+
+    async fn next_control(&mut self) -> ControlPost {
+        next_event(&mut self.controls).await
+    }
+
+    async fn exchange_ping(&mut self, id: &str) {
+        self.incoming
+            .send(sse(json!({ "jsonrpc": "2.0", "id": id, "method": "ping" })))
+            .expect("common SSE stream remains open");
+        let control = self.next_control().await;
+        assert_eq!(control.message["id"], id);
+        assert!(control.message["result"].is_object());
+        assert_eq!(control.session.as_deref(), Some("session-1"));
+        control
+            .reply
+            .send(Ok(StreamableHttpPostResponse::Accepted))
+            .expect("reply POST is still waiting");
     }
 
     async fn finish(
@@ -317,7 +467,7 @@ async fn json_limits_allow_overlap_and_preserve_response_ids() -> anyhow::Result
 async fn early_sse_response_releases_the_post_slot() -> anyhow::Result<()> {
     let mut harness = Harness::start(config().max_concurrent_requests(1)).await?;
     let first = harness.call("first");
-    let release = harness.next().await.start_sse();
+    let release = harness.next().await.start_sse().await?;
     let second = harness.call("second");
     harness.next().await.succeed();
     timeout(TEST_TIMEOUT, second).await???;
@@ -348,6 +498,108 @@ async fn concurrent_session_expiry_shares_one_reinitialization() -> anyhow::Resu
     }
     assert!(originals.is_empty());
     harness.finish(calls, 4, 2).await
+}
+
+#[tokio::test]
+async fn cancellation_still_runs_while_recovery_waits_for_old_posts() -> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(3)).await?;
+    let hanging = harness.cancellable("hanging").await?;
+    let mut blocked = harness.next().await;
+    let expired = harness.call("expired");
+    harness.next().await.expire_and_wait().await?;
+    assert_eq!(harness.counts.initialized.load(SeqCst), 1);
+    assert_eq!(harness.counts.active.load(SeqCst), 1);
+
+    timeout(TEST_TIMEOUT, hanging.cancel(None))
+        .await
+        .expect("cancellation must bypass the session recovery wait")?;
+    timeout(TEST_TIMEOUT, blocked.reply.closed()).await?;
+    let retry = harness.next().await;
+    assert_eq!(retry.name, "expired");
+    assert_eq!(retry.session.as_deref(), Some("session-2"));
+    retry.succeed();
+    harness.finish(vec![expired], 3, 2).await
+}
+
+#[tokio::test]
+async fn server_replies_still_run_while_recovery_waits_for_old_posts() -> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(2)).await?;
+    harness.counts.manual_controls.store(true, SeqCst);
+    let waiting = harness.call("waiting-for-client");
+    let blocked = harness.next().await;
+    let expired = harness.call("expired");
+    harness.next().await.expire_and_wait().await?;
+
+    harness.exchange_ping("recovery-ping").await;
+    blocked.succeed();
+    let retry = harness.next().await;
+    assert_eq!(retry.name, "expired");
+    assert_eq!(retry.session.as_deref(), Some("session-2"));
+    retry.succeed();
+    harness.finish(vec![waiting, expired], 3, 2).await
+}
+
+#[tokio::test]
+async fn a_version_barrier_allows_the_server_reply_it_needs() -> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(2)).await?;
+    harness.counts.manual_controls.store(true, SeqCst);
+    let mut meta = RequestMetaObject::new();
+    meta.set_protocol_version(ProtocolVersion::V_2025_06_18);
+    let barrier = harness
+        .cancellable_with_options("barrier", PeerRequestOptions::no_options().with_meta(meta))
+        .await?;
+    let blocked = harness.next().await;
+    let queued = harness.cancellable("after-barrier").await?;
+
+    harness.exchange_ping("barrier-ping").await;
+    assert_eq!(harness.counts.posted.load(SeqCst), 1);
+    blocked.succeed();
+    timeout(TEST_TIMEOUT, barrier.await_response()).await??;
+    let next = harness.next().await;
+    assert_eq!(next.name, "after-barrier");
+    next.succeed();
+    timeout(TEST_TIMEOUT, queued.await_response()).await??;
+    harness.finish(vec![], 2, 1).await
+}
+
+#[tokio::test]
+async fn recovery_deadline_drops_ambiguous_posts_without_retrying_them() -> anyhow::Result<()> {
+    assert_eq!(config().session_recovery_timeout, Duration::from_secs(5));
+    let mut harness = Harness::start(
+        config()
+            .max_concurrent_requests(3)
+            .session_recovery_timeout(Duration::from_millis(50)),
+    )
+    .await?;
+    let ambiguous = harness.call("possibly-applied");
+    let mut blocked = harness.next().await;
+    let expired = harness.call("expired");
+    let rejected = harness.next().await;
+    let rejected_id = rejected.id.clone();
+    rejected.expire_and_wait().await?;
+
+    assert_recovery_timeout(timeout(TEST_TIMEOUT, ambiguous).await??.unwrap_err());
+    timeout(TEST_TIMEOUT, blocked.reply.closed()).await?;
+    let retry = harness.next().await;
+    assert_eq!(retry.name, "expired");
+    assert_eq!(retry.id, rejected_id);
+    assert_eq!(retry.session.as_deref(), Some("session-2"));
+    retry.succeed();
+    harness.finish(vec![expired], 3, 2).await
+}
+
+#[tokio::test]
+async fn reinitialization_has_its_own_deadline() -> anyhow::Result<()> {
+    let mut harness =
+        Harness::start(config().session_recovery_timeout(Duration::from_millis(50))).await?;
+    harness.counts.hold_reinitialization.store(true, SeqCst);
+    let expired = harness.call("expired");
+    harness.next().await.expire_and_wait().await?;
+    let mut reinitialization = next_event(&mut harness.reinitializations).await;
+
+    assert_recovery_timeout(timeout(TEST_TIMEOUT, expired).await??.unwrap_err());
+    timeout(TEST_TIMEOUT, reinitialization.closed()).await?;
+    harness.finish(vec![], 1, 2).await
 }
 
 #[tokio::test]
@@ -383,35 +635,75 @@ async fn a_lost_post_response_is_not_retried() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn cancellation_drops_an_active_post() -> anyhow::Result<()> {
-    for (lifecycle, legacy_notifications) in [
-        (ClientLifecycleMode::Initialize, 1),
+async fn cancellation_bypasses_queued_posts_at_capacity() -> anyhow::Result<()> {
+    for (lifecycle, legacy_notifications, initializations) in [
+        (ClientLifecycleMode::Initialize, 2, 1),
         (
             ClientLifecycleMode::Discover {
                 preferred_versions: vec![ProtocolVersion::V_2026_07_28],
             },
             0,
+            0,
         ),
     ] {
         let mut harness =
-            Harness::with_lifecycle(config().max_concurrent_requests(2), lifecycle).await?;
-        let request = harness
-            .client
-            .peer()
-            .send_cancellable_request(
-                ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(
-                    "cancel-me",
-                ))),
-                PeerRequestOptions::no_options(),
-            )
-            .await?;
+            Harness::with_lifecycle(config().max_concurrent_requests(1), lifecycle).await?;
+        let request = harness.cancellable("cancel-me").await?;
         let mut blocked = harness.next().await;
+        let cancelled = harness.cancellable("never-send").await?;
+        timeout(TEST_TIMEOUT, cancelled.cancel(None)).await??;
+        let queued = harness.cancellable("queued").await?;
         timeout(TEST_TIMEOUT, request.cancel(None)).await??;
         timeout(TEST_TIMEOUT, blocked.reply.closed()).await?;
+        let next = harness.next().await;
+        assert_eq!(next.name, "queued");
+        next.succeed();
+        timeout(TEST_TIMEOUT, queued.await_response()).await??;
         assert_eq!(harness.counts.cancelled.load(SeqCst), legacy_notifications);
-        harness.finish(vec![], 1, legacy_notifications).await?;
+        harness.finish(vec![], 2, initializations).await?;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn a_hanging_legacy_control_does_not_delay_local_cancellation() -> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(1)).await?;
+    harness.counts.manual_controls.store(true, SeqCst);
+    let stale = harness.notify_cancellation(RequestId::Number(999));
+    let mut held = harness.next_control().await;
+    assert_eq!(held.message["params"]["requestId"], 999);
+    harness.counts.manual_controls.store(false, SeqCst);
+
+    let live = harness.cancellable("live-post").await?;
+    let mut blocked = harness.next().await;
+    let cancel_post = tokio::spawn(async move { live.cancel(None).await });
+    timeout(Duration::from_secs(1), blocked.reply.closed()).await?;
+
+    let streaming = harness.cancellable("live-stream").await?;
+    let mut stream = harness.next().await.start_sse().await?;
+    let cancel_stream = harness.notify_cancellation(streaming.id.clone());
+    timeout(Duration::from_secs(1), stream.closed()).await?;
+    assert!(
+        !held.reply.is_closed(),
+        "the old control POST is still held"
+    );
+    assert_eq!(harness.counts.cancelled.load(SeqCst), 1);
+
+    // The private control timeout is five seconds; give its watchdog headroom.
+    let error = timeout(Duration::from_secs(10), stale).await??.unwrap_err();
+    assert!(matches!(
+        transport_error(&error.into()),
+        StreamableHttpError::ControlRequestTimeout
+    ));
+    timeout(TEST_TIMEOUT, held.reply.closed()).await?;
+    timeout(TEST_TIMEOUT, cancel_post).await???;
+    timeout(TEST_TIMEOUT, cancel_stream).await???;
+    assert!(matches!(
+        timeout(TEST_TIMEOUT, streaming.await_response()).await?,
+        Err(rmcp::ServiceError::Cancelled { .. })
+    ));
+    assert_eq!(harness.counts.cancelled.load(SeqCst), 3);
+    harness.finish(vec![], 2, 1).await
 }
 
 #[tokio::test]

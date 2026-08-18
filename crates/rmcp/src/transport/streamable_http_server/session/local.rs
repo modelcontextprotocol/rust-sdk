@@ -1127,7 +1127,9 @@ impl Worker for LocalSessionWorker {
                 }
             };
             match event {
-                InnerEvent::FromHandler(WorkerSendRequest { message, responder }) => {
+                InnerEvent::FromHandler(WorkerSendRequest {
+                    message, responder, ..
+                }) => {
                     // catch response
                     let to_unregister = match &message {
                         crate::model::JsonRpcMessage::Response(json_rpc_response) => {
