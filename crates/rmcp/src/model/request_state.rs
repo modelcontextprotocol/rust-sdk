@@ -183,6 +183,37 @@ impl<'a> SealOptions<'a> {
 /// Configure the same high-entropy keys of at least 32 bytes on every replica.
 /// Values are authenticated, not encrypted; key ids and payloads remain
 /// readable. Retain old keys until every value they signed has expired.
+///
+/// # Key rotation
+///
+/// Rotate in stages so every replica can open states emitted by its peers:
+///
+/// ```
+/// # use rmcp::model::{RequestStateCodec, RequestStateError};
+/// # fn main() -> Result<(), RequestStateError> {
+/// let old_key = b"old-request-state-key-at-least-32b".as_slice();
+/// let new_key = b"new-request-state-key-at-least-32b".as_slice();
+/// let keys = [("old", old_key), ("new", new_key)];
+///
+/// // 1. Deploy both keys, but continue emitting rs1 with the old key.
+/// let transitional = RequestStateCodec::new_with_keyring("new", keys)?
+///     .with_rs1_signing("old")?;
+///
+/// // 2. Emit rs2 with the new key, while accepting in-flight rs1 values.
+/// let promoted = RequestStateCodec::new_with_keyring("new", keys)?
+///     .with_rs1_fallback("old")?;
+///
+/// let old_state = transitional.seal(b"old state");
+/// assert_eq!(promoted.open(&old_state)?, b"old state");
+/// let new_state = promoted.seal(b"new state");
+/// assert_eq!(transitional.open(&new_state)?, b"new state");
+///
+/// // 3. After old values expire, remove the old key.
+/// let retired = RequestStateCodec::new_with_keyring("new", [("new", new_key)])?;
+/// assert_eq!(retired.open(&new_state)?, b"new state");
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct RequestStateCodec {
     keys: Keys,
