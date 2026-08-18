@@ -1631,6 +1631,13 @@ let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/m
 let client = ClientInfo::default().serve(transport).await?;
 ```
 
+The client allows up to 16 http POSTs at once. Configure this with
+`StreamableHttpClientTransportConfig::with_uri(url).max_concurrent_requests(n)`;
+`1` keeps POSTs serial, and `0` is treated as `1`. An open sse response stream
+does not count against this limit. Cancellation uses the existing send queue
+and may wait when the limit is full. Callers still decide which tools may run
+at the same time and which need approval.
+
 #### Server-Sent Events (SSE)
 
 Streamable HTTP responses arrive as either a single `application/json` body or a
