@@ -16,7 +16,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     labels:
       # Mark PRs as CI related change.
       - T-CI
