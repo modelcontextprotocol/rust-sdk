@@ -963,6 +963,10 @@
       "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
       "type": "object",
       "properties": {
+        "$schema": {
+          "description": "Optional JSON Schema dialect identifier (the `$schema` keyword).\n\nThe 2025-11-25 protocol revision allows a `requestedSchema` to declare its\ndialect. It is preserved verbatim so a declared dialect survives a\ndecode/re-encode round-trip instead of being silently dropped.",
+          "type": "string"
+        },
         "description": {
           "description": "Optional description of what this schema represents",
           "type": [
