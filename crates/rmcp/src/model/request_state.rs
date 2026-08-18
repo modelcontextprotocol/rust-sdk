@@ -40,9 +40,10 @@
 //!
 //! ```
 //! use rmcp::model::{RequestStateCodec, SealOptions};
+//! # fn main() -> Result<(), rmcp::model::RequestStateError> {
 //!
 //! // Derive the key from a per-process secret; keep it out of client reach.
-//! let codec = RequestStateCodec::new(b"a-32-byte-or-longer-secret-key!!!");
+//! let codec = RequestStateCodec::try_new(b"a-32-byte-or-longer-secret-key!!!")?;
 //!
 //! // Bind the state to the caller and the originating request.
 //! let context = b"user:alice|tools/call:weather";
@@ -53,11 +54,13 @@
 //!
 //! // On retry the client echoes `sealed` back untouched; the server re-derives
 //! // the same context and opens it.
-//! let opened = codec.open_with(&sealed, context).expect("integrity check passes");
+//! let opened = codec.open_with(&sealed, context)?;
 //! assert_eq!(opened, b"step=2");
 //!
 //! // A different principal (different context) is rejected.
 //! assert!(codec.open_with(&sealed, b"user:bob|tools/call:weather").is_err());
+//! # Ok(())
+//! # }
 //! ```
 
 use std::time::Duration;
@@ -67,6 +70,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -81,10 +85,17 @@ const DOMAIN: &[u8] = b"rmcp/mrtr/request-state/v1";
 /// front of every sealed body. `0` means "no expiry".
 const EXPIRY_LEN: usize = 8;
 
-/// Errors returned when opening a sealed [`RequestStateCodec`] value.
+/// Errors returned when constructing a [`RequestStateCodec`] or processing a
+/// sealed value.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RequestStateError {
+    /// The signing key is shorter than [`RequestStateCodec::MIN_KEY_LENGTH`].
+    #[error(
+        "request state signing key is too short: expected at least {minimum} bytes, got {actual}"
+    )]
+    KeyTooShort { minimum: usize, actual: usize },
+
     /// The value is not a well-formed sealed request state (wrong prefix or
     /// missing sections).
     #[error("request state is malformed or uses an unsupported format")]
@@ -156,11 +167,12 @@ impl<'a> SealOptions<'a> {
 /// [`open`](Self::open) a value, so it has to survive across the rounds of a
 /// single MRTR exchange (e.g. a stable per-process or per-deployment secret).
 ///
-/// The key may be any length; HMAC internally normalizes it. For meaningful
-/// security use a high-entropy key of at least 32 bytes.
+/// Use [`try_new`](Self::try_new) to require at least
+/// [`MIN_KEY_LENGTH`](Self::MIN_KEY_LENGTH) bytes of high-entropy key material.
+/// The stored key material is zeroized when the codec is dropped.
 #[derive(Clone)]
 pub struct RequestStateCodec {
-    key: Box<[u8]>,
+    key: Zeroizing<Vec<u8>>,
 }
 
 impl std::fmt::Debug for RequestStateCodec {
@@ -173,11 +185,44 @@ impl std::fmt::Debug for RequestStateCodec {
 }
 
 impl RequestStateCodec {
-    /// Creates a codec from a signing key.
+    /// Minimum accepted signing-key length in bytes.
+    pub const MIN_KEY_LENGTH: usize = 32;
+
+    /// Creates a codec from a signing key without validating its length.
+    #[deprecated(
+        since = "3.1.4",
+        note = "use RequestStateCodec::try_new to enforce the minimum signing-key length"
+    )]
     pub fn new(key: impl Into<Vec<u8>>) -> Self {
+        Self::new_unchecked(key)
+    }
+
+    /// Creates a codec without validating the signing-key length.
+    ///
+    /// Prefer [`try_new`](Self::try_new) unless the key length has already been
+    /// validated.
+    pub fn new_unchecked(key: impl Into<Vec<u8>>) -> Self {
         Self {
-            key: key.into().into_boxed_slice(),
+            key: Zeroizing::new(key.into()),
         }
+    }
+
+    /// Creates a codec from a signing key after validating its length.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RequestStateError::KeyTooShort`] when `key` contains fewer
+    /// than [`MIN_KEY_LENGTH`](Self::MIN_KEY_LENGTH) bytes.
+    pub fn try_new(key: impl Into<Vec<u8>>) -> Result<Self, RequestStateError> {
+        let key = Zeroizing::new(key.into());
+        if key.len() < Self::MIN_KEY_LENGTH {
+            return Err(RequestStateError::KeyTooShort {
+                minimum: Self::MIN_KEY_LENGTH,
+                actual: key.len(),
+            });
+        }
+
+        Ok(Self { key })
     }
 
     /// Seals raw bytes into an opaque, integrity-protected string suitable for
@@ -347,8 +392,8 @@ impl RequestStateCodec {
     /// body. The length prefix keeps the `associated_data`/`body` boundary
     /// unambiguous so distinct inputs cannot collide.
     fn mac_for(&self, associated_data: &[u8], body: &[u8]) -> HmacSha256 {
-        let mut mac =
-            HmacSha256::new_from_slice(&self.key).expect("HMAC accepts keys of any length");
+        let mut mac = HmacSha256::new_from_slice(self.key.as_slice())
+            .expect("HMAC accepts keys of any length");
         mac.update(DOMAIN);
         mac.update(&(associated_data.len() as u64).to_be_bytes());
         mac.update(associated_data);
@@ -366,8 +411,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn try_new_accepts_key_at_minimum_length() {
+        let result = RequestStateCodec::try_new(vec![0; RequestStateCodec::MIN_KEY_LENGTH]);
+
+        assert!(result.is_ok(), "unexpected result: {result:?}");
+    }
+
+    #[test]
+    fn try_new_rejects_key_below_minimum_length() {
+        let actual = RequestStateCodec::MIN_KEY_LENGTH - 1;
+        let error = RequestStateCodec::try_new(vec![0; actual]).unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                RequestStateError::KeyTooShort {
+                    minimum: RequestStateCodec::MIN_KEY_LENGTH,
+                    actual: error_actual,
+                } if *error_actual == actual
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn new_accepts_short_key_for_backward_compatibility() {
+        let codec = RequestStateCodec::new(b"key".to_vec());
+
+        assert_eq!(codec.open(&codec.seal(b"state")).unwrap(), b"state");
+    }
+
+    #[test]
     fn seal_open_roundtrips_bytes() {
-        let codec = RequestStateCodec::new(b"test-key-test-key-test-key-32byte".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"test-key-test-key-test-key-32byte".to_vec()).unwrap();
         let sealed = codec.seal(b"hello world");
         assert!(sealed.starts_with("rs1."));
         assert_eq!(codec.open(&sealed).unwrap(), b"hello world");
@@ -380,7 +458,8 @@ mod tests {
             tool: String,
             round: u32,
         }
-        let codec = RequestStateCodec::new(b"another-strong-signing-key-here!!".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"another-strong-signing-key-here!!".to_vec()).unwrap();
         let state = State {
             tool: "weather".into(),
             round: 3,
@@ -392,14 +471,16 @@ mod tests {
 
     #[test]
     fn empty_payload_roundtrips() {
-        let codec = RequestStateCodec::new(b"k".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"empty-payload-test-signing-key!!".to_vec()).unwrap();
         let sealed = codec.seal(b"");
         assert_eq!(codec.open(&sealed).unwrap(), b"");
     }
 
     #[test]
     fn tampered_payload_is_rejected() {
-        let codec = RequestStateCodec::new(b"signing-key-signing-key-signing!!".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"signing-key-signing-key-signing!!".to_vec()).unwrap();
         let sealed = codec.seal(b"amount=100");
 
         // Replace the body section but keep the original tag.
@@ -416,8 +497,10 @@ mod tests {
 
     #[test]
     fn different_key_is_rejected() {
-        let signer = RequestStateCodec::new(b"the-real-signing-key-value-here!!".to_vec());
-        let attacker = RequestStateCodec::new(b"a-totally-different-forged-key!!!".to_vec());
+        let signer =
+            RequestStateCodec::try_new(b"the-real-signing-key-value-here!!".to_vec()).unwrap();
+        let attacker =
+            RequestStateCodec::try_new(b"a-totally-different-forged-key!!!".to_vec()).unwrap();
         let sealed = signer.seal(b"trusted");
         assert!(matches!(
             attacker.open(&sealed),
@@ -427,7 +510,8 @@ mod tests {
 
     #[test]
     fn appended_bytes_are_rejected() {
-        let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
         let mut sealed = codec.seal(b"state");
         sealed.push('x');
         assert!(codec.open(&sealed).is_err());
@@ -435,7 +519,8 @@ mod tests {
 
     #[test]
     fn wrong_version_prefix_is_malformed() {
-        let codec = RequestStateCodec::new(b"key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"wrong-version-test-signing-key!!".to_vec()).unwrap();
         let sealed = codec.seal(b"state");
         let bumped = sealed.replacen("rs1.", "rs2.", 1);
         assert!(matches!(
@@ -446,7 +531,8 @@ mod tests {
 
     #[test]
     fn missing_sections_are_malformed() {
-        let codec = RequestStateCodec::new(b"key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"missing-sections-test-signing-key".to_vec()).unwrap();
         assert!(matches!(
             codec.open("rs1"),
             Err(RequestStateError::MalformedFormat)
@@ -463,7 +549,8 @@ mod tests {
 
     #[test]
     fn non_base64_sections_are_invalid_encoding() {
-        let codec = RequestStateCodec::new(b"key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"invalid-base64-test-signing-key!!".to_vec()).unwrap();
         assert!(matches!(
             codec.open("rs1.!!!!.!!!!"),
             Err(RequestStateError::InvalidEncoding)
@@ -472,7 +559,8 @@ mod tests {
 
     #[test]
     fn debug_does_not_leak_key() {
-        let codec = RequestStateCodec::new(b"super-secret-key".to_vec());
+        let codec =
+            RequestStateCodec::try_new(b"super-secret-key-super-secret-key!!".to_vec()).unwrap();
         let rendered = format!("{codec:?}");
         assert!(!rendered.contains("super-secret-key"));
         assert!(rendered.contains("redacted"));
@@ -483,7 +571,8 @@ mod tests {
 
         #[test]
         fn matching_context_opens() {
-            let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+            let codec =
+                RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
             let ctx = b"user:alice|tools/call:weather";
             let sealed = codec.seal_with(b"state", &SealOptions::new().associated_data(ctx));
             assert_eq!(codec.open_with(&sealed, ctx).unwrap(), b"state");
@@ -491,7 +580,8 @@ mod tests {
 
         #[test]
         fn different_context_is_rejected() {
-            let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+            let codec =
+                RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
             let sealed =
                 codec.seal_with(b"state", &SealOptions::new().associated_data(b"user:alice"));
             assert!(matches!(
@@ -502,7 +592,8 @@ mod tests {
 
         #[test]
         fn missing_context_is_rejected() {
-            let codec = RequestStateCodec::new(b"key-key-key-key-key-key-key-key!!".to_vec());
+            let codec =
+                RequestStateCodec::try_new(b"key-key-key-key-key-key-key-key!!".to_vec()).unwrap();
             let sealed =
                 codec.seal_with(b"state", &SealOptions::new().associated_data(b"user:alice"));
             // Opening without the associated data must fail closed.
@@ -520,7 +611,7 @@ mod tests {
 
         #[test]
         fn within_ttl_opens() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let sealed = codec.seal_at(
                 b"state",
                 &SealOptions::new().ttl(Duration::from_secs(60)),
@@ -532,7 +623,7 @@ mod tests {
 
         #[test]
         fn past_ttl_is_expired() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let sealed = codec.seal_at(
                 b"state",
                 &SealOptions::new().ttl(Duration::from_secs(60)),
@@ -547,14 +638,14 @@ mod tests {
 
         #[test]
         fn no_ttl_never_expires() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let sealed = codec.seal_at(b"state", &SealOptions::new(), 1_000);
             assert_eq!(codec.open_at(&sealed, &[], i64::MAX).unwrap(), b"state");
         }
 
         #[test]
         fn ttl_and_associated_data_combine() {
-            let codec = RequestStateCodec::new(KEY.to_vec());
+            let codec = RequestStateCodec::try_new(KEY.to_vec()).unwrap();
             let ctx = b"user:alice";
             let sealed = codec.seal_at(
                 b"state",
