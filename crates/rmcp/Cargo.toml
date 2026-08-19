@@ -454,7 +454,9 @@ path = "tests/test_streamable_http_connection_reuse.rs"
 [[test]]
 name = "test_streamable_http_disconnect_cancel"
 required-features = [
+  "client",
   "server",
+  "transport-streamable-http-client-reqwest",
   "transport-streamable-http-server",
   "reqwest",
 ]
