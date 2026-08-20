@@ -92,13 +92,18 @@ pub struct StreamableHttpServerConfig {
     pub allowed_hosts: Vec<String>,
     /// Allowed browser origins for inbound `Origin` validation.
     ///
-    /// Defaults to an empty list, which disables Origin validation. When
-    /// non-empty, requests carrying an `Origin` header must match per RFC 6454
-    /// `(scheme, host, port)`; missing-`Origin` requests still pass. Entries
-    /// must include a scheme; `"null"` matches the browser's `Origin: null`.
+    /// Validation is enabled by default. Requests carrying an `Origin` header
+    /// must match per RFC 6454
+    /// `(scheme, host, port)`; missing-`Origin` requests still pass. An empty
+    /// list allows no present Origin values. Entries must include a scheme;
+    /// `"null"` matches the browser's `Origin: null`.
+    ///
+    /// Call [`StreamableHttpServerConfig::disable_allowed_origins`] to
+    /// explicitly disable Origin validation.
     /// examples:
     ///     allowed_origins = ["https://app.example.com", "http://localhost:8080"]
     pub allowed_origins: Vec<String>,
+    origin_validation_enabled: bool,
     /// Optional external session store for cross-instance recovery.
     ///
     /// When set, [`SessionState`] (the client's `initialize` parameters) is
@@ -171,6 +176,7 @@ impl Default for StreamableHttpServerConfig {
             cancellation_token: CancellationToken::new(),
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
             allowed_origins: vec![],
+            origin_validation_enabled: true,
             session_store: None,
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
             stateless_protocol_metadata_required: false,
@@ -196,11 +202,13 @@ impl StreamableHttpServerConfig {
         allowed_origins: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.allowed_origins = allowed_origins.into_iter().map(Into::into).collect();
+        self.origin_validation_enabled = true;
         self
     }
-    /// Disable Origin validation, reverting to the default ignore-Origin behavior.
+    /// Disable Origin validation, allowing requests with any `Origin` header.
     pub fn disable_allowed_origins(mut self) -> Self {
         self.allowed_origins.clear();
+        self.origin_validation_enabled = false;
         self
     }
     pub fn with_sse_keep_alive(mut self, duration: Option<Duration>) -> Self {
@@ -797,9 +805,6 @@ fn parse_origin_value(value: &str) -> Option<NormalizedOrigin> {
 }
 
 fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> bool {
-    if allowed_origins.is_empty() {
-        return true;
-    }
     allowed_origins
         .iter()
         .filter_map(|raw| parse_origin_value(raw))
@@ -874,15 +879,15 @@ fn validate_dns_rebinding_headers(
         );
         return Err(forbidden_response("Forbidden: Host header is not allowed"));
     }
-    validate_origin_header(headers, &config.allowed_origins)?;
+    validate_origin_header(headers, config)?;
     Ok(())
 }
 
 fn validate_origin_header(
     headers: &HeaderMap,
-    allowed_origins: &[String],
+    config: &StreamableHttpServerConfig,
 ) -> Result<(), BoxResponse> {
-    if allowed_origins.is_empty() {
+    if !config.origin_validation_enabled {
         return Ok(());
     }
     let Some(origin_header) = headers.get(http::header::ORIGIN) else {
@@ -893,15 +898,15 @@ fn validate_origin_header(
         .inspect_err(|_| {
             tracing::warn!(origin = ?origin_header, "rejected request with non-UTF-8 Origin header");
         })
-        .map_err(|_| bad_request_response("Bad Request: Invalid Origin header encoding"))?;
+        .map_err(|_| forbidden_response("Forbidden: Invalid Origin header encoding"))?;
     let origin = parse_origin_value(origin_str).ok_or_else(|| {
         tracing::warn!(
             origin = origin_str,
             "rejected request with malformed Origin header",
         );
-        bad_request_response("Bad Request: Invalid Origin header")
+        forbidden_response("Forbidden: Invalid Origin header")
     })?;
-    if !origin_is_allowed(&origin, allowed_origins) {
+    if !origin_is_allowed(&origin, &config.allowed_origins) {
         tracing::warn!(
             origin = ?origin,
             "rejected request with disallowed Origin header (possible cross-origin attack)",
