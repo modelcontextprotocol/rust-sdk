@@ -3811,9 +3811,10 @@ pub struct CallToolResult {
 
 // Custom Deserialize implementation that:
 // 1. Defaults `content` to `[]` when the field is missing (lenient per Postel's law)
-// 2. Requires at least one known field to be present, so that `CallToolResult` doesn't
-//    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
-//    (e.g. `ServerResult`), which would shadow `CustomResult`.
+// 2. Requires at least one tool-specific field to be present, so protocol-generic
+//    fields such as `resultType` and `_meta` do not make `CallToolResult` greedily
+//    match custom-extension responses inside `#[serde(untagged)]` enums (e.g.
+//    `ServerResult`), which would shadow `CustomResult`.
 // 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
 impl<'de> Deserialize<'de> for CallToolResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -3847,11 +3848,10 @@ impl<'de> Deserialize<'de> for CallToolResult {
         if helper.content.is_none()
             && helper.structured_content.is_none()
             && helper.is_error.is_none()
-            && helper.meta.is_none()
         {
             return Err(serde::de::Error::custom(
-                "expected at least one known CallToolResult field \
-                 (content, structuredContent, isError, or _meta)",
+                "expected at least one tool-specific CallToolResult field \
+                 (content, structuredContent, or isError)",
             ));
         }
 
@@ -4786,6 +4786,41 @@ mod tests {
 
         let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
+    }
+
+    #[test]
+    fn custom_server_result_with_generic_meta_is_not_a_tool_result() {
+        let raw = json!({
+            "resultType": "complete",
+            "skills": [{
+                "uri": "skill://example/SKILL.md",
+                "frontmatter": {"name": "example", "description": "example skill"}
+            }],
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "skills-server",
+                    "version": "1.0.0"
+                }
+            }
+        });
+
+        let result: ServerResult = serde_json::from_value(raw.clone()).expect("custom result");
+        match result {
+            ServerResult::CustomResult(CustomResult(value)) => assert_eq!(value, raw),
+            other => panic!("expected CustomResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn call_tool_result_with_meta_and_tool_content_remains_a_tool_result() {
+        let raw = json!({
+            "resultType": "complete",
+            "content": [],
+            "_meta": {"trace": "present"}
+        });
+
+        let result: ServerResult = serde_json::from_value(raw).expect("tool result");
+        assert!(matches!(result, ServerResult::CallToolResult(_)));
     }
 
     #[test]
