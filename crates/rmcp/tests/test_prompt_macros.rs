@@ -4,14 +4,12 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ClientHandler, RoleServer, ServerHandler, ServiceExt,
+    ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::prompt::PromptRouter, wrapper::Parameters},
     model::{
-        ClientInfo, ContentBlock, GetPromptRequestParams, GetPromptResult, ListPromptsResult,
-        PaginatedRequestParams, PromptMessage, Role,
+        ClientInfo, ContentBlock, GetPromptRequestParams, GetPromptResult, PromptMessage, Role,
     },
     prompt, prompt_handler, prompt_router,
-    service::RequestContext,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
