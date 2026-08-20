@@ -335,12 +335,29 @@ impl CachedTx {
             .as_deref()
             .unwrap_or_default()
             .parse::<EventId>()?;
-        let sync_index = index.saturating_sub(front_event_id.index);
+        // Last-Event-ID is the last event the client received. The resume is
+        // valid as long as the next event has not already fallen out of cache.
+        let next_index = index.saturating_add(1);
+        if next_index < front_event_id.index {
+            return Err(SessionError::InvalidEventId);
+        }
+        let sync_index = next_index.saturating_sub(front_event_id.index);
         if sync_index > self.cache.len() {
             // invalid index
             return Err(SessionError::InvalidEventId);
         }
         for message in self.cache.iter().skip(sync_index) {
+            let send_result = self.tx.send(message.clone()).await;
+            if send_result.is_err() {
+                let event_id: EventId = message.event_id.as_deref().unwrap_or_default().parse()?;
+                return Err(SessionError::ChannelClosed(Some(event_id.index as u64)));
+            }
+        }
+        Ok(())
+    }
+
+    async fn replay_cached(&mut self) -> Result<(), SessionError> {
+        for message in &self.cache {
             let send_result = self.tx.send(message.clone()).await;
             if send_result.is_err() {
                 let event_id: EventId = message.event_id.as_deref().unwrap_or_default().parse()?;
@@ -638,8 +655,14 @@ impl LocalSessionWorker {
             OutboundChannel::RequestWise { id, close } => {
                 if let Some(request_wise) = self.tx_router.get_mut(&id) {
                     request_wise.tx.send(message).await?;
-                    if close && let Some(channel) = self.tx_router.remove(&id) {
-                        for resource in channel.resources {
+                    if close {
+                        let resources: Vec<_> = request_wise.resources.drain().collect();
+                        request_wise.completed_at = Some(Instant::now());
+                        // Retain the completed channel until TTL eviction so a
+                        // disconnected client can resume its final response.
+                        let (closed_tx, _) = tokio::sync::mpsc::channel(1);
+                        request_wise.tx.tx = closed_tx;
+                        for resource in resources {
                             self.resource_router.remove(&resource);
                         }
                     }
@@ -655,6 +678,9 @@ impl LocalSessionWorker {
         &mut self,
         last_event_id: EventId,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        // A resume request can be the first event after a completed entry's
+        // TTL expires, so enforce eviction here before looking up its cache.
+        self.evict_expired_channels();
         // Clean up closed shadow senders before processing
         self.shadow_txs.retain(|tx| !tx.is_closed());
 
@@ -690,17 +716,16 @@ impl LocalSessionWorker {
     async fn establish_common_channel(
         &mut self,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
-        let last_event_index = self.event_store.is_none().then_some(0);
-        self.resume_or_shadow_common(last_event_index).await
+        self.resume_or_shadow_common(None).await
     }
 
     /// Resume the common channel, or create a shadow stream if the primary is
     /// still active.
     ///
     /// When the primary common channel is dead (receiver dropped), replace it
-    /// so this stream becomes the new primary notification channel. Cached
-    /// messages are replayed from `last_event_index` so the client receives
-    /// any events it missed (including server-initiated requests).
+    /// so this stream becomes the new primary notification channel. Resume
+    /// requests replay events after `last_event_index`; fresh GETs without a
+    /// Last-Event-ID replay the locally retained cache.
     ///
     /// When the primary is still active, create a "shadow" stream — an idle SSE
     /// connection kept alive by keep-alive pings. This prevents multiple
@@ -721,8 +746,10 @@ impl LocalSessionWorker {
             // Primary common channel is dead — replace it.
             tracing::debug!("Replacing dead common channel with new primary");
             self.common.tx = tx;
-            if let Some(last_event_index) = last_event_index {
-                self.common.sync(last_event_index).await?;
+            match last_event_index {
+                Some(last_event_index) => self.common.sync(last_event_index).await?,
+                None if self.event_store.is_none() => self.common.replay_cached().await?,
+                None => {}
             }
         } else {
             // Primary common channel is still active. Create a shadow stream
@@ -1370,5 +1397,92 @@ mod sep2260_routing_tests {
 
         let channel = worker.resolve_outbound_channel(&roots_request(Some(originating_id)));
         assert!(matches!(channel, OutboundChannel::Common));
+    }
+
+    #[tokio::test]
+    async fn completed_request_channel_retains_cache_for_resume() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let request_id = RequestId::Number(7);
+        worker.register_resource(
+            ResourceKey::McpRequestId(request_id.clone()),
+            http_request_id,
+        );
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::error(
+                crate::model::ErrorData::internal_error("failed", None),
+                Some(request_id),
+            ))
+            .await
+            .unwrap();
+
+        assert!(worker.tx_router[&http_request_id].completed_at.is_some());
+        assert!(worker.tx_router[&http_request_id].resources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resume_accepts_event_immediately_before_cache_front() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut cached_tx = CachedTx::new(tx, None, 0, "test-stream".into(), None);
+        cached_tx.cache.push_back(ServerSseMessage {
+            event_id: Some("5".into()),
+            ..Default::default()
+        });
+        cached_tx.cache.push_back(ServerSseMessage {
+            event_id: Some("6".into()),
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            cached_tx.sync(3).await,
+            Err(SessionError::InvalidEventId)
+        ));
+        cached_tx.sync(4).await.unwrap();
+
+        assert_eq!(rx.recv().await.unwrap().event_id.as_deref(), Some("5"));
+        assert_eq!(rx.recv().await.unwrap().event_id.as_deref(), Some("6"));
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_expired_completed_request_cache() {
+        let config = SessionConfig {
+            completed_cache_ttl: Duration::ZERO,
+            ..SessionConfig::default()
+        };
+        let (_handle, mut worker) = create_local_session("test-session", config);
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let request_id = RequestId::Number(7);
+        worker.register_resource(
+            ResourceKey::McpRequestId(request_id.clone()),
+            http_request_id,
+        );
+        worker
+            .handle_server_message(ServerJsonRpcMessage::error(
+                crate::model::ErrorData::internal_error("failed", None),
+                Some(request_id),
+            ))
+            .await
+            .unwrap();
+
+        let last_event_id = worker.tx_router[&http_request_id]
+            .tx
+            .cache
+            .front()
+            .unwrap()
+            .event_id
+            .as_deref()
+            .unwrap()
+            .parse::<EventId>()
+            .unwrap();
+        let result = worker.resume(last_event_id).await;
+
+        assert!(matches!(
+            result,
+            Err(SessionError::ChannelClosed(Some(id))) if id == http_request_id
+        ));
+        assert!(!worker.tx_router.contains_key(&http_request_id));
     }
 }
