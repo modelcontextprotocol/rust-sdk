@@ -2,7 +2,7 @@
 #![expect(deprecated)]
 pub(super) mod cache;
 
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{borrow::Cow, collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use cache::CacheGeneration;
 pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
@@ -376,6 +376,7 @@ pub enum SubscriptionEnd {
 pub struct Subscription {
     id: RequestId,
     acknowledged: SubscriptionFilter,
+    custom_methods: HashSet<String>,
     notifications: tokio::sync::mpsc::Receiver<ServerNotification>,
     request: Option<RequestHandle<RoleClient>>,
     end: Option<SubscriptionEnd>,
@@ -557,12 +558,25 @@ impl Subscription {
                 .resource_subscriptions
                 .as_ref()
                 .is_some_and(|uris| uris.contains(&update.params.uri)),
+            ServerNotification::TaskStatusNotification(notification) => {
+                let task_id = notification.params.task.task.task_id.as_str();
+                self.acknowledged
+                    .additional_fields
+                    .get("taskIds")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|task_ids| {
+                        task_ids
+                            .iter()
+                            .any(|accepted| accepted.as_str() == Some(task_id))
+                    })
+            }
             ServerNotification::SubscriptionsAcknowledgedNotification(_)
             | ServerNotification::CancelledNotification(_)
             | ServerNotification::ProgressNotification(_)
-            | ServerNotification::LoggingMessageNotification(_)
-            | ServerNotification::TaskStatusNotification(_)
-            | ServerNotification::CustomNotification(_) => false,
+            | ServerNotification::LoggingMessageNotification(_) => false,
+            ServerNotification::CustomNotification(notification) => {
+                self.custom_methods.contains(notification.method.as_str())
+            }
         }
     }
 
@@ -1033,13 +1047,25 @@ const RESOURCE_LIST_CACHE_PREFIX: &str = "resources/list:";
 const RESOURCE_TEMPLATE_LIST_CACHE_PREFIX: &str = "resources/templates/list:";
 const RESOURCE_READ_CACHE_PREFIX: &str = "resources/read:";
 
-// Cache keys are built only from the request method plus the parameters that
-// affect the result (SEP-2549). Request `_meta` (progress tokens, trace
-// context, etc.) does not affect the result, so it is deliberately excluded to
-// avoid fragmenting the cache across otherwise-identical requests.
-fn discover_cache_key() -> String {
-    // `server/discover` carries no result-affecting parameters.
-    DISCOVER_CACHE_PREFIX.to_string()
+// Cache keys are built only from the request method plus the parameters or
+// reserved request metadata that affect the result (SEP-2549 / SEP-2575).
+// Trace context and client identity are deliberately excluded; discovery may
+// vary by protocol revision and the complete open client capability document.
+fn discover_cache_key(meta: &RequestMetaObject) -> String {
+    let mut result_affecting_meta = serde_json::Map::new();
+    for key in [
+        "io.modelcontextprotocol/protocolVersion",
+        "io.modelcontextprotocol/clientCapabilities",
+    ] {
+        if let Some(value) = meta.get(key) {
+            result_affecting_meta.insert(key.to_string(), value.clone());
+        }
+    }
+    let canonical =
+        serde_json_canonicalizer::to_vec(&serde_json::Value::Object(result_affecting_meta))
+            .expect("request metadata is already valid JSON");
+    let canonical = String::from_utf8(canonical).expect("canonical JSON is UTF-8");
+    format!("{DISCOVER_CACHE_PREFIX}{canonical}")
 }
 
 fn list_response_cache_key(prefix: &str, params: &Option<PaginatedRequestParams>) -> String {
@@ -1178,6 +1204,29 @@ impl Peer<RoleClient> {
         self.listen_with_channel_capacity_inner(
             notifications,
             DEFAULT_SUBSCRIPTION_CHANNEL_CAPACITY,
+            HashSet::new(),
+        )
+        .await
+    }
+
+    /// Open a subscription that explicitly permits the listed custom notification methods.
+    ///
+    /// RMCP cannot infer extension method ownership from open-world subscription filter fields.
+    /// Callers must therefore opt in to each extension notification method they have negotiated
+    /// and validated. Core notification filtering remains unchanged.
+    pub async fn listen_with_custom_methods<I, S>(
+        &self,
+        notifications: SubscriptionFilter,
+        custom_methods: I,
+    ) -> Result<Subscription, ServiceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.listen_with_channel_capacity_inner(
+            notifications,
+            DEFAULT_SUBSCRIPTION_CHANNEL_CAPACITY,
+            custom_methods.into_iter().map(Into::into).collect(),
         )
         .await
     }
@@ -1196,14 +1245,19 @@ impl Peer<RoleClient> {
         notifications: SubscriptionFilter,
         channel_capacity: NonZeroUsize,
     ) -> Result<Subscription, ServiceError> {
-        self.listen_with_channel_capacity_inner(notifications, channel_capacity.get())
-            .await
+        self.listen_with_channel_capacity_inner(
+            notifications,
+            channel_capacity.get(),
+            HashSet::new(),
+        )
+        .await
     }
 
     async fn listen_with_channel_capacity_inner(
         &self,
         notifications: SubscriptionFilter,
         channel_capacity: usize,
+        custom_methods: HashSet<String>,
     ) -> Result<Subscription, ServiceError> {
         let request = ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
             SubscriptionsListenRequestParams::new(notifications.clone()),
@@ -1242,6 +1296,7 @@ impl Peer<RoleClient> {
                 Ok(Subscription {
                     id,
                     acknowledged: accepted,
+                    custom_methods,
                     notifications: subscription_notifications,
                     request: Some(handle),
                     end: None,
@@ -1267,16 +1322,22 @@ impl Peer<RoleClient> {
     /// The high-level client currently exposes this peer only after initialization;
     /// pre-initialization probing is planned as follow-up work.
     pub async fn discover(&self, meta: RequestMetaObject) -> Result<DiscoverResult, ServiceError> {
-        let cache_key = discover_cache_key();
+        let cache_key = discover_cache_key(&meta);
         if let Some(ServerResult::DiscoverResult(result)) = self.cached_response(&cache_key).await {
             return Ok(result);
         }
         let generation = self.capture_response_cache_generation().await;
-        let mut request = DiscoverRequest::new(DiscoverRequestParams {});
-        request.extensions.insert(meta);
-        let result = self
-            .send_request(ClientRequest::DiscoverRequest(request))
-            .await;
+        let request = DiscoverRequest::new(DiscoverRequestParams {});
+        let result = match self
+            .send_request_with_option(
+                ClientRequest::DiscoverRequest(request),
+                PeerRequestOptions::no_options().with_meta(meta),
+            )
+            .await
+        {
+            Ok(handle) => handle.await_response().await,
+            Err(error) => Err(error),
+        };
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -2388,10 +2449,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discover_explicit_client_context_overrides_channel_startup_metadata() {
+        let (peer, mut outbound) =
+            Peer::<RoleClient>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
+        let startup_capabilities = serde_json::from_value(serde_json::json!({
+            "extensions": {"com.example/startup": {}}
+        }))
+        .expect("startup capabilities");
+        peer.set_client_request_metadata(ClientRequestMetadata {
+            protocol_version: ProtocolVersion::V_2026_07_28,
+            client_info: crate::model::Implementation::from_build_env(),
+            client_capabilities: startup_capabilities,
+        });
+        let contextual_capabilities = serde_json::from_value(serde_json::json!({
+            "extensions": {"com.example/contextual": {"enabled": true}}
+        }))
+        .expect("contextual capabilities");
+        let meta = RequestMetaObject::with_client_context(
+            ProtocolVersion::V_2026_07_28,
+            crate::model::Implementation::from_build_env(),
+            contextual_capabilities,
+        );
+
+        let discover = tokio::spawn({
+            let peer = peer.clone();
+            async move { peer.discover(meta).await }
+        });
+        let PeerSinkMessage::Request { request, .. } =
+            outbound.recv().await.expect("discover request")
+        else {
+            panic!("expected discover request");
+        };
+        let ClientRequest::DiscoverRequest(request) = request else {
+            panic!("expected server/discover request");
+        };
+        let capabilities = request
+            .extensions
+            .get::<RequestMetaObject>()
+            .expect("request metadata")
+            .client_capabilities()
+            .expect("request-scoped client capabilities");
+        let raw = serde_json::to_value(capabilities).expect("serialize client capabilities");
+        assert!(raw["extensions"].get("com.example/startup").is_none());
+        assert_eq!(raw["extensions"]["com.example/contextual"]["enabled"], true);
+        discover.abort();
+    }
+
+    #[test]
+    fn discover_cache_key_tracks_result_affecting_request_metadata_canonically() {
+        let mut first = RequestMetaObject::new();
+        first.set_protocol_version(ProtocolVersion::V_2026_07_28);
+        first.set_client_capabilities(
+            serde_json::from_value(serde_json::json!({
+                "sampling": {},
+                "com.example/future": {"b": 2, "a": 1}
+            }))
+            .expect("open client capability fixture"),
+        );
+        let mut reordered = RequestMetaObject::new();
+        reordered.set_protocol_version(ProtocolVersion::V_2026_07_28);
+        reordered.set_client_capabilities(
+            serde_json::from_value(serde_json::json!({
+                "com.example/future": {"a": 1, "b": 2},
+                "sampling": {}
+            }))
+            .expect("reordered open client capability fixture"),
+        );
+        let mut changed = RequestMetaObject::new();
+        changed.set_protocol_version(ProtocolVersion::V_2026_07_28);
+        changed.set_client_capabilities(
+            serde_json::from_value(serde_json::json!({
+                "sampling": {},
+                "com.example/future": {"a": 1, "b": 3}
+            }))
+            .expect("changed open client capability fixture"),
+        );
+
+        assert_eq!(discover_cache_key(&first), discover_cache_key(&reordered));
+        assert_ne!(discover_cache_key(&first), discover_cache_key(&changed));
+    }
+
+    #[tokio::test]
     async fn discover_serves_a_fresh_cached_response_without_transport_io() {
         let peer = disconnected_peer();
         let meta = RequestMetaObject::default();
-        let key = discover_cache_key();
+        let key = discover_cache_key(&meta);
         let expected = DiscoverResult::new(vec![ProtocolVersion::default()], Default::default())
             .with_server_info(crate::model::Implementation::from_build_env())
             .with_ttl_ms(5_000)
