@@ -1,3 +1,8 @@
+#![expect(
+    deprecated,
+    reason = "The conformance suite still exercises deprecated sampling scenarios"
+)]
+
 use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt, ErrorData, RoleClient, ServiceExt,
     model::*,

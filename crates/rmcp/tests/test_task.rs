@@ -13,9 +13,9 @@ use rmcp::{
 use serde_json::json;
 
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
-pub struct SumArgs {
-    pub a: i32,
-    pub b: i32,
+struct SumArgs {
+    a: i32,
+    b: i32,
 }
 
 #[derive(Clone)]
