@@ -16,7 +16,11 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    allow:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     labels:
       # Mark PRs as CI related change.
       - T-CI
