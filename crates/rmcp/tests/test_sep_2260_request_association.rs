@@ -1,5 +1,8 @@
 #![cfg(all(feature = "server", feature = "client", not(feature = "local")))]
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "This test verifies request association for the deprecated sampling API"
+)]
 
 use std::sync::{Arc, Mutex};
 
@@ -18,9 +21,11 @@ use tokio::{
     sync::oneshot,
 };
 
+type RequestResultSender = oneshot::Sender<Result<(), ServiceError>>;
+
 #[derive(Clone)]
 struct SamplingServer {
-    outside: Arc<Mutex<Option<oneshot::Sender<Result<(), ServiceError>>>>>,
+    outside: Arc<Mutex<Option<RequestResultSender>>>,
 }
 
 impl ServerHandler for SamplingServer {

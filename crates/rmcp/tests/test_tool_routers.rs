@@ -21,12 +21,6 @@ struct Request {
     fields: HashMap<String, String>,
 }
 
-#[derive(Debug, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-struct Sum {
-    a: i32,
-    b: i32,
-}
-
 #[rmcp::tool_router(router = test_router_1)]
 impl<T> TestHandler<T> {
     #[rmcp::tool]

@@ -123,23 +123,23 @@ impl SqlQueryServer {
                 .collect();
 
             // If no uppercase letters found, just use first letter
-            if first_chars.is_empty() && !candidate.is_empty() {
-                if let Some(first) = candidate.chars().next() {
-                    first_chars.push(first.to_lowercase().next().unwrap_or('\0'));
-                }
+            if first_chars.is_empty()
+                && let Some(first) = candidate.chars().next()
+            {
+                first_chars.push(first.to_lowercase().next().unwrap_or('\0'));
             }
         }
 
         // Special case: if query is 2 chars and we only got 1 char, try matching first 2 letters
-        if query_chars.len() == 2 && first_chars.len() == 1 {
-            if let Some(first) = candidate.chars().nth(0) {
-                if let Some(second) = candidate.chars().nth(1) {
-                    first_chars = vec![
-                        first.to_lowercase().next().unwrap_or('\0'),
-                        second.to_lowercase().next().unwrap_or('\0'),
-                    ];
-                }
-            }
+        if query_chars.len() == 2
+            && first_chars.len() == 1
+            && let Some(first) = candidate.chars().next()
+            && let Some(second) = candidate.chars().nth(1)
+        {
+            first_chars = vec![
+                first.to_lowercase().next().unwrap_or('\0'),
+                second.to_lowercase().next().unwrap_or('\0'),
+            ];
         }
 
         if query_chars.len() != first_chars.len() {
@@ -193,7 +193,7 @@ impl SqlQueryServer {
     }
 }
 
-#[prompt_router]
+#[prompt_router(router = "prompt_router")]
 impl SqlQueryServer {
     #[prompt(name = "sql_query", description = "Smart SQL query builder")]
     async fn sql_query(
@@ -308,7 +308,7 @@ impl SqlQueryServer {
     }
 }
 
-#[prompt_handler]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for SqlQueryServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(

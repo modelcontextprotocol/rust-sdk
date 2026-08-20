@@ -75,13 +75,13 @@ impl ProgressDemo {
             ctx.meta.get_key_value("progressToken")
         );
         let Some((_, progress_token)) = ctx.meta.get_key_value("progressToken") else {
-            return Err(McpError::internal_error(format!("No progress token"), None));
+            return Err(McpError::internal_error("No progress token", None));
         };
 
         let Ok(progress_token) = serde_json::from_value::<NumberOrString>(progress_token.clone())
         else {
             return Err(McpError::internal_error(
-                format!("Invalid format of the progress token"),
+                "Invalid format of the progress token",
                 None,
             ));
         };

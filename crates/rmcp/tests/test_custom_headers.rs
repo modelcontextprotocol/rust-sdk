@@ -380,10 +380,10 @@ async fn test_mcp_custom_headers_sent_to_server() -> anyhow::Result<()> {
         let mut headers_map = HashMap::new();
         for (name, value) in headers.iter() {
             let name_str = name.as_str();
-            if name_str.starts_with("x-") {
-                if let Ok(v) = value.to_str() {
-                    headers_map.insert(name_str.to_string(), v.to_string());
-                }
+            if name_str.starts_with("x-")
+                && let Ok(v) = value.to_str()
+            {
+                headers_map.insert(name_str.to_string(), v.to_string());
             }
         }
 
@@ -392,48 +392,48 @@ async fn test_mcp_custom_headers_sent_to_server() -> anyhow::Result<()> {
         stored.extend(headers_map);
 
         // Parse the MCP request
-        if let Ok(json_body) = serde_json::from_slice::<serde_json::Value>(&body) {
-            if let Some(method) = json_body.get("method").and_then(|m| m.as_str()) {
-                if method == "initialize" {
-                    state.initialize_called.notify_one();
-                    // Return a valid MCP initialize response with session header
-                    let response = json!({
-                        "jsonrpc": "2.0",
-                        "id": json_body.get("id"),
-                        "result": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {},
-                            "serverInfo": {
-                                "name": "test-server",
-                                "version": "1.0.0"
-                            }
+        if let Ok(json_body) = serde_json::from_slice::<serde_json::Value>(&body)
+            && let Some(method) = json_body.get("method").and_then(|m| m.as_str())
+        {
+            if method == "initialize" {
+                state.initialize_called.notify_one();
+                // Return a valid MCP initialize response with session header
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": json_body.get("id"),
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "serverInfo": {
+                            "name": "test-server",
+                            "version": "1.0.0"
                         }
-                    });
-                    return (
-                        StatusCode::OK,
-                        [
-                            (http::header::CONTENT_TYPE, "application/json"),
-                            (
-                                http::HeaderName::from_static("mcp-session-id"),
-                                "test-session-123",
-                            ),
-                        ],
-                        response.to_string(),
-                    );
-                } else if method == "notifications/initialized" {
-                    // For initialized notification, return 202 Accepted
-                    return (
-                        StatusCode::ACCEPTED,
-                        [
-                            (http::header::CONTENT_TYPE, "application/json"),
-                            (
-                                http::HeaderName::from_static("mcp-session-id"),
-                                "test-session-123",
-                            ),
-                        ],
-                        String::new(),
-                    );
-                }
+                    }
+                });
+                return (
+                    StatusCode::OK,
+                    [
+                        (http::header::CONTENT_TYPE, "application/json"),
+                        (
+                            http::HeaderName::from_static("mcp-session-id"),
+                            "test-session-123",
+                        ),
+                    ],
+                    response.to_string(),
+                );
+            } else if method == "notifications/initialized" {
+                // For initialized notification, return 202 Accepted
+                return (
+                    StatusCode::ACCEPTED,
+                    [
+                        (http::header::CONTENT_TYPE, "application/json"),
+                        (
+                            http::HeaderName::from_static("mcp-session-id"),
+                            "test-session-123",
+                        ),
+                    ],
+                    String::new(),
+                );
             }
         }
 
