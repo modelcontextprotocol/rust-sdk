@@ -32,6 +32,14 @@ use crate::{
 
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 type SseTaskResult<E> = (Option<RequestId>, Result<(), StreamableHttpError<E>>);
+
+struct ModernPostTaskResult<E: std::error::Error + Send + Sync + 'static> {
+    request_id: Option<RequestId>,
+    responder: tokio::sync::oneshot::Sender<Result<(), StreamableHttpError<E>>>,
+    response: Option<Result<StreamableHttpPostResponse, StreamableHttpError<E>>>,
+    stream_ct: CancellationToken,
+}
+
 const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_request_headers(
@@ -949,19 +957,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 ))?;
             let _ = initialized_notification.responder.send(Ok(()));
         }
-        #[expect(
-            clippy::large_enum_variant,
-            reason = "the event is short-lived and boxing would add allocation in the event loop"
-        )]
         enum Event<W: Worker, E: std::error::Error + Send + Sync + 'static> {
             ClientMessage(WorkerSendRequest<W>),
             ServerMessage(ServerJsonRpcMessage),
+            ModernPostResult(ModernPostTaskResult<E>),
             StreamResult {
                 request_id: Option<RequestId>,
                 result: Result<(), StreamableHttpError<E>>,
             },
         }
         let mut streams = tokio::task::JoinSet::new();
+        let mut modern_posts = tokio::task::JoinSet::new();
         let mut pending_stream_response_ids = HashSet::new();
         let mut request_stream_cancellations = HashMap::<RequestId, CancellationToken>::new();
         let mut awaiting_fallback_initialized = false;
@@ -996,6 +1002,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     };
                     Event::ServerMessage(message)
                 },
+                terminated_post = modern_posts.join_next(), if !modern_posts.is_empty() => {
+                    match terminated_post {
+                        Some(Ok(result)) => Event::ModernPostResult(result),
+                        Some(Err(error)) => break 'main_loop Err(WorkerQuitReason::Join(error)),
+                        None => continue,
+                    }
+                }
                 terminated_stream = streams.join_next(), if !streams.is_empty() => {
                     match terminated_stream {
                         Some(result) => {
@@ -1125,9 +1138,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 ClientNotification::InitializedNotification(_)
                             )
                     );
-                    // Pass a clone to the first attempt so `message` is retained for a
-                    // potential re-init retry. `post_message` takes ownership and the
-                    // trait cannot be changed, so the clone is unavoidable.
                     let (request_version, request_headers) = request_version_headers(
                         &protocol_headers,
                         &message,
@@ -1144,6 +1154,40 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             cleanup.protocol_headers = protocol_headers.clone();
                         }
                     }
+                    if uses_modern_http {
+                        let stream_ct = transport_task_ct.child_token();
+                        if let Some(request_id) = request_id.as_ref() {
+                            request_stream_cancellations
+                                .insert(request_id.clone(), stream_ct.clone());
+                        }
+                        let client = self.client.clone();
+                        let uri = config.uri.clone();
+                        let auth_header = config.auth_header.clone();
+                        let max_sse_event_size = config.max_sse_event_size;
+                        modern_posts.spawn(async move {
+                            let response = tokio::select! {
+                                response = client.post_message_with_max_sse_event_size(
+                                    uri,
+                                    message,
+                                    None,
+                                    auth_header,
+                                    request_headers,
+                                    max_sse_event_size,
+                                ) => Some(response),
+                                _ = stream_ct.cancelled() => None,
+                            };
+                            ModernPostTaskResult {
+                                request_id,
+                                responder,
+                                response,
+                                stream_ct,
+                            }
+                        });
+                        continue;
+                    }
+                    // Pass a clone to the first attempt so `message` is retained for a
+                    // potential re-init retry. `post_message` takes ownership and the
+                    // trait cannot be changed, so the clone is unavoidable.
                     let response = self
                         .client
                         .post_message_with_max_sse_event_size(
@@ -1391,6 +1435,78 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         }
                         awaiting_fallback_initialized = false;
                     }
+                    let _ = responder.send(send_result);
+                }
+                Event::ModernPostResult(ModernPostTaskResult {
+                    request_id,
+                    responder,
+                    response,
+                    stream_ct,
+                }) => {
+                    let send_result = match (stream_ct.is_cancelled(), response) {
+                        (true, _) | (_, None) => Ok(()),
+                        (false, Some(response)) => match response {
+                            Err(error) => {
+                                if let Some(request_id) = request_id.as_ref() {
+                                    request_stream_cancellations.remove(request_id);
+                                }
+                                Err(error)
+                            }
+                            Ok(StreamableHttpPostResponse::Accepted) => {
+                                if let Some(request_id) = request_id.as_ref() {
+                                    request_stream_cancellations.remove(request_id);
+                                }
+                                Self::mark_stream_response_pending(
+                                    &mut pending_stream_response_ids,
+                                    request_id,
+                                );
+                                tracing::trace!("client message accepted");
+                                Ok(())
+                            }
+                            Ok(StreamableHttpPostResponse::Json(mut message, ..)) => {
+                                if let Some(request_id) = request_id.as_ref() {
+                                    request_stream_cancellations.remove(request_id);
+                                }
+                                cache_tools_from_response(
+                                    &mut tool_header_cache,
+                                    &mut message,
+                                    &negotiated_version,
+                                );
+                                context.send_to_handler(message).await?;
+                                Ok(())
+                            }
+                            Ok(StreamableHttpPostResponse::Sse(stream, ..)) => {
+                                Self::mark_stream_response_pending(
+                                    &mut pending_stream_response_ids,
+                                    request_id.clone(),
+                                );
+                                let sse_stream = Self::response_sse_to_jsonrpc(
+                                    stream,
+                                    None,
+                                    self.client.clone(),
+                                    config.uri.clone(),
+                                    config.auth_header.clone(),
+                                    protocol_headers.clone(),
+                                    config.max_sse_event_size,
+                                    self.config.retry_config.clone(),
+                                );
+                                let stream_tx = sse_worker_tx.clone();
+                                let origin = match &request_id {
+                                    Some(id) => InboundStreamOrigin::OutboundRequest(id.clone()),
+                                    None => InboundStreamOrigin::Unassociated,
+                                };
+                                streams.spawn(async move {
+                                    let result = Self::execute_sse_stream(
+                                        sse_stream, stream_tx, origin, true, stream_ct,
+                                    )
+                                    .await;
+                                    (request_id, result)
+                                });
+                                tracing::trace!("got new sse stream");
+                                Ok(())
+                            }
+                        },
+                    };
                     let _ = responder.send(send_result);
                 }
                 Event::ServerMessage(mut json_rpc_message) => {

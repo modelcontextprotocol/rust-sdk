@@ -1,4 +1,5 @@
 #![cfg(all(
+    feature = "client",
     feature = "server",
     feature = "transport-streamable-http-server",
     feature = "reqwest",
@@ -16,14 +17,18 @@
 use std::{sync::Arc, time::Duration};
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ClientLifecycleMode, ClientServiceExt, ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
-        ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ClientInfo, ClientRequest,
+        ContentBlock, ProtocolVersion, Request, ServerCapabilities, ServerInfo,
     },
-    service::RequestContext,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    service::{PeerRequestOptions, RequestContext},
+    transport::{
+        StreamableHttpClientTransport,
+        streamable_http_client::StreamableHttpClientTransportConfig,
+        streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
     },
 };
 use tokio::sync::Notify;
@@ -191,6 +196,50 @@ async fn stateless_json_client_disconnect_cancels_request() -> anyhow::Result<()
         .await
         .expect("RequestContext::ct should fire after client disconnect (JSON)");
 
+    server.server_ct.cancel();
+    Ok(())
+}
+
+/// Modern RMCP clients must be able to cancel while the request POST is still
+/// waiting for its first response event.
+#[tokio::test]
+async fn modern_rmcp_client_cancels_pending_request() -> anyhow::Result<()> {
+    let server = spawn_stateless_server(false).await?;
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server.url.clone()),
+    );
+    let client = ClientInfo::default()
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await?;
+
+    let request = client
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(
+                "wait_for_cancel".to_owned(),
+            ))),
+            PeerRequestOptions::no_options(),
+        )
+        .await?;
+
+    tokio::time::timeout(Duration::from_secs(5), server.started.notified())
+        .await
+        .expect("tool handler should start");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        request.cancel(Some("test cancellation".to_owned())),
+    )
+    .await
+    .expect("RequestHandle::cancel should not wait for the response stream")?;
+    tokio::time::timeout(Duration::from_secs(10), server.cancelled.notified())
+        .await
+        .expect("RequestContext::ct should fire after RequestHandle::cancel");
+
+    client.cancel().await?;
     server.server_ct.cancel();
     Ok(())
 }
