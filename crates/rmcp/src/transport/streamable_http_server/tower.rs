@@ -2087,12 +2087,9 @@ where
     /// - initialize: the full `InitializeRequestParams` — protocol version,
     ///   capabilities, and client_info — is right there in the request body
     ///   (authoritative), so it is used verbatim.
-    /// - all other requests: there is no session to recover the original
-    ///   handshake from, so only the protocol version can be reconstructed,
-    ///   from the MCP-Protocol-Version header (validated before this point;
-    ///   absent header defaults to 2025-03-26). `capabilities`/`client_info`
-    ///   remain placeholders in this case, since stateless mode has nowhere
-    ///   to persist the real values between requests.
+    /// - all other requests: only the protocol version is reconstructed here,
+    ///   from the MCP-Protocol-Version header when present (otherwise it defaults
+    ///   to 2025-03-26); `capabilities`/`client_info` remain placeholders.
     fn peer_info_for_stateless_request(
         request: &crate::model::JsonRpcRequest<ClientRequest>,
         headers: &HeaderMap,
