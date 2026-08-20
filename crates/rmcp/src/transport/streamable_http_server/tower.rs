@@ -893,13 +893,13 @@ fn validate_origin_header(
         .inspect_err(|_| {
             tracing::warn!(origin = ?origin_header, "rejected request with non-UTF-8 Origin header");
         })
-        .map_err(|_| bad_request_response("Bad Request: Invalid Origin header encoding"))?;
+        .map_err(|_| forbidden_response("Forbidden: Invalid Origin header encoding"))?;
     let origin = parse_origin_value(origin_str).ok_or_else(|| {
         tracing::warn!(
             origin = origin_str,
             "rejected request with malformed Origin header",
         );
-        bad_request_response("Bad Request: Invalid Origin header")
+        forbidden_response("Forbidden: Invalid Origin header")
     })?;
     if !origin_is_allowed(&origin, allowed_origins) {
         tracing::warn!(

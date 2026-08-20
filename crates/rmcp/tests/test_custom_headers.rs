@@ -1127,7 +1127,10 @@ mod origin_validation {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use http::{Method, Request, header::CONTENT_TYPE};
+    use http::{
+        Method, Request,
+        header::{CONTENT_TYPE, HeaderValue, ORIGIN},
+    };
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
@@ -1196,6 +1199,24 @@ mod origin_validation {
         let response = service
             .handle(init_request(Some("http://attacker.example")))
             .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn malformed_origin_is_forbidden() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service.handle(init_request(Some("not-an-origin"))).await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_utf8_origin_is_forbidden() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let mut request = init_request(None);
+        request
+            .headers_mut()
+            .insert(ORIGIN, HeaderValue::from_bytes(&[0xff]).unwrap());
+        let response = service.handle(request).await;
         assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
     }
 
