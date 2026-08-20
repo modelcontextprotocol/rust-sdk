@@ -1065,6 +1065,8 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// Explicit resource indicator supplied by the application (RFC 8707).
+    configured_resource: Option<String>,
     /// resource indicator from protected resource metadata, used for RFC 8707 `resource`
     discovered_resource: RwLock<Option<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
@@ -1314,6 +1316,7 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            configured_resource: None,
             discovered_resource: RwLock::new(None),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
             allow_missing_issuer: false,
@@ -1336,6 +1339,33 @@ impl AuthorizationManager {
     /// with authorization servers that return incomplete metadata.
     pub fn set_allow_missing_issuer(&mut self, allow: bool) {
         self.allow_missing_issuer = allow;
+    }
+
+    /// Set an explicit OAuth resource indicator for authorization and token requests.
+    ///
+    /// The value takes precedence over protected-resource metadata and the MCP
+    /// endpoint. Configure it before starting authorization or restoring cached
+    /// credentials so every request uses the same resource audience.
+    ///
+    /// Passing `None` restores the normal discovered-resource selection.
+    pub fn set_resource(&mut self, resource: Option<&str>) -> Result<(), AuthError> {
+        let Some(resource) = resource else {
+            self.configured_resource = None;
+            return Ok(());
+        };
+
+        let parsed = Url::parse(resource).map_err(|error| {
+            AuthError::MetadataError(format!("Invalid OAuth resource indicator: {error}"))
+        })?;
+        if !Self::is_http_url(&parsed) || parsed.fragment().is_some() {
+            return Err(AuthError::MetadataError(
+                "OAuth resource indicator must be an absolute HTTP(S) URL without a fragment"
+                    .to_string(),
+            ));
+        }
+
+        self.configured_resource = Some(resource.to_string());
+        Ok(())
     }
 
     /// Set a custom credential store
@@ -1823,6 +1853,10 @@ impl AuthorizationManager {
     }
 
     async fn oauth_resource(&self) -> String {
+        if let Some(resource) = &self.configured_resource {
+            return resource.clone();
+        }
+
         self.discovered_resource
             .read()
             .await
@@ -4209,8 +4243,17 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::discovered(None, "https://mcp.example.com")]
+    #[case::configured(
+        Some("https://api.example.com/tenant-a"),
+        "https://api.example.com/tenant-a"
+    )]
     #[tokio::test]
-    async fn refresh_token_uses_discovered_protected_resource() {
+    async fn refresh_token_uses_discovered_protected_resource(
+        #[case] configured_resource: Option<&str>,
+        #[case] expected_resource: &str,
+    ) {
         let challenge = oauth2::http::Response::builder()
             .status(401)
             .header(
@@ -4263,6 +4306,7 @@ mod tests {
         )
         .await
         .unwrap();
+        manager.set_resource(configured_resource).unwrap();
 
         let resolution = manager.resolve_metadata().await.unwrap();
         manager.set_metadata(resolution.metadata);
@@ -4308,9 +4352,48 @@ mod tests {
                 token_requests[0].get("resource").map(String::as_str),
                 token_requests[1].get("resource").map(String::as_str),
             ],
-            [Some("https://mcp.example.com"); 3],
-            "authorization, code exchange, and refresh must use the discovered resource audience"
+            [Some(expected_resource); 3],
+            "authorization, code exchange, and refresh must use the same resource audience"
         );
+    }
+
+    #[rstest]
+    #[case::relative("api/resource")]
+    #[case::non_http("file:///tmp/resource")]
+    #[case::fragment("https://api.example.com/resource#fragment")]
+    #[case::missing_host("https://")]
+    #[tokio::test]
+    async fn configured_resource_rejects_invalid_indicators(#[case] resource: &str) {
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/mcp")
+            .await
+            .unwrap();
+        manager
+            .set_resource(Some("https://api.example.com/tenant-a"))
+            .unwrap();
+
+        let error = manager.set_resource(Some(resource)).unwrap_err();
+
+        assert!(matches!(error, AuthError::MetadataError(_)));
+        assert_eq!(
+            manager.oauth_resource().await,
+            "https://api.example.com/tenant-a",
+            "invalid input must not replace the previously configured resource"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_configured_resource_restores_discovered_resource() {
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/mcp")
+            .await
+            .unwrap();
+        *manager.discovered_resource.write().await = Some("https://mcp.example.com".to_string());
+        manager
+            .set_resource(Some("https://api.example.com/tenant-a"))
+            .unwrap();
+
+        manager.set_resource(None).unwrap();
+
+        assert_eq!(manager.oauth_resource().await, "https://mcp.example.com");
     }
 
     #[tokio::test]
