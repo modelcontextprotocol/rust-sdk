@@ -839,6 +839,17 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let (sse_worker_tx, mut sse_worker_rx) =
             tokio::sync::mpsc::channel::<ServerJsonRpcMessage>(channel_buffer_capacity);
         let config = self.config.clone();
+        // SEP-2243: tool input schemas (name -> schema) used to promote annotated
+        // tools/call arguments to Mcp-Param-* headers. Callers may seed the cache
+        // when another component owns tool discovery; tools/list responses refresh it.
+        let mut tool_header_cache = config.tool_schemas.clone();
+        tool_header_cache.retain(|name, schema| {
+            let Err(reason) = mcp_headers::validate_param_header_annotations(schema) else {
+                return true;
+            };
+            tracing::warn!(tool = %name, "ignoring configured schema with invalid x-mcp-header annotations: {reason}");
+            false
+        });
         let transport_task_ct = context.cancellation_token.clone();
         let _drop_guard = transport_task_ct.clone().drop_guard();
         let WorkerSendRequest {
@@ -851,7 +862,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 if matches!(&request.request, ClientRequest::InitializeRequest(_))
         );
         let mut saved_init_request = is_legacy_startup.then(|| startup_request.clone());
-        let empty_tool_cache = HashMap::new();
         let (bootstrap_version, bootstrap_headers) = if is_legacy_startup {
             (ProtocolVersion::default(), config.custom_headers.clone())
         } else {
@@ -859,7 +869,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 &config.custom_headers,
                 &startup_request,
                 &ProtocolVersion::default(),
-                &empty_tool_cache,
+                &tool_header_cache,
             )
         };
         let (message, session_id) = match self
@@ -908,10 +918,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         } else {
             (bootstrap_version, bootstrap_headers)
         };
-        // SEP-2243: tool input schemas (name -> schema) cached from tools/list responses,
-        // used to promote annotated tools/call arguments to Mcp-Param-* headers.
-        let mut tool_header_cache: HashMap<String, Arc<JsonObject>> = HashMap::new();
-
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
         let mut session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
             client: self.client.clone(),
@@ -1684,6 +1690,12 @@ pub struct StreamableHttpClientTransportConfig {
     pub auth_header: Option<String>,
     /// Custom HTTP headers to include with every request
     pub custom_headers: HashMap<HeaderName, HeaderValue>,
+    /// Tool input schemas used to construct SEP-2243 `Mcp-Param-*` headers.
+    ///
+    /// This lets callers seed schemas learned outside this transport, so the
+    /// client does not need to issue `tools/list` before `tools/call`.
+    /// Schemas returned by later `tools/list` responses replace matching entries.
+    pub tool_schemas: HashMap<String, Arc<JsonObject>>,
     /// Maximum raw size of one SSE event accepted from the server.
     ///
     /// The built-in reqwest and Unix socket clients enforce this value. Custom
@@ -1748,6 +1760,12 @@ impl StreamableHttpClientTransportConfig {
         self
     }
 
+    /// Set tool input schemas used to construct SEP-2243 `Mcp-Param-*` headers.
+    pub fn tool_schemas(mut self, tool_schemas: HashMap<String, Arc<JsonObject>>) -> Self {
+        self.tool_schemas = tool_schemas;
+        self
+    }
+
     /// Set the maximum raw size of one SSE event accepted from the server.
     pub fn max_sse_event_size(mut self, bytes: usize) -> Self {
         self.max_sse_event_size = bytes;
@@ -1777,6 +1795,7 @@ impl Default for StreamableHttpClientTransportConfig {
             allow_stateless: true,
             auth_header: None,
             custom_headers: HashMap::new(),
+            tool_schemas: HashMap::new(),
             max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
             reinit_on_expired_session: true,
         }
@@ -2086,6 +2105,45 @@ mod tests {
             name,
             Arc::new(schema.as_object().expect("object schema").clone()),
         )
+    }
+
+    #[test]
+    fn configured_tool_schema_builds_param_headers_without_tools_list() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "region": { "type": "string", "x-mcp-header": "Region" },
+            },
+        });
+        let config = StreamableHttpClientTransportConfig::with_uri("http://localhost/mcp")
+            .tool_schemas(HashMap::from([(
+                "deploy".to_owned(),
+                Arc::new(schema.as_object().expect("object schema").clone()),
+            )]));
+        let message: ClientJsonRpcMessage = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "deploy",
+                "arguments": { "region": "us-west1" },
+            },
+        }))
+        .expect("tools/call message");
+
+        let headers = build_request_headers(
+            &HashMap::new(),
+            &message,
+            &config.tool_schemas,
+            &ProtocolVersion::V_2026_07_28,
+        );
+
+        assert_eq!(
+            headers
+                .get(&HeaderName::from_static("mcp-param-region"))
+                .expect("configured schema creates parameter header"),
+            &HeaderValue::from_static("us-west1")
+        );
     }
 
     #[test]

@@ -55,6 +55,9 @@ use crate::{
 pub(crate) const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 const STATELESS_STREAM_CHANNEL_CAPACITY: usize = 16;
 
+type ToolSchemaResolver =
+    dyn Fn(&http::request::Parts, &str) -> Option<Arc<JsonObject>> + Send + Sync;
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct StreamableHttpServerConfig {
@@ -1011,6 +1014,9 @@ pub struct StreamableHttpService<S, M> {
     /// Populated lazily via `get_tool` so the service factory runs at most once
     /// per tool name. `None` value means the tool exposes no schema.
     tool_schemas: Arc<std::sync::RwLock<HashMap<String, Option<Arc<JsonObject>>>>>,
+    /// Optional request-aware source for tool schemas. When configured, this is
+    /// authoritative and replaces the service-wide `get_tool` cache.
+    tool_schema_resolver: Option<Arc<ToolSchemaResolver>>,
 }
 
 impl<S, M> Clone for StreamableHttpService<S, M> {
@@ -1021,6 +1027,7 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
             service_factory: self.service_factory.clone(),
             pending_restores: self.pending_restores.clone(),
             tool_schemas: self.tool_schemas.clone(),
+            tool_schema_resolver: self.tool_schema_resolver.clone(),
         }
     }
 }
@@ -1102,8 +1109,27 @@ where
             service_factory: Arc::new(service_factory),
             pending_restores,
             tool_schemas: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            tool_schema_resolver: None,
         }
     }
+
+    /// Use a request-aware tool schema source for SEP-2243 validation.
+    ///
+    /// The resolver receives the HTTP request parts and the `tools/call` name.
+    /// It is useful when routing or authorization state in request extensions
+    /// determines which tool definition applies. Once configured, the resolver
+    /// is authoritative; `None` does not fall back to the service-wide cache.
+    pub fn with_tool_schema_resolver(
+        mut self,
+        resolver: impl Fn(&http::request::Parts, &str) -> Option<Arc<JsonObject>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.tool_schema_resolver = Some(Arc::new(resolver));
+        self
+    }
+
     fn get_service(&self) -> Result<S, std::io::Error> {
         (self.service_factory)()
     }
@@ -1267,10 +1293,13 @@ where
         Ok(self.stateless_sse_response(Some(first), receiver, request_ct))
     }
 
-    /// Returns the cached input schema for `name`, constructing a service once
-    /// per name to read its `ServerHandler::get_tool` definition. Used to
-    /// validate SEP-2243 `Mcp-Param-*` headers against the request body.
-    fn tool_schema(&self, name: &str) -> Option<Arc<JsonObject>> {
+    /// Returns the input schema for `name` in this request. A configured
+    /// request-aware resolver is authoritative; otherwise the schema is cached
+    /// by name from `ServerHandler::get_tool`.
+    fn tool_schema(&self, parts: &http::request::Parts, name: &str) -> Option<Arc<JsonObject>> {
+        if let Some(resolver) = &self.tool_schema_resolver {
+            return resolver(parts, name);
+        }
         if let Ok(cache) = self.tool_schemas.read() {
             if let Some(schema) = cache.get(name) {
                 return schema.clone();
@@ -1759,7 +1788,9 @@ where
                 validate_protocol_version_header(&part.headers, has_per_request_version)?;
                 validate_request_protocol_version_meta(&part.headers, &message)?;
                 // Validate SEP-2243 standard headers against the body
-                validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
+                validate_standard_headers(&part.headers, &message, |name| {
+                    self.tool_schema(&part, name)
+                })?;
 
                 // inject request part to extensions
                 match &mut message {
@@ -1812,7 +1843,7 @@ where
                         message_has_per_request_protocol_version(&message),
                     )?;
                     validate_standard_headers(&part.headers, &message, |name| {
-                        self.tool_schema(name)
+                        self.tool_schema(&part, name)
                     })?;
                     validate_request_protocol_version_meta(&part.headers, &message)?;
                     let ClientJsonRpcMessage::Request(request) = message else {
@@ -1941,7 +1972,9 @@ where
                 }
             }
             // Validate SEP-2243 standard headers against the body
-            validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
+            validate_standard_headers(&part.headers, &message, |name| {
+                self.tool_schema(&part, name)
+            })?;
             validate_request_protocol_version_meta(&part.headers, &message)?;
             validate_required_protocol_meta(&self.config, &message)?;
             let service = self

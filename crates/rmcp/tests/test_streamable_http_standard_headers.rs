@@ -17,6 +17,12 @@ const SEP_VERSION: &str = "2026-07-28";
 #[derive(Clone, Default)]
 struct HeaderValidationServer;
 
+#[derive(Clone, Copy)]
+enum TenantSchema {
+    Region,
+    Location,
+}
+
 impl ServerHandler for HeaderValidationServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -57,6 +63,59 @@ async fn spawn_server() -> (reqwest::Client, String, CancellationToken) {
         }
     });
     (reqwest::Client::new(), format!("http://{addr}/mcp"), ct)
+}
+
+async fn spawn_request_aware_server() -> (reqwest::Client, [String; 2], CancellationToken) {
+    let config = StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true)
+        .with_sse_keep_alive(None)
+        .with_cancellation_token(CancellationToken::new());
+    let ct = config.cancellation_token.clone();
+    let service: StreamableHttpService<HeaderValidationServer, LocalSessionManager> =
+        StreamableHttpService::new(|| Ok(HeaderValidationServer), Default::default(), config)
+            .with_tool_schema_resolver(|parts, name| {
+                if name != "deploy" {
+                    return None;
+                }
+                let header = match parts.extensions.get::<TenantSchema>()? {
+                    TenantSchema::Region => "Region",
+                    TenantSchema::Location => "Location",
+                };
+                let schema = serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "region": { "type": "string", "x-mcp-header": header },
+                    },
+                });
+                Some(Arc::new(schema.as_object().expect("object schema").clone()))
+            });
+
+    let region_router = axum::Router::new()
+        .nest_service("/region/mcp", service.clone())
+        .layer(axum::Extension(TenantSchema::Region));
+    let location_router = axum::Router::new()
+        .nest_service("/location/mcp", service)
+        .layer(axum::Extension(TenantSchema::Location));
+    let router = region_router.merge(location_router);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = tcp_listener.local_addr().unwrap();
+    tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+    (
+        reqwest::Client::new(),
+        [
+            format!("http://{addr}/region/mcp"),
+            format!("http://{addr}/location/mcp"),
+        ],
+        ct,
+    )
 }
 
 /// POSTs a `tools/call` with the given protocol-version and optional SEP-2243 headers.
@@ -309,6 +368,46 @@ async fn rejects_missing_param_header_with_32020() -> anyhow::Result<()> {
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["error"]["code"], -32020);
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_aware_schema_resolver_isolates_same_named_tools() -> anyhow::Result<()> {
+    let (client, [region_url, location_url], ct) = spawn_request_aware_server().await;
+
+    let region_response = post_tool_call(
+        &client,
+        &region_url,
+        SEP_VERSION,
+        "deploy",
+        serde_json::json!({ "region": "us-west1" }),
+        Some("tools/call"),
+        Some("deploy"),
+        Some("us-west1"),
+    )
+    .await;
+    let region_body: serde_json::Value = region_response.json().await?;
+    assert_ne!(
+        region_body["error"]["code"], -32020,
+        "the region tenant must use its request-scoped schema: {region_body}"
+    );
+
+    let location_response = post_tool_call(
+        &client,
+        &location_url,
+        SEP_VERSION,
+        "deploy",
+        serde_json::json!({ "region": "us-west1" }),
+        Some("tools/call"),
+        Some("deploy"),
+        Some("us-west1"),
+    )
+    .await;
+    assert_eq!(location_response.status(), 400);
+    let location_body: serde_json::Value = location_response.json().await?;
+    assert_eq!(location_body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())
