@@ -1,11 +1,12 @@
-//! Tests for protocol version negotiation in stateless HTTP mode.
+//! Tests for legacy protocol version negotiation over streamable HTTP.
 //!
-//! Supported versions are echoed back; unknown versions, and versions outside
-//! the server's `supported_protocol_versions`, fall back to the handler's own
-//! version.
+//! Supported legacy versions are echoed back; modern and unknown offers, and
+//! versions outside the server's `supported_protocol_versions`, fall back to
+//! the handler's preferred supported legacy revision.
 #![cfg(not(feature = "local"))]
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -68,6 +69,31 @@ impl ServerHandler for NarrowedOverridingInitialize {
     }
 }
 
+const MODERN_ONLY_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::V_2026_07_28];
+
+#[derive(Clone, Default)]
+struct ModernOnly;
+
+impl ServerHandler for ModernOnly {
+    fn get_info(&self) -> ServerInfo {
+        let mut info = ServerInfo::new(ServerCapabilities::default());
+        info.protocol_version = ProtocolVersion::V_2026_07_28;
+        info
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(MODERN_ONLY_VERSIONS)
+    }
+
+    async fn initialize(
+        &self,
+        _request: InitializeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        Ok(self.get_info())
+    }
+}
+
 fn stateless_sse_config() -> StreamableHttpServerConfig {
     StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
@@ -77,6 +103,13 @@ fn stateless_sse_config() -> StreamableHttpServerConfig {
 
 fn stateless_json_config() -> StreamableHttpServerConfig {
     stateless_sse_config().with_json_response(true)
+}
+
+fn stateful_sse_config() -> StreamableHttpServerConfig {
+    StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(true)
+        .with_sse_keep_alive(None)
+        .with_cancellation_token(CancellationToken::new())
 }
 
 async fn spawn_server(
@@ -139,10 +172,10 @@ async fn post_init(client: &reqwest::Client, url: &str, body_version: &str) -> s
         let body = resp.text().await.expect("read SSE body");
         let data = body
             .lines()
-            .find_map(|line| line.strip_prefix("data:"))
+            .filter_map(|line| line.strip_prefix("data:"))
             .map(str::trim)
-            .filter(|data| !data.is_empty())
-            .expect("SSE response contains data");
+            .find(|data| !data.is_empty())
+            .unwrap_or_else(|| panic!("SSE response contains data, got {body:?}"));
         serde_json::from_str(data).expect("parse SSE data")
     }
 }
@@ -152,6 +185,9 @@ async fn stateless_json_init_echoes_known_versions_when_handler_overrides_initia
     let (client, url, ct) = spawn_server(stateless_json_config()).await;
 
     for version in ProtocolVersion::KNOWN_VERSIONS {
+        if version == &ProtocolVersion::V_2026_07_28 {
+            continue;
+        }
         let resp = post_init(&client, &url, version.as_str()).await;
         assert_eq!(
             resp["result"]["protocolVersion"],
@@ -168,6 +204,9 @@ async fn stateless_sse_init_echoes_known_versions_when_handler_overrides_initial
     let (client, url, ct) = spawn_server(stateless_sse_config()).await;
 
     for version in ProtocolVersion::KNOWN_VERSIONS {
+        if version == &ProtocolVersion::V_2026_07_28 {
+            continue;
+        }
         let resp = post_init(&client, &url, version.as_str()).await;
         assert_eq!(
             resp["result"]["protocolVersion"],
@@ -176,6 +215,52 @@ async fn stateless_sse_init_echoes_known_versions_when_handler_overrides_initial
         );
     }
 
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn modern_initialize_negotiates_the_preferred_legacy_version_over_json_and_sse() {
+    for config in [stateless_json_config(), stateless_sse_config()] {
+        let (client, url, ct) = spawn_server(config).await;
+        let resp = post_init(&client, &url, ProtocolVersion::V_2026_07_28.as_str()).await;
+        assert_eq!(
+            resp["result"]["protocolVersion"],
+            ProtocolVersion::V_2025_11_25.as_str()
+        );
+        ct.cancel();
+    }
+}
+
+#[tokio::test]
+async fn modern_initialize_offer_uses_a_legacy_stateful_http_session() {
+    let manager = Arc::new(LocalSessionManager::default());
+    let config = stateful_sse_config();
+    let ct = config.cancellation_token.clone();
+    let service: StreamableHttpService<OverridingInitialize, LocalSessionManager> =
+        StreamableHttpService::new(|| Ok(OverridingInitialize), manager.clone(), config);
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let resp = post_init(
+        &reqwest::Client::new(),
+        &url,
+        ProtocolVersion::V_2026_07_28.as_str(),
+    )
+    .await;
+    assert_eq!(
+        resp["result"]["protocolVersion"],
+        ProtocolVersion::V_2025_11_25.as_str()
+    );
+    assert_eq!(manager.sessions.read().await.len(), 1);
     ct.cancel();
 }
 
@@ -211,7 +296,7 @@ async fn stateless_json_init_echoes_versions_the_server_narrowed_to() {
 }
 
 #[tokio::test]
-async fn stateless_json_init_does_not_agree_to_version_outside_supported_list() {
+async fn stateless_json_init_does_not_agree_to_modern_version() {
     let (client, url, ct) =
         spawn_server_of::<NarrowedOverridingInitialize>(stateless_json_config()).await;
 
@@ -219,8 +304,19 @@ async fn stateless_json_init_does_not_agree_to_version_outside_supported_list() 
     assert_eq!(
         resp["result"]["protocolVersion"],
         ProtocolVersion::V_2025_11_25.as_str(),
-        "a version outside supported_protocol_versions should not be echoed back"
+        "initialize should negotiate the server's preferred legacy revision"
     );
+
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn modern_only_server_rejects_initialize() {
+    let (client, url, ct) = spawn_server_of::<ModernOnly>(stateless_json_config()).await;
+
+    let resp = post_init(&client, &url, ProtocolVersion::V_2026_07_28.as_str()).await;
+    assert_eq!(resp["error"]["code"], -32601);
+    assert_eq!(resp["error"]["message"], "initialize");
 
     ct.cancel();
 }

@@ -322,20 +322,25 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
             context.peer.set_peer_info(request.clone());
             let mut info = self.get_info();
-            info.protocol_version = negotiate_protocol_version(
+            let Some(protocol_version) = negotiate_protocol_version(
                 &request.protocol_version,
                 info.protocol_version,
                 &self.supported_protocol_versions(),
-            );
+            ) else {
+                return std::future::ready(Err(McpError::method_not_found::<
+                    InitializeResultMethod,
+                >()));
+            };
+            info.protocol_version = protocol_version;
             std::future::ready(Ok(info))
         }
         /// Return the protocol versions supported by this server.
         ///
         /// Defaults to every version this SDK knows. Override it to narrow the
         /// set to the revisions the server actually implements: the returned
-        /// list is advertised by [`Self::discover`], bounds what `initialize`
-        /// negotiation may agree to, and is what per-request versions are
-        /// validated against.
+        /// list is advertised by [`Self::discover`], bounds which legacy
+        /// revisions `initialize` negotiation may agree to, and is what
+        /// per-request versions are validated against.
         fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
             Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
         }

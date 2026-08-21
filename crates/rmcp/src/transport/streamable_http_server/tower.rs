@@ -27,8 +27,8 @@ use crate::{
     model::{
         ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode,
         ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
-        InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
-        ProtocolVersion, RequestId, ServerInfo, ServerJsonRpcMessage, ServerResult,
+        InitializeRequestParams, InitializeResultMethod, InitializedNotification, JsonObject,
+        JsonRpcError, ProtocolVersion, RequestId, ServerInfo, ServerJsonRpcMessage, ServerResult,
     },
     serve_server,
     service::{
@@ -322,7 +322,8 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
                 &requested,
                 result.protocol_version.clone(),
                 &self.0.supported_protocol_versions(),
-            );
+            )
+            .ok_or_else(ErrorData::method_not_found::<InitializeResultMethod>)?;
             if let Some(peer_info) = peer.peer_info() {
                 let mut peer_info = (*peer_info).clone();
                 peer_info.protocol_version = result.protocol_version.clone();
@@ -353,9 +354,10 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
     clippy::result_large_err,
     reason = "BoxResponse is intentionally large; matches other handlers in this file"
 )]
-// SEP-2567: sessions are removed from the discover lifecycle. Validate
-// protocol-version consistency, then classify the request with the shared
-// lifecycle helper.
+// SEP-2567: sessions are removed from the discover lifecycle. An initialize
+// opener always selects the legacy lifecycle, even when its version offer is
+// modern and will be negotiated down. Otherwise validate protocol-version
+// consistency, then classify the request with the shared lifecycle helper.
 fn is_legacy_request(
     message: Option<&ClientJsonRpcMessage>,
     headers: &HeaderMap,
@@ -401,10 +403,12 @@ fn is_legacy_request(
                 .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
         })
         .unwrap_or(ProtocolVersion::V_2025_03_26);
-    Ok(uses_legacy_lifecycle(
-        Some(&version),
-        uses_discover_lifecycle,
-    ))
+    let is_initialize = matches!(
+        message,
+        Some(ClientJsonRpcMessage::Request(req))
+            if matches!(&req.request, ClientRequest::InitializeRequest(_))
+    );
+    Ok(is_initialize || uses_legacy_lifecycle(Some(&version), uses_discover_lifecycle))
 }
 
 fn method_not_allowed_response() -> BoxResponse {
