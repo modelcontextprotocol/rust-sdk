@@ -268,7 +268,7 @@ async fn server_echoes_client_protocol_version_when_known_old() {
 
 #[tokio::test]
 async fn server_echoes_client_protocol_version_when_latest() {
-    let negotiated = negotiate_version(TestServer::new(), "2025-11-25").await;
+    let negotiated = negotiate_version(TestServer::new(), ProtocolVersion::LATEST.as_str()).await;
     assert_eq!(negotiated, ProtocolVersion::LATEST);
 }
 
@@ -289,7 +289,7 @@ impl ServerHandler for PinnedServer {
 
 #[tokio::test]
 async fn server_pinned_version_does_not_override_known_client_request() {
-    let negotiated = negotiate_version(PinnedServer, "2025-11-25").await;
+    let negotiated = negotiate_version(PinnedServer, ProtocolVersion::LATEST.as_str()).await;
     assert_eq!(negotiated, ProtocolVersion::LATEST);
 }
 
