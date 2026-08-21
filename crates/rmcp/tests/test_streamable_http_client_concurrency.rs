@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     io,
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     },
     time::Duration,
@@ -37,6 +37,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_util::sync::CancellationToken;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 type PostResult = Result<StreamableHttpPostResponse, StreamableHttpError<io::Error>>;
@@ -48,6 +49,9 @@ struct Counts {
     initialized: AtomicUsize,
     hold_reinitialization: AtomicBool,
     manual_controls: AtomicBool,
+    reject_unmatched_cancellation: AtomicBool,
+    local_streams: StdMutex<HashMap<RequestId, CancellationToken>>,
+    local_cancellations: AtomicUsize,
     deleted: AtomicUsize,
     cancelled: AtomicUsize,
     posted: AtomicUsize,
@@ -60,6 +64,19 @@ struct ActivePost(Arc<Counts>);
 impl Drop for ActivePost {
     fn drop(&mut self) {
         self.0.active.fetch_sub(1, SeqCst);
+    }
+}
+
+struct LocalStreamRegistration {
+    id: RequestId,
+    counts: Arc<Counts>,
+    dropped: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for LocalStreamRegistration {
+    fn drop(&mut self) {
+        self.counts.local_streams.lock().unwrap().remove(&self.id);
+        let _ = self.dropped.take().unwrap().send(());
     }
 }
 
@@ -145,6 +162,39 @@ impl Posted {
             .await?;
         Ok(release)
     }
+
+    async fn start_local_sse(
+        self,
+        counts: Arc<Counts>,
+    ) -> anyhow::Result<(CancellationToken, oneshot::Receiver<()>)> {
+        let id: RequestId = serde_json::from_value(self.id.clone())?;
+        let cancellation = CancellationToken::new();
+        let eof = cancellation.clone();
+        counts
+            .local_streams
+            .lock()
+            .unwrap()
+            .insert(id.clone(), cancellation.clone());
+        let (dropped, closed) = oneshot::channel();
+        let registration = LocalStreamRegistration {
+            id,
+            counts,
+            dropped: Some(dropped),
+        };
+        let (started, listening) = oneshot::channel();
+        let stream = futures::stream::once(async move {
+            let _registration = registration;
+            let _ = started.send(());
+            cancellation.cancelled().await;
+            None::<Result<Sse, SseError>>
+        })
+        .filter_map(futures::future::ready)
+        .boxed();
+        self.finish_and_wait(Ok(StreamableHttpPostResponse::Sse(stream, None)))
+            .await?;
+        timeout(TEST_TIMEOUT, listening).await??;
+        Ok((eof, closed))
+    }
 }
 
 #[derive(Clone)]
@@ -220,7 +270,20 @@ impl StreamableHttpClient for ScriptedClient {
             }
             Some("notifications/initialized") => Ok(StreamableHttpPostResponse::Accepted),
             Some("notifications/cancelled") => {
+                let id: RequestId =
+                    serde_json::from_value(value["params"]["requestId"].clone()).unwrap();
+                let local = self.counts.local_streams.lock().unwrap().get(&id).cloned();
+                if let Some(cancellation) = local {
+                    self.counts.local_cancellations.fetch_add(1, SeqCst);
+                    cancellation.cancel();
+                    return Ok(StreamableHttpPostResponse::Accepted);
+                }
                 self.counts.cancelled.fetch_add(1, SeqCst);
+                if self.counts.reject_unmatched_cancellation.load(SeqCst) {
+                    return Err(StreamableHttpError::Client(io::Error::other(
+                        "local event cancellation reached the http POST path",
+                    )));
+                }
                 self.control_post(value, session).await
             }
             Some("tools/call") => {
@@ -478,6 +541,76 @@ async fn early_sse_response_releases_the_post_slot() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a_common_stream_response_finishes_the_request_before_its_post_returns()
+-> anyhow::Result<()> {
+    let (stream, incoming) = mpsc::unbounded_channel();
+    for (late, orphan) in [
+        (Ok(StreamableHttpPostResponse::Accepted), None),
+        (Err(StreamableHttpError::SessionExpired), None),
+        (
+            Ok(StreamableHttpPostResponse::Sse(
+                UnboundedReceiverStream::new(incoming).boxed(),
+                None,
+            )),
+            Some(stream),
+        ),
+    ] {
+        let mut harness = Harness::start(config().max_concurrent_requests(1)).await?;
+        let request = harness.cancellable("completed-on-common-stream").await?;
+        let post = harness.next().await;
+        harness
+            .incoming
+            .send(sse(serde_json::to_value(post.result())?))?;
+        timeout(TEST_TIMEOUT, request.await_response()).await??;
+
+        post.finish_and_wait(late).await?;
+        let next = harness.call("after-completed-request");
+        let post = harness.next().await;
+        assert_eq!(
+            post.name, "after-completed-request",
+            "do not retry completed work"
+        );
+        assert_eq!(post.session.as_deref(), Some("session-1"));
+        post.succeed();
+        timeout(TEST_TIMEOUT, next).await???;
+        if let Some(stream) = orphan {
+            timeout(Duration::from_secs(1), stream.closed())
+                .await
+                .expect("a late SSE response must not leave an orphan stream");
+        }
+        harness.finish(vec![], 2, 1).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_common_stream_response_prevents_replay_during_session_recovery() -> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(2)).await?;
+    let blocking = harness.call("blocking-recovery");
+    let blocked = harness.next().await;
+    let request = harness.cancellable("completed-during-recovery").await?;
+    let expired = harness.next().await;
+    let final_response = sse(serde_json::to_value(expired.result())?);
+    expired.expire_and_wait().await?;
+    harness.incoming.send(final_response)?;
+    timeout(TEST_TIMEOUT, request.await_response()).await??;
+    blocked.succeed();
+    timeout(TEST_TIMEOUT, blocking).await???;
+
+    let next = harness.call("after-completed-request");
+    let post = harness.next().await;
+    assert_eq!(
+        post.name, "after-completed-request",
+        "do not retry completed work"
+    );
+    let initializations = harness.counts.initialized.load(SeqCst);
+    assert!((1..=2).contains(&initializations));
+    post.succeed();
+    timeout(TEST_TIMEOUT, next).await???;
+    harness.finish(vec![], 3, initializations).await
+}
+
+#[tokio::test]
 async fn concurrent_session_expiry_shares_one_reinitialization() -> anyhow::Result<()> {
     let mut harness = Harness::start(config().max_concurrent_requests(2)).await?;
     let calls = vec![harness.call("first"), harness.call("second")];
@@ -510,7 +643,7 @@ async fn cancellation_still_runs_while_recovery_waits_for_old_posts() -> anyhow:
     assert_eq!(harness.counts.initialized.load(SeqCst), 1);
     assert_eq!(harness.counts.active.load(SeqCst), 1);
 
-    timeout(TEST_TIMEOUT, hanging.cancel(None))
+    timeout(Duration::from_secs(1), hanging.cancel(None))
         .await
         .expect("cancellation must bypass the session recovery wait")?;
     timeout(TEST_TIMEOUT, blocked.reply.closed()).await?;
@@ -560,6 +693,119 @@ async fn a_version_barrier_allows_the_server_reply_it_needs() -> anyhow::Result<
     next.succeed();
     timeout(TEST_TIMEOUT, queued.await_response()).await??;
     harness.finish(vec![], 2, 1).await
+}
+
+#[tokio::test]
+async fn a_cancelled_version_barrier_does_not_block_unrelated_posts() -> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(2)).await?;
+    let blocking = harness.call("blocking");
+    let blocked = harness.next().await;
+    let mut meta = RequestMetaObject::new();
+    meta.set_protocol_version(ProtocolVersion::V_2025_06_18);
+    let barrier = harness
+        .cancellable_with_options(
+            "cancelled-barrier",
+            PeerRequestOptions::no_options().with_meta(meta),
+        )
+        .await?;
+    timeout(TEST_TIMEOUT, barrier.cancel(None)).await??;
+
+    let next = harness.call("after-cancelled-barrier");
+    let post = harness.next().await;
+    assert_eq!(post.name, "after-cancelled-barrier");
+    post.succeed();
+    timeout(TEST_TIMEOUT, next).await???;
+    assert!(!blocked.reply.is_closed(), "the older POST is still held");
+    blocked.succeed();
+    harness.finish(vec![blocking], 2, 1).await
+}
+
+#[tokio::test]
+async fn dropping_a_parked_barrier_send_unblocks_the_ordinary_queue() -> anyhow::Result<()> {
+    use std::task::{Context, Wake, Waker};
+
+    use rmcp::transport::Transport;
+
+    struct WakeSignal(mpsc::UnboundedSender<()>);
+    impl Wake for WakeSignal {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    let (started, mut requests) = mpsc::unbounded_channel();
+    let counts = Arc::new(Counts::default());
+    let mut config = config().max_concurrent_requests(2);
+    config.channel_buffer_capacity = 1;
+    let mut transport = StreamableHttpClientTransport::with_client(
+        ScriptedClient {
+            started,
+            controls: mpsc::unbounded_channel().0,
+            incoming: Arc::new(Mutex::new(None)),
+            reinitializing: mpsc::unbounded_channel().0,
+            counts: counts.clone(),
+        },
+        config,
+    );
+    for message in [
+        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ClientInfo::default() }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    ] {
+        timeout(
+            TEST_TIMEOUT,
+            transport.send(serde_json::from_value(message)?),
+        )
+        .await??;
+    }
+    assert!(timeout(TEST_TIMEOUT, transport.receive()).await?.is_some());
+    let call = |id, params| {
+        ClientJsonRpcMessage::request(
+            ClientRequest::CallToolRequest(Request::new(params)),
+            RequestId::Number(id),
+        )
+    };
+    let mut first = Box::pin(transport.send(call(1, CallToolRequestParams::new("held"))));
+    assert!(futures::poll!(first.as_mut()).is_pending());
+    let blocked = next_event(&mut requests).await;
+
+    let mut meta = RequestMetaObject::new();
+    meta.set_protocol_version(ProtocolVersion::V_2025_06_18);
+    let mut barrier_request = Request::new(CallToolRequestParams::new("abandoned-barrier"));
+    barrier_request.extensions.insert(meta);
+    let mut barrier = Box::pin(transport.send(ClientJsonRpcMessage::request(
+        ClientRequest::CallToolRequest(barrier_request),
+        RequestId::Number(2),
+    )));
+    assert!(futures::poll!(barrier.as_mut()).is_pending());
+    let mut next = Box::pin(transport.send(call(3, CallToolRequestParams::new("after-barrier"))));
+    let (wake, mut woke) = mpsc::unbounded_channel();
+    let waker = Waker::from(Arc::new(WakeSignal(wake)));
+    assert!(
+        next.as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    // The barrier fills the queue. The next send wakes only after the worker parks it.
+    next_event(&mut woke).await;
+    assert_eq!(counts.posted.load(SeqCst), 1, "the barrier must be parked");
+    drop(barrier);
+    assert!(futures::poll!(next.as_mut()).is_pending());
+
+    let post = timeout(Duration::from_secs(1), requests.recv())
+        .await
+        .expect("dropping the parked send must wake the worker")
+        .unwrap();
+    assert_eq!(post.name, "after-barrier");
+    post.succeed();
+    timeout(TEST_TIMEOUT, next).await??;
+    assert!(timeout(TEST_TIMEOUT, transport.receive()).await?.is_some());
+    assert!(!blocked.reply.is_closed(), "the first POST remains held");
+    blocked.succeed();
+    timeout(TEST_TIMEOUT, first).await??;
+    assert_eq!(counts.posted.load(SeqCst), 2);
+    assert_eq!(counts.cancelled.load(SeqCst), 0);
+    transport.close().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -666,6 +912,67 @@ async fn cancellation_bypasses_queued_posts_at_capacity() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
+async fn legacy_cancellation_reaches_the_adapter_before_its_local_stream_drops()
+-> anyhow::Result<()> {
+    let mut harness = Harness::start(config().max_concurrent_requests(1)).await?;
+    harness.counts.manual_controls.store(true, SeqCst);
+    let stale = harness.notify_cancellation(RequestId::Number(999));
+    let held = harness.next_control().await;
+    harness.counts.manual_controls.store(false, SeqCst);
+    harness
+        .counts
+        .reject_unmatched_cancellation
+        .store(true, SeqCst);
+
+    let event = harness.cancellable("local-events").await?;
+    let (eof, dropped) = harness
+        .next()
+        .await
+        .start_local_sse(harness.counts.clone())
+        .await?;
+    let peer = harness.client.peer().clone();
+    let mut cancel = Box::pin(peer.notify_cancelled(CancelledNotificationParam::new(
+        Some(event.id.clone()),
+        None,
+    )));
+    assert!(futures::poll!(cancel.as_mut()).is_pending());
+    // The ordinary request follows the cancellation through the service queue.
+    let probe = harness.call("after-cancellation");
+    harness.next().await.succeed();
+    timeout(TEST_TIMEOUT, probe).await???;
+
+    // EOF is ready, but queued cancellation must pause reads until dispatch.
+    eof.cancel();
+    let probe = harness.call("after-eof");
+    harness.next().await.succeed();
+    timeout(TEST_TIMEOUT, probe).await???;
+    assert!(
+        harness
+            .counts
+            .local_streams
+            .lock()
+            .unwrap()
+            .contains_key(&event.id),
+        "the adapter's stream registration must survive queued cancellation"
+    );
+    assert!(!held.reply.is_closed(), "the control slot is still held");
+
+    held.reply
+        .send(Ok(StreamableHttpPostResponse::Accepted))
+        .unwrap();
+    timeout(TEST_TIMEOUT, stale).await???;
+    timeout(TEST_TIMEOUT, cancel).await??;
+    timeout(TEST_TIMEOUT, dropped).await??;
+    assert!(matches!(
+        timeout(TEST_TIMEOUT, event.await_response()).await?,
+        Err(rmcp::ServiceError::Cancelled { .. })
+    ));
+    assert_eq!(harness.counts.local_cancellations.load(SeqCst), 1);
+    assert_eq!(harness.counts.cancelled.load(SeqCst), 1);
+    harness.finish(vec![], 3, 1).await
+}
+
+#[tokio::test]
 async fn a_hanging_legacy_control_does_not_delay_local_cancellation() -> anyhow::Result<()> {
     let mut harness = Harness::start(config().max_concurrent_requests(1)).await?;
     harness.counts.manual_controls.store(true, SeqCst);
@@ -682,7 +989,6 @@ async fn a_hanging_legacy_control_does_not_delay_local_cancellation() -> anyhow:
     let streaming = harness.cancellable("live-stream").await?;
     let mut stream = harness.next().await.start_sse().await?;
     let cancel_stream = harness.notify_cancellation(streaming.id.clone());
-    timeout(Duration::from_secs(1), stream.closed()).await?;
     assert!(
         !held.reply.is_closed(),
         "the old control POST is still held"
@@ -698,6 +1004,7 @@ async fn a_hanging_legacy_control_does_not_delay_local_cancellation() -> anyhow:
     timeout(TEST_TIMEOUT, held.reply.closed()).await?;
     timeout(TEST_TIMEOUT, cancel_post).await???;
     timeout(TEST_TIMEOUT, cancel_stream).await???;
+    timeout(TEST_TIMEOUT, stream.closed()).await?;
     assert!(matches!(
         timeout(TEST_TIMEOUT, streaming.await_response()).await?,
         Err(rmcp::ServiceError::Cancelled { .. })
