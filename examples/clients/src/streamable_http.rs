@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation},
+    model::{CallToolRequestParams, ClientCapabilities, Implementation, InitializeRequestParams},
     transport::StreamableHttpClientTransport,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
     let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
-    let client_info = ClientInfo::new(
+    let client_info = InitializeRequestParams::new(
         ClientCapabilities::default(),
         Implementation::new("test sse client", "0.0.1"),
     );

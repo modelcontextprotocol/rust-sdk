@@ -5,8 +5,8 @@ use std::{collections::BTreeSet, process::Stdio, time::Duration};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
-        ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InitializeResult,
+        ServerCapabilities,
     },
 };
 use serde_json::{Value, json};
@@ -82,8 +82,8 @@ struct LargeResponseServer;
 
 impl ServerHandler for LargeResponseServer {
     #[allow(deprecated)]
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(
