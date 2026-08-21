@@ -260,6 +260,24 @@ impl<W: Worker> WorkerTransport<W> {
             _drop_guard: transport_task_ct.drop_guard(),
         }
     }
+
+    fn cancel_request_from_notification(
+        &self,
+        notification: &<W::Role as ServiceRole>::Not,
+    ) -> Option<Arc<RequestCancellationRegistration>> {
+        let cancelled: CancelledNotification = notification.clone().try_into().ok()?;
+        let id = cancelled.params.request_id.as_ref()?;
+        let target = {
+            let pending = self
+                .request_cancellations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            pending.get(id).and_then(Weak::upgrade)
+        }?;
+        // Signal cancellation even if the control queue is full.
+        target.token().cancel();
+        Some(target)
+    }
 }
 
 #[non_exhaustive]
@@ -328,23 +346,8 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
                     self.request_cancellations.clone(),
                 )),
                 JsonRpcMessage::Notification(notification) => {
-                    let cancelled: Result<CancelledNotification, _> =
-                        notification.notification.clone().try_into();
-                    if let Ok(cancelled) = cancelled
-                        && let Some(id) = cancelled.params.request_id.as_ref()
-                    {
-                        cancellation_target = {
-                            let pending = self
-                                .request_cancellations
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner);
-                            pending.get(id).and_then(Weak::upgrade)
-                        };
-                        if let Some(target) = &cancellation_target {
-                            // Signal cancellation even if the control queue is full.
-                            target.token().cancel();
-                        }
-                    }
+                    cancellation_target =
+                        self.cancel_request_from_notification(&notification.notification);
                     None
                 }
                 _ => None,
