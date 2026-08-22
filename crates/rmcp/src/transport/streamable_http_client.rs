@@ -623,16 +623,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     fn clear_stream_response_pending(
         pending_stream_response_ids: &mut HashSet<RequestId>,
         message: &ServerJsonRpcMessage,
-    ) {
-        let Some(response_id) = Self::server_response_id(message) else {
-            return;
-        };
-        if pending_stream_response_ids.remove(response_id) {
-            return;
+    ) -> Option<RequestId> {
+        let response_id = Self::server_response_id(message)?;
+        if let Some(id) = pending_stream_response_ids.take(response_id) {
+            return Some(id);
         }
-        if let Some(id) = response_id.numeric_string_value() {
-            pending_stream_response_ids.remove(&RequestId::Number(id));
-        }
+        let id = RequestId::Number(response_id.numeric_string_value()?);
+        pending_stream_response_ids.take(&id)
     }
 
     async fn drain_queued_stream_messages(
@@ -643,7 +640,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         loop {
             match sse_worker_rx.try_recv() {
                 Ok(message) => {
-                    Self::clear_stream_response_pending(pending_stream_response_ids, &message);
+                    let _ =
+                        Self::clear_stream_response_pending(pending_stream_response_ids, &message);
                     context.send_to_handler(message).await?;
                 }
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(()),
@@ -1676,18 +1674,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     let _ = responder.send(send_result);
                 }
                 Event::ServerMessage(mut json_rpc_message) => {
-                    if let Some(response_id) = Self::server_response_id(&json_rpc_message)
-                        && let Some(registration) = crate::service::remove_pending_request(
-                            &mut request_stream_cancellations,
-                            response_id,
-                        )
-                    {
-                        drop(registration);
-                    }
-                    Self::clear_stream_response_pending(
+                    // Match against all pending requests, not just open response streams.
+                    if let Some(request_id) = Self::clear_stream_response_pending(
                         &mut pending_stream_response_ids,
                         &json_rpc_message,
-                    );
+                    ) {
+                        drop(request_stream_cancellations.remove(&request_id));
+                    }
                     cache_tools_from_response(
                         &mut tool_header_cache,
                         &mut json_rpc_message,
@@ -2477,11 +2470,13 @@ mod tests {
             NumberOrString::String("1".into()),
         );
 
-        StreamableHttpClientWorker::<reqwest::Client>::clear_stream_response_pending(
-            &mut pending,
-            &response,
-        );
+        let matched_id =
+            StreamableHttpClientWorker::<reqwest::Client>::clear_stream_response_pending(
+                &mut pending,
+                &response,
+            );
 
+        assert_eq!(matched_id, Some(NumberOrString::Number(1)));
         assert!(pending.is_empty());
     }
 
@@ -2492,14 +2487,16 @@ mod tests {
         let mut pending = HashSet::from([NumberOrString::Number(1), string_id.clone()]);
         let response = ServerJsonRpcMessage::response(
             ServerResult::ListToolsResult(ListToolsResult::default()),
-            string_id,
+            string_id.clone(),
         );
 
-        StreamableHttpClientWorker::<reqwest::Client>::clear_stream_response_pending(
-            &mut pending,
-            &response,
-        );
+        let matched_id =
+            StreamableHttpClientWorker::<reqwest::Client>::clear_stream_response_pending(
+                &mut pending,
+                &response,
+            );
 
+        assert_eq!(matched_id, Some(string_id));
         assert_eq!(pending, HashSet::from([NumberOrString::Number(1)]));
     }
 }

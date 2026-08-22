@@ -487,8 +487,6 @@ mod tests {
             let mut send = Box::pin(transport.send(cancellation_message(id)));
             assert!(registration.token().is_cancelled());
             assert!(!lifetime.is_cancelled());
-            drop(registration);
-            assert!(weak.upgrade().is_some());
 
             let queued = if admitted {
                 assert!(futures::poll!(send.as_mut()).is_pending());
@@ -498,7 +496,10 @@ mod tests {
             };
             drop(send);
 
+            // An open stream can still own the registration after cancellation is abandoned.
             assert!(lifetime.is_cancelled());
+            assert!(weak.upgrade().is_some());
+            drop(registration);
             assert!(weak.upgrade().is_none());
             assert!(queued.is_none_or(|request| request.responder.is_closed()));
             assert!(transport.request_cancellations.lock().unwrap().is_empty());

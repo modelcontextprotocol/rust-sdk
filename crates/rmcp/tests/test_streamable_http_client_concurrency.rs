@@ -584,6 +584,78 @@ async fn a_common_stream_response_finishes_the_request_before_its_post_returns()
 }
 
 #[tokio::test]
+async fn common_stream_response_keeps_numeric_and_string_ids_distinct() -> anyhow::Result<()> {
+    use rmcp::transport::Transport;
+
+    let (started, mut requests) = mpsc::unbounded_channel();
+    let (incoming, incoming_rx) = mpsc::unbounded_channel();
+    let counts = Arc::new(Counts::default());
+    let mut transport = StreamableHttpClientTransport::with_client(
+        ScriptedClient {
+            started,
+            controls: mpsc::unbounded_channel().0,
+            incoming: Arc::new(Mutex::new(Some(incoming_rx))),
+            reinitializing: mpsc::unbounded_channel().0,
+            counts: counts.clone(),
+        },
+        config(),
+    );
+    for message in [
+        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ClientInfo::default() }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    ] {
+        timeout(
+            TEST_TIMEOUT,
+            transport.send(serde_json::from_value(message)?),
+        )
+        .await??;
+    }
+    assert!(timeout(TEST_TIMEOUT, transport.receive()).await?.is_some());
+    let call = |id, name| {
+        ClientJsonRpcMessage::request(
+            ClientRequest::CallToolRequest(Request::new(CallToolRequestParams::new(name))),
+            id,
+        )
+    };
+
+    let mut numeric_send = Box::pin(transport.send(call(RequestId::Number(7), "numeric")));
+    assert!(futures::poll!(numeric_send.as_mut()).is_pending());
+    let numeric_post = next_event(&mut requests).await;
+    let numeric_result = numeric_post.result();
+    let release_numeric = numeric_post.start_sse().await?;
+    timeout(TEST_TIMEOUT, numeric_send).await??;
+
+    // This exact string id is pending, but has no response stream registration.
+    let mut string_send = Box::pin(transport.send(call(RequestId::String("7".into()), "string")));
+    assert!(futures::poll!(string_send.as_mut()).is_pending());
+    let string_post = next_event(&mut requests).await;
+    let string_result = serde_json::to_value(string_post.result())?;
+    string_post.finish(Ok(StreamableHttpPostResponse::Accepted));
+    timeout(TEST_TIMEOUT, string_send).await??;
+
+    incoming.send(sse(string_result.clone()))?;
+    let received = timeout(TEST_TIMEOUT, transport.receive())
+        .await?
+        .expect("string-id response");
+    assert_eq!(serde_json::to_value(received)?, string_result);
+
+    release_numeric
+        .send(())
+        .expect("the distinct numeric-id stream must remain open");
+    let received = timeout(TEST_TIMEOUT, transport.receive())
+        .await?
+        .expect("numeric-id response");
+    assert_eq!(
+        serde_json::to_value(received)?,
+        serde_json::to_value(numeric_result)?
+    );
+    assert_eq!(counts.posted.load(SeqCst), 2);
+    assert_eq!(counts.cancelled.load(SeqCst), 0);
+    transport.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_common_stream_response_prevents_replay_during_session_recovery() -> anyhow::Result<()> {
     let mut harness = Harness::start(config().max_concurrent_requests(2)).await?;
     let blocking = harness.call("blocking-recovery");
