@@ -25,7 +25,10 @@ use crate::{
     },
     service::InboundStreamOrigin,
     transport::{
-        common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
+        common::{
+            client_side_sse::SseAutoReconnectStream, http_header::HEADER_NAME_MCP_PROTOCOL_VERSION,
+            mcp_headers,
+        },
         worker::{Worker, WorkerQuitReason, WorkerSendRequest, WorkerTransport},
     },
 };
@@ -78,7 +81,7 @@ fn request_version_headers(
     };
     let mut headers = build_request_headers(base, message, tool_cache, &version);
     if let Ok(value) = HeaderValue::from_str(version.as_str()) {
-        headers.insert(HeaderName::from_static("mcp-protocol-version"), value);
+        headers.insert(HEADER_NAME_MCP_PROTOCOL_VERSION, value);
     }
     (version, headers)
 }
@@ -117,9 +120,8 @@ fn negotiate_version_headers(
         && let ServerResult::InitializeResult(init_result) = &response.result
     {
         version = init_result.protocol_version.clone();
-        // HeaderName::from_static requires lowercase
         if let Ok(hv) = HeaderValue::from_str(init_result.protocol_version.as_str()) {
-            headers.insert(HeaderName::from_static("mcp-protocol-version"), hv);
+            headers.insert(HEADER_NAME_MCP_PROTOCOL_VERSION, hv);
         }
     }
     (version, headers)
@@ -1137,8 +1139,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     if inline_version.is_some() {
                         negotiated_version = request_version.clone();
                         if let Ok(value) = HeaderValue::from_str(request_version.as_str()) {
-                            protocol_headers
-                                .insert(HeaderName::from_static("mcp-protocol-version"), value);
+                            protocol_headers.insert(HEADER_NAME_MCP_PROTOCOL_VERSION, value);
                         }
                         if let Some(cleanup) = &mut session_cleanup_info {
                             cleanup.protocol_headers = protocol_headers.clone();
