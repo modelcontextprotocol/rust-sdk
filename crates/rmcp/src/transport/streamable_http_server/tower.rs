@@ -39,8 +39,9 @@ use crate::{
         OneshotTransport, TransportAdapterIdentity,
         common::{
             http_header::{
-                EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_MCP_PROTOCOL_VERSION,
-                HEADER_SESSION_ID, JSON_MIME_TYPE,
+                EVENT_STREAM_MIME_TYPE, HEADER_NAME_LAST_EVENT_ID,
+                HEADER_NAME_MCP_PROTOCOL_VERSION, HEADER_NAME_SESSION_ID, HEADER_SESSION_ID,
+                JSON_MIME_TYPE,
             },
             mcp_headers,
             server_side_http::{
@@ -260,7 +261,7 @@ fn validate_protocol_version_header(
     headers: &http::HeaderMap,
     allow_unknown: bool,
 ) -> Result<(), BoxResponse> {
-    if let Some(value) = headers.get(HEADER_MCP_PROTOCOL_VERSION) {
+    if let Some(value) = headers.get(HEADER_NAME_MCP_PROTOCOL_VERSION) {
         let version_str = value.to_str().map_err(|_| {
             Response::builder()
                 .status(http::StatusCode::BAD_REQUEST)
@@ -396,7 +397,7 @@ fn is_legacy_request(
     let version = from_body
         .or_else(|| {
             headers
-                .get(HEADER_MCP_PROTOCOL_VERSION)
+                .get(HEADER_NAME_MCP_PROTOCOL_VERSION)
                 .and_then(|value| value.to_str().ok())
                 .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
         })
@@ -466,7 +467,7 @@ fn validate_header_matches_init_body(
     body_version: &str,
     request_id: Option<RequestId>,
 ) -> Result<(), BoxResponse> {
-    let Some(header_value) = headers.get(HEADER_MCP_PROTOCOL_VERSION) else {
+    let Some(header_value) = headers.get(HEADER_NAME_MCP_PROTOCOL_VERSION) else {
         return Ok(());
     };
     let header_str = header_value.to_str().map_err(|_| {
@@ -508,7 +509,7 @@ fn validate_request_protocol_version_meta(
     let is_discover = matches!(&request.request, ClientRequest::DiscoverRequest(_));
     let meta = request.request.get_meta();
     let header_version = headers
-        .get(HEADER_MCP_PROTOCOL_VERSION)
+        .get(HEADER_NAME_MCP_PROTOCOL_VERSION)
         .and_then(|value| value.to_str().ok());
     let Some(meta_version) = meta.protocol_version() else {
         let requires_request_metadata = is_discover
@@ -569,7 +570,7 @@ fn validate_required_protocol_header(
         // Initialize keeps its own header-matching rule.
         return Ok(());
     }
-    if headers.contains_key(HEADER_MCP_PROTOCOL_VERSION) {
+    if headers.contains_key(HEADER_NAME_MCP_PROTOCOL_VERSION) {
         return Ok(());
     }
     Err(header_mismatch_jsonrpc_response(
@@ -676,7 +677,7 @@ fn validate_standard_headers(
     tool_schema: impl Fn(&str) -> Option<Arc<JsonObject>>,
 ) -> Result<(), BoxResponse> {
     let version_requires_headers = headers
-        .get(HEADER_MCP_PROTOCOL_VERSION)
+        .get(HEADER_NAME_MCP_PROTOCOL_VERSION)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|version| version >= ProtocolVersion::STANDARD_HEADERS.as_str());
     if !version_requires_headers {
@@ -1562,7 +1563,7 @@ where
         if !legacy_request {
             let Some(last_event_id) = request
                 .headers()
-                .get(HEADER_LAST_EVENT_ID)
+                .get(HEADER_NAME_LAST_EVENT_ID)
                 .and_then(|value| value.to_str().ok())
             else {
                 return Ok(method_not_allowed_response());
@@ -1586,7 +1587,7 @@ where
         // check session id
         let session_id = request
             .headers()
-            .get(HEADER_SESSION_ID)
+            .get(HEADER_NAME_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
@@ -1622,7 +1623,7 @@ where
         // check if last event id is provided
         let last_event_id = parts
             .headers
-            .get(HEADER_LAST_EVENT_ID)
+            .get(HEADER_NAME_LAST_EVENT_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned());
         if let Some(last_event_id) = last_event_id {
@@ -1730,7 +1731,7 @@ where
             // do we have a session id?
             let session_id = part
                 .headers
-                .get(HEADER_SESSION_ID)
+                .get(HEADER_NAME_SESSION_ID)
                 .and_then(|v| v.to_str().ok());
             if let Some(session_id) = session_id {
                 let session_id = session_id.to_owned().into();
@@ -2048,7 +2049,7 @@ where
         // check session id
         let session_id = request
             .headers()
-            .get(HEADER_SESSION_ID)
+            .get(HEADER_NAME_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
@@ -2092,7 +2093,7 @@ where
             init.params.protocol_version.clone()
         } else {
             headers
-                .get(HEADER_MCP_PROTOCOL_VERSION)
+                .get(HEADER_NAME_MCP_PROTOCOL_VERSION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
                 .unwrap_or(ProtocolVersion::V_2025_03_26)
