@@ -15,8 +15,9 @@ use crate::{
         common::{
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
-                EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
-                extract_scope_from_header, validate_custom_header,
+                EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_NAME_SESSION_ID,
+                HEADER_SESSION_ID, JSON_MIME_TYPE, extract_scope_from_header,
+                validate_custom_header,
             },
         },
         streamable_http_client::*,
@@ -287,7 +288,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             .and_then(|v| v.parse::<u64>().ok());
         let session_id = response
             .headers()
-            .get(HEADER_SESSION_ID)
+            .get(HEADER_NAME_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
