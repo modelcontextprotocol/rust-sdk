@@ -1631,6 +1631,22 @@ let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/m
 let client = ClientInfo::default().serve(transport).await?;
 ```
 
+The client allows up to 16 ordinary http POSTs at once. Configure this with
+`StreamableHttpClientTransportConfig::with_uri(url).max_concurrent_requests(n)`;
+`1` keeps ordinary POSTs serial, and `0` is treated as `1`. An open sse response
+stream does not count against this limit. Cancellation and replies use a
+separate queue with one extra POST slot. Each control POST has a five-second
+timeout after it starts. Cancellation stops a queued or active POST immediately.
+For an open legacy response stream, the client stops reading but keeps the stream
+alive until the cancellation send finishes or is dropped. This lets custom http
+adapters handle cancellation before their stream state is removed.
+
+Session recovery waits up to five seconds for old POSTs, then stops any that
+remain. Those POSTs are not retried because the server may have processed them.
+Configure this wait and the separate
+reinitialization timeout with `session_recovery_timeout`. Callers still decide
+which tools may run at the same time and which need approval.
+
 #### Server-Sent Events (SSE)
 
 Streamable HTTP responses arrive as either a single `application/json` body or a

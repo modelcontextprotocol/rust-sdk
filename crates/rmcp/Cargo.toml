@@ -297,6 +297,11 @@ required-features = ["server", "client", "transport-streamable-http-server", "re
 path = "tests/test_streamable_http_json_response.rs"
 
 [[test]]
+name = "test_streamable_http_client_concurrency"
+required-features = ["client", "transport-streamable-http-client"]
+path = "tests/test_streamable_http_client_concurrency.rs"
+
+[[test]]
 name = "test_streamable_http_protocol_version"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_protocol_version.rs"
