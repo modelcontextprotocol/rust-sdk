@@ -13,9 +13,12 @@ use http::{HeaderName, HeaderValue};
 use hyper_util::rt::TokioIo;
 use rmcp::{
     ServiceExt,
+    model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
     transport::{
         StreamableHttpClientTransport, UnixSocketHttpClient,
-        streamable_http_client::StreamableHttpClientTransportConfig,
+        streamable_http_client::{
+            StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
+        },
     },
 };
 use serde_json::json;
@@ -294,5 +297,53 @@ async fn test_unix_socket_convenience_constructor() -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&socket_path);
     let _ = std::fs::remove_dir(&dir);
 
+    Ok(())
+}
+
+/// A request POST that gets 200 + `application/json` + `{}` must error.
+/// Mapping that body to Accepted would hang the caller waiting on SSE.
+#[tokio::test]
+async fn test_unix_socket_request_malformed_json_is_unexpected() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-bad-json-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn bad_json_handler() -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            [(http::header::CONTENT_TYPE, "application/json")],
+            "{}",
+        )
+    }
+
+    let app = Router::new().route("/mcp", post(bad_json_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::request(
+                ClientRequest::PingRequest(PingRequest::default()),
+                RequestId::Number(1),
+            ),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Err(StreamableHttpError::UnexpectedServerResponse(_)) => {}
+        other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+    }
     Ok(())
 }
