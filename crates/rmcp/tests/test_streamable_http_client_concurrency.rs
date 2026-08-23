@@ -15,6 +15,7 @@ use std::{
 use futures::{StreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
+    ServiceExt,
     model::{
         CallToolRequestParams, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientRequest, DiscoverResult, ProtocolVersion, Request, RequestId, RequestMetaObject,
@@ -24,9 +25,13 @@ use rmcp::{
         ClientLifecycleMode, PeerRequestOptions, RequestHandle, RoleClient, RunningService,
         serve_client_with_lifecycle,
     },
-    transport::streamable_http_client::{
-        StreamableHttpClient, StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
-        StreamableHttpError, StreamableHttpPostResponse,
+    transport::{
+        IntoTransport,
+        streamable_http_client::{
+            StreamableHttpClient, StreamableHttpClientTransport,
+            StreamableHttpClientTransportConfig, StreamableHttpClientWorker, StreamableHttpError,
+            StreamableHttpPostResponse,
+        },
     },
 };
 use serde_json::{Value, json};
@@ -386,12 +391,28 @@ impl Harness {
         config: StreamableHttpClientTransportConfig,
         lifecycle: ClientLifecycleMode,
     ) -> anyhow::Result<Self> {
+        Self::with_constructor(
+            config,
+            lifecycle,
+            StreamableHttpClientTransport::with_client,
+        )
+        .await
+    }
+
+    async fn with_constructor<T, A>(
+        config: StreamableHttpClientTransportConfig,
+        lifecycle: ClientLifecycleMode,
+        build: impl FnOnce(ScriptedClient, StreamableHttpClientTransportConfig) -> T,
+    ) -> anyhow::Result<Self>
+    where
+        T: IntoTransport<RoleClient, StreamableHttpError<io::Error>, A>,
+    {
         let (started, requests) = mpsc::unbounded_channel();
         let (control_tx, controls) = mpsc::unbounded_channel();
         let (incoming, incoming_rx) = mpsc::unbounded_channel();
         let (reinitializing, reinitializations) = mpsc::unbounded_channel();
         let counts = Arc::new(Counts::default());
-        let transport = StreamableHttpClientTransport::with_client(
+        let transport = build(
             ScriptedClient {
                 started,
                 controls: control_tx,
@@ -401,8 +422,12 @@ impl Harness {
             },
             config,
         );
-        let client =
-            serve_client_with_lifecycle(ClientInfo::default(), transport, lifecycle).await?;
+        let client = match lifecycle {
+            ClientLifecycleMode::Initialize => ClientInfo::default().serve(transport).await?,
+            lifecycle => {
+                serve_client_with_lifecycle(ClientInfo::default(), transport, lifecycle).await?
+            }
+        };
         Ok(Self {
             client,
             started: requests,
@@ -490,6 +515,59 @@ impl Harness {
         self.client.cancel().await?;
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn constructor_and_worker_conversion_paths_preserve_cancellation() -> anyhow::Result<()> {
+    async fn check<T, A>(
+        build: impl FnOnce(ScriptedClient, StreamableHttpClientTransportConfig) -> T,
+    ) -> anyhow::Result<()>
+    where
+        T: IntoTransport<RoleClient, StreamableHttpError<io::Error>, A>,
+    {
+        let mut harness = Harness::with_constructor(
+            config().max_concurrent_requests(1),
+            ClientLifecycleMode::Initialize,
+            build,
+        )
+        .await?;
+        let request = harness.cancellable("blocked").await?;
+        let mut blocked = harness.next().await;
+        let queued = harness.cancellable("queued").await?;
+        timeout(TEST_TIMEOUT, request.cancel(None)).await??;
+        timeout(TEST_TIMEOUT, blocked.reply.closed()).await?;
+        let next = harness.next().await;
+        assert_eq!(next.name, "queued");
+        next.succeed();
+        timeout(TEST_TIMEOUT, queued.await_response()).await??;
+        assert_eq!(harness.counts.cancelled.load(SeqCst), 1);
+        harness.finish(vec![], 2, 1).await
+    }
+
+    check(StreamableHttpClientTransport::with_client).await?;
+    check(|client, config| {
+        StreamableHttpClientTransport::spawn(StreamableHttpClientWorker::new(client, config))
+    })
+    .await?;
+    check(|client, config| StreamableHttpClientWorker::new(client, config).into_transport())
+        .await?;
+    // The generic fixture passes the worker directly to ServiceExt::serve.
+    check(StreamableHttpClientWorker::new).await?;
+
+    let supplied_token = CancellationToken::new();
+    let mut returned_token = None;
+    check(|client, config| {
+        let transport = StreamableHttpClientTransport::spawn_with_ct(
+            StreamableHttpClientWorker::new(client, config),
+            supplied_token.clone(),
+        );
+        returned_token = Some(transport.cancel_token());
+        transport
+    })
+    .await?;
+    assert!(supplied_token.is_cancelled());
+    assert!(returned_token.unwrap().is_cancelled());
+    Ok(())
 }
 
 #[tokio::test]
