@@ -15,14 +15,15 @@ use std::{
 use futures::{StreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
+    ClientHandler,
     model::{
         CallToolRequestParams, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
-        ClientRequest, DiscoverResult, ProtocolVersion, Request, RequestId, RequestMetaObject,
-        ServerJsonRpcMessage,
+        ClientRequest, CustomRequest, CustomResult, DiscoverResult, ErrorData, ProtocolVersion,
+        Request, RequestId, RequestMetaObject, ServerJsonRpcMessage,
     },
     service::{
-        ClientLifecycleMode, PeerRequestOptions, RequestHandle, RoleClient, RunningService,
-        serve_client_with_lifecycle,
+        ClientLifecycleMode, PeerRequestOptions, RequestContext, RequestHandle, RoleClient,
+        RunningService, serve_client_with_lifecycle,
     },
     transport::streamable_http_client::{
         StreamableHttpClient, StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -742,6 +743,151 @@ async fn server_replies_still_run_while_recovery_waits_for_old_posts() -> anyhow
     assert_eq!(retry.session.as_deref(), Some("session-2"));
     retry.succeed();
     harness.finish(vec![waiting, expired], 3, 2).await
+}
+
+struct HeldServerRequest {
+    id: RequestId,
+    cancellation: CancellationToken,
+    reply: oneshot::Sender<Result<CustomResult, ErrorData>>,
+}
+
+struct HeldRequestClient {
+    started: mpsc::UnboundedSender<HeldServerRequest>,
+}
+
+impl ClientHandler for HeldRequestClient {
+    async fn on_custom_request(
+        &self,
+        _request: CustomRequest,
+        context: RequestContext<RoleClient>,
+    ) -> Result<CustomResult, ErrorData> {
+        let (reply, result) = oneshot::channel();
+        self.started
+            .send(HeldServerRequest {
+                id: context.id,
+                cancellation: context.ct,
+                reply,
+            })
+            .expect("test receives the server request");
+        result.await.expect("test releases the handler")
+    }
+}
+
+async fn check_late_session_handler_reply(
+    old_result: Result<CustomResult, ErrorData>,
+    replacement_id: i64,
+) -> anyhow::Result<()> {
+    let (started, mut requests) = mpsc::unbounded_channel();
+    let (control_tx, mut controls) = mpsc::unbounded_channel();
+    let (incoming, incoming_rx) = mpsc::unbounded_channel();
+    let (handler_tx, mut handlers) = mpsc::unbounded_channel();
+    let counts = Arc::new(Counts::default());
+    counts.manual_controls.store(true, SeqCst);
+    let transport = StreamableHttpClientTransport::with_client(
+        ScriptedClient {
+            started,
+            controls: control_tx,
+            incoming: Arc::new(Mutex::new(Some(incoming_rx))),
+            reinitializing: mpsc::unbounded_channel().0,
+            counts: counts.clone(),
+        },
+        config(),
+    );
+    let client = serve_client_with_lifecycle(
+        HeldRequestClient {
+            started: handler_tx,
+        },
+        transport,
+        ClientLifecycleMode::Initialize,
+    )
+    .await?;
+
+    incoming.send(sse(json!({
+        "jsonrpc": "2.0", "id": 7, "method": "test/held",
+    })))?;
+    let old = next_event(&mut handlers).await;
+    assert_eq!(old.id, RequestId::Number(7));
+
+    let peer = client.peer().clone();
+    let call =
+        tokio::spawn(async move { peer.call_tool(CallToolRequestParams::new("recover")).await });
+    next_event(&mut requests).await.expire();
+    let retry = next_event(&mut requests).await;
+    assert_eq!(retry.session.as_deref(), Some("session-2"));
+    let final_response = serde_json::to_value(retry.result())?;
+    let (replacement_stream, replacement_rx) = mpsc::unbounded_channel();
+    retry
+        .finish_and_wait(Ok(StreamableHttpPostResponse::Sse(
+            UnboundedReceiverStream::new(replacement_rx).boxed(),
+            None,
+        )))
+        .await?;
+    replacement_stream.send(sse(json!({
+        "jsonrpc": "2.0", "id": replacement_id, "method": "test/held",
+    })))?;
+    let replacement = next_event(&mut handlers).await;
+    assert_eq!(replacement.id, RequestId::Number(replacement_id));
+    replacement_stream.send(sse(final_response))?;
+    timeout(TEST_TIMEOUT, call).await???;
+
+    old.reply.send(old_result).expect("old handler is waiting");
+    // Completion must cancel only the completing handler's token. Waiting for
+    // that acknowledgement orders the old completion before the new one.
+    timeout(TEST_TIMEOUT, async {
+        tokio::select! {
+            _ = old.cancellation.cancelled() => {}
+            _ = replacement.cancellation.cancelled() => {
+                panic!("old completion cancelled the replacement handler");
+            }
+        }
+    })
+    .await?;
+    assert!(!replacement.cancellation.is_cancelled());
+    replacement
+        .reply
+        .send(Ok(CustomResult::new(json!({ "reply": "replacement" }))))
+        .expect("replacement handler is waiting");
+
+    let control = next_event(&mut controls).await;
+    assert_eq!(control.session.as_deref(), Some("session-2"));
+    assert_eq!(control.message["id"], replacement_id);
+    assert_eq!(control.message["result"], json!({ "reply": "replacement" }));
+    control
+        .reply
+        .send(Ok(StreamableHttpPostResponse::Accepted))
+        .unwrap();
+    timeout(TEST_TIMEOUT, replacement.cancellation.cancelled()).await?;
+    // Closing drains automatic send tasks, so a delayed old reply cannot evade
+    // the assertion by starting after the replacement reply was acknowledged.
+    timeout(TEST_TIMEOUT, client.cancel()).await??;
+    assert!(
+        controls.try_recv().is_err(),
+        "no old-session reply may be posted"
+    );
+    assert_eq!(counts.initialized.load(SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_session_handler_response_does_not_reach_replacement_session() -> anyhow::Result<()> {
+    check_late_session_handler_reply(Ok(CustomResult::new(json!({ "reply": "old" }))), 8).await
+}
+
+#[tokio::test]
+async fn old_session_handler_error_does_not_reach_replacement_session() -> anyhow::Result<()> {
+    check_late_session_handler_reply(Err(ErrorData::internal_error("old handler error", None)), 8)
+        .await
+}
+
+#[tokio::test]
+async fn old_session_handler_response_preserves_reused_request_id() -> anyhow::Result<()> {
+    check_late_session_handler_reply(Ok(CustomResult::new(json!({ "reply": "old" }))), 7).await
+}
+
+#[tokio::test]
+async fn old_session_handler_error_preserves_reused_request_id() -> anyhow::Result<()> {
+    check_late_session_handler_reply(Err(ErrorData::internal_error("old handler error", None)), 7)
+        .await
 }
 
 #[tokio::test]

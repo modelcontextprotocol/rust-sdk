@@ -13,7 +13,7 @@ use tracing::{Instrument, Level};
 
 use super::{IntoTransport, Transport};
 use crate::{
-    model::{CancelledNotification, JsonRpcMessage, RequestId},
+    model::{CancelledNotification, GetExtensions, JsonRpcMessage, RequestId},
     service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
 };
 
@@ -81,6 +81,48 @@ pub trait Worker: Sized + Send + 'static {
 
 type RequestCancellations = Arc<Mutex<HashMap<RequestId, Weak<RequestCancellationRegistration>>>>;
 
+/// The transport and generation that delivered an inbound request. Never serialized.
+#[derive(Debug, Clone)]
+pub(crate) struct ResponseOrigin {
+    transport: Arc<AtomicU64>,
+    generation: u64,
+}
+
+impl ResponseOrigin {
+    /// Capture a transport's current generation before handing off a request.
+    pub(crate) fn capture(transport: &Arc<AtomicU64>) -> Self {
+        Self {
+            transport: transport.clone(),
+            generation: transport.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Return whether the originating transport still uses this generation.
+    pub(crate) fn is_current(&self) -> bool {
+        self.generation == self.transport.load(Ordering::SeqCst)
+    }
+}
+
+tokio::task_local! {
+    static RESPONSE_ORIGIN: Option<ResponseOrigin>;
+}
+
+/// Preserve reply origin during both send construction and future polling.
+///
+/// Lazy wrappers polled in this future retain the context. Wrappers that spawn
+/// tasks must construct the inner send before spawning it. Deferring that call
+/// to a detached task, or serializing away request extensions, loses the origin.
+pub(crate) fn with_response_origin<F>(
+    origin: Option<ResponseOrigin>,
+    create_send: impl FnOnce() -> F,
+) -> impl Future<Output = F::Output> + Send + 'static
+where
+    F: Future + Send + 'static,
+{
+    let send = RESPONSE_ORIGIN.sync_scope(origin.clone(), create_send);
+    RESPONSE_ORIGIN.scope(origin, send)
+}
+
 /// Keeps a request's cancellation token registered for a chosen lifetime.
 pub(crate) struct RequestCancellationRegistration {
     id: RequestId,
@@ -135,6 +177,8 @@ pub struct WorkerSendRequest<W: Worker> {
     pub responder: tokio::sync::oneshot::Sender<Result<(), W::Error>>,
     cancellation: Option<Arc<RequestCancellationRegistration>>,
     control_generation: u64,
+    #[cfg(feature = "transport-streamable-http-client")]
+    response_origin: Option<ResponseOrigin>,
 }
 
 impl<W: Worker> WorkerSendRequest<W> {
@@ -156,11 +200,12 @@ impl<W: Worker> WorkerSendRequest<W> {
         self.cancellation.clone()
     }
 
-    /// Return the local generation captured when [`Transport::send`] created its future.
+    /// Return the local generation associated with this send.
     ///
-    /// This happens before polling or queue admission. The value is not sent over
-    /// the wire; the worker decides whether a message from an older generation is valid.
-    /// It identifies the outbound send, not the session that started an inbound handler.
+    /// Ordinary sends capture it when [`Transport::send`] creates its future,
+    /// before polling or queue admission. Automatic replies retain the generation
+    /// that delivered their inbound request. This value is not sent over the wire;
+    /// the worker decides whether a message from an older generation is valid.
     pub fn control_generation(&self) -> u64 {
         self.control_generation
     }
@@ -301,17 +346,19 @@ pub struct WorkerContext<W: Worker> {
 }
 
 impl<W: Worker> WorkerContext<W> {
-    /// Return the local generation that newly created sends will capture.
+    /// Return the local generation that new sends without a reply origin capture.
     ///
     /// Workers may use this value to check messages from an earlier connection
-    /// or session. The generic transport does not check it automatically.
+    /// or session. Automatic replies retain their inbound request's generation.
+    /// The generic transport does not check generations automatically.
     pub fn control_generation(&self) -> u64 {
         self.control_generation.load(Ordering::SeqCst)
     }
 
     /// Advance the local generation, wrapping at [`u64::MAX`], and return its new value.
     ///
-    /// Only subsequent calls to [`Transport::send`] capture the new value.
+    /// Subsequent sends without a reply origin capture the new value. Automatic
+    /// replies keep their inbound request's generation even when sent later.
     /// Advancing does not drain queues, cancel work, or reject older messages;
     /// the worker is responsible for those actions.
     pub fn advance_control_generation(&self) -> u64 {
@@ -320,10 +367,27 @@ impl<W: Worker> WorkerContext<W> {
             .wrapping_add(1)
     }
 
+    /// Check both the captured generation and, for replies, the originating transport.
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) fn is_current_control(&self, request: &WorkerSendRequest<W>) -> bool {
+        request.control_generation == self.control_generation()
+            && request
+                .response_origin
+                .as_ref()
+                .is_none_or(|origin| Arc::ptr_eq(&origin.transport, &self.control_generation))
+    }
+
+    /// Queue an inbound message, recording request origin before waiting for capacity.
     pub async fn send_to_handler(
         &mut self,
-        item: RxJsonRpcMessage<W::Role>,
+        mut item: RxJsonRpcMessage<W::Role>,
     ) -> Result<(), WorkerQuitReason<W::Error>> {
+        if let JsonRpcMessage::Request(request) = &mut item {
+            request
+                .request
+                .extensions_mut()
+                .insert(ResponseOrigin::capture(&self.control_generation));
+        }
         self.to_handler_tx
             .send(item)
             .await
@@ -347,7 +411,18 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
         &mut self,
         item: TxJsonRpcMessage<W::Role>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
-        let control_generation = self.control_generation.load(Ordering::SeqCst);
+        let response_origin = if matches!(
+            &item,
+            JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)
+        ) {
+            RESPONSE_ORIGIN.try_with(Clone::clone).ok().flatten()
+        } else {
+            None
+        };
+        let control_generation = response_origin.as_ref().map_or_else(
+            || self.control_generation.load(Ordering::SeqCst),
+            |origin| origin.generation,
+        );
         let mut cancellation_target = None;
         let registration = if W::supports_request_cancellation() {
             match &item {
@@ -383,6 +458,8 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
             responder,
             cancellation: registration,
             control_generation,
+            #[cfg(feature = "transport-streamable-http-client")]
+            response_origin,
         };
         async move {
             // Keep the stream alive until its cancellation is handled or abandoned.
@@ -415,7 +492,10 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::{model::ClientJsonRpcMessage, service::RoleClient};
+    use crate::{
+        model::{ClientJsonRpcMessage, ClientResult, ServerJsonRpcMessage},
+        service::RoleClient,
+    };
 
     struct TestWorker(tokio::sync::oneshot::Sender<WorkerContext<Self>>);
 
@@ -459,6 +539,114 @@ mod tests {
             "params": { "requestId": id },
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn inbound_origin_is_captured_before_queue_admission() {
+        let (context_tx, context_rx) = tokio::sync::oneshot::channel();
+        let mut transport = WorkerTransport::spawn(TestWorker(context_tx));
+        let mut context = context_rx.await.unwrap();
+        let generation = context.control_generation.clone();
+        let request = || {
+            serde_json::from_value::<ServerJsonRpcMessage>(serde_json::json!({
+                "jsonrpc": "2.0", "id": 7, "method": "ping",
+            }))
+            .unwrap()
+        };
+        for _ in 0..WorkerConfig::default().channel_buffer_capacity {
+            context.send_to_handler(request()).await.unwrap();
+        }
+        let mut pending = Box::pin(context.send_to_handler(request()));
+        assert!(futures::poll!(pending.as_mut()).is_pending());
+        generation.fetch_add(1, Ordering::SeqCst);
+        transport.receive().await.unwrap();
+        pending.await.unwrap();
+        for _ in 1..WorkerConfig::default().channel_buffer_capacity {
+            transport.receive().await.unwrap();
+        }
+        let message = transport.receive().await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            serde_json::to_value(request()).unwrap()
+        );
+        let JsonRpcMessage::Request(request) = message else {
+            panic!("expected request")
+        };
+        let origin = request
+            .request
+            .extensions()
+            .get::<ResponseOrigin>()
+            .unwrap();
+        assert!(Arc::ptr_eq(&origin.transport, &generation));
+        assert_eq!(origin.generation, 0);
+        assert!(!origin.is_current());
+        transport.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reply_origin_survives_send_creation_and_lazy_polling() {
+        for response in [
+            ClientJsonRpcMessage::response(ClientResult::empty(()), RequestId::Number(7)),
+            ClientJsonRpcMessage::error(
+                crate::model::ErrorData::internal_error("handler error", None),
+                Some(RequestId::Number(7)),
+            ),
+        ] {
+            let (context_tx, context_rx) = tokio::sync::oneshot::channel();
+            let mut transport = WorkerTransport::spawn(TestWorker(context_tx));
+            let mut context = context_rx.await.unwrap();
+            let origin = ResponseOrigin::capture(&context.control_generation);
+            context.advance_control_generation();
+            let eager =
+                with_response_origin(Some(origin.clone()), || transport.send(response.clone()));
+            assert!(RESPONSE_ORIGIN.try_with(Clone::clone).is_err());
+            let lazy = with_response_origin(Some(origin), || async move {
+                tokio::task::yield_now().await;
+                let result = transport.send(response).await;
+                (transport, result)
+            });
+            let eager = tokio::spawn(eager);
+            let lazy = tokio::spawn(lazy);
+            for _ in 0..2 {
+                let request = context.from_handler_rx.recv().await.unwrap();
+                assert_eq!(request.control_generation(), 0);
+                request.responder.send(Ok(())).unwrap();
+            }
+            eager.await.unwrap().unwrap();
+            let (mut transport, result) = lazy.await.unwrap();
+            result.unwrap();
+            assert!(RESPONSE_ORIGIN.try_with(Clone::clone).is_err());
+            transport.close().await.unwrap();
+        }
+    }
+
+    #[cfg(feature = "transport-streamable-http-client")]
+    #[tokio::test]
+    async fn reply_origin_checks_transport_identity_even_when_generations_match() {
+        let (context_tx, context_rx) = tokio::sync::oneshot::channel();
+        let mut transport = WorkerTransport::spawn(TestWorker(context_tx));
+        let mut context = context_rx.await.unwrap();
+        for foreign in [false, true] {
+            let generation = if foreign {
+                Arc::new(AtomicU64::new(context.control_generation()))
+            } else {
+                context.control_generation.clone()
+            };
+            let origin = ResponseOrigin::capture(&generation);
+            let send = with_response_origin(Some(origin), || {
+                transport.send(ClientJsonRpcMessage::response(
+                    ClientResult::empty(()),
+                    RequestId::Number(7),
+                ))
+            });
+            let send = tokio::spawn(send);
+            let request = context.from_handler_rx.recv().await.unwrap();
+            assert_eq!(request.control_generation(), context.control_generation());
+            assert_eq!(context.is_current_control(&request), !foreign);
+            request.responder.send(Ok(())).unwrap();
+            send.await.unwrap().unwrap();
+        }
+        transport.close().await.unwrap();
     }
 
     #[tokio::test]
