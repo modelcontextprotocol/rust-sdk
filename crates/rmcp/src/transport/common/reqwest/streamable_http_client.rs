@@ -293,7 +293,9 @@ impl StreamableHttpClient for reqwest::Client {
                     ),
                 }
             }
-            if let Some(response) = legacy_discover_response(&message, status, &body) {
+            if let Some(response) =
+                legacy_discover_response(&message, session_was_attached, status, &body)
+            {
                 return Ok(response);
             }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(

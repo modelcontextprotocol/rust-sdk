@@ -341,10 +341,12 @@ impl StreamableHttpPostResponse {
 /// Keep authentication failures and server errors on their original paths.
 pub(super) fn legacy_discover_response(
     message: &ClientJsonRpcMessage,
+    session_was_attached: bool,
     status: StatusCode,
     body: &str,
 ) -> Option<StreamableHttpPostResponse> {
-    if !status.is_client_error()
+    if session_was_attached
+        || !status.is_client_error()
         || matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
     {
         return None;
