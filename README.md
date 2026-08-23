@@ -1803,6 +1803,7 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ### Built with `rmcp`
 
+- [rcm-rs](https://github.com/drQedwards/RCM) / [rcm-rs on crates.io](https://crates.io/crates/rcm-rs) - Polyglot package manager (Cargo, NPM, Composer/PPM, system packages) powered by the LET imperative; integrates RMCP for AI-agent tool exposure
 - [goose](https://github.com/block/goose) - An open-source, extensible AI agent that goes beyond code suggestions
 - [apollo-mcp-server](https://github.com/apollographql/apollo-mcp-server) - MCP server that connects AI agents to GraphQL APIs via Apollo GraphOS
 - [rustfs-mcp](https://github.com/rustfs/rustfs/tree/main/crates/mcp) - High-performance MCP server providing S3-compatible object storage operations for AI/LLM integration
