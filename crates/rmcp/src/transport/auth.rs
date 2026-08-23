@@ -2701,6 +2701,23 @@ impl AuthorizationManager {
                 return Ok(None);
             }
         };
+
+        // Every field of `ResourceServerMetadata` is optional, so an unrelated JSON
+        // object deserializes into an all-`None` value and then fails validation
+        // fatally. RFC 9728 requires `resource`, and MCP requires an authorization
+        // server reference, so a document carrying neither is not a protected
+        // resource metadata document. Treat it as a soft failure, the same way this
+        // function already treats a non-200 status and a body that is not JSON.
+        if metadata.resource.is_none()
+            && metadata.authorization_server.is_none()
+            && metadata.authorization_servers.is_none()
+        {
+            debug!(
+                "response at {resource_metadata_url} is not a protected resource metadata document"
+            );
+            return Ok(None);
+        }
+
         Ok(Some(metadata))
     }
 
@@ -4823,6 +4840,49 @@ mod tests {
             empty_response(404),
             empty_response(404),
             empty_response(404),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://mcp.example.com",
+                    "authorization_endpoint": "https://mcp.example.com/oauth/authorize",
+                    "token_endpoint": "https://mcp.example.com/oauth/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::AuthorizationServerMetadata,
+                "https://mcp.example.com/oauth/token",
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_ignores_non_metadata_json_at_the_base_url() {
+        let health = || {
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            )
+        };
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata.
+            // The same URL is hit twice: once to probe, once to fetch the document.
+            health(),
+            health(),
             http_response(
                 200,
                 serde_json::json!({
