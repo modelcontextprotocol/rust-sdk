@@ -5,7 +5,17 @@
     feature = "transport-streamable-http-server"
 ))]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
+
+use axum::{
+    Router,
+    body::{Body, Bytes},
+    extract::State,
+    http::{Response, StatusCode},
+    routing::post,
+};
+use serde_json::json;
+use tokio::sync::Mutex;
 
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
@@ -44,6 +54,54 @@ impl ServerHandler for LegacyHttpServer {
             None,
         )))
     }
+}
+
+#[derive(Clone, Default)]
+struct PlainTextLegacyHttpState {
+    methods: Arc<Mutex<Vec<String>>>,
+}
+
+async fn plain_text_legacy_http_handler(
+    State(state): State<PlainTextLegacyHttpState>,
+    body: Bytes,
+) -> Response<Body> {
+    let request: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON-RPC body");
+    let method = request["method"]
+        .as_str()
+        .expect("request method")
+        .to_owned();
+    state.methods.lock().await.push(method.clone());
+
+    if method == "server/discover" {
+        return Response::builder()
+            .status(StatusCode::UNPROCESSABLE_ENTITY)
+            .body(Body::from("Unexpected message, expect initialize request"))
+            .expect("build rejection response");
+    }
+
+    if method == "initialize" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": request["id"],
+                    "result": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "serverInfo": {"name": "legacy", "version": "1.0"}
+                    }
+                })
+                .to_string(),
+            ))
+            .expect("build initialize response");
+    }
+
+    Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .body(Body::empty())
+        .expect("build notification response")
 }
 
 #[tokio::test]
@@ -132,6 +190,50 @@ async fn auto_http_client_falls_back_to_stateful_legacy_startup() {
     client.list_tools(None).await.expect("list tools");
     client.cancel().await.expect("cancel client");
 
+    ct.cancel();
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn auto_http_client_falls_back_after_plain_text_4xx_rejection() {
+    let ct = CancellationToken::new();
+    let state = PlainTextLegacyHttpState::default();
+    let methods = state.methods.clone();
+    let router = Router::new()
+        .route("/mcp", post(plain_text_legacy_http_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
+    );
+    let client = ClientInfo::default()
+        .serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("auto HTTP client should fall back after a transport-level rejection");
+    client.cancel().await.expect("cancel client");
+
+    assert_eq!(
+        methods.lock().await.as_slice(),
+        &["server/discover", "initialize", "notifications/initialized"]
+    );
     ct.cancel();
     server.await.expect("server task");
 }
