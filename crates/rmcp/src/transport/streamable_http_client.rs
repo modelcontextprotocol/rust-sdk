@@ -40,7 +40,6 @@ use crate::{
 type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 type SseTaskResult<E> = (Option<RequestId>, Result<(), StreamableHttpError<E>>);
 const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
-const CONTROL_POST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_request_headers(
     base: &HashMap<HeaderName, HeaderValue>,
@@ -561,6 +560,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         let uri = config.uri.clone();
         let auth_header = config.auth_header.clone();
         let max_sse_event_size = config.max_sse_event_size;
+        let control_request_timeout = config.control_request_timeout;
         let is_control = Self::is_control_message(&send_request.message);
         let cancellation = send_request
             .cancellation_token()
@@ -573,7 +573,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                 _ = session.cancellation.cancelled() => {
                     Some(Err(StreamableHttpError::SessionRecoveryTimeout))
                 },
-                _ = tokio::time::sleep(CONTROL_POST_TIMEOUT), if is_control => {
+                _ = tokio::time::sleep(control_request_timeout), if is_control => {
                     Some(Err(StreamableHttpError::ControlRequestTimeout))
                 },
                 response = client.post_message_with_max_sse_event_size(
@@ -1966,9 +1966,11 @@ pub struct StreamableHttpClientTransportConfig {
     /// Maximum number of ordinary http POSTs in progress (default: 16).
     /// A POST stops counting when it completes or opens an sse response stream.
     /// Zero is treated as one. Cancellation and replies use a separate queue
-    /// with one extra POST slot. Each control POST has a five-second timeout
-    /// after it starts.
+    /// with one extra POST slot and use [`Self::control_request_timeout`].
     pub max_concurrent_requests: usize,
+    /// Maximum time a cancellation or reply POST can run after it starts (default: five seconds).
+    /// Time spent waiting in the control queue does not count toward this timeout.
+    pub control_request_timeout: Duration,
     /// Maximum wait for old POSTs to finish before session recovery (default: five seconds).
     /// The new initialization handshake has a separate timeout of the same length.
     /// An unfinished old POST returns [`StreamableHttpError::SessionRecoveryTimeout`]
@@ -2011,6 +2013,12 @@ impl StreamableHttpClientTransportConfig {
     /// Set how many ordinary POSTs can run at once. One keeps them serial; zero also means one.
     pub fn max_concurrent_requests(mut self, limit: usize) -> Self {
         self.max_concurrent_requests = limit.max(1);
+        self
+    }
+
+    /// Set the timeout for cancellation and reply POSTs, starting when each POST starts.
+    pub fn control_request_timeout(mut self, timeout: Duration) -> Self {
+        self.control_request_timeout = timeout;
         self
     }
 
@@ -2085,6 +2093,7 @@ impl Default for StreamableHttpClientTransportConfig {
             retry_config: Arc::new(ExponentialBackoff::default()),
             channel_buffer_capacity: 16,
             max_concurrent_requests: 16,
+            control_request_timeout: Duration::from_secs(5),
             session_recovery_timeout: Duration::from_secs(5),
             allow_stateless: true,
             auth_header: None,

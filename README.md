@@ -1635,8 +1635,10 @@ The client allows up to 16 ordinary http POSTs at once. Configure this with
 `StreamableHttpClientTransportConfig::with_uri(url).max_concurrent_requests(n)`;
 `1` keeps ordinary POSTs serial, and `0` is treated as `1`. An open sse response
 stream does not count against this limit. Cancellation and replies use a
-separate queue with one extra POST slot. Each control POST has a five-second
-timeout after it starts. Cancellation stops a queued or active POST immediately.
+separate queue with one extra POST slot. Configure their timeout with
+`control_request_timeout` (default: five seconds). The timeout starts when the
+POST starts, excluding time in the queue. Cancellation stops a queued or active
+POST immediately.
 For an open legacy response stream, the client stops reading but keeps the stream
 alive until the cancellation send finishes or is dropped. This lets custom http
 adapters handle cancellation before their stream state is removed.

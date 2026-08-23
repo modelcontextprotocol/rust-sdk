@@ -150,13 +150,17 @@ impl<W: Worker> WorkerSendRequest<W> {
             .map(RequestCancellationRegistration::token)
     }
 
-    /// Keep the same cancellation registration alive after the POST completes.
+    /// Keep the same cancellation registration alive after the send completes.
     #[cfg(feature = "transport-streamable-http-client")]
     pub(crate) fn cancellation_registration(&self) -> Option<Arc<RequestCancellationRegistration>> {
         self.cancellation.clone()
     }
 
-    /// Return the control generation when the send was created.
+    /// Return the local generation captured when [`Transport::send`] created its future.
+    ///
+    /// This happens before polling or queue admission. The value is not sent over
+    /// the wire; the worker decides whether a message from an older generation is valid.
+    /// It identifies the outbound send, not the session that started an inbound handler.
     pub fn control_generation(&self) -> u64 {
         self.control_generation
     }
@@ -297,12 +301,19 @@ pub struct WorkerContext<W: Worker> {
 }
 
 impl<W: Worker> WorkerContext<W> {
-    /// Return the generation assigned to newly created control sends.
+    /// Return the local generation that newly created sends will capture.
+    ///
+    /// Workers may use this value to check messages from an earlier connection
+    /// or session. The generic transport does not check it automatically.
     pub fn control_generation(&self) -> u64 {
         self.control_generation.load(Ordering::SeqCst)
     }
 
-    /// Advance the generation so the worker can reject older control sends.
+    /// Advance the local generation, wrapping at [`u64::MAX`], and return its new value.
+    ///
+    /// Only subsequent calls to [`Transport::send`] capture the new value.
+    /// Advancing does not drain queues, cancel work, or reject older messages;
+    /// the worker is responsible for those actions.
     pub fn advance_control_generation(&self) -> u64 {
         self.control_generation
             .fetch_add(1, Ordering::SeqCst)

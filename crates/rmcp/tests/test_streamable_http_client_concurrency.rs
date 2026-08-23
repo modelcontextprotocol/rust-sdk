@@ -1045,6 +1045,38 @@ async fn legacy_cancellation_reaches_the_adapter_before_its_local_stream_drops()
 }
 
 #[tokio::test]
+async fn control_timeout_is_configurable_and_releases_its_slot() -> anyhow::Result<()> {
+    assert_eq!(config().control_request_timeout, Duration::from_secs(5));
+    let mut harness =
+        Harness::start(config().control_request_timeout(Duration::from_millis(50))).await?;
+    harness.counts.manual_controls.store(true, SeqCst);
+    let cancellation = harness.notify_cancellation(RequestId::Number(999));
+    let mut cancelled_post = harness.next_control().await;
+    harness.incoming.send(sse(json!({
+        "jsonrpc": "2.0", "id": "timed-reply", "method": "ping"
+    })))?;
+
+    let error = timeout(Duration::from_secs(1), cancellation)
+        .await??
+        .unwrap_err();
+    assert!(matches!(
+        transport_error(&error.into()),
+        StreamableHttpError::ControlRequestTimeout
+    ));
+    timeout(Duration::from_secs(1), cancelled_post.reply.closed()).await?;
+
+    let mut reply_post = harness.next_control().await;
+    assert_eq!(reply_post.message["id"], "timed-reply");
+    assert!(reply_post.message["result"].is_object());
+    harness.counts.manual_controls.store(false, SeqCst);
+    let next = harness.notify_cancellation(RequestId::Number(1000));
+    timeout(Duration::from_secs(1), reply_post.reply.closed()).await?;
+    timeout(Duration::from_secs(1), next).await???;
+    assert_eq!(harness.counts.cancelled.load(SeqCst), 2);
+    harness.finish(vec![], 0, 1).await
+}
+
+#[tokio::test]
 async fn a_hanging_legacy_control_does_not_delay_local_cancellation() -> anyhow::Result<()> {
     let mut harness = Harness::start(config().max_concurrent_requests(1)).await?;
     harness.counts.manual_controls.store(true, SeqCst);
@@ -1067,7 +1099,7 @@ async fn a_hanging_legacy_control_does_not_delay_local_cancellation() -> anyhow:
     );
     assert_eq!(harness.counts.cancelled.load(SeqCst), 1);
 
-    // The private control timeout is five seconds; give its watchdog headroom.
+    // The default control timeout is five seconds; give its watchdog headroom.
     let error = timeout(Duration::from_secs(10), stale).await??.unwrap_err();
     assert!(matches!(
         transport_error(&error.into()),
