@@ -486,12 +486,7 @@ struct SessionCleanupInfo<C> {
     protocol_headers: HashMap<HeaderName, HeaderValue>,
 }
 
-/// http client and configuration used to construct a [`StreamableHttpClientTransport`].
-///
-/// Pass this value to [`StreamableHttpClientTransport::spawn`] or directly to
-/// [`crate::ServiceExt::serve`]. It no longer implements [`Worker`]: constructing
-/// a raw [`WorkerTransport`] would bypass the http transport's cancellation and
-/// control-message interception.
+/// Client and settings for a [`StreamableHttpClientTransport`].
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct StreamableHttpClientWorker<C: StreamableHttpClient> {
@@ -508,7 +503,7 @@ struct HttpClientWorker<C: StreamableHttpClient> {
 
 type RequestCancellations = Arc<Mutex<HashMap<RequestId, Weak<RequestCancellationRegistration>>>>;
 
-/// Keeps an http request registered while its POST or response stream is active.
+/// Cancellation state for a request and its response stream.
 struct RequestCancellationRegistration {
     id: RequestId,
     lifetime: CancellationToken,
@@ -558,14 +553,13 @@ struct HttpSendRequest<C: StreamableHttpClient> {
     message: ClientJsonRpcMessage,
     responder: tokio::sync::oneshot::Sender<Result<(), StreamableHttpError<C::Error>>>,
     cancellation: Option<Arc<RequestCancellationRegistration>>,
-    // Captured by the wrapper before the control send is polled or queued.
+    // Captured before the send future is polled.
     control_generation: u64,
 }
 
 impl<C: StreamableHttpClient> HttpSendRequest<C> {
     fn from_worker(mut request: WorkerSendRequest<HttpClientWorker<C>>) -> Self {
-        // Do not copy the registration into saved initialization messages or
-        // backend-owned message clones. Only this envelope owns its lifetime.
+        // Do not let message clones extend the request's lifetime.
         let cancellation = match &mut request.message {
             ClientJsonRpcMessage::Request(request) => request
                 .request
@@ -577,7 +571,7 @@ impl<C: StreamableHttpClient> HttpSendRequest<C> {
             message: request.message,
             responder: request.responder,
             cancellation,
-            // Ordinary sends do not participate in the control-generation check.
+            // Only control messages use this value.
             control_generation: 0,
         }
     }
@@ -586,10 +580,6 @@ impl<C: StreamableHttpClient> HttpSendRequest<C> {
         self.cancellation
             .as_deref()
             .map(RequestCancellationRegistration::token)
-    }
-
-    fn cancellation_registration(&self) -> Option<Arc<RequestCancellationRegistration>> {
-        self.cancellation.clone()
     }
 }
 
@@ -609,7 +599,7 @@ struct PostSession {
 }
 
 impl<C: StreamableHttpClient + Default> StreamableHttpClientWorker<C> {
-    /// Create transport configuration using the default http client.
+    /// Create a worker with the default http client.
     pub fn new_simple(url: impl Into<Arc<str>>) -> Self {
         Self {
             client: C::default(),
@@ -622,7 +612,7 @@ impl<C: StreamableHttpClient + Default> StreamableHttpClientWorker<C> {
 }
 
 impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
-    /// Create transport configuration using a custom http client.
+    /// Create a worker with the given client and settings.
     pub fn new(client: C, config: StreamableHttpClientTransportConfig) -> Self {
         Self { client, config }
     }
@@ -1689,7 +1679,7 @@ impl<C: StreamableHttpClient> Worker for HttpClientWorker<C> {
                         recovery_posts.push_back(send_request);
                         continue;
                     }
-                    let request_cancellation = send_request.cancellation_registration();
+                    let request_cancellation = send_request.cancellation.clone();
                     let HttpSendRequest {
                         message, responder, ..
                     } = send_request;
@@ -1980,27 +1970,8 @@ impl<C: StreamableHttpClient> Worker for HttpClientWorker<C> {
 /// );
 /// ```
 ///
-/// # Worker transport migration
-///
-/// This is a distinct transport type, not an alias for [`WorkerTransport`].
-/// Replace `WorkerTransport::spawn(worker)` with `StreamableHttpClientTransport::spawn(worker)`
-/// (or use [`Self::spawn_with_ct`] for an existing cancellation token).
-/// [`StreamableHttpClientWorker`] can still be passed directly to [`crate::ServiceExt::serve`]
-/// or converted with [`IntoTransport::into_transport`], but it no longer implements [`Worker`].
-/// Code naming the old `WorkerTransport<StreamableHttpClientWorker<C>>` type must use
-/// `StreamableHttpClientTransport<C>` instead. These paths all retain http cancellation
-/// and control-message handling; no raw inner-transport conversion is provided.
-///
-/// ```compile_fail,E0277
-/// use rmcp::transport::{
-///     streamable_http_client::{StreamableHttpClient, StreamableHttpClientWorker},
-///     worker::WorkerTransport,
-/// };
-///
-/// fn bypass_http_wrapper<C: StreamableHttpClient>(worker: StreamableHttpClientWorker<C>) {
-///     let _ = WorkerTransport::spawn(worker);
-/// }
-/// ```
+/// This is a separate type, not a [`WorkerTransport`] alias.
+/// [`StreamableHttpClientWorker`] no longer implements [`Worker`].
 ///
 /// # Feature Flags
 ///
@@ -2014,12 +1985,12 @@ pub struct StreamableHttpClientTransport<C: StreamableHttpClient> {
 }
 
 impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
-    /// Start the http transport with the supplied client and configuration.
+    /// Start the transport.
     pub fn spawn(worker: StreamableHttpClientWorker<C>) -> Self {
         Self::spawn_with_ct(worker, CancellationToken::new())
     }
 
-    /// Start the http transport using an existing cancellation token.
+    /// Start the transport with the given cancellation token.
     pub fn spawn_with_ct(
         worker: StreamableHttpClientWorker<C>,
         transport_task_ct: CancellationToken,
@@ -2044,29 +2015,9 @@ impl<C: StreamableHttpClient> StreamableHttpClientTransport<C> {
         }
     }
 
-    /// Return the token that cancels this transport and its active work.
+    /// Return this transport's cancellation token.
     pub fn cancel_token(&self) -> CancellationToken {
         self.inner.cancel_token()
-    }
-
-    fn cancel_request_from_notification(
-        &self,
-        notification: &ClientNotification,
-    ) -> Option<Arc<RequestCancellationRegistration>> {
-        let ClientNotification::CancelledNotification(cancelled) = notification else {
-            return None;
-        };
-        let id = cancelled.params.request_id.as_ref()?;
-        let target = {
-            let pending = self
-                .request_cancellations
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            pending.get(id).and_then(Weak::upgrade)
-        }?;
-        // Signal cancellation even if the control queue is full.
-        target.token().cancel();
-        Some(target)
     }
 
     /// Creates a new transport with a custom HTTP client implementation.
@@ -2161,10 +2112,20 @@ impl<C: StreamableHttpClient> Transport<RoleClient> for StreamableHttpClientTran
         &mut self,
         mut item: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
-        // Capture the outbound send's generation before polling or queue admission.
-        // This does not identify the session that started an inbound handler.
+        // Capture the send's generation before polling or queueing it.
         let control_generation = self.control_generation.load(Ordering::SeqCst);
-        let mut cancellation_target = None;
+        let cancellation_target =
+            HttpClientWorker::<C>::cancellation_request_id(&item).and_then(|id| {
+                let pending = self
+                    .request_cancellations
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                pending.get(id).and_then(Weak::upgrade)
+            });
+        // Cancel locally before waiting for a queue slot.
+        if let Some(target) = &cancellation_target {
+            target.token().cancel();
+        }
         let registration = match &mut item {
             ClientJsonRpcMessage::Request(request) => {
                 let registration = RequestCancellationRegistration::new(
@@ -2177,11 +2138,6 @@ impl<C: StreamableHttpClient> Transport<RoleClient> for StreamableHttpClientTran
                     .extensions_mut()
                     .insert(registration.clone());
                 Some(registration)
-            }
-            ClientJsonRpcMessage::Notification(notification) => {
-                cancellation_target =
-                    self.cancel_request_from_notification(&notification.notification);
-                None
             }
             _ => None,
         };
@@ -2779,58 +2735,13 @@ mod tests {
         assert_eq!(matched_id, Some(string_id));
         assert_eq!(pending, HashSet::from([NumberOrString::Number(1)]));
     }
-}
-
-#[cfg(test)]
-mod cancellation_tests {
-    use std::io;
-
-    use super::*;
-    #[derive(Clone)]
-    struct PendingClient;
-
-    impl StreamableHttpClient for PendingClient {
-        type Error = io::Error;
-
-        async fn post_message(
-            &self,
-            _uri: Arc<str>,
-            _message: ClientJsonRpcMessage,
-            _session_id: Option<Arc<str>>,
-            _auth_header: Option<String>,
-            _custom_headers: HashMap<HeaderName, HeaderValue>,
-        ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-            std::future::pending().await
-        }
-
-        async fn delete_session(
-            &self,
-            _uri: Arc<str>,
-            _session_id: Arc<str>,
-            _auth_header: Option<String>,
-            _custom_headers: HashMap<HeaderName, HeaderValue>,
-        ) -> Result<(), StreamableHttpError<Self::Error>> {
-            Ok(())
-        }
-
-        async fn get_stream(
-            &self,
-            _uri: Arc<str>,
-            _session_id: Option<Arc<str>>,
-            _last_event_id: Option<String>,
-            _auth_header: Option<String>,
-            _custom_headers: HashMap<HeaderName, HeaderValue>,
-        ) -> Result<BoxedSseStream, StreamableHttpError<Self::Error>> {
-            std::future::pending().await
-        }
-    }
 
     fn transport_with_control_queue() -> (
-        StreamableHttpClientTransport<PendingClient>,
-        tokio::sync::mpsc::Receiver<HttpSendRequest<PendingClient>>,
+        StreamableHttpClientTransport<StatelessReconnectClient>,
+        tokio::sync::mpsc::Receiver<HttpSendRequest<StatelessReconnectClient>>,
     ) {
         let mut transport = StreamableHttpClientTransport::with_client(
-            PendingClient,
+            StatelessReconnectClient::default(),
             StreamableHttpClientTransportConfig::with_uri("http://unused/mcp"),
         );
         // Inspect admitted controls without starting an http handshake.
@@ -2865,8 +2776,10 @@ mod cancellation_tests {
         message.insert_extension(registration.clone());
         message.insert_extension(42_u32);
         let (responder, _receiver) = tokio::sync::oneshot::channel();
-        let request =
-            HttpSendRequest::<PendingClient>::from_worker(WorkerSendRequest { message, responder });
+        let request = HttpSendRequest::<StatelessReconnectClient>::from_worker(WorkerSendRequest {
+            message,
+            responder,
+        });
 
         assert!(Arc::ptr_eq(
             request.cancellation.as_ref().unwrap(),

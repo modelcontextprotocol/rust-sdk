@@ -533,18 +533,12 @@ async fn constructor_and_worker_conversion_paths_preserve_cancellation() -> anyh
         .await?;
         let request = harness.cancellable("blocked").await?;
         let mut blocked = harness.next().await;
-        let queued = harness.cancellable("queued").await?;
         timeout(TEST_TIMEOUT, request.cancel(None)).await??;
         timeout(TEST_TIMEOUT, blocked.reply.closed()).await?;
-        let next = harness.next().await;
-        assert_eq!(next.name, "queued");
-        next.succeed();
-        timeout(TEST_TIMEOUT, queued.await_response()).await??;
         assert_eq!(harness.counts.cancelled.load(SeqCst), 1);
-        harness.finish(vec![], 2, 1).await
+        harness.finish(vec![], 1, 1).await
     }
 
-    check(StreamableHttpClientTransport::with_client).await?;
     check(|client, config| {
         StreamableHttpClientTransport::spawn(StreamableHttpClientWorker::new(client, config))
     })

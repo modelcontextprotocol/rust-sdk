@@ -1649,18 +1649,6 @@ Configure this wait and the separate
 reinitialization timeout with `session_recovery_timeout`. Callers still decide
 which tools may run at the same time and which need approval.
 
-`StreamableHttpClientTransport<C>` is now a distinct type rather than an alias
-for `WorkerTransport`. Existing `with_client`, `from_uri`, `from_config`, and
-Unix-socket constructors remain available. For worker-based construction, replace
-`WorkerTransport::spawn(worker)` with `StreamableHttpClientTransport::spawn(worker)`,
-or use `StreamableHttpClientTransport::spawn_with_ct(worker, token)`.
-`worker.into_transport()`, `service.serve(worker)`, and `transport.cancel_token()`
-remain supported. The public `StreamableHttpClientWorker<C>` no longer implements
-the generic `Worker` trait; type annotations naming
-`WorkerTransport<StreamableHttpClientWorker<C>>` must use
-`StreamableHttpClientTransport<C>` instead. This ensures every supported
-construction path includes http cancellation and control-message handling.
-
 #### Server-Sent Events (SSE)
 
 Streamable HTTP responses arrive as either a single `application/json` body or a
