@@ -14,9 +14,6 @@ use axum::{
     http::{Response, StatusCode},
     routing::post,
 };
-use serde_json::json;
-use tokio::sync::Mutex;
-
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
     model::{ClientInfo, DiscoverResult, ErrorCode, ErrorData, ProtocolVersion},
@@ -29,6 +26,8 @@ use rmcp::{
         },
     },
 };
+use serde_json::json;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]
