@@ -274,6 +274,11 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 .await
                 .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
                 .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            if let Some(response) =
+                legacy_discover_response(&message, session_was_attached, status, &body)
+            {
+                return Ok(response);
+            }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                 format!("HTTP {status}: {body}"),
             )));

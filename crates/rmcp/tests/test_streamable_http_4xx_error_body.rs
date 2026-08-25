@@ -7,7 +7,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rmcp::{
-    model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+    model::{
+        ClientJsonRpcMessage, ClientRequest, DiscoverRequest, DiscoverRequestParams, PingRequest,
+        RequestId,
+    },
     transport::streamable_http_client::{
         StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
     },
@@ -41,6 +44,13 @@ async fn spawn_mock_server(status: u16, content_type: &'static str, body: &'stat
 fn ping_message() -> ClientJsonRpcMessage {
     ClientJsonRpcMessage::request(
         ClientRequest::PingRequest(PingRequest::default()),
+        RequestId::Number(1),
+    )
+}
+
+fn discover_message() -> ClientJsonRpcMessage {
+    ClientJsonRpcMessage::request(
+        ClientRequest::DiscoverRequest(DiscoverRequest::new(DiscoverRequestParams {})),
         RequestId::Number(1),
     )
 }
@@ -109,6 +119,29 @@ async fn http_4xx_malformed_json_body_falls_back_to_unexpected_server_response()
             Arc::from(url.as_str()),
             ping_message(),
             None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    match result {
+        Err(StreamableHttpError::UnexpectedServerResponse(_)) => {}
+        other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+    }
+}
+
+/// A discovery request attached to an existing session must retain the
+/// transport error path; legacy fallback only applies to sessionless probes.
+#[tokio::test]
+async fn sessionful_discover_4xx_does_not_trigger_legacy_fallback() {
+    let url = spawn_mock_server(422, "text/plain", "Session-bound rejection").await;
+
+    let client = reqwest::Client::new();
+    let result = client
+        .post_message(
+            Arc::from(url.as_str()),
+            discover_message(),
+            Some(Arc::from("session-1")),
             None,
             HashMap::new(),
         )

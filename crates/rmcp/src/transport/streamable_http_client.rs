@@ -10,7 +10,7 @@ use futures::{
     future::BoxFuture,
     stream::{BoxStream, FuturesUnordered},
 };
-use http::{HeaderName, HeaderValue};
+use http::{HeaderName, HeaderValue, StatusCode};
 pub use sse_stream::Error as SseError;
 use sse_stream::Sse;
 use thiserror::Error;
@@ -330,6 +330,43 @@ impl StreamableHttpPostResponse {
             )),
         }
     }
+}
+
+/// Convert a sessionless discovery rejection into a response the lifecycle
+/// layer can classify as a legacy-server signal.
+///
+/// Some legacy streamable-HTTP servers reject `server/discover` in middleware
+/// before it reaches JSON-RPC dispatch. Their response may be an empty or
+/// plain-text 4xx, so there is no JSON-RPC error for the client to forward.
+/// Keep authentication failures and server errors on their original paths.
+pub(super) fn legacy_discover_response(
+    message: &ClientJsonRpcMessage,
+    session_was_attached: bool,
+    status: StatusCode,
+    body: &str,
+) -> Option<StreamableHttpPostResponse> {
+    if session_was_attached
+        || !status.is_client_error()
+        || matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+    {
+        return None;
+    }
+
+    let ClientJsonRpcMessage::Request(request) = message else {
+        return None;
+    };
+    if !matches!(request.request, ClientRequest::DiscoverRequest(_)) {
+        return None;
+    }
+
+    let error = ErrorData::invalid_request(
+        format!("server/discover rejected with HTTP {status}: {body}"),
+        None,
+    );
+    Some(StreamableHttpPostResponse::Json(
+        ServerJsonRpcMessage::error(error, Some(request.id.clone())),
+        None,
+    ))
 }
 
 /// HTTP backend used by [`StreamableHttpClientTransport`].
