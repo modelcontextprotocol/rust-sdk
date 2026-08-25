@@ -2606,9 +2606,7 @@ impl AuthorizationManager {
     }
 
     async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
-        if let Some(resource_metadata_url) =
-            self.probe_resource_metadata_url(&self.base_url).await?
-        {
+        if let Some(resource_metadata_url) = self.probe_resource_endpoint_for_challenge().await? {
             return Ok(Some(resource_metadata_url));
         }
 
@@ -2631,10 +2629,37 @@ impl AuthorizationManager {
         Ok(None)
     }
 
-    /// Probe `url` with a GET, extracting the resource metadata url from a
-    /// 200 (the url itself is the metadata document) or from a 401's
-    /// WWW-Authenticate header value.
+    /// Probe the resource itself, looking only for a `WWW-Authenticate` challenge
+    /// that carries a `resource_metadata` pointer.
+    ///
+    /// A 200 here says nothing about metadata. RFC 9728 publishes the document at
+    /// the well-known URI and advertises it through the challenge parameter, so the
+    /// resource answering its own GET is not the document and must not end
+    /// discovery before the well-known candidates are tried.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
+    async fn probe_resource_endpoint_for_challenge(&self) -> Result<Option<Url>, AuthError> {
+        let response = self
+            .discovery_get(&self.base_url)
+            .await
+            .map_err(|error| Self::discovery_failed(&self.base_url, error))?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Ok(self
+                .extract_resource_metadata_url_from_www_authenticate(&response)
+                .await);
+        }
+
+        debug!(
+            "resource endpoint probe returned {}, no WWW-Authenticate pointer to follow",
+            response.status()
+        );
+        Ok(None)
+    }
+
+    /// Probe a `.well-known` candidate with a GET, extracting the resource metadata
+    /// url from a 200 (the url itself is the metadata document) or from a 401's
+    /// WWW-Authenticate header value.
+    /// https://www.rfc-editor.org/rfc/rfc9728.html#name-obtaining-protected-resourc
     async fn probe_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
         let response = self
             .discovery_get(url)
@@ -4871,7 +4896,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_metadata_ignores_non_metadata_json_at_the_base_url() {
+    async fn resolve_metadata_reaches_the_well_known_document_past_a_non_metadata_base_url() {
+        let document = || {
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            )
+        };
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the well-known candidate carries the real document: probed, then fetched
+            document(),
+            document(),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        assert!(
+            recorder.requests().iter().any(|request| {
+                request.uri == "https://mcp.example.com/.well-known/oauth-protected-resource"
+            }),
+            "the well-known candidate was never probed: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_ignores_a_well_known_url_that_is_not_a_metadata_document() {
         let health = || {
             http_response(
                 200,
@@ -4879,8 +4962,9 @@ mod tests {
             )
         };
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            // the MCP endpoint answers GET with a health payload, not metadata.
-            // The same URL is hit twice: once to probe, once to fetch the document.
+            // the MCP endpoint answers GET with a health payload, not metadata
+            health(),
+            // so does the well-known candidate: probed, then fetched
             health(),
             health(),
             http_response(
