@@ -1,8 +1,6 @@
 name: Release-plz
 
-permissions:
-  pull-requests: write
-  contents: write
+permissions: {}
 
 on:
   push:
@@ -18,6 +16,7 @@ jobs:
     if: ${{ github.repository_owner == 'modelcontextprotocol' }}
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
