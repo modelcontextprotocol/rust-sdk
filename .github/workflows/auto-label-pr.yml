@@ -3,6 +3,9 @@ on:
   # Runs workflow when activity on a PR in the workflow's repository occurs.
   pull_request_target:
 
+permissions:
+  contents: read
+
 jobs:
   auto-label:
     permissions:

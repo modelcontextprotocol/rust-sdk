@@ -12,6 +12,9 @@ env:
   CARGO_TERM_COLOR: always
   ARTIFACT_DIR: release-artifacts
 
+permissions:
+  contents: read
+
 jobs:
   commit-lint:
     name: Lint Commit Messages
