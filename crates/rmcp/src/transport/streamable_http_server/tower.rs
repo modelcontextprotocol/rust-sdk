@@ -322,7 +322,7 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
                 &requested,
                 result.protocol_version.clone(),
                 &self.0.supported_protocol_versions(),
-            );
+            )?;
             if let Some(peer_info) = peer.peer_info() {
                 let mut peer_info = (*peer_info).clone();
                 peer_info.protocol_version = result.protocol_version.clone();
@@ -375,22 +375,30 @@ fn is_legacy_request(
         validate_request_protocol_version_meta(headers, message)?;
     }
 
+    // An `initialize` request selects legacy semantics whatever version it names:
+    // the handshake exists only in the revisions before 2026-07-28, so the
+    // version in its params never routes it to the stateless path. The
+    // handshake itself answers with a legacy version the server supports.
+    if matches!(
+        message,
+        Some(ClientJsonRpcMessage::Request(req))
+            if matches!(&req.request, ClientRequest::InitializeRequest(_))
+    ) {
+        return Ok(true);
+    }
+
     let uses_discover_lifecycle = matches!(
         message,
         Some(ClientJsonRpcMessage::Request(req))
-            if !matches!(&req.request, ClientRequest::InitializeRequest(_))
-                && req
-                    .request
-                    .get_meta()
-                    .missing_required_keys(&ProtocolVersion::V_2026_07_28)
-                    .is_empty()
+            if req
+                .request
+                .get_meta()
+                .missing_required_keys(&ProtocolVersion::V_2026_07_28)
+                .is_empty()
     );
 
     let from_body = match message {
-        Some(ClientJsonRpcMessage::Request(req)) => match &req.request {
-            ClientRequest::InitializeRequest(init) => Some(init.params.protocol_version.clone()),
-            _ => req.request.get_meta().protocol_version(),
-        },
+        Some(ClientJsonRpcMessage::Request(req)) => req.request.get_meta().protocol_version(),
         _ => None,
     };
     let version = from_body

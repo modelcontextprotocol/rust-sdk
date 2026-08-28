@@ -193,12 +193,17 @@ pub enum PeerRequestAssociation {
     Unknown { has_pending_outbound_request: bool },
 }
 
+/// Whether `version` predates `2026-07-28`, the revision that replaced the
+/// `initialize` handshake with per-request metadata.
+pub(crate) fn is_legacy_version(version: &ProtocolVersion) -> bool {
+    version.as_str() < ProtocolVersion::V_2026_07_28.as_str()
+}
+
 pub(crate) fn uses_legacy_lifecycle(
     protocol_version: Option<&ProtocolVersion>,
     uses_discover_lifecycle: bool,
 ) -> bool {
-    !uses_discover_lifecycle
-        && protocol_version.is_none_or(|version| version < &ProtocolVersion::V_2026_07_28)
+    !uses_discover_lifecycle && protocol_version.is_none_or(is_legacy_version)
 }
 
 pub(crate) fn peer_request_association<Req: crate::model::GetExtensions, V>(

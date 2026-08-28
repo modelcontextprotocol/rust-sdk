@@ -87,6 +87,17 @@ async fn post_init(
     req.send().await.expect("send initialize request")
 }
 
+/// First JSON-RPC message of an SSE response, skipping the empty priming event.
+async fn sse_payload(response: reqwest::Response) -> anyhow::Result<Value> {
+    let body = response.text().await?;
+    let data = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|data| !data.is_empty())
+        .expect("response must carry a JSON-RPC payload");
+    Ok(serde_json::from_str(data)?)
+}
+
 async fn post_non_initialize(client: &reqwest::Client, url: &str) -> reqwest::Response {
     client
         .post(url)
@@ -187,6 +198,27 @@ async fn stateless_init_accepts_when_header_absent() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stateless_init_naming_a_post_handshake_version_negotiates_down() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_init(&client, &url, None, "2026-07-28").await;
+    assert_eq!(
+        response.status(),
+        200,
+        "initialize selects legacy semantics whatever version it names"
+    );
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body["result"]["protocolVersion"], "2025-11-25",
+        "initialize must settle on a version that still has the handshake"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
 async fn stateful_init_rejects_when_header_mismatches_body() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server(stateful_config()).await;
 
@@ -213,6 +245,37 @@ async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Res
     let response = post_init(&client, &url, Some("2024-11-05"), "2025-11-25").await;
     assert_eq!(response.status(), 400);
     assert_eq!(session_manager.sessions.read().await.len(), 0);
+
+    ct.cancel();
+    Ok(())
+}
+
+/// The `initialize` handshake exists only in the revisions before `2026-07-28`,
+/// so naming a later version in it does not make the request a modern one: the
+/// server keeps legacy semantics, opens a session, and answers with a version it
+/// can actually serve over the handshake.
+#[tokio::test]
+async fn stateful_init_naming_a_post_handshake_version_opens_a_legacy_session() -> anyhow::Result<()>
+{
+    let (client, url, ct) = spawn_server(stateful_config()).await;
+
+    let response = post_init(&client, &url, None, "2026-07-28").await;
+    assert_eq!(
+        response.status(),
+        200,
+        "initialize selects legacy semantics whatever version it names"
+    );
+    assert!(
+        response.headers().contains_key("Mcp-Session-Id"),
+        "the handshake must open a session, got headers: {:?}",
+        response.headers()
+    );
+
+    let payload = sse_payload(response).await?;
+    assert_eq!(
+        payload["result"]["protocolVersion"], "2025-11-25",
+        "initialize must settle on a version that still has the handshake"
+    );
 
     ct.cancel();
     Ok(())
