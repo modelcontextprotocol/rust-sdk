@@ -307,7 +307,8 @@ impl StreamableHttpClient for reqwest::Client {
                 // reply. Treat an unusable JSON body as Accepted. A request
                 // still needs a reply; the same body is an error so the worker
                 // does not wait on SSE forever.
-                match response.json::<ServerJsonRpcMessage>().await {
+                let body = response.bytes().await?;
+                match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
                     Err(e)
                         if matches!(
@@ -323,7 +324,7 @@ impl StreamableHttpClient for reqwest::Client {
                         Ok(StreamableHttpPostResponse::Accepted)
                     }
                     Err(e) => Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                        format!("could not parse JSON response as ServerJsonRpcMessage: {e}"),
+                        json_rpc_parse_error_message(&e, &body),
                     ))),
                 }
             }

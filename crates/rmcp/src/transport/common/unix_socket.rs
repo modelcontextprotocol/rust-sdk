@@ -332,7 +332,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                         Ok(StreamableHttpPostResponse::Accepted)
                     }
                     Err(e) => Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                        format!("could not parse JSON response as ServerJsonRpcMessage: {e}"),
+                        json_rpc_parse_error_message(&e, &body),
                     ))),
                 }
             }

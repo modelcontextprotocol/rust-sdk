@@ -342,7 +342,12 @@ async fn test_unix_socket_request_malformed_json_is_unexpected() -> anyhow::Resu
     let _ = std::fs::remove_dir(&dir);
 
     match result {
-        Err(StreamableHttpError::UnexpectedServerResponse(_)) => {}
+        Err(StreamableHttpError::UnexpectedServerResponse(ref msg)) => {
+            assert!(
+                msg.contains("{}"),
+                "expected body preview in error, got: {msg}"
+            );
+        }
         other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
     }
     Ok(())
