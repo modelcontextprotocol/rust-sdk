@@ -87,7 +87,7 @@ url = { version = "2.4", optional = true }
 tower-service = { version = "0.3", optional = true }
 
 # for child process transport
-process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
+process-wrap = { version = "10.0", features = ["tokio1"], optional = true }
 
 # for cross-platform executable path resolution
 which = { version = "8", optional = true }
