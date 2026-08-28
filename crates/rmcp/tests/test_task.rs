@@ -107,8 +107,8 @@ impl ServerHandler for TaskServer {
         self.tasks.cancel_task(&request.task_id)
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tasks()
@@ -117,8 +117,8 @@ impl ServerHandler for TaskServer {
     }
 }
 
-fn tasks_client_info() -> ClientInfo {
-    ClientInfo::new(
+fn tasks_client_info() -> InitializeRequestParams {
+    InitializeRequestParams::new(
         ClientCapabilities::builder().enable_tasks().build(),
         Implementation::from_build_env(),
     )
@@ -275,8 +275,8 @@ impl ServerHandler for AlwaysTaskServer {
         Ok(CallToolResponse::Task(CreateTaskResult::new(task)))
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tasks()

@@ -8,7 +8,7 @@
 use rmcp::{
     ClientHandler, RoleServer, ServerHandler, ServiceError, ServiceExt,
     model::{
-        ClientInfo, ErrorCode, ErrorData, ProtocolVersion, ReadResourceRequestParams,
+        ErrorCode, ErrorData, InitializeRequestParams, ProtocolVersion, ReadResourceRequestParams,
         ReadResourceResponse,
     },
     service::RequestContext,
@@ -33,8 +33,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }

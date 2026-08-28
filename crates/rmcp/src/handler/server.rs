@@ -551,7 +551,7 @@ macro_rules! server_handler_methods {
         }
 
         fn get_info(&self) -> ServerInfo {
-            ServerInfo::default()
+            InitializeResult::default()
         }
 
         /// SEP-2663 `tasks/get`: return the current [`DetailedTask`] state.

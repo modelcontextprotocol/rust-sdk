@@ -18,8 +18,8 @@ use tracing_subscriber::{self, EnvFilter};
 pub struct SamplingDemoServer;
 
 impl ServerHandler for SamplingDemoServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(concat!(
                 "This is a demo server that requests sampling from clients. It provides tools that use LLM capabilities.\n\n",
                 "IMPORTANT: This server requires a client that supports the 'sampling/createMessage' method. ",

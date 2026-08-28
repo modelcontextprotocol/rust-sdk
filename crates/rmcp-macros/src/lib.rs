@@ -185,8 +185,8 @@ pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// #[tool_handler]
 /// impl ServerHandler for MyToolHandler {
-///     fn get_info(&self) -> ServerInfo {
-///         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+///     fn get_info(&self) -> InitializeResult {
+///         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
 ///     }
 /// }
 /// ```

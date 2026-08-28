@@ -1082,7 +1082,26 @@ impl InitializeResult {
     }
 }
 
+/// Full server initialize payload (`InitializeResult`).
+///
+/// Prefer [`InitializeResult`]. The name collides with the protocol's
+/// `serverInfo` field, which is only the [`Implementation`] identity (#1082).
+//
+// The signatures this crate publishes (`ServerHandler::get_info`,
+// `DiscoverResult::from_server_info`, and the `ClientInfo` equivalents below)
+// keep spelling the alias. It resolves to the same type, so the spelling makes
+// no difference to callers, but rustdoc records the name as written and the
+// public API check treats a respelling as a changed item. Moving those
+// signatures onto the canonical names is a documented API change and belongs in
+// the next major release.
+#[deprecated(note = "use `InitializeResult` instead")]
 pub type ServerInfo = InitializeResult;
+
+/// Full client initialize params (`InitializeRequestParams`).
+///
+/// Prefer [`InitializeRequestParams`]. The name collides with the protocol's
+/// `clientInfo` field, which is only the [`Implementation`] identity (#1082).
+#[deprecated(note = "use `InitializeRequestParams` instead")]
 pub type ClientInfo = InitializeRequestParams;
 
 /// Information negotiated about a server peer.
@@ -1247,7 +1266,7 @@ impl DiscoverResult {
         supported_versions: Vec<ProtocolVersion>,
         server_info: ServerInfo,
     ) -> Self {
-        let ServerInfo {
+        let InitializeResult {
             capabilities,
             server_info,
             instructions,
@@ -1295,9 +1314,9 @@ impl ServerPeerInfo {
 }
 
 #[allow(clippy::derivable_impls)]
-impl Default for ServerInfo {
+impl Default for InitializeResult {
     fn default() -> Self {
-        ServerInfo {
+        InitializeResult {
             protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::default(),
             server_info: Implementation::from_build_env(),
@@ -1308,9 +1327,9 @@ impl Default for ServerInfo {
 }
 
 #[allow(clippy::derivable_impls)]
-impl Default for ClientInfo {
+impl Default for InitializeRequestParams {
     fn default() -> Self {
-        ClientInfo {
+        InitializeRequestParams {
             meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),

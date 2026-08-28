@@ -252,7 +252,7 @@ let transport = StreamableHttpClientTransport::with_client(
 );
 
 // create client and connect to MCP server
-let client_service = ClientInfo::default();
+let client_service = InitializeRequestParams::default();
 let client = client_service.serve(transport).await?;
 ```
 

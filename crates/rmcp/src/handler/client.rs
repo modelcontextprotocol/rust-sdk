@@ -275,7 +275,7 @@ macro_rules! client_handler_methods {
         }
 
         fn get_info(&self) -> ClientInfo {
-            ClientInfo::default()
+            InitializeRequestParams::default()
         }
     };
 }

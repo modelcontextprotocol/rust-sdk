@@ -13,14 +13,15 @@ use super::*;
 use crate::model::{ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction};
 use crate::{
     model::{
-        CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
+        CancelledNotification, CancelledNotificationParam, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData, ListRootsRequest,
-        ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
-        ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
-        ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
-        ResourceUpdatedNotificationParam, ServerInfo, ServerNotification, ServerRequest,
-        ServerResult, SubscriptionFilter, SubscriptionsAcknowledgedNotification,
+        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData,
+        InitializeRequestParams, InitializeResult, ListRootsRequest, ListRootsResult,
+        LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
+        ProgressNotificationParam, PromptListChangedNotification, ProtocolVersion,
+        ResourceListChangedNotification, ResourceUpdatedNotification,
+        ResourceUpdatedNotificationParam, ServerNotification, ServerRequest, ServerResult,
+        SubscriptionFilter, SubscriptionsAcknowledgedNotification,
         SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
     },
     transport::DynamicTransportError,
@@ -37,8 +38,8 @@ impl ServiceRole for RoleServer {
     type PeerReq = ClientRequest;
     type PeerResp = ClientResult;
     type PeerNot = ClientNotification;
-    type Info = ServerInfo;
-    type PeerInfo = ClientInfo;
+    type Info = InitializeResult;
+    type PeerInfo = InitializeRequestParams;
 
     type InitializeError = ServerInitializeError;
     const IS_CLIENT: bool = false;

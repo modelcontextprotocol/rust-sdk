@@ -27,8 +27,8 @@ use crate::{
     model::{
         ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode,
         ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
-        InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
-        ProtocolVersion, RequestId, ServerInfo, ServerJsonRpcMessage, ServerResult,
+        InitializeRequestParams, InitializeResult, InitializedNotification, JsonObject,
+        JsonRpcError, ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
     },
     serve_server,
     service::{
@@ -340,7 +340,7 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
         self.0.handle_notification(notification, context).await
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> InitializeResult {
         self.0.get_info()
     }
 
@@ -2075,7 +2075,7 @@ where
         Ok(accepted_response())
     }
 
-    /// Build a `ClientInfo` (peer_info) for a stateless request so that
+    /// Build a `InitializeRequestParams` (peer_info) for a stateless request so that
     /// `context.protocol_version()` returns the correct value inside handlers.
     ///
     /// `serve_directly` skips the MCP handshake and accepts `peer_info = None`,
