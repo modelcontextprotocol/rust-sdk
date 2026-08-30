@@ -2462,13 +2462,20 @@ impl AuthorizationManager {
     async fn discover_oauth_server_via_resource_metadata(
         &self,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await? else {
+        let Some((resource_metadata_url, resource_metadata)) =
+            self.discover_resource_metadata().await?
+        else {
             return Ok(None);
         };
-        self.discover_oauth_server_from_resource_metadata_url(&resource_metadata_url)
-            .await
+        self.authorization_metadata_from_resource_metadata(
+            &resource_metadata_url,
+            resource_metadata,
+        )
+        .await
     }
 
+    /// Read protected resource metadata from the url a `WWW-Authenticate`
+    /// challenge advertised.
     async fn discover_oauth_server_from_resource_metadata_url(
         &self,
         resource_metadata_url: &Url,
@@ -2480,6 +2487,17 @@ impl AuthorizationManager {
             return Ok(None);
         };
 
+        self.authorization_metadata_from_resource_metadata(resource_metadata_url, resource_metadata)
+            .await
+    }
+
+    /// Walk the authorization servers a protected resource metadata document
+    /// names, keeping the first one that answers with usable metadata.
+    async fn authorization_metadata_from_resource_metadata(
+        &self,
+        resource_metadata_url: &Url,
+        resource_metadata: ResourceServerMetadata,
+    ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         self.validate_resource_metadata_resource(&resource_metadata)?;
 
         self.discovered_resource
@@ -2605,9 +2623,17 @@ impl AuthorizationManager {
                 || expected_path.as_bytes().get(actual_path.len()) == Some(&b'/'))
     }
 
-    async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
+    /// Look for the protected resource metadata document, reading it where it is
+    /// found so that a candidate answering with something else only costs that
+    /// candidate.
+    async fn discover_resource_metadata(
+        &self,
+    ) -> Result<Option<(Url, ResourceServerMetadata)>, AuthError> {
         if let Some(resource_metadata_url) = self.probe_resource_endpoint_for_challenge().await? {
-            return Ok(Some(resource_metadata_url));
+            return Ok(self
+                .fetch_resource_metadata_from_url(&resource_metadata_url)
+                .await?
+                .map(|metadata| (resource_metadata_url, metadata)));
         }
 
         // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
@@ -2615,14 +2641,38 @@ impl AuthorizationManager {
         for candidate_path in
             Self::well_known_paths(self.base_url.path(), "oauth-protected-resource")
         {
-            let mut discovery_url = self.base_url.clone();
-            discovery_url.set_query(None);
-            discovery_url.set_fragment(None);
-            discovery_url.set_path(&candidate_path);
-            if let Some(resource_metadata_url) =
-                self.probe_resource_metadata_url(&discovery_url).await?
-            {
-                return Ok(Some(resource_metadata_url));
+            let mut candidate_url = self.base_url.clone();
+            candidate_url.set_query(None);
+            candidate_url.set_fragment(None);
+            candidate_url.set_path(&candidate_path);
+
+            let response = self
+                .discovery_get(&candidate_url)
+                .await
+                .map_err(|error| Self::discovery_failed(&candidate_url, error))?;
+
+            match response.status() {
+                // The candidate url is the document itself, so read the body here
+                // instead of requesting the same url again.
+                StatusCode::OK => {
+                    if let Some(metadata) =
+                        Self::parse_resource_metadata(&candidate_url, response.body())
+                    {
+                        return Ok(Some((candidate_url, metadata)));
+                    }
+                }
+                StatusCode::UNAUTHORIZED => {
+                    if let Some(advertised_url) = self
+                        .extract_resource_metadata_url_from_www_authenticate(&response)
+                        .await
+                        && let Some(metadata) = self
+                            .fetch_resource_metadata_from_url(&advertised_url)
+                            .await?
+                    {
+                        return Ok(Some((advertised_url, metadata)));
+                    }
+                }
+                status => debug!("resource metadata probe returned unexpected status: {status}"),
             }
         }
 
@@ -2654,28 +2704,6 @@ impl AuthorizationManager {
             response.status()
         );
         Ok(None)
-    }
-
-    /// Probe a `.well-known` candidate with a GET, extracting the resource metadata
-    /// url from a 200 (the url itself is the metadata document) or from a 401's
-    /// WWW-Authenticate header value.
-    /// https://www.rfc-editor.org/rfc/rfc9728.html#name-obtaining-protected-resourc
-    async fn probe_resource_metadata_url(&self, url: &Url) -> Result<Option<Url>, AuthError> {
-        let response = self
-            .discovery_get(url)
-            .await
-            .map_err(|error| Self::discovery_failed(url, error))?;
-
-        match response.status() {
-            StatusCode::OK => Ok(Some(url.clone())),
-            StatusCode::UNAUTHORIZED => Ok(self
-                .extract_resource_metadata_url_from_www_authenticate(&response)
-                .await),
-            status => {
-                debug!("resource metadata probe returned unexpected status: {status}");
-                Ok(None)
-            }
-        }
     }
 
     async fn extract_resource_metadata_url_from_www_authenticate(
@@ -2719,11 +2747,21 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        let metadata = match serde_json::from_slice::<ResourceServerMetadata>(response.body()) {
+        Ok(Self::parse_resource_metadata(
+            resource_metadata_url,
+            response.body(),
+        ))
+    }
+
+    fn parse_resource_metadata(
+        resource_metadata_url: &Url,
+        body: &[u8],
+    ) -> Option<ResourceServerMetadata> {
+        let metadata = match serde_json::from_slice::<ResourceServerMetadata>(body) {
             Ok(metadata) => metadata,
             Err(e) => {
                 debug!("failed to parse resource metadata as JSON: {}", e);
-                return Ok(None);
+                return None;
             }
         };
 
@@ -2731,8 +2769,8 @@ impl AuthorizationManager {
         // object deserializes into an all-`None` value and then fails validation
         // fatally. RFC 9728 requires `resource`, and MCP requires an authorization
         // server reference, so a document carrying neither is not a protected
-        // resource metadata document. Treat it as a soft failure, the same way this
-        // function already treats a non-200 status and a body that is not JSON.
+        // resource metadata document. Treat it as a soft failure, the same way a
+        // non-200 status and a body that is not JSON are treated.
         if metadata.resource.is_none()
             && metadata.authorization_server.is_none()
             && metadata.authorization_servers.is_none()
@@ -2740,10 +2778,10 @@ impl AuthorizationManager {
             debug!(
                 "response at {resource_metadata_url} is not a protected resource metadata document"
             );
-            return Ok(None);
+            return None;
         }
 
-        Ok(Some(metadata))
+        Some(metadata)
     }
 
     fn discovery_failed(url: &Url, error: OAuthHttpClientError) -> AuthError {
@@ -4369,13 +4407,6 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
-                    "resource": "https://mcp.example.com/",
-                    "authorization_servers": ["https://auth.example.com/tenant1"]
-                }),
-            ),
-            http_response(
-                200,
-                serde_json::json!({
                     "issuer": "https://auth.example.com/tenant1",
                     "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
                     "token_endpoint": "https://auth.example.com/tenant1/token"
@@ -4407,7 +4438,6 @@ mod tests {
                 vec![
                     "https://mcp.example.com/",
                     "https://mcp.example.com/.well-known/oauth-protected-resource",
-                    "https://mcp.example.com/.well-known/oauth-protected-resource",
                     "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
                 ],
             )
@@ -4418,13 +4448,6 @@ mod tests {
     async fn protected_resource_metadata_preserves_non_root_issuer_trailing_slash() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             empty_response(401),
-            http_response(
-                200,
-                serde_json::json!({
-                    "resource": "https://mcp.example.com/",
-                    "authorization_servers": ["https://auth.example.com/tenant1/"]
-                }),
-            ),
             http_response(
                 200,
                 serde_json::json!({
@@ -4897,24 +4920,20 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_metadata_reaches_the_well_known_document_past_a_non_metadata_base_url() {
-        let document = || {
-            http_response(
-                200,
-                serde_json::json!({
-                    "resource": "https://mcp.example.com/",
-                    "authorization_servers": ["https://auth.example.com"]
-                }),
-            )
-        };
         let client = RecordingOAuthHttpClient::with_responses(vec![
             // the MCP endpoint answers GET with a health payload, not metadata
             http_response(
                 200,
                 serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
             ),
-            // the well-known candidate carries the real document: probed, then fetched
-            document(),
-            document(),
+            // the well-known candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
             http_response(
                 200,
                 serde_json::json!({
@@ -4964,8 +4983,7 @@ mod tests {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             // the MCP endpoint answers GET with a health payload, not metadata
             health(),
-            // so does the well-known candidate: probed, then fetched
-            health(),
+            // so does the well-known candidate
             health(),
             http_response(
                 200,
@@ -4994,6 +5012,71 @@ mod tests {
                 AuthorizationMetadataSource::AuthorizationServerMetadata,
                 "https://mcp.example.com/oauth/token",
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_well_known_candidate_past_a_non_metadata_document() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // so does the first well-known candidate
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        let document_requests = recorder
+            .requests()
+            .iter()
+            .filter(|request| {
+                request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
+            })
+            .count();
+        assert_eq!(
+            document_requests,
+            1,
+            "the candidate holding the document should be requested exactly once: {:?}",
+            recorder.requests()
         );
     }
 
