@@ -635,6 +635,18 @@ struct ResourceServerMetadata {
     scopes_supported: Option<Vec<String>>,
 }
 
+/// How a url that may hold protected resource metadata was arrived at, which
+/// decides what a document that is not metadata means there.
+#[derive(Debug, Clone, Copy)]
+enum ResourceMetadataUrlOrigin {
+    /// The server named this url in the `resource_metadata` parameter of a
+    /// `WWW-Authenticate` challenge.
+    Advertised,
+    /// The url was derived from the base url, on the chance that the document is
+    /// published there.
+    WellKnownGuess,
+}
+
 /// Parameters extracted from WWW-Authenticate header
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -2481,7 +2493,10 @@ impl AuthorizationManager {
         resource_metadata_url: &Url,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         let Some(resource_metadata) = self
-            .fetch_resource_metadata_from_url(resource_metadata_url)
+            .fetch_resource_metadata_from_url(
+                resource_metadata_url,
+                ResourceMetadataUrlOrigin::Advertised,
+            )
             .await?
         else {
             return Ok(None);
@@ -2631,7 +2646,10 @@ impl AuthorizationManager {
     ) -> Result<Option<(Url, ResourceServerMetadata)>, AuthError> {
         if let Some(resource_metadata_url) = self.probe_resource_endpoint_for_challenge().await? {
             return Ok(self
-                .fetch_resource_metadata_from_url(&resource_metadata_url)
+                .fetch_resource_metadata_from_url(
+                    &resource_metadata_url,
+                    ResourceMetadataUrlOrigin::Advertised,
+                )
                 .await?
                 .map(|metadata| (resource_metadata_url, metadata)));
         }
@@ -2655,9 +2673,11 @@ impl AuthorizationManager {
                 // The candidate url is the document itself, so read the body here
                 // instead of requesting the same url again.
                 StatusCode::OK => {
-                    if let Some(metadata) =
-                        Self::parse_resource_metadata(&candidate_url, response.body())
-                    {
+                    if let Some(metadata) = Self::parse_resource_metadata(
+                        &candidate_url,
+                        response.body(),
+                        ResourceMetadataUrlOrigin::WellKnownGuess,
+                    )? {
                         return Ok(Some((candidate_url, metadata)));
                     }
                 }
@@ -2666,7 +2686,10 @@ impl AuthorizationManager {
                         .extract_resource_metadata_url_from_www_authenticate(&response)
                         .await
                         && let Some(metadata) = self
-                            .fetch_resource_metadata_from_url(&advertised_url)
+                            .fetch_resource_metadata_from_url(
+                                &advertised_url,
+                                ResourceMetadataUrlOrigin::Advertised,
+                            )
                             .await?
                     {
                         return Ok(Some((advertised_url, metadata)));
@@ -2729,6 +2752,7 @@ impl AuthorizationManager {
     async fn fetch_resource_metadata_from_url(
         &self,
         resource_metadata_url: &Url,
+        origin: ResourceMetadataUrlOrigin,
     ) -> Result<Option<ResourceServerMetadata>, AuthError> {
         debug!(
             "resource metadata discovery url: {:?}",
@@ -2747,21 +2771,19 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        Ok(Self::parse_resource_metadata(
-            resource_metadata_url,
-            response.body(),
-        ))
+        Self::parse_resource_metadata(resource_metadata_url, response.body(), origin)
     }
 
     fn parse_resource_metadata(
         resource_metadata_url: &Url,
         body: &[u8],
-    ) -> Option<ResourceServerMetadata> {
+        origin: ResourceMetadataUrlOrigin,
+    ) -> Result<Option<ResourceServerMetadata>, AuthError> {
         let metadata = match serde_json::from_slice::<ResourceServerMetadata>(body) {
             Ok(metadata) => metadata,
             Err(e) => {
                 debug!("failed to parse resource metadata as JSON: {}", e);
-                return None;
+                return Ok(None);
             }
         };
 
@@ -2769,19 +2791,30 @@ impl AuthorizationManager {
         // object deserializes into an all-`None` value and then fails validation
         // fatally. RFC 9728 requires `resource`, and MCP requires an authorization
         // server reference, so a document carrying neither is not a protected
-        // resource metadata document. Treat it as a soft failure, the same way a
-        // non-200 status and a body that is not JSON are treated.
+        // resource metadata document.
         if metadata.resource.is_none()
             && metadata.authorization_server.is_none()
             && metadata.authorization_servers.is_none()
         {
-            debug!(
-                "response at {resource_metadata_url} is not a protected resource metadata document"
-            );
-            return None;
+            return match origin {
+                // The server named this url, so there is nothing better to move on
+                // to: the alternatives all drop the resource binding the document
+                // was supposed to carry. Report it instead.
+                ResourceMetadataUrlOrigin::Advertised => Err(AuthError::MetadataError(format!(
+                    "the server advertised {resource_metadata_url} as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
+                ))),
+                // Nothing advertised this url, so its answer only rules out this
+                // candidate.
+                ResourceMetadataUrlOrigin::WellKnownGuess => {
+                    debug!(
+                        "response at {resource_metadata_url} is not a protected resource metadata document"
+                    );
+                    Ok(None)
+                }
+            };
         }
 
-        Some(metadata)
+        Ok(Some(metadata))
     }
 
     fn discovery_failed(url: &Url, error: OAuthHttpClientError) -> AuthError {
@@ -5077,6 +5110,33 @@ mod tests {
             1,
             "the candidate holding the document should be requested exactly once: {:?}",
             recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_from_challenge_reports_an_advertised_url_without_metadata() {
+        let mut responses = vec![http_response(200, serde_json::json!({}))];
+        // enough responses for the fallback to reach the legacy endpoints, so that
+        // treating the document as a soft failure would resolve rather than error
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(8));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let error = manager
+            .resolve_metadata_from_challenge(Some(
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            ))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: the server advertised https://mcp.example.com/.well-known/oauth-protected-resource as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
         );
     }
 
