@@ -1,6 +1,7 @@
-//! Tests for protocol version negotiation in the default ServerHandler::initialize impl.
+//! Tests for legacy protocol version negotiation in ServerHandler::initialize.
 //!
-//! Known versions are echoed back; unknown versions fall back to LATEST.
+//! Known legacy versions are echoed back; modern and unknown offers fall back
+//! to the server's preferred supported legacy revision.
 #![cfg(not(feature = "local"))]
 #![cfg(feature = "client")]
 
@@ -8,8 +9,12 @@ use std::borrow::Cow;
 
 use rmcp::{
     ClientHandler, ErrorData, RoleServer, ServerHandler, ServiceExt,
-    model::{ClientInfo, InitializeRequestParams, InitializeResult, ProtocolVersion, ServerInfo},
+    model::{
+        ClientInfo, ClientJsonRpcMessage, ClientRequest, InitializeRequestParams, InitializeResult,
+        ProtocolVersion, RequestId, ServerInfo, ServerJsonRpcMessage, ServerResult,
+    },
     service::RequestContext,
+    transport::{IntoTransport, Transport},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -119,12 +124,46 @@ async fn negotiated_version_with<S: ServerHandler>(
 #[tokio::test]
 async fn known_version_echoed_back() {
     for version in ProtocolVersion::KNOWN_VERSIONS {
+        if version >= &ProtocolVersion::V_2026_07_28 {
+            continue;
+        }
         let negotiated = negotiated_version(version.clone()).await;
         assert_eq!(
             negotiated, *version,
             "known version {version} should be echoed back"
         );
     }
+}
+
+#[tokio::test]
+async fn modern_initialize_negotiates_the_preferred_legacy_version_on_a_direct_transport() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server = tokio::spawn(async move { EchoServer.serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+    let request: ClientRequest = serde_json::from_value(serde_json::json!({
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2026-07-28",
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "1.0" }
+        }
+    }))
+    .unwrap();
+    client
+        .send(ClientJsonRpcMessage::request(request, RequestId::Number(1)))
+        .await
+        .unwrap();
+
+    let Some(ServerJsonRpcMessage::Response(response)) = client.receive().await else {
+        panic!("expected initialize response");
+    };
+    let ServerResult::InitializeResult(result) = response.result else {
+        panic!("expected initialize result");
+    };
+    assert_eq!(result.protocol_version, ProtocolVersion::V_2025_11_25);
+
+    let running = server.await.unwrap().expect("server should initialize");
+    running.cancel().await.expect("server should cancel");
 }
 
 #[tokio::test]
@@ -151,7 +190,8 @@ async fn narrowed_server_still_echoes_versions_it_supports() {
 
 #[tokio::test]
 async fn narrowed_server_does_not_agree_to_version_it_excludes() {
-    let negotiated = negotiated_version_with(NarrowedServer, ProtocolVersion::V_2026_07_28).await;
+    let unsupported = serde_json::from_str(r#""1999-01-01""#).unwrap();
+    let negotiated = negotiated_version_with(NarrowedServer, unsupported).await;
     assert_eq!(
         negotiated,
         ProtocolVersion::V_2025_11_25,
@@ -161,8 +201,8 @@ async fn narrowed_server_does_not_agree_to_version_it_excludes() {
 
 #[tokio::test]
 async fn narrowed_server_caps_even_when_it_overrides_initialize() {
-    let negotiated =
-        negotiated_version_with(NarrowedOverridingServer, ProtocolVersion::V_2026_07_28).await;
+    let unsupported = serde_json::from_str(r#""1999-01-01""#).unwrap();
+    let negotiated = negotiated_version_with(NarrowedOverridingServer, unsupported).await;
     assert_eq!(
         negotiated,
         ProtocolVersion::V_2025_11_25,

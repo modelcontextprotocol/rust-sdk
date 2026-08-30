@@ -15,13 +15,14 @@ use crate::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
-        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData, ListRootsRequest,
-        ListRootsResult, LoggingMessageNotification, LoggingMessageNotificationParam,
-        ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
-        ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
-        ResourceUpdatedNotificationParam, ServerInfo, ServerNotification, ServerRequest,
-        ServerResult, SubscriptionFilter, SubscriptionsAcknowledgedNotification,
-        SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
+        CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData,
+        InitializeResultMethod, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
+        LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
+        PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
+        ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerInfo,
+        ServerNotification, ServerRequest, ServerResult, SubscriptionFilter,
+        SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
+        ToolListChangedNotification,
     },
     transport::DynamicTransportError,
 };
@@ -460,26 +461,46 @@ where
     }
 }
 
-/// Echoes the client-requested version if the server supports it; otherwise
-/// returns `server_fallback`.
+/// Negotiates the legacy protocol version used by an `initialize` handshake.
 ///
-/// `server_supported` comes from [`Service::supported_protocol_versions`], so a
-/// server that narrows that list is never made to answer `initialize` with a
-/// version it cannot serve.
+/// `2026-07-28` replaced `initialize` with the discover lifecycle. A client that
+/// nevertheless opens with `initialize` is offering to use the legacy lifecycle,
+/// so a dual-era server negotiates its preferred supported legacy revision. A
+/// modern-only server returns `None` and rejects the method.
 pub(crate) fn negotiate_protocol_version(
     client_requested: &ProtocolVersion,
     server_fallback: ProtocolVersion,
     server_supported: &[ProtocolVersion],
-) -> ProtocolVersion {
-    if server_supported.contains(client_requested) {
-        client_requested.clone()
+) -> Option<ProtocolVersion> {
+    let requested_legacy = client_requested < &ProtocolVersion::V_2026_07_28;
+    if requested_legacy && server_supported.contains(client_requested) {
+        return Some(client_requested.clone());
+    }
+
+    let fallback = if server_fallback < ProtocolVersion::V_2026_07_28
+        && server_supported.contains(&server_fallback)
+    {
+        Some(server_fallback)
     } else {
+        server_supported
+            .iter()
+            .filter(|version| *version < &ProtocolVersion::V_2026_07_28)
+            .max_by(|left, right| left.as_str().cmp(right.as_str()))
+            .cloned()
+    };
+    if let Some(server_fallback) = fallback {
         tracing::warn!(
             client_requested = %client_requested,
             server_fallback = %server_fallback,
-            "client requested unsupported protocol version; falling back to server default"
+            "client requested a version unavailable to initialize; falling back to the server's preferred legacy version"
         );
-        server_fallback
+        Some(server_fallback)
+    } else {
+        tracing::warn!(
+            client_requested = %client_requested,
+            "server supports no legacy protocol version; rejecting initialize"
+        );
+        None
     }
 }
 
@@ -605,11 +626,25 @@ where
             return Err(ServerInitializeError::InitializeFailed(e));
         }
     };
-    init_response.protocol_version = negotiate_protocol_version(
+    let negotiated_protocol_version = negotiate_protocol_version(
         &requested_protocol_version,
         init_response.protocol_version,
         &service.supported_protocol_versions(),
     );
+    let Some(negotiated_protocol_version) = negotiated_protocol_version else {
+        let error = ErrorData::method_not_found::<InitializeResultMethod>();
+        transport
+            .send(ServerJsonRpcMessage::error(error.clone(), Some(id)))
+            .await
+            .map_err(|transport_error| {
+                ServerInitializeError::transport::<T>(
+                    transport_error,
+                    "sending initialize error response",
+                )
+            })?;
+        return Err(ServerInitializeError::InitializeFailed(error));
+    };
+    init_response.protocol_version = negotiated_protocol_version;
     // Update peer_info so context.protocol_version() reflects the negotiated
     // version in all subsequent request handlers.
     negotiated_peer_info.protocol_version = init_response.protocol_version.clone();
