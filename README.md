@@ -1828,6 +1828,7 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 - [rmcp-actix-web](https://gitlab.com/lx-industries/rmcp-actix-web) - An `actix_web` backend for `rmcp`
 - [rmcp-openapi](https://gitlab.com/lx-industries/rmcp-openapi) - Transform OpenAPI definition endpoints into MCP tools
+- [rcm-rs](https://github.com/drQedwards/RCM) ([crates.io](https://crates.io/crates/rcm-rs)) - Extends RMCP with the **LET** imperative: a polyglot package-manager surface (Cargo, NPM, Composer/PPM, system packages) exposed as MCP tools so AI agents can drive installs, builds, deploys, and workspace operations through natural language.
 
 ### Built with `rmcp`
 

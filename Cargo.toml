@@ -1,24 +1,76 @@
-[workspace]
-members = ["crates/rmcp", "crates/rmcp-macros", "examples/*", "conformance"]
-default-members = ["crates/rmcp", "crates/rmcp-macros"]
-resolver = "2"
-
-[workspace.dependencies]
-rmcp = { version = "3.1.4", path = "./crates/rmcp" }
-rmcp-macros = { version = "3.1.4", path = "./crates/rmcp-macros" }
-
-[workspace.package]
-edition = "2024"
-rust-version = "1.88"
-version = "3.1.4"
-authors = ["4t145 <u4t145@163.com>"]
-license = "Apache-2.0"
-repository = "https://github.com/modelcontextprotocol/rust-sdk/"
-description = "Rust SDK for Model Context Protocol"
-keywords = ["mcp", "sdk", "tokio", "modelcontextprotocol"]
-homepage = "https://github.com/modelcontextprotocol/rust-sdk"
-categories = [
-    "network-programming",
-    "asynchronous",
-]
+[package]
+name = "rcm-rs"
+version = "0.8.0"
+edition = "2021"
+authors = ["Dr. Q and Company"]
+license = "MIT"
+description = "RCM – polyglot package manager; LET is the prime bonded imperative"
+homepage = "https://github.com/drQedwards/RCM"
+repository = "https://github.com/drQedwards/RCM"
 readme = "README.md"
+keywords = ["package-manager", "let", "cargo", "npm", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["ARM-lib/**", "GPT-lib/**", "target/**", "**/*.md.bak"]
+
+[lib]
+name = "rcm"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "rcm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
+sha2 = "0.10"
+semver = "1.0"
+regex = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tempfile = "3.0"
+walkdir = "2.0"
+tar = "0.4"
+flate2 = "1.0"
+zip = "0.6"
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"
+log = "0.4"
+env_logger = "0.10"
+which = "4.0"
+
+# Model Context Protocol (RMCP)
+rmcp = { version = "3.1.4", features = ["server", "macros"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.0"
+tempfile = "3.0"
+
+[features]
+default = ["let"]
+let = []
+npm = []
+ppm = []
+system = []
+full = ["let", "npm", "ppm", "system"]
+experimental = ["full"]
+# Optional: expose MCP support behind a feature
+mcp = ["dep:rmcp"]   # uncomment + change the dependency to optional if you want this
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
