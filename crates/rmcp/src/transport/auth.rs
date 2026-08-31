@@ -2508,13 +2508,14 @@ impl AuthorizationManager {
 
     /// Walk the authorization servers a protected resource metadata document
     /// names, keeping the first one that answers with usable metadata.
+    ///
+    /// The document arrives here through `read_resource_metadata`, which is where
+    /// it is decided to be this resource's metadata at all.
     async fn authorization_metadata_from_resource_metadata(
         &self,
         resource_metadata_url: &Url,
         resource_metadata: ResourceServerMetadata,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        self.validate_resource_metadata_resource(&resource_metadata)?;
-
         self.discovered_resource
             .write()
             .await
@@ -2673,7 +2674,7 @@ impl AuthorizationManager {
                 // The candidate url is the document itself, so read the body here
                 // instead of requesting the same url again.
                 StatusCode::OK => {
-                    if let Some(metadata) = Self::parse_resource_metadata(
+                    if let Some(metadata) = self.read_resource_metadata(
                         &candidate_url,
                         response.body(),
                         ResourceMetadataUrlOrigin::WellKnownGuess,
@@ -2771,10 +2772,15 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        Self::parse_resource_metadata(resource_metadata_url, response.body(), origin)
+        self.read_resource_metadata(resource_metadata_url, response.body(), origin)
     }
 
-    fn parse_resource_metadata(
+    /// Read a response body as this resource's protected resource metadata.
+    ///
+    /// A body that is not that document rules out the url it came from, and where
+    /// that url came from decides whether ruling it out leaves anything to try.
+    fn read_resource_metadata(
+        &self,
         resource_metadata_url: &Url,
         body: &[u8],
         origin: ResourceMetadataUrlOrigin,
@@ -2808,6 +2814,21 @@ impl AuthorizationManager {
                 ResourceMetadataUrlOrigin::WellKnownGuess => {
                     debug!(
                         "response at {resource_metadata_url} is not a protected resource metadata document"
+                    );
+                    Ok(None)
+                }
+            };
+        }
+
+        // Carrying those fields only makes the body a metadata document; validation
+        // is what makes it this resource's. Both answers rule out the url the same
+        // way, so both are read the same way.
+        if let Err(error) = self.validate_resource_metadata_resource(&metadata) {
+            return match origin {
+                ResourceMetadataUrlOrigin::Advertised => Err(error),
+                ResourceMetadataUrlOrigin::WellKnownGuess => {
+                    debug!(
+                        "document at {resource_metadata_url} is not this resource's metadata: {error}"
                     );
                     Ok(None)
                 }
@@ -5137,6 +5158,69 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Metadata error: the server advertised https://mcp.example.com/.well-known/oauth-protected-resource as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_well_known_candidate_past_an_unusable_document() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // a catch-all handler answers the first candidate with its own error
+            // shape, which carries a `resource` that only validation rejects
+            http_response(
+                200,
+                serde_json::json!({
+                    "error": "not_found",
+                    "resource": "/.well-known/oauth-protected-resource"
+                }),
+            ),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        assert!(
+            recorder.requests().iter().any(|request| {
+                request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
+            }),
+            "the candidate after the rejected one was never probed: {:?}",
+            recorder.requests()
         );
     }
 
