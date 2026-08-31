@@ -356,7 +356,10 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
             .reinit_on_expired_session(true),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientInfo::default()
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
+        .serve(transport)
+        .await?;
 
     // Verify the session is established: list_all_resources() succeeds
     let _resources = client.list_all_resources().await?;
@@ -432,7 +435,10 @@ async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()>
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
             .reinit_on_expired_session(false),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientInfo::default()
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
+        .serve(transport)
+        .await?;
 
     // Verify the session is established
     let _resources = client.list_all_resources().await?;

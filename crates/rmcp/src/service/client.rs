@@ -877,6 +877,7 @@ where
     T: Transport<RoleClient> + 'static,
 {
     let id = id_provider.next_request_id();
+    let client_info_for_meta = client_info.clone();
     let init_request = InitializeRequest {
         method: Default::default(),
         params: client_info,
@@ -899,6 +900,13 @@ where
     let ServerResult::InitializeResult(initialize_result) = response else {
         return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
     };
+    if initialize_result.protocol_version.as_str() >= ProtocolVersion::V_2026_07_28.as_str() {
+        peer.set_client_request_metadata(ClientRequestMetadata {
+            protocol_version: initialize_result.protocol_version.clone(),
+            client_info: client_info_for_meta.client_info,
+            client_capabilities: client_info_for_meta.capabilities,
+        });
+    }
     peer.set_peer_info(initialize_result.into());
 
     // send notification
