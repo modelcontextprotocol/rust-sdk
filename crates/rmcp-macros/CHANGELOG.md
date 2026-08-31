@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.4...rmcp-macros-v3.2.0) - 2026-08-31
+
+### Added
+
+- add request-state key rotation ([#1128](https://github.com/modelcontextprotocol/rust-sdk/pull/1128))
+
+### Fixed
+
+- allow concurrent streamable http requests ([#1186](https://github.com/modelcontextprotocol/rust-sdk/pull/1186))
+
 ## [3.1.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.2...rmcp-macros-v3.1.3) - 2026-08-17
 
 ### Fixed
