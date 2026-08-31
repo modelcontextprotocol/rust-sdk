@@ -1,21 +1,45 @@
-//! Non-interactive enterprise-managed authorization (EMA/XAA) token exchange.
+//! Non-interactive enterprise-managed authorization (EMA/XAA) token exchanges.
 //!
-//! Exchanges an enterprise refresh token for a resource-bound ID-JAG.
-//! Callers must discover and approve both servers and their registrations
+//! Exchanges an enterprise refresh token for an ID-JAG, then for an MCP access
+//! token. Callers must discover and approve both servers and their registrations
 //! before supplying a credential. This module does not discover servers, log in,
 //! persist credentials, or decide when to reauthenticate.
 //!
-//! Configure the IdP client's approved authentication method: HTTP Basic, a client
-//! secret in the request body, or a freshly signed JWT client assertion. Public
-//! clients are supported only where explicitly allowed by the IdP. The helper
-//! requires one MCP resource and does not implement Rich Authorization Requests
-//! or DPoP. It does not automatically retry token requests.
+//! Configure each pre-registered client's approved authentication method separately:
+//! HTTP Basic, a client secret in the request body, or a freshly signed JWT client
+//! assertion. Public-client authentication requires the server's explicit approval.
+//! This helper requires one MCP resource and does not implement Rich
+//! Authorization Requests or DPoP. Redemption consumes the SDK's ID-JAG handle,
+//! without automatic retries; server-side replay policy remains the server's responsibility.
 //!
 //! ID-JAG checks below enforce structure and claim bindings, not cryptographic
 //! signature verification. Assertions come directly from the trusted IdP token
 //! endpoint; the resource authorization server must verify their signatures.
+//!
+//! ```no_run
+//! use oauth2::{ClientSecret, RefreshToken};
+//! use rmcp::transport::auth::{default_oauth_http_client, enterprise::*};
+//!
+//! # async fn authorize(refresh: &RefreshToken, idp_secret: ClientSecret, resource_secret: ClientSecret) -> Result<(), Box<dyn std::error::Error>> {
+//! // Enable `auth-enterprise-managed` and a TLS feature such as `reqwest`.
+//! let http = default_oauth_http_client()?;
+//! let token = EmaExchangeRequest::new(
+//!     EmaAuthorizationServer::new("https://idp.example", "https://idp.example/token", "idp-client")
+//!         .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(idp_secret)),
+//!     EmaAuthorizationServer::new("https://as.example", "https://as.example/token", "mcp-client")
+//!         .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(resource_secret)),
+//!     "https://mcp.example", refresh,
+//! ).with_scopes(["files.read"]).exchange(&http, &http).await?;
+//! // Use token.access_token only for the approved MCP resource; never log it.
+//! // token.scopes contains the final granted scopes, which may be narrower.
+//! # Ok(()) }
+//! ```
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use base64::{
     Engine,
@@ -90,8 +114,8 @@ impl std::fmt::Debug for EmaClientAssertion {
 
 /// Creates client assertions on demand, allowing keys to remain in an external signer.
 ///
-/// Called once immediately before each token request.
-/// Set `iss` and `sub` to the registered client identifier and `aud`
+/// Called once immediately before each token request, including delayed ID-JAG
+/// redemption. Set `iss` and `sub` to the registered client identifier and `aud`
 /// to the server's approved audience, with a short expiration and a fresh `jti`.
 /// The SDK does not sign or validate these assertions. Provider failures are
 /// sanitized and the call shares the token request's timeout. Cancellation may
@@ -120,11 +144,15 @@ pub struct EmaAuthorizationServer {
 impl EmaAuthorizationServer {
     /// Use approved metadata and a public-client registration (`token_endpoint_auth_method=none`).
     /// Set [`Self::with_client_authentication`] for a confidential client.
-    pub fn new(issuer: &str, token_endpoint: &str, client_id: &str) -> Self {
+    pub fn new(
+        issuer: impl Into<String>,
+        token_endpoint: impl Into<String>,
+        client_id: impl Into<String>,
+    ) -> Self {
         Self {
-            issuer: issuer.to_owned(),
-            token_endpoint: token_endpoint.to_owned(),
-            client_id: client_id.to_owned(),
+            issuer: issuer.into(),
+            token_endpoint: token_endpoint.into(),
+            client_id: client_id.into(),
             client_authentication: EmaClientAuthentication::None,
         }
     }
@@ -142,11 +170,11 @@ pub struct EmaExchangeRequest<'a> {
     resource_as: EmaAuthorizationServer,
     resource: &'a str,
     refresh_token: &'a RefreshToken,
-    scopes: &'a [String],
+    scopes: Vec<String>,
 }
 
 impl<'a> EmaExchangeRequest<'a> {
-    /// No scope parameter is sent until [`Self::scopes`] is used.
+    /// No scope parameter is sent until [`Self::with_scopes`] is used.
     pub fn new(
         idp: EmaAuthorizationServer,
         resource_as: EmaAuthorizationServer,
@@ -158,14 +186,18 @@ impl<'a> EmaExchangeRequest<'a> {
             resource_as,
             resource,
             refresh_token,
-            scopes: &[],
+            scopes: Vec::new(),
         }
     }
 
     /// Request distinct non-empty scope tokens; the IdP may narrow them.
-    /// An empty slice omits `scope`, rather than requesting an empty grant.
-    pub fn scopes(mut self, scopes: &'a [String]) -> Self {
-        self.scopes = scopes;
+    /// An empty iterator omits `scope`, rather than requesting an empty grant.
+    pub fn with_scopes<I, S>(mut self, scopes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.scopes = scopes.into_iter().map(Into::into).collect();
         self
     }
 
@@ -228,13 +260,30 @@ impl<'a> EmaExchangeRequest<'a> {
             &self.idp,
             &params,
             EmaExchangeStage::IdentityProvider,
+            None,
+            unix_time,
         )
         .await?;
-        let granted = jag.validate(&self, &requested)?;
+        let (granted, expires_at) = jag.validate(&self, &requested)?;
         Ok(EmaIdJag {
             assertion: AccessToken::new(jag.access_token),
             scopes: granted,
+            resource_as: self.resource_as,
+            resource: self.resource.to_owned(),
+            expires_at,
         })
+    }
+
+    /// Perform both exchanges with independently routed HTTP clients and no automatic retries.
+    pub async fn exchange(
+        self,
+        idp_http: &dyn OAuthHttpClient,
+        resource_http: &dyn OAuthHttpClient,
+    ) -> Result<EmaAccessToken, EmaError> {
+        self.exchange_id_jag(idp_http)
+            .await?
+            .exchange(resource_http)
+            .await
     }
 }
 
@@ -242,6 +291,9 @@ impl<'a> EmaExchangeRequest<'a> {
 pub struct EmaIdJag {
     assertion: AccessToken,
     scopes: HashSet<String>,
+    resource_as: EmaAuthorizationServer,
+    resource: String,
+    expires_at: u64,
 }
 
 impl std::fmt::Debug for EmaAuthorizationServer {
@@ -271,6 +323,53 @@ impl EmaIdJag {
     /// The scope tokens carried by the assertion; an empty set means scope was omitted.
     pub fn scopes(&self) -> &HashSet<String> {
         &self.scopes
+    }
+
+    /// Redeem this assertion once, at its approved resource AS, without redirects or retries.
+    /// Consume the grant so this helper cannot accidentally replay it after a failed exchange.
+    pub async fn exchange(self, http: &dyn OAuthHttpClient) -> Result<EmaAccessToken, EmaError> {
+        self.exchange_with_clock(http, unix_time).await
+    }
+
+    async fn exchange_with_clock(
+        self,
+        http: &dyn OAuthHttpClient,
+        now: impl Fn() -> Result<u64, EmaError> + Sync,
+    ) -> Result<EmaAccessToken, EmaError> {
+        if self.expires_at <= now()? {
+            return Err(EmaError::InvalidRequest("ID-JAG expired before redemption"));
+        }
+        // Only the assertion carries authority: repeating resource/scope could undo narrowing.
+        let token: ResourceTokenResponse = post_form(
+            http,
+            &self.resource_as,
+            &[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+                ("assertion", self.assertion.secret()),
+            ],
+            EmaExchangeStage::ResourceAuthorizationServer,
+            Some(self.expires_at),
+            now,
+        )
+        .await?;
+        token.validate(&self.resource, self.scopes)
+    }
+}
+
+/// A resource-bound bearer with secret-safe diagnostics and its optional lifetime.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct EmaAccessToken {
+    pub access_token: AccessToken,
+    pub expires_in: Option<Duration>,
+    /// Resource-AS scopes, or the ID-JAG scopes when the response omits `scope`.
+    /// Empty when both the ID-JAG and response omit scopes.
+    pub scopes: HashSet<String>,
+}
+
+impl std::fmt::Debug for EmaAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EmaAccessToken { .. }")
     }
 }
 
@@ -312,6 +411,8 @@ async fn post_form<T: DeserializeOwned>(
     server: &EmaAuthorizationServer,
     params: &[(&str, &str)],
     stage: EmaExchangeStage,
+    grant_expires_at: Option<u64>,
+    now: impl Fn() -> Result<u64, EmaError> + Sync,
 ) -> Result<T, EmaError> {
     let response = tokio::time::timeout(DEFAULT_HTTP_TIMEOUT, async {
         // Generate assertions at the request boundary, not when server configuration is built.
@@ -371,6 +472,12 @@ async fn post_form<T: DeserializeOwned>(
                 .body(form.finish().into_bytes())
                 .map_err(|_| EmaError::InvalidRequest("invalid token endpoint URI"))?
         };
+        // An external signer may outlive the grant even when it meets the request deadline.
+        if let Some(expires_at) = grant_expires_at
+            && expires_at <= now()?
+        {
+            return Err(EmaError::InvalidRequest("ID-JAG expired before redemption"));
+        }
         http.execute(OAuthHttpRequest::new(
             request,
             OAuthHttpRedirectPolicy::Stop,
@@ -468,6 +575,7 @@ struct IdJagClaims {
     iat: u64,
     resource: Resource,
     scope: Option<String>,
+    authorization_details: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -478,6 +586,7 @@ struct IdJagResponse {
     resource: Option<Resource>,
     scope: Option<String>,
     refresh_token: Option<String>,
+    authorization_details: Option<Vec<serde_json::Value>>,
 }
 
 impl IdJagResponse {
@@ -485,7 +594,7 @@ impl IdJagResponse {
         &self,
         request: &EmaExchangeRequest<'_>,
         requested: &HashSet<&str>,
-    ) -> Result<HashSet<String>, EmaError> {
+    ) -> Result<(HashSet<String>, u64), EmaError> {
         let invalid = |message| EmaError::InvalidResponse {
             stage: EmaExchangeStage::IdentityProvider,
             message,
@@ -515,6 +624,12 @@ impl IdJagResponse {
             .map_err(|_| invalid("malformed ID-JAG header"))?;
         let claims: IdJagClaims = serde_json::from_slice(&decode(payload)?)
             .map_err(|_| invalid("malformed ID-JAG claims"))?;
+        if [&self.authorization_details, &claims.authorization_details]
+            .into_iter()
+            .any(|details| details.as_ref().is_some_and(|details| !details.is_empty()))
+        {
+            return Err(invalid("authorization_details is not supported"));
+        }
         if header.alg.trim().is_empty()
             || header.alg.eq_ignore_ascii_case("none")
             || header.typ.as_deref() != Some("oauth-id-jag+jwt")
@@ -528,10 +643,7 @@ impl IdJagResponse {
                 "ID-JAG type, issuer, audience, client, subject, or JWT ID mismatch",
             ));
         }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| invalid("system clock precedes the Unix epoch"))?
-            .as_secs();
+        let now = unix_time()?;
         if claims.exp <= now || claims.iat > now.saturating_add(60) {
             return Err(invalid("expired or future-issued ID-JAG"));
         }
@@ -562,7 +674,7 @@ impl IdJagResponse {
             }
             _ => {}
         }
-        Ok(granted.into_iter().map(str::to_owned).collect())
+        Ok((granted.into_iter().map(str::to_owned).collect(), claims.exp))
     }
 }
 
@@ -577,6 +689,77 @@ fn is_scope_token(scope: &str) -> bool {
         && scope
             .bytes()
             .all(|b| matches!(b, b'!' | b'#'..=b'[' | b']'..=b'~'))
+}
+
+fn unix_time() -> Result<u64, EmaError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| EmaError::InvalidRequest("system clock precedes the Unix epoch"))
+}
+
+#[derive(Deserialize)]
+struct ResourceTokenResponse {
+    access_token: String,
+    token_type: String,
+    expires_in: Option<u64>,
+    resource: Option<Resource>,
+    scope: Option<String>,
+    refresh_token: Option<String>,
+    authorization_details: Option<Vec<serde_json::Value>>,
+}
+
+impl ResourceTokenResponse {
+    fn validate(
+        self,
+        resource: &str,
+        granted: HashSet<String>,
+    ) -> Result<EmaAccessToken, EmaError> {
+        let invalid = |message| EmaError::InvalidResponse {
+            stage: EmaExchangeStage::ResourceAuthorizationServer,
+            message,
+        };
+        if self
+            .authorization_details
+            .as_ref()
+            .is_some_and(|details| !details.is_empty())
+        {
+            return Err(invalid("authorization_details is not supported"));
+        }
+        if !self.token_type.eq_ignore_ascii_case("bearer")
+            || self.access_token.trim().is_empty()
+            || self.refresh_token.is_some()
+            || self.expires_in == Some(0)
+        {
+            return Err(invalid(
+                "invalid bearer token, lifetime, or unexpected refresh token",
+            ));
+        }
+        // The resource need not be echoed, but must agree with the ID-JAG if present.
+        if self
+            .resource
+            .as_ref()
+            .is_some_and(|r| !r.is_exact(resource))
+        {
+            return Err(invalid("access token resource mismatch"));
+        }
+        // An omitted scope retains the authority carried by the assertion.
+        let scopes = if let Some(scope) = self.scope.as_deref() {
+            let scopes =
+                parse_scope(scope).ok_or_else(|| invalid("malformed or duplicate scopes"))?;
+            if !scopes.iter().all(|s| granted.contains(*s)) {
+                return Err(invalid("access token scope exceeds ID-JAG scope"));
+            }
+            scopes.into_iter().map(str::to_owned).collect()
+        } else {
+            granted
+        };
+        Ok(EmaAccessToken {
+            access_token: AccessToken::new(self.access_token),
+            expires_in: self.expires_in.map(Duration::from_secs),
+            scopes,
+        })
+    }
 }
 
 #[cfg(test)]

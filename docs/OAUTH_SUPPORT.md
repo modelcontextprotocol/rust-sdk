@@ -15,6 +15,7 @@ This document describes the OAuth 2.1 authorization implementation for Model Con
 - Automatic token refresh
 - Authorized HTTP Client implementation
 - Injectable OAuth HTTP client for custom network environments
+- Opt-in EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients
 
 ## Usage Guide
 
@@ -293,6 +294,130 @@ match oauth_state.request_scope_upgrade("admin:write", MCP_REDIRECT_URI).await {
     }
 }
 ```
+
+## Enterprise-managed authorization (EMA/XAA)
+
+The example requires the `rmcp` features `auth-enterprise-managed`, `client`,
+`reqwest` (TLS), and `transport-streamable-http-client-reqwest`, plus `oauth2`
+version 5. Call the async function from a Tokio runtime.
+
+The exchange profile has these requirements and limits:
+
+- Each authorization server has its own approved client registration and explicit
+  `EmaClientAuthentication`: `None`, `ClientSecretBasic`, `ClientSecretPost`, or
+  `JwtAssertion`. The SDK does not select methods from metadata or fall back to a
+  different method after a failure.
+- Input is an enterprise IdP refresh token. The requested MCP resource must match
+  the ID-JAG's sole `resource` claim; scope may be omitted or narrowed.
+- RAR (`authorization_details`) and DPoP are not supported. Nonempty authorization
+  details are rejected at both exchange stages.
+- Redemption consumes the SDK's ID-JAG handle and does not retry automatically.
+  This is an SDK safety choice, not a protocol requirement that ID-JAGs be single-use.
+
+The [ID-JAG draft recommends confidential clients](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant-04#section-9.1).
+The example below uses confidential clients with `client_secret_basic` at both
+servers. Use `None` only where that server permits a public client registration.
+Discovery, server approval, SSO, credential storage, and reauthentication remain
+the application's responsibility. Client-side ID-JAG checks validate structure and
+bindings, not signatures; the resource authorization server verifies signatures.
+
+```rust no_run
+use oauth2::{ClientSecret, RefreshToken};
+use rmcp::{
+    ServiceExt,
+    model::ClientInfo,
+    transport::{
+        StreamableHttpClientTransport,
+        auth::{
+            default_oauth_http_client,
+            enterprise::{EmaAuthorizationServer, EmaClientAuthentication, EmaExchangeRequest},
+        },
+        streamable_http_client::StreamableHttpClientTransportConfig,
+    },
+};
+
+async fn connect(
+    refresh: &RefreshToken,
+    idp_client_secret: ClientSecret,
+    resource_client_secret: ClientSecret,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resource = "https://mcp.example/mcp";
+    let http = default_oauth_http_client()?;
+    let idp = EmaAuthorizationServer::new(
+        "https://idp.example", "https://idp.example/token", "idp-client",
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(idp_client_secret));
+    let resource_as = EmaAuthorizationServer::new(
+        "https://as.example", "https://as.example/token", "mcp-client",
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(resource_client_secret));
+    let token = EmaExchangeRequest::new(idp, resource_as, resource, refresh)
+        .with_scopes(["files.read"])
+        .exchange(&http, &http)
+        .await?;
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(resource)
+            .auth_header(token.access_token.secret()),
+    );
+    let client = ClientInfo::default().serve(transport).await?;
+    client.list_tools(Default::default()).await?;
+    client.cancel().await?;
+    Ok(())
+}
+```
+
+`auth_header` takes the token without a `Bearer ` prefix. Use it only with the
+approved resource and never log it. This transport uses a fixed token; obtain a
+new token and reconnect when it expires or is rejected.
+
+For a registration using JWT client authentication, implement
+`EmaClientAssertionProvider` with your application's signer and configure
+`JwtAssertion` on that server. The provider example below also uses `async-trait`
+version 0.1; `AppSigner` represents your application's existing signing service.
+
+```rust ignore
+use std::sync::Arc;
+use rmcp::transport::auth::enterprise::{
+    EmaAuthorizationServer, EmaClientAssertion, EmaClientAssertionProvider,
+    EmaClientAuthentication,
+};
+
+struct AppAssertionProvider {
+    signer: AppSigner,
+}
+
+#[async_trait::async_trait]
+impl EmaClientAssertionProvider for AppAssertionProvider {
+    async fn create_assertion(
+        &self,
+        server: &EmaAuthorizationServer,
+    ) -> Result<EmaClientAssertion, Box<dyn std::error::Error + Send + Sync>> {
+        // Sign a new assertion for this registration and approved server.
+        let jwt = self.signer.sign_client_assertion(
+            &server.client_id, &server.issuer, &server.token_endpoint,
+        ).await?;
+        Ok(EmaClientAssertion::new(jwt))
+    }
+}
+
+let resource_as = EmaAuthorizationServer::new(
+    "https://as.example", "https://as.example/token", "mcp-client",
+)
+.with_client_authentication(EmaClientAuthentication::JwtAssertion(Arc::new(
+    AppAssertionProvider { signer },
+)));
+```
+
+The SDK calls the provider before each token request, including delayed
+`EmaIdJag::exchange` redemption. Sign a fresh, short-lived assertion with a unique
+`jti`, the registered client ID in `iss` and `sub`, and the server's approved
+audience in `aud`. Your signer owns the keys and algorithm; the client assertion
+is separate from the ID-JAG grant. Signing and HTTP share a 30-second deadline.
+
+The factory honors per-request redirect policy with the SDK's default reqwest
+settings. For custom proxy, CA, or remote-execution policy, implement
+`OAuthHttpClient`; use separate adapters for the IdP and resource AS when their
+network policies differ.
 
 ## Complete Examples
 

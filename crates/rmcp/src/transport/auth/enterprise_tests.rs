@@ -92,7 +92,7 @@ async fn exchange(idp: &MockHttp, scopes: &str) -> Result<EmaIdJag, EmaError> {
         RESOURCE,
         &refresh,
     )
-    .scopes(&scopes);
+    .with_scopes(scopes);
     assert!(!format!("{request:?}").contains(refresh.secret()));
     assert!(!format!("{request:?}").contains("private-query"));
     let future = request.exchange_id_jag(idp);
@@ -198,6 +198,76 @@ async fn scopes_may_be_omitted_but_never_widened() {
 }
 
 #[tokio::test]
+async fn unsupported_authorization_details_are_rejected_at_each_stage() {
+    const SECRET: &str = "authorization-details-secret";
+    for (location, stage) in [
+        ("claims", Idp),
+        ("idp response", Idp),
+        ("resource response", ResourceServer),
+    ] {
+        for (case, details, valid) in [
+            ("absent", None, true),
+            ("null", Some(Value::Null), true),
+            ("empty", Some(json!([])), true),
+            (
+                "additional authority",
+                Some(
+                    json!([{"type":SECRET,"locations":["https://other.example"],"actions":["write"]}]),
+                ),
+                false,
+            ),
+            ("invalid member", Some(json!([null])), false),
+            ("object", Some(json!({"type":SECRET})), false),
+            ("string", Some(json!(SECRET)), false),
+        ] {
+            let mut claims = claims();
+            let mut response = bearer();
+            // Unrelated extension fields remain compatible at every boundary.
+            claims["vendor_extension"] = json!(SECRET);
+            response["vendor_extension"] = json!(SECRET);
+            if location == "claims"
+                && let Some(details) = &details
+            {
+                claims["authorization_details"] = details.clone();
+            }
+            let mut idp_response = jag(&claims);
+            idp_response["vendor_extension"] = json!(SECRET);
+            if let Some(details) = details {
+                match location {
+                    "idp response" => idp_response["authorization_details"] = details,
+                    "resource response" => response["authorization_details"] = details,
+                    _ => {}
+                }
+            }
+            let idp = MockHttp::new(200, idp_response);
+            let resource = MockHttp::new(200, response);
+            let result = EmaExchangeRequest::new(
+                EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp"),
+                EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp"),
+                RESOURCE,
+                &RefreshToken::new("refresh-token".into()),
+            )
+            .with_scopes(["files.read"])
+            .exchange(&idp, &resource)
+            .await;
+            assert_eq!(result.is_ok(), valid, "{location}: {case}");
+            if let Err(error) = result {
+                assert!(
+                    matches!(error, EmaError::InvalidResponse { stage: actual, .. } if actual == stage)
+                );
+                assert!(!format!("{error:?} {error}").contains(SECRET));
+            }
+            assert_eq!(idp.requests.lock().unwrap().len(), 1);
+            assert_eq!(
+                resource.requests.lock().unwrap().len(),
+                usize::from(valid || stage == ResourceServer),
+                "{location}: {case}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn invalid_jags_never_escape_validation() {
     let original = claims();
     let mut cases = Vec::new();
@@ -273,14 +343,13 @@ async fn invalid_inputs_fail_before_http() {
     cases.push((original, vec!["files.read", "files.read"]));
     for (fields, scopes) in cases {
         let http = MockHttp::default();
-        let scopes = scopes.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let result = EmaExchangeRequest::new(
             EmaAuthorizationServer::new(fields[0], fields[1], fields[2]),
             EmaAuthorizationServer::new(fields[3], fields[4], fields[5]),
             fields[6],
             &RefreshToken::new(fields[7].into()),
         )
-        .scopes(&scopes)
+        .with_scopes(scopes)
         .exchange_id_jag(&http)
         .await;
         assert!(matches!(result, Err(EmaError::InvalidRequest(_))));
@@ -339,11 +408,260 @@ async fn errors_and_redirects_cannot_reflect_credentials() {
     ));
 }
 
+fn bearer() -> Value {
+    json!({"access_token":"resource-token","token_type":"Bearer","expires_in":300})
+}
+
+async fn redeem(http: &MockHttp) -> Result<EmaAccessToken, EmaError> {
+    exchange(
+        &MockHttp::new(200, jag(&claims())),
+        "files.read files.write",
+    )
+    .await?
+    .exchange(http)
+    .await
+}
+
+#[tokio::test]
+async fn full_exchange_uses_separate_clients_and_only_the_narrowed_assertion() {
+    for valid in [true, false] {
+        let mut claims = claims();
+        if !valid {
+            claims["client_id"] = json!("other");
+        }
+        let response = jag(&claims);
+        let idp = MockHttp::new(200, response.clone());
+        let resource_as = MockHttp::new(200, bearer());
+        let refresh = RefreshToken::new("refresh-token".into());
+        let request = EmaExchangeRequest::new(
+            EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp"),
+            EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp"),
+            RESOURCE,
+            &refresh,
+        )
+        .with_scopes(["files.read", "files.write"]);
+        let future = request.exchange(&idp, &resource_as);
+        fn is_send<T: Send>(_: &T) {}
+        is_send(&future);
+        let result = future.await;
+        assert_eq!(idp.requests.lock().unwrap().len(), 1);
+        let requests = resource_as.requests.lock().unwrap();
+        assert_eq!(requests.len(), usize::from(valid));
+        if !valid {
+            assert!(matches!(
+                result,
+                Err(EmaError::InvalidResponse { stage: Idp, .. })
+            ));
+            continue;
+        }
+        let token = result.unwrap();
+        assert_eq!(token.access_token.secret(), "resource-token");
+        assert_eq!(token.expires_in, Some(Duration::from_secs(300)));
+        assert_eq!(token.scopes, HashSet::from(["files.read".to_owned()]));
+        assert!(!format!("{token:?}").contains(token.access_token.secret()));
+        assert_eq!(requests[0].request.uri(), AS_TOKEN);
+        assert_eq!(
+            serde_json::to_value(form(&requests[0])).unwrap(),
+            json!({
+                "grant_type":"urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "assertion":response["access_token"],"client_id":"mcp"
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn expired_grants_are_not_redeemed() {
+    let mut grant = exchange(&MockHttp::new(200, jag(&claims())), "")
+        .await
+        .unwrap();
+    grant.expires_at = 0;
+    let resource_as = MockHttp::default();
+    assert!(matches!(
+        grant.exchange(&resource_as).await,
+        Err(EmaError::InvalidRequest(_))
+    ));
+    assert!(resource_as.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn bearer_responses_cannot_change_resource_or_widen_scope() {
+    let mut cases = vec![
+        ("scope", json!("files.read"), true),
+        ("scope", json!("files.admin"), false),
+        ("scope", json!("files.read files.write"), false),
+        ("scope", json!("files.read files.read"), false),
+        ("resource", json!(RESOURCE), true),
+        ("resource", json!([RESOURCE]), true),
+        ("resource", json!([RESOURCE, "other"]), false),
+        ("resource", json!("https://mcp.example"), false),
+        ("expires_in", json!(0), false),
+        ("expires_in", Value::Null, true),
+        ("refresh_token", json!("unsupported"), false),
+        ("token_type", json!("N_A"), false),
+        ("token_type", json!("bearer"), true),
+        ("access_token", json!(" \t"), false),
+    ];
+    cases.extend(
+        BAD_SCOPES
+            .iter()
+            .map(|scope| ("scope", json!(scope), false)),
+    );
+    for (key, value, valid) in cases {
+        let mut token = bearer();
+        if value.is_null() {
+            token.as_object_mut().unwrap().remove(key);
+        } else {
+            token[key] = value;
+        }
+        let result = redeem(&MockHttp::new(200, token)).await;
+        assert_eq!(result.is_ok(), valid, "{key}");
+        if key == "expires_in" && valid {
+            assert_eq!(result.unwrap().expires_in, None);
+        } else if !valid {
+            assert!(matches!(
+                result,
+                Err(EmaError::InvalidResponse {
+                    stage: ResourceServer,
+                    ..
+                })
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn resource_scope_narrowing_is_reported_without_logging_scope_values() {
+    for read in ["files.read", "private-scope-sentinel"] {
+        let requested = format!("{read} files.write");
+        let mut claims = claims();
+        claims["scope"] = json!(requested);
+        let grant = exchange(&MockHttp::new(200, jag(&claims)), &requested)
+            .await
+            .unwrap();
+        let mut response = bearer();
+        response["scope"] = json!(read);
+        let token = grant.exchange(&MockHttp::new(200, response)).await.unwrap();
+        assert_eq!(token.scopes, HashSet::from([read.to_owned()]));
+        assert!(!format!("{token:?}").contains(read));
+    }
+}
+
+#[tokio::test]
+async fn bearer_scope_may_be_omitted_but_not_added_to_an_unscoped_grant() {
+    for scope in [None, Some("files.read")] {
+        let mut claims = claims();
+        claims.as_object_mut().unwrap().remove("scope");
+        let grant = exchange(&MockHttp::new(200, jag(&claims)), "")
+            .await
+            .unwrap();
+        let mut token = bearer();
+        if let Some(scope) = scope {
+            token["scope"] = json!(scope);
+        }
+        let result = grant.exchange(&MockHttp::new(200, token)).await;
+        assert_eq!(result.is_ok(), scope.is_none());
+        if let Ok(token) = result {
+            assert!(token.scopes.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn resource_errors_are_staged_and_never_reflect_credentials() {
+    const SECRET: &str = "secret-resource-error-sentinel";
+    for (status, code) in [
+        (400, "invalid_grant"),
+        (400, "insufficient_user_authentication"),
+        (400, "invalid_client"),
+        (302, SECRET),
+        (500, SECRET),
+    ] {
+        let http = MockHttp::new(status, json!({"error":code,"error_description":SECRET}));
+        let error = redeem(&http).await.unwrap_err();
+        match code {
+            "invalid_grant" => assert_eq!(error, EmaError::InvalidGrant(ResourceServer)),
+            "insufficient_user_authentication" => assert_eq!(
+                error,
+                EmaError::InsufficientUserAuthentication(ResourceServer)
+            ),
+            _ => assert!(
+                matches!(error, EmaError::OAuthRejected {stage: ResourceServer, status: actual, ..} if actual == status)
+            ),
+        }
+        assert!(!format!("{error:?} {error}").contains(SECRET));
+        assert!(std::error::Error::source(&error).is_none());
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+    }
+    let mut oversized = bearer();
+    oversized["ignored"] = json!("x".repeat(1024 * 1024));
+    for (body, adapter_failure) in [
+        (json!({"access_token":SECRET,"expires_in":SECRET}), false),
+        (oversized, false),
+        (Value::Null, true),
+    ] {
+        let http = MockHttp::new(200, body);
+        if adapter_failure {
+            *http.response.lock().unwrap() = Some(Err(SECRET.into()));
+        }
+        let error = redeem(&http).await.unwrap_err();
+        assert!(!format!("{error:?} {error}").contains(SECRET));
+        assert!(std::error::Error::source(&error).is_none());
+        if adapter_failure {
+            assert_eq!(error, EmaError::RequestFailed(ResourceServer));
+        } else {
+            assert!(matches!(
+                error,
+                EmaError::InvalidResponse {
+                    stage: ResourceServer,
+                    ..
+                }
+            ));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn both_exchanges_enforce_the_timeout_when_the_adapter_does_not() {
+    struct PendingHttp;
+    impl OAuthHttpClient for PendingHttp {
+        fn execute(&self, _: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            Box::pin(std::future::pending())
+        }
+    }
+    for stage in [Idp, ResourceServer] {
+        let ready = MockHttp::new(200, jag(&claims()));
+        let (idp, resource): (&dyn OAuthHttpClient, &dyn OAuthHttpClient) = match stage {
+            Idp => (&PendingHttp, &ready),
+            _ => (&ready, &PendingHttp),
+        };
+        let refresh = RefreshToken::new("refresh-token".into());
+        let request = EmaExchangeRequest::new(
+            EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp"),
+            EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp"),
+            RESOURCE,
+            &refresh,
+        );
+        let start = tokio::time::Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(31), request.exchange(idp, resource))
+            .await
+            .expect("the SDK must enforce its own deadline");
+        assert_eq!(result.unwrap_err(), EmaError::RequestFailed(stage));
+        assert_eq!(start.elapsed(), Duration::from_secs(30));
+        assert_eq!(
+            ready.requests.lock().unwrap().len(),
+            usize::from(stage == ResourceServer)
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum AssertionBehavior {
     Success,
     Error,
     Empty(&'static str),
+    Delay(Duration),
+    Pending,
 }
 
 struct RecordingAssertionProvider {
@@ -386,6 +704,8 @@ impl EmaClientAssertionProvider for RecordingAssertionProvider {
         match self.behavior {
             AssertionBehavior::Error => return Err("client-assertion-provider-secret".into()),
             AssertionBehavior::Empty(value) => return Ok(EmaClientAssertion::new(value.into())),
+            AssertionBehavior::Delay(delay) => tokio::time::sleep(delay).await,
+            AssertionBehavior::Pending => std::future::pending::<()>().await,
             AssertionBehavior::Success => {}
         }
         Ok(EmaClientAssertion::new(client_assertion(
@@ -464,45 +784,56 @@ fn remove_client_authentication(
 }
 
 #[tokio::test]
-async fn idp_client_authentication_is_explicit_and_separate_from_the_grant() {
-    const IDP_CLIENT: &str = "idp:+ %é";
-    const IDP_SECRET: &str = "idp-secret:+ %é";
-    for method in [
+async fn client_authentication_is_endpoint_specific_and_never_mixed_with_grants() {
+    const METHODS: [AuthenticationMethod; 4] = [
         AuthenticationMethod::Public,
         AuthenticationMethod::Basic,
         AuthenticationMethod::Post,
         AuthenticationMethod::Jwt,
-    ] {
-        let provider = RecordingAssertionProvider::new(AssertionBehavior::Success);
-        let server = EmaAuthorizationServer::new(IDP, IDP_TOKEN, IDP_CLIENT)
-            .with_client_authentication(method.configure(IDP_SECRET, &provider));
-        let refresh = RefreshToken::new("refresh-token".into());
-        assert!(provider.calls.lock().unwrap().is_empty());
-        // Reusing configuration must ask the signer for a fresh assertion.
-        for attempt in 1..=2 {
-            let idp = MockHttp::new(200, jag(&claims()));
-            EmaExchangeRequest::new(
-                server.clone(),
-                EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp"),
+    ];
+    // Colons, plus signs, spaces, percent signs, and non-ASCII bytes must be
+    // form-encoded individually before the HTTP Basic username/password join.
+    const IDP_CLIENT: &str = "idp:+ %é";
+    const AS_CLIENT: &str = "mcp:+ %é";
+    const IDP_SECRET: &str = "idp-secret:+ %é";
+    const AS_SECRET: &str = "as-secret:+ %é";
+    for idp_method in METHODS {
+        for resource_method in METHODS {
+            let provider = RecordingAssertionProvider::new(AssertionBehavior::Success);
+            let mut claims = claims();
+            claims["client_id"] = json!(AS_CLIENT);
+            let response = jag(&claims);
+            let idp = MockHttp::new(200, response.clone());
+            let resource = MockHttp::new(200, bearer());
+            let refresh = RefreshToken::new("refresh-token".into());
+            let token = EmaExchangeRequest::new(
+                EmaAuthorizationServer::new(IDP, IDP_TOKEN, IDP_CLIENT)
+                    .with_client_authentication(idp_method.configure(IDP_SECRET, &provider)),
+                EmaAuthorizationServer::new(AS, AS_TOKEN, AS_CLIENT)
+                    .with_client_authentication(resource_method.configure(AS_SECRET, &provider)),
                 RESOURCE,
                 &refresh,
             )
-            .exchange_id_jag(&idp)
+            .exchange(&idp, &resource)
             .await
             .unwrap();
-            let requests = idp.requests.lock().unwrap();
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].request.uri(), IDP_TOKEN);
-            let fields = remove_client_authentication(
-                &requests[0],
-                method,
+            assert_eq!(token.access_token.secret(), "resource-token");
+            let idp_requests = idp.requests.lock().unwrap();
+            let resource_requests = resource.requests.lock().unwrap();
+            assert_eq!(idp_requests.len(), 1);
+            assert_eq!(resource_requests.len(), 1);
+            assert_eq!(idp_requests[0].request.uri(), IDP_TOKEN);
+            assert_eq!(resource_requests[0].request.uri(), AS_TOKEN);
+            let idp_fields = remove_client_authentication(
+                &idp_requests[0],
+                idp_method,
                 IDP_CLIENT,
                 IDP_SECRET,
                 "idp%3A%2B+%25%C3%A9:idp-secret%3A%2B+%25%C3%A9",
-                &client_assertion(IDP_CLIENT, IDP, attempt),
+                &client_assertion(IDP_CLIENT, IDP, 1),
             );
             assert_eq!(
-                serde_json::to_value(fields).unwrap(),
+                serde_json::to_value(idp_fields).unwrap(),
                 json!({
                     "grant_type":"urn:ietf:params:oauth:grant-type:token-exchange",
                     "requested_token_type":ID_JAG_TOKEN_TYPE,"subject_token":"refresh-token",
@@ -510,14 +841,70 @@ async fn idp_client_authentication_is_explicit_and_separate_from_the_grant() {
                     "audience":AS,"resource":RESOURCE
                 })
             );
-            let expected_calls = if method == AuthenticationMethod::Jwt {
-                vec![(IDP.into(), IDP_TOKEN.into(), IDP_CLIENT.into()); attempt]
-            } else {
-                Vec::new()
-            };
+            let resource_fields = remove_client_authentication(
+                &resource_requests[0],
+                resource_method,
+                AS_CLIENT,
+                AS_SECRET,
+                "mcp%3A%2B+%25%C3%A9:as-secret%3A%2B+%25%C3%A9",
+                &client_assertion(
+                    AS_CLIENT,
+                    AS,
+                    1 + usize::from(idp_method == AuthenticationMethod::Jwt),
+                ),
+            );
+            assert_eq!(
+                serde_json::to_value(resource_fields).unwrap(),
+                json!({
+                    "grant_type":"urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion":response["access_token"]
+                })
+            );
+            let mut expected_calls = Vec::new();
+            if idp_method == AuthenticationMethod::Jwt {
+                expected_calls.push((IDP.into(), IDP_TOKEN.into(), IDP_CLIENT.into()));
+            }
+            if resource_method == AuthenticationMethod::Jwt {
+                expected_calls.push((AS.into(), AS_TOKEN.into(), AS_CLIENT.into()));
+            }
             assert_eq!(*provider.calls.lock().unwrap(), expected_calls);
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn client_assertions_are_fresh_for_every_request_and_delayed_redemption() {
+    let provider = RecordingAssertionProvider::new(AssertionBehavior::Success);
+    let idp_server = EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp")
+        .with_client_authentication(EmaClientAuthentication::JwtAssertion(provider.clone()));
+    let resource_server = EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp")
+        .with_client_authentication(EmaClientAuthentication::JwtAssertion(provider.clone()));
+    let refresh = RefreshToken::new("refresh-token".into());
+    let mut assertions = HashSet::new();
+    for attempt in 0..2 {
+        let idp = MockHttp::new(200, jag(&claims()));
+        let resource = MockHttp::new(200, bearer());
+        let grant = EmaExchangeRequest::new(
+            idp_server.clone(),
+            resource_server.clone(),
+            RESOURCE,
+            &refresh,
+        )
+        .exchange_id_jag(&idp)
+        .await
+        .unwrap();
+        assert_eq!(provider.calls.lock().unwrap().len(), attempt * 2 + 1);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(provider.calls.lock().unwrap().len(), attempt * 2 + 1);
+        grant.exchange(&resource).await.unwrap();
+        assert_eq!(provider.calls.lock().unwrap().len(), attempt * 2 + 2);
+        for http in [&idp, &resource] {
+            let requests = http.requests.lock().unwrap();
+            let mut fields = form(&requests[0]);
+            assert!(assertions.insert(fields.remove("client_assertion").unwrap()));
+        }
+    }
+    assert_eq!(assertions.len(), 4);
 }
 
 #[tokio::test]
@@ -533,6 +920,7 @@ async fn invalid_static_client_secrets_fail_before_any_http_or_signing() {
                     _ => (valid, invalid),
                 };
                 let idp = MockHttp::default();
+                let resource = MockHttp::default();
                 let error = EmaExchangeRequest::new(
                     EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp")
                         .with_client_authentication(idp_auth),
@@ -541,11 +929,12 @@ async fn invalid_static_client_secrets_fail_before_any_http_or_signing() {
                     RESOURCE,
                     &RefreshToken::new("refresh-token".into()),
                 )
-                .exchange_id_jag(&idp)
+                .exchange(&idp, &resource)
                 .await
                 .unwrap_err();
                 assert!(matches!(error, EmaError::InvalidRequest(_)));
                 assert!(idp.requests.lock().unwrap().is_empty());
+                assert!(resource.requests.lock().unwrap().is_empty());
                 assert!(provider.calls.lock().unwrap().is_empty());
             }
         }
@@ -553,73 +942,184 @@ async fn invalid_static_client_secrets_fail_before_any_http_or_signing() {
 }
 
 #[tokio::test]
-async fn assertion_provider_failures_and_empty_results_never_reach_http_or_escape_errors() {
-    for behavior in [
-        AssertionBehavior::Error,
-        AssertionBehavior::Empty(""),
-        AssertionBehavior::Empty(" \t"),
-    ] {
-        let provider = RecordingAssertionProvider::new(behavior);
-        let idp = MockHttp::default();
-        let error = EmaExchangeRequest::new(
-            EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp").with_client_authentication(
-                EmaClientAuthentication::JwtAssertion(provider.clone()),
-            ),
-            EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp"),
-            RESOURCE,
-            &RefreshToken::new("refresh-token".into()),
-        )
-        .exchange_id_jag(&idp)
+async fn a_grant_that_expires_while_signing_is_never_sent_to_the_resource_server() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let provider = RecordingAssertionProvider::new(AssertionBehavior::Success);
+    let idp = MockHttp::new(200, jag(&claims()));
+    let resource = MockHttp::default();
+    let mut grant = EmaExchangeRequest::new(
+        EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp"),
+        EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp")
+            .with_client_authentication(EmaClientAuthentication::JwtAssertion(provider.clone())),
+        RESOURCE,
+        &RefreshToken::new("refresh-token".into()),
+    )
+    .exchange_id_jag(&idp)
+    .await
+    .unwrap();
+    grant.expires_at = 100;
+    // The clock crosses expiration between the checks before and after signing.
+    let now = AtomicU64::new(99);
+    let error = grant
+        .exchange_with_clock(&resource, || Ok(now.fetch_add(1, Ordering::Relaxed)))
         .await
         .unwrap_err();
-        if matches!(behavior, AssertionBehavior::Error) {
-            assert_eq!(error, EmaError::RequestFailed(Idp));
-        } else {
-            assert!(matches!(error, EmaError::InvalidRequest(_)));
+    assert!(matches!(error, EmaError::InvalidRequest(_)));
+    assert_eq!(provider.calls.lock().unwrap().len(), 1);
+    assert!(resource.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn assertion_provider_failures_and_empty_results_never_reach_http_or_escape_errors() {
+    for stage in [Idp, ResourceServer] {
+        for behavior in [
+            AssertionBehavior::Error,
+            AssertionBehavior::Empty(""),
+            AssertionBehavior::Empty(" \t"),
+        ] {
+            let provider = RecordingAssertionProvider::new(behavior);
+            let auth = EmaClientAuthentication::JwtAssertion(provider.clone());
+            let (idp_auth, resource_auth) = match stage {
+                Idp => (auth, EmaClientAuthentication::None),
+                _ => (EmaClientAuthentication::None, auth),
+            };
+            let idp = MockHttp::new(200, jag(&claims()));
+            let resource = MockHttp::default();
+            let error = EmaExchangeRequest::new(
+                EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp")
+                    .with_client_authentication(idp_auth),
+                EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp")
+                    .with_client_authentication(resource_auth),
+                RESOURCE,
+                &RefreshToken::new("refresh-token".into()),
+            )
+            .exchange(&idp, &resource)
+            .await
+            .unwrap_err();
+            if matches!(behavior, AssertionBehavior::Error) {
+                assert_eq!(error, EmaError::RequestFailed(stage));
+            } else {
+                assert!(matches!(error, EmaError::InvalidRequest(_)));
+            }
+            assert!(!format!("{error:?} {error}").contains("client-assertion-provider-secret"));
+            assert!(std::error::Error::source(&error).is_none());
+            assert_eq!(provider.calls.lock().unwrap().len(), 1);
+            assert_eq!(
+                idp.requests.lock().unwrap().len(),
+                usize::from(stage == ResourceServer)
+            );
+            assert!(resource.requests.lock().unwrap().is_empty());
         }
-        assert!(!format!("{error:?} {error}").contains("client-assertion-provider-secret"));
-        assert!(std::error::Error::source(&error).is_none());
-        assert_eq!(provider.calls.lock().unwrap().len(), 1);
-        assert!(idp.requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn signing_and_http_share_one_deadline_at_both_endpoints() {
+    struct DelayedHttp(Mutex<Vec<OAuthHttpRequest>>);
+    impl OAuthHttpClient for DelayedHttp {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            self.0.lock().unwrap().push(request);
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                Err("http-adapter-secret".into())
+            })
+        }
+    }
+    for stage in [Idp, ResourceServer] {
+        for behavior in [
+            AssertionBehavior::Pending,
+            AssertionBehavior::Delay(Duration::from_secs(25)),
+        ] {
+            let provider = RecordingAssertionProvider::new(behavior);
+            let auth = EmaClientAuthentication::JwtAssertion(provider.clone());
+            let (idp_auth, resource_auth) = match stage {
+                Idp => (auth, EmaClientAuthentication::None),
+                _ => (EmaClientAuthentication::None, auth),
+            };
+            let ready = MockHttp::new(200, jag(&claims()));
+            let delayed = DelayedHttp(Mutex::new(Vec::new()));
+            let (idp, resource): (&dyn OAuthHttpClient, &dyn OAuthHttpClient) = match stage {
+                Idp => (&delayed, &ready),
+                _ => (&ready, &delayed),
+            };
+            let refresh = RefreshToken::new("refresh-token".into());
+            let request = EmaExchangeRequest::new(
+                EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp")
+                    .with_client_authentication(idp_auth),
+                EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp")
+                    .with_client_authentication(resource_auth),
+                RESOURCE,
+                &refresh,
+            );
+            let start = tokio::time::Instant::now();
+            let result =
+                tokio::time::timeout(Duration::from_secs(31), request.exchange(idp, resource))
+                    .await
+                    .expect("signing must share the SDK's token request deadline");
+            assert_eq!(result.unwrap_err(), EmaError::RequestFailed(stage));
+            assert_eq!(start.elapsed(), Duration::from_secs(30));
+            assert_eq!(provider.calls.lock().unwrap().len(), 1);
+            assert_eq!(
+                delayed.0.lock().unwrap().len(),
+                usize::from(matches!(behavior, AssertionBehavior::Delay(_)))
+            );
+            assert_eq!(
+                ready.requests.lock().unwrap().len(),
+                usize::from(stage == ResourceServer)
+            );
+        }
     }
 }
 
 #[tokio::test]
 async fn rejected_client_authentication_never_falls_back_or_retries() {
-    for method in [
-        AuthenticationMethod::Basic,
-        AuthenticationMethod::Post,
-        AuthenticationMethod::Jwt,
-    ] {
-        let provider = RecordingAssertionProvider::new(AssertionBehavior::Success);
-        let idp = MockHttp::new(
-            401,
-            json!({"error":"invalid_client","error_description":"client-authentication-secret"}),
-        );
-        let error = EmaExchangeRequest::new(
-            EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp")
-                .with_client_authentication(method.configure("idp-client-secret", &provider)),
-            EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp"),
-            RESOURCE,
-            &RefreshToken::new("refresh-token".into()),
-        )
-        .exchange_id_jag(&idp)
-        .await
-        .unwrap_err();
-        assert_eq!(
-            error,
-            EmaError::OAuthRejected {
-                stage: Idp,
-                status: 401,
-                code: "invalid_client"
-            }
-        );
-        assert!(!format!("{error:?} {error}").contains("client-authentication-secret"));
-        assert_eq!(idp.requests.lock().unwrap().len(), 1);
-        assert_eq!(
-            provider.calls.lock().unwrap().len(),
-            usize::from(method == AuthenticationMethod::Jwt)
-        );
+    for stage in [Idp, ResourceServer] {
+        for method in [
+            AuthenticationMethod::Basic,
+            AuthenticationMethod::Post,
+            AuthenticationMethod::Jwt,
+        ] {
+            let provider = RecordingAssertionProvider::new(AssertionBehavior::Success);
+            let failure = json!({"error":"invalid_client","error_description":"client-authentication-secret"});
+            let idp = if stage == Idp {
+                MockHttp::new(401, failure.clone())
+            } else {
+                MockHttp::new(200, jag(&claims()))
+            };
+            let resource = MockHttp::new(401, failure);
+            let error = EmaExchangeRequest::new(
+                EmaAuthorizationServer::new(IDP, IDP_TOKEN, "idp")
+                    .with_client_authentication(method.configure("idp-client-secret", &provider)),
+                EmaAuthorizationServer::new(AS, AS_TOKEN, "mcp")
+                    .with_client_authentication(method.configure("as-client-secret", &provider)),
+                RESOURCE,
+                &RefreshToken::new("refresh-token".into()),
+            )
+            .exchange(&idp, &resource)
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error,
+                EmaError::OAuthRejected {
+                    stage,
+                    status: 401,
+                    code: "invalid_client"
+                }
+            );
+            assert!(!format!("{error:?} {error}").contains("client-authentication-secret"));
+            assert_eq!(idp.requests.lock().unwrap().len(), 1);
+            assert_eq!(
+                resource.requests.lock().unwrap().len(),
+                usize::from(stage == ResourceServer)
+            );
+            let expected_calls = if method == AuthenticationMethod::Jwt {
+                1 + usize::from(stage == ResourceServer)
+            } else {
+                0
+            };
+            assert_eq!(provider.calls.lock().unwrap().len(), expected_calls);
+        }
     }
 }
 

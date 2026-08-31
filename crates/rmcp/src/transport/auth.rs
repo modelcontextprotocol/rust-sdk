@@ -102,6 +102,19 @@ pub trait OAuthHttpClient: Send + Sync {
     fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_>;
 }
 
+/// Create an OAuth HTTP client with the SDK's default reqwest configuration.
+///
+/// Honors each request's redirect policy, with a 30-second timeout and bounded
+/// response bodies. Enable a TLS feature such as `reqwest` for HTTPS requests.
+/// Implement [`OAuthHttpClient`] instead when custom network policy is required.
+pub fn default_oauth_http_client() -> Result<impl OAuthHttpClient, AuthError> {
+    let client = ReqwestClient::builder()
+        .timeout(DEFAULT_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+    ReqwestOAuthHttpClient::new(client)
+}
+
 struct ReqwestOAuthHttpClient {
     follow_redirects: ReqwestClient,
     stop_redirects: ReqwestClient,
@@ -1310,13 +1323,9 @@ impl AuthorizationManager {
 
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
-        let http_client = ReqwestClient::builder()
-            .timeout(DEFAULT_HTTP_TIMEOUT)
-            .build()
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
         Self::new_inner(
             base_url,
-            Arc::new(ReqwestOAuthHttpClient::new(http_client)?),
+            Arc::new(default_oauth_http_client()?),
             OAuthHttpRedirectPolicy::Stop,
         )
         .await
@@ -4044,6 +4053,58 @@ mod tests {
             error.to_string(),
             "Metadata error: OAuth metadata discovery failed for https://mcp.example.com/mcp\n  Caused by: request failed\n  Caused by: certificate signed by unknown authority"
         );
+    }
+
+    #[tokio::test]
+    async fn default_oauth_http_client_honors_redirect_policy() {
+        use axum::{Router, routing::post};
+
+        let received = Arc::new(StdMutex::new(Vec::new()));
+        let capture = Arc::clone(&received);
+        let app = Router::new()
+            .route(
+                "/redirect",
+                post(|| async { (StatusCode::TEMPORARY_REDIRECT, [("location", "/token")]) }),
+            )
+            .route(
+                "/token",
+                post(move |body: String| {
+                    let capture = Arc::clone(&capture);
+                    async move {
+                        capture.lock().unwrap().push(body);
+                        StatusCode::OK
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/redirect", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = super::default_oauth_http_client().unwrap();
+
+        for (policy, expected) in [
+            (
+                OAuthHttpRedirectPolicy::Stop,
+                StatusCode::TEMPORARY_REDIRECT,
+            ),
+            (OAuthHttpRedirectPolicy::Follow, StatusCode::OK),
+        ] {
+            let request = oauth2::http::Request::builder()
+                .method("POST")
+                .uri(&endpoint)
+                .body(b"credential-sentinel".to_vec())
+                .unwrap();
+            let response = client
+                .execute(OAuthHttpRequest::new(request, policy))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let expected_bodies = if policy == OAuthHttpRedirectPolicy::Stop {
+                vec![]
+            } else {
+                vec!["credential-sentinel".to_owned()]
+            };
+            assert_eq!(*received.lock().unwrap(), expected_bodies);
+        }
     }
 
     #[tokio::test]

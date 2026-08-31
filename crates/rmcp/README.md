@@ -24,6 +24,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `macros` | `#[tool]` / `#[prompt]` macros (re-exports [`rmcp-macros`](../rmcp-macros)) | ✅ |
 | `schemars` | JSON Schema generation for tool definitions | |
 | `auth` | OAuth 2.0 authentication support | |
+| `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |
 
 ### Transport features
@@ -44,6 +45,10 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `reqwest` | Uses rustls — pure Rust TLS (recommended default) |
 | `reqwest-native-tls` | Uses platform-native TLS (OpenSSL / Secure Transport / SChannel) |
 | `reqwest-tls-no-provider` | Uses rustls without a default crypto provider (bring your own) |
+
+For enterprise-managed authorization, enable `auth-enterprise-managed` and a TLS
+backend such as `reqwest`. See the [EMA/XAA guide](../../docs/OAUTH_SUPPORT.md#enterprise-managed-authorization-emaxaa)
+for client authentication and an MCP connection example.
 
 ## Transports
 
