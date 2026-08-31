@@ -2528,24 +2528,28 @@ impl AuthorizationManager {
             *self.resource_scopes.write().await = scopes;
         }
 
-        let mut candidates = Vec::new();
+        // A server naming the same authorization server in both the singular draft
+        // field and the list would otherwise have each of that server's well-known
+        // forms requested twice.
+        let mut candidates: Vec<String> = Vec::new();
+        let mut push_candidate = |candidate: String| {
+            let candidate = candidate.trim();
+            if !candidate.is_empty() && !candidates.iter().any(|kept| kept == candidate) {
+                candidates.push(candidate.to_string());
+            }
+        };
 
         if let Some(single) = resource_metadata.authorization_server {
-            candidates.push(single);
+            push_candidate(single);
         }
-        if let Some(list) = resource_metadata.authorization_servers {
-            candidates.extend(list);
+        for candidate in resource_metadata.authorization_servers.unwrap_or_default() {
+            push_candidate(candidate);
         }
 
         for candidate in candidates {
-            let candidate = candidate.trim();
-            if candidate.is_empty() {
-                continue;
-            }
-
-            let candidate_url = match Url::parse(candidate) {
+            let candidate_url = match Url::parse(&candidate) {
                 Ok(url) => url,
-                Err(_) => match resource_metadata_url.join(candidate) {
+                Err(_) => match resource_metadata_url.join(&candidate) {
                     Ok(url) => url,
                     Err(e) => {
                         debug!("Failed to resolve authorization server URL `{candidate}`: {e}");
@@ -5352,6 +5356,58 @@ mod tests {
             advertised_requests,
             1,
             "the url the challenge named was requested again as a candidate: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_requests_an_authorization_server_named_twice_once() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document names the same authorization server in both the singular
+            // draft field and the list
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_server": "https://auth.example.com",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+        ];
+        // the authorization server publishes no metadata, so every form of its
+        // discovery url is tried before the run settles on the legacy endpoints
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            resolution.source,
+            AuthorizationMetadataSource::LegacyEndpointFallback
+        );
+        let discovery_requests = recorder
+            .requests()
+            .iter()
+            .filter(|request| {
+                request.uri == "https://auth.example.com/.well-known/oauth-authorization-server"
+            })
+            .count();
+        assert_eq!(
+            discovery_requests,
+            1,
+            "the authorization server was walked once per field naming it: {:?}",
             recorder.requests()
         );
     }
