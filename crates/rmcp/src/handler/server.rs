@@ -322,12 +322,15 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
             context.peer.set_peer_info(request.clone());
             let mut info = self.get_info();
-            info.protocol_version = negotiate_protocol_version(
+            let negotiated = negotiate_protocol_version(
                 &request.protocol_version,
-                info.protocol_version,
+                std::mem::take(&mut info.protocol_version),
                 &self.supported_protocol_versions(),
             );
-            std::future::ready(Ok(info))
+            std::future::ready(negotiated.map(|version| {
+                info.protocol_version = version;
+                info
+            }))
         }
         /// Return the protocol versions supported by this server.
         ///

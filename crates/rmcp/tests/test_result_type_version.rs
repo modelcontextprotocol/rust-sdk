@@ -6,12 +6,12 @@
 #![cfg(feature = "client")]
 
 use rmcp::{
-    ClientHandler, RoleServer, ServerHandler, ServiceExt,
+    ClientHandler, RoleClient, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ClientInfo, ContentBlock,
-        ErrorData, ProtocolVersion, ResultType,
+        ErrorData, ProtocolVersion, ResultType, ServerInfo,
     },
-    service::RequestContext,
+    service::{RequestContext, serve_directly},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -40,20 +40,33 @@ impl ClientHandler for VersionedClient {
     }
 }
 
+/// Wires the pair up directly on `client_version`. `2026-07-28` removed the
+/// `initialize` handshake, so a peer on that revision is reached the way the
+/// discover lifecycle leaves one: with the version already agreed.
 async fn call_tool_result_type(client_version: ProtocolVersion) -> Option<ResultType> {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
+    let client_handler = VersionedClient {
+        protocol_version: client_version.clone(),
+    };
+    let mut server_peer_info = ServerInfo::default();
+    server_peer_info.protocol_version = client_version;
+
+    let server = serve_directly::<RoleServer, _, _, _, _>(
+        ToolServer,
+        server_transport,
+        Some(client_handler.get_info()),
+    );
     let server_handle = tokio::spawn(async move {
-        ToolServer.serve(server_transport).await?.waiting().await?;
+        server.waiting().await?;
         anyhow::Ok(())
     });
 
-    let client = VersionedClient {
-        protocol_version: client_version,
-    }
-    .serve(client_transport)
-    .await
-    .expect("client should connect");
+    let client = serve_directly::<RoleClient, _, _, _, _>(
+        client_handler,
+        client_transport,
+        Some(server_peer_info.into()),
+    );
 
     let result = client
         .call_tool(CallToolRequestParams::new("echo"))

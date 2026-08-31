@@ -2,10 +2,14 @@
 #![cfg(feature = "client")]
 
 use rmcp::{
-    ClientHandler, ServerHandler, ServiceExt,
+    ClientHandler, RoleClient, RoleServer, ServerHandler,
     handler::server::router::{prompt::PromptRouter, tool::ToolRouter},
-    model::{CacheScope, ClientInfo, ListPromptsResult, ListToolsResult, ProtocolVersion},
-    prompt_handler, tool_handler,
+    model::{
+        CacheScope, ClientInfo, ListPromptsResult, ListToolsResult, ProtocolVersion, ServerInfo,
+    },
+    prompt_handler,
+    service::serve_directly,
+    tool_handler,
 };
 
 #[derive(Debug, Clone)]
@@ -40,22 +44,33 @@ impl ClientHandler for VersionedClient {
     }
 }
 
+/// Wires the pair up directly on `protocol_version`. `2026-07-28` removed the
+/// `initialize` handshake, so a peer on that revision is reached the way the
+/// discover lifecycle leaves one: with the version already agreed.
 async fn list_results(protocol_version: ProtocolVersion) -> (ListToolsResult, ListPromptsResult) {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
+    let client_handler = VersionedClient {
+        protocol_version: protocol_version.clone(),
+    };
+    let mut server_peer_info = ServerInfo::default();
+    server_peer_info.protocol_version = protocol_version;
+
+    let server = serve_directly::<RoleServer, _, _, _, _>(
+        CacheHintServer::new(),
+        server_transport,
+        Some(client_handler.get_info()),
+    );
     let server_handle = tokio::spawn(async move {
-        CacheHintServer::new()
-            .serve(server_transport)
-            .await?
-            .waiting()
-            .await?;
+        server.waiting().await?;
         anyhow::Ok(())
     });
 
-    let client = VersionedClient { protocol_version }
-        .serve(client_transport)
-        .await
-        .expect("client should connect");
+    let client = serve_directly::<RoleClient, _, _, _, _>(
+        client_handler,
+        client_transport,
+        Some(server_peer_info.into()),
+    );
     let tools = client
         .list_tools(None)
         .await

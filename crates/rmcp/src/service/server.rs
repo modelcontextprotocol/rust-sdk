@@ -460,27 +460,60 @@ where
     }
 }
 
-/// Echoes the client-requested version if the server supports it; otherwise
-/// returns `server_fallback`.
+/// Echoes the client-requested version if the server can serve it over the
+/// `initialize` handshake; otherwise returns a legacy version the server does
+/// support.
 ///
 /// `server_supported` comes from [`Service::supported_protocol_versions`], so a
 /// server that narrows that list is never made to answer `initialize` with a
-/// version it cannot serve.
+/// version it cannot serve. `2026-07-28` replaced the handshake with
+/// per-request metadata, so a client naming that revision or later is answered
+/// with the server's newest legacy version instead.
+///
+/// # Errors
+///
+/// Returns [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`] when the server supports
+/// no version that still has an `initialize` handshake.
+///
+/// [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`]: crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
 pub(crate) fn negotiate_protocol_version(
     client_requested: &ProtocolVersion,
     server_fallback: ProtocolVersion,
     server_supported: &[ProtocolVersion],
-) -> ProtocolVersion {
-    if server_supported.contains(client_requested) {
-        client_requested.clone()
+) -> Result<ProtocolVersion, ErrorData> {
+    if is_legacy_version(client_requested) && server_supported.contains(client_requested) {
+        return Ok(client_requested.clone());
+    }
+    let legacy_fallback = if is_legacy_version(&server_fallback) {
+        Some(server_fallback)
     } else {
+        newest_legacy_version(server_supported)
+    };
+    let Some(legacy_fallback) = legacy_fallback else {
         tracing::warn!(
             client_requested = %client_requested,
-            server_fallback = %server_fallback,
-            "client requested unsupported protocol version; falling back to server default"
+            "server supports no protocol version with an initialize handshake; rejecting"
         );
-        server_fallback
-    }
+        return Err(ErrorData::unsupported_protocol_version(
+            client_requested.clone(),
+            server_supported,
+        ));
+    };
+    tracing::warn!(
+        client_requested = %client_requested,
+        server_fallback = %legacy_fallback,
+        "client requested a protocol version unavailable over initialize; falling back to server default"
+    );
+    Ok(legacy_fallback)
+}
+
+/// The newest of `versions` that still has an `initialize` handshake.
+fn newest_legacy_version(versions: &[ProtocolVersion]) -> Option<ProtocolVersion> {
+    versions
+        .iter()
+        .filter(|version| is_legacy_version(version))
+        .max_by(|left, right| left.as_str().cmp(right.as_str()))
+        .cloned()
 }
 
 fn missing_request_metadata_error(missing: &[&str]) -> ErrorData {
@@ -491,6 +524,27 @@ fn missing_request_metadata_error(missing: &[&str]) -> ErrorData {
         ),
         None,
     )
+}
+
+/// Sends `error` as the response to the `initialize` request and reports it as
+/// the reason the handshake failed.
+async fn report_initialize_failure<T>(
+    transport: &mut T,
+    error: ErrorData,
+    id: RequestId,
+) -> ServerInitializeError
+where
+    T: Transport<RoleServer> + 'static,
+{
+    match transport
+        .send(ServerJsonRpcMessage::error(error.clone(), Some(id)))
+        .await
+    {
+        Ok(()) => ServerInitializeError::InitializeFailed(error),
+        Err(send_error) => {
+            ServerInitializeError::transport::<T>(send_error, "sending error response")
+        }
+    }
 }
 
 async fn serve_server_with_ct_inner<S, T>(
@@ -589,27 +643,21 @@ where
         peer: peer.clone(),
     };
     // Send initialize response
-    let init_response = service.handle_request(request, context).await;
-    let mut init_response = match init_response {
+    let mut init_response = match service.handle_request(request, context).await {
         Ok(ServerResult::InitializeResult(init_response)) => init_response,
         Ok(result) => {
             return Err(ServerInitializeError::UnexpectedInitializeResponse(result));
         }
-        Err(e) => {
-            transport
-                .send(ServerJsonRpcMessage::error(e.clone(), Some(id)))
-                .await
-                .map_err(|error| {
-                    ServerInitializeError::transport::<T>(error, "sending error response")
-                })?;
-            return Err(ServerInitializeError::InitializeFailed(e));
-        }
+        Err(e) => return Err(report_initialize_failure(&mut transport, e, id).await),
     };
-    init_response.protocol_version = negotiate_protocol_version(
+    init_response.protocol_version = match negotiate_protocol_version(
         &requested_protocol_version,
         init_response.protocol_version,
         &service.supported_protocol_versions(),
-    );
+    ) {
+        Ok(version) => version,
+        Err(e) => return Err(report_initialize_failure(&mut transport, e, id).await),
+    };
     // Update peer_info so context.protocol_version() reflects the negotiated
     // version in all subsequent request handlers.
     negotiated_peer_info.protocol_version = init_response.protocol_version.clone();
