@@ -288,11 +288,11 @@ pub trait CredentialStore: Send + Sync {
 
     async fn clear(&self) -> Result<(), AuthError>;
 
-    /// Optionally serialize refreshes that share these credentials.
+    /// Optionally coordinate refreshes that share these credentials.
     ///
     /// The manager acquires this guard before loading credentials and retains it
     /// through the token request and save. `load` and `save` must not reacquire
-    /// the same lock. Writers that bypass the guard are not serialized with it.
+    /// the same lock. Writers that bypass the guard are not coordinated with it.
     /// The default does not coordinate refreshes.
     async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
         Ok(None)
