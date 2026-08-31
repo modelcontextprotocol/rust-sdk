@@ -227,7 +227,12 @@ impl SseRetryPolicy for ExponentialBackoff {
         {
             return None;
         }
-        Some(self.base_duration * (2u32.pow(current_times as u32)))
+        // `current_times` is unbounded when `max_times` is unset, so the exponent can reach
+        // the bit width. Saturate the multiplier at `u32::MAX` and use saturating multiplication
+        // for the base duration so a long-lived SSE client gets a monotonic, panic-free delay
+        // instead of an overflow panic (debug) or a wrapped-to-zero backoff (release).
+        let multiplier = 2u32.saturating_pow(current_times as u32);
+        Some(self.base_duration.saturating_mul(multiplier))
     }
 }
 
@@ -774,5 +779,39 @@ mod tests {
 
         assert!(stream.next().await.is_none());
         assert_eq!(attempts.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn exponential_backoff_saturates_at_high_retry_counts() {
+        // With `max_times` unset, `current_times` can reach the bit width. The old
+        // `2u32.pow(current_times)` panicked in debug builds and wrapped in release;
+        // the saturating implementation must return a monotonic, non-zero delay instead.
+        let policy = ExponentialBackoff::default();
+        let mut previous = Duration::ZERO;
+        for current_times in [31usize, 32, 63, 64, 100] {
+            let delay = policy
+                .retry(current_times)
+                .expect("unbounded policy never gives up");
+            assert!(
+                !delay.is_zero(),
+                "delay must stay non-zero at {current_times}"
+            );
+            assert!(
+                delay >= previous,
+                "delay must stay monotonic at {current_times}"
+            );
+            previous = delay;
+        }
+    }
+
+    #[test]
+    fn exponential_backoff_respects_max_times() {
+        let policy = ExponentialBackoff {
+            max_times: Some(3),
+            base_duration: Duration::from_millis(1),
+        };
+        assert!(policy.retry(0).is_some());
+        assert!(policy.retry(2).is_some());
+        assert!(policy.retry(3).is_none());
     }
 }
