@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     pin::Pin,
@@ -2645,17 +2645,25 @@ impl AuthorizationManager {
     async fn discover_resource_metadata(
         &self,
     ) -> Result<Option<(Url, ResourceServerMetadata)>, AuthError> {
-        if let Some(resource_metadata_url) = self.probe_resource_endpoint_for_challenge().await? {
-            return Ok(self
+        // A url the resource points at can also be one of the candidates below.
+        let mut requested = HashSet::new();
+
+        if let Some(advertised_url) = self.probe_resource_endpoint_for_challenge().await? {
+            requested.insert(advertised_url.clone());
+            if let Some(metadata) = self
                 .fetch_resource_metadata_from_url(
-                    &resource_metadata_url,
+                    &advertised_url,
                     ResourceMetadataUrlOrigin::Advertised,
                 )
                 .await?
-                .map(|metadata| (resource_metadata_url, metadata)));
+            {
+                return Ok(Some((advertised_url, metadata)));
+            }
+            // Nothing was published there. The candidates below are reached from the
+            // base url rather than from that pointer, so they are still worth trying.
         }
 
-        // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
+        // The other place the document can be is the well-known location.
         // https://www.rfc-editor.org/rfc/rfc9728.html#name-obtaining-protected-resourc
         for candidate_path in
             Self::well_known_paths(self.base_url.path(), "oauth-protected-resource")
@@ -2664,6 +2672,10 @@ impl AuthorizationManager {
             candidate_url.set_query(None);
             candidate_url.set_fragment(None);
             candidate_url.set_path(&candidate_path);
+
+            if !requested.insert(candidate_url.clone()) {
+                continue;
+            }
 
             let response = self
                 .discovery_get(&candidate_url)
@@ -2683,15 +2695,21 @@ impl AuthorizationManager {
                     }
                 }
                 StatusCode::UNAUTHORIZED => {
-                    if let Some(advertised_url) = self
+                    let Some(advertised_url) = self
                         .extract_resource_metadata_url_from_www_authenticate(&response)
                         .await
-                        && let Some(metadata) = self
-                            .fetch_resource_metadata_from_url(
-                                &advertised_url,
-                                ResourceMetadataUrlOrigin::Advertised,
-                            )
-                            .await?
+                    else {
+                        continue;
+                    };
+                    if !requested.insert(advertised_url.clone()) {
+                        continue;
+                    }
+                    if let Some(metadata) = self
+                        .fetch_resource_metadata_from_url(
+                            &advertised_url,
+                            ResourceMetadataUrlOrigin::Advertised,
+                        )
+                        .await?
                     {
                         return Ok(Some((advertised_url, metadata)));
                     }
@@ -5220,6 +5238,120 @@ mod tests {
                 request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
             }),
             "the candidate after the rejected one was never probed: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_probes_the_candidates_past_an_advertised_url_that_is_not_served() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/prm""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            // the advertised url is not where the document is served
+            empty_response(404),
+            // neither is the first candidate
+            empty_response(404),
+            // the second candidate carries the document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        assert!(
+            recorder.requests().iter().any(|request| {
+                request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
+            }),
+            "the candidates were skipped after the advertised url answered 404: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_requests_an_advertised_url_that_is_also_a_candidate_once() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the first candidate points at the last candidate of the same run
+            challenge,
+        ];
+        // the document is served nowhere, so the run walks every candidate and
+        // settles on the legacy endpoints
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            resolution.source,
+            AuthorizationMetadataSource::LegacyEndpointFallback
+        );
+        let advertised_requests = recorder
+            .requests()
+            .iter()
+            .filter(|request| {
+                request.uri == "https://mcp.example.com/.well-known/oauth-protected-resource"
+            })
+            .count();
+        assert_eq!(
+            advertised_requests,
+            1,
+            "the url the challenge named was requested again as a candidate: {:?}",
             recorder.requests()
         );
     }
