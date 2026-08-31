@@ -54,6 +54,7 @@ where
                 match refreshed {
                     Ok(fresh_token) if fresh_token != sent_token => call(Some(fresh_token)).await,
                     Ok(_) => Err(StreamableHttpError::AuthRequired(challenge)),
+                    Err(error @ AuthError::CredentialStoreError(_)) => Err(error.into()),
                     Err(error) => {
                         debug!("token refresh after server rejection failed: {error}");
                         Err(StreamableHttpError::AuthRequired(challenge))
@@ -206,5 +207,66 @@ where
             }
         })
         .await
+    }
+}
+
+#[cfg(all(test, feature = "transport-streamable-http-client-reqwest"))]
+mod tests {
+    use super::*;
+    use crate::transport::{
+        auth::{
+            AuthorizationManager, AuthorizationMetadata, CredentialRefreshGuard, CredentialStore,
+            StoredCredentials,
+        },
+        streamable_http_client::AuthRequiredError,
+    };
+
+    struct UnavailableStore;
+
+    #[async_trait::async_trait]
+    impl CredentialStore for UnavailableStore {
+        async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+            unreachable!("guard failure must stop the credential load")
+        }
+
+        async fn save(&self, _: StoredCredentials) -> Result<(), AuthError> {
+            unreachable!("guard failure must stop the credential save")
+        }
+
+        async fn clear(&self) -> Result<(), AuthError> {
+            unreachable!("refresh must not clear credentials")
+        }
+
+        async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
+            Err(AuthError::CredentialStoreError("guard unavailable".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn reactive_refresh_preserves_credential_store_failure() {
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/mcp")
+            .await
+            .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: "https://auth.example.com/token".into(),
+            ..Default::default()
+        });
+        manager.configure_client_id("client").unwrap();
+        manager.set_credential_store(UnavailableStore);
+        let client = AuthClient::new(reqwest::Client::new(), manager);
+
+        let error = client
+            .call_reacting_to_challenges(Some("old-token".into()), |_| async {
+                Err::<(), _>(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                    "Bearer".into(),
+                )))
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error,
+            StreamableHttpError::Auth(AuthError::CredentialStoreError(message))
+                if message == "guard unavailable"));
     }
 }

@@ -255,11 +255,31 @@ impl StoredCredentials {
     }
 }
 
+/// An owned guard held across a credential refresh and its save.
+///
+/// Stores can wrap a file lock, an owned mutex guard, or another coordination
+/// primitive. Dropping this value releases the guard.
+#[must_use = "dropping the guard releases refresh coordination"]
+pub struct CredentialRefreshGuard {
+    _guard: Box<dyn Send>,
+}
+
+impl CredentialRefreshGuard {
+    /// Wrap a guard whose lifetime coordinates access to the stored credentials.
+    pub fn new(guard: impl Send + 'static) -> Self {
+        Self {
+            _guard: Box::new(guard),
+        }
+    }
+}
+
 /// Trait for storing and retrieving OAuth2 credentials
 ///
 /// Implementations of this trait can provide custom storage backends
 /// for OAuth2 credentials, such as file-based storage, keychain integration,
 /// or database storage.
+/// Return [`AuthError::CredentialStoreError`] for backend or locking failures
+/// so they remain distinct from errors requiring reauthorization.
 #[async_trait]
 pub trait CredentialStore: Send + Sync {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError>;
@@ -267,6 +287,16 @@ pub trait CredentialStore: Send + Sync {
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError>;
 
     async fn clear(&self) -> Result<(), AuthError>;
+
+    /// Optionally coordinate refreshes that share these credentials.
+    ///
+    /// The manager acquires this guard before loading credentials and retains it
+    /// through the token request and save. `load` and `save` must not reacquire
+    /// the same lock. Writers that bypass the guard are not coordinated with it.
+    /// The default does not coordinate refreshes.
+    async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
+        Ok(None)
+    }
 }
 
 /// In-memory credential store (default implementation)
@@ -514,6 +544,9 @@ pub enum AuthError {
     /// The authorization server definitively rejected the refresh token.
     #[error("OAuth refresh token was rejected: {0}")]
     TokenRefreshRejected(String),
+
+    #[error("OAuth credential store failed: {0}")]
+    CredentialStoreError(String),
 
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),
@@ -2203,8 +2236,14 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
+        let refresh_guard = self.credential_store.acquire_refresh_guard().await?;
         let stored = self.credential_store.load().await?;
         let stored_credentials = stored.ok_or(AuthError::AuthorizationRequired)?;
+        if refresh_guard.is_some()
+            && stored_credentials.client_id != oauth_client.client_id().as_str()
+        {
+            return Err(AuthError::AuthorizationRequired);
+        }
         let current_credentials = stored_credentials
             .token_response
             .ok_or(AuthError::AuthorizationRequired)?;
@@ -2220,6 +2259,7 @@ impl AuthorizationManager {
             // RFC 8707: the resource indicator is required on token requests, including refreshes
             .add_extra_param("resource", self.oauth_resource().await);
         let mut refresh_scopes = stored_credentials.granted_scopes;
+        let authoritative_scopes = refresh_guard.is_some().then(|| refresh_scopes.clone());
         self.add_offline_access_if_supported(&mut refresh_scopes);
         for scope in refresh_scopes {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
@@ -2246,9 +2286,10 @@ impl AuthorizationManager {
             token_result.set_refresh_token(Some(refresh_token_value));
         }
 
-        let granted_scopes: Vec<String> = match token_result.scopes() {
-            Some(scopes) => scopes.iter().map(|s| s.to_string()).collect(),
-            None => self.current_scopes.read().await.clone(),
+        let granted_scopes: Vec<String> = match (token_result.scopes(), authoritative_scopes) {
+            (Some(scopes), _) => scopes.iter().map(|s| s.to_string()).collect(),
+            (None, Some(scopes)) => scopes,
+            (None, None) => self.current_scopes.read().await.clone(),
         };
 
         *self.current_scopes.write().await = granted_scopes.clone();
@@ -3904,17 +3945,19 @@ mod tests {
         sync::{Arc, Mutex as StdMutex},
     };
 
-    use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier};
+    use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier, TokenResponse};
     use reqwest::StatusCode;
     use rstest::rstest;
+    use tokio::sync::{Mutex, OwnedMutexGuard, Semaphore};
     use url::Url;
 
     use super::{
         AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
-        AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession, CredentialStore,
-        InMemoryCredentialStore, InMemoryStateStore, OAuthClientConfig, OAuthHttpClient,
-        OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest,
-        ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
+        AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession,
+        CredentialRefreshGuard, CredentialStore, InMemoryCredentialStore, InMemoryStateStore,
+        OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
+        OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig, StateStore,
+        StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -8341,5 +8384,278 @@ mod tests {
             Some("rotated-refresh-token"),
             "a rotated refresh token from the response should replace the old one"
         );
+    }
+
+    #[derive(Clone)]
+    struct RefreshStore {
+        credentials: InMemoryCredentialStore,
+        lock: Arc<Mutex<()>>,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+        guard_requested: Arc<Semaphore>,
+        save_started: Arc<Semaphore>,
+        save_gate: Option<Arc<Semaphore>>,
+        fail_at: Option<&'static str>,
+    }
+
+    struct ObservedRefreshGuard {
+        _lock: OwnedMutexGuard<()>,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+    }
+
+    impl Drop for ObservedRefreshGuard {
+        fn drop(&mut self) {
+            self.events.lock().unwrap().push("release");
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CredentialStore for RefreshStore {
+        async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+            self.events.lock().unwrap().push("load");
+            if self.fail_at == Some("load") {
+                return Err(AuthError::CredentialStoreError("load failed".into()));
+            }
+            self.credentials.load().await
+        }
+
+        async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+            self.events.lock().unwrap().push("save");
+            self.save_started.add_permits(1);
+            if let Some(gate) = &self.save_gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            if self.fail_at == Some("save") {
+                return Err(AuthError::CredentialStoreError("save failed".into()));
+            }
+            self.credentials.save(credentials).await?;
+            self.events.lock().unwrap().push("saved");
+            Ok(())
+        }
+
+        async fn clear(&self) -> Result<(), AuthError> {
+            self.credentials.clear().await
+        }
+
+        async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
+            self.events.lock().unwrap().push("acquire");
+            self.guard_requested.add_permits(1);
+            if self.fail_at == Some("guard") {
+                return Err(AuthError::CredentialStoreError("guard failed".into()));
+            }
+            let lock = self.lock.clone().lock_owned().await;
+            self.events.lock().unwrap().push("acquired");
+            Ok(Some(CredentialRefreshGuard::new(ObservedRefreshGuard {
+                _lock: lock,
+                events: self.events.clone(),
+            })))
+        }
+    }
+
+    fn refresh_store() -> RefreshStore {
+        let credentials = StoredCredentials::new(
+            "my-client".into(),
+            Some(make_token_response_with_refresh("old-token", "old-refresh")),
+            vec!["read".into()],
+            Some(AuthorizationManager::now_epoch_secs()),
+        );
+        RefreshStore {
+            credentials: InMemoryCredentialStore {
+                credentials: Arc::new(tokio::sync::RwLock::new(Some(credentials))),
+            },
+            lock: Arc::new(Mutex::new(())),
+            events: Arc::new(StdMutex::new(Vec::new())),
+            guard_requested: Arc::new(Semaphore::new(0)),
+            save_started: Arc::new(Semaphore::new(0)),
+            save_gate: None,
+            fail_at: None,
+        }
+    }
+
+    struct RefreshHttpClient {
+        recording: RecordingOAuthHttpClient,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+    }
+
+    impl OAuthHttpClient for RefreshHttpClient {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            self.events.lock().unwrap().push("provider");
+            self.recording.execute(request)
+        }
+    }
+
+    fn refresh_http_client(store: &RefreshStore) -> Arc<RefreshHttpClient> {
+        Arc::new(RefreshHttpClient {
+            recording: RecordingOAuthHttpClient::with_responses(
+                [
+                    ("new-token", "new-refresh"),
+                    ("latest-token", "latest-refresh"),
+                ]
+                .into_iter()
+                .map(|(access, refresh)| {
+                    http_response(
+                        200,
+                        serde_json::json!({
+                            "access_token": access, "token_type": "Bearer",
+                            "expires_in": 3600, "refresh_token": refresh
+                        }),
+                    )
+                })
+                .collect(),
+            ),
+            events: store.events.clone(),
+        })
+    }
+
+    async fn refresh_manager(
+        store: RefreshStore,
+        http_client: Arc<RefreshHttpClient>,
+    ) -> AuthorizationManager {
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            http_client,
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: "https://auth.example.com/token".into(),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+        manager.set_credential_store(store);
+        *manager.current_scopes.write().await = vec!["cached".into()];
+        manager
+    }
+
+    async fn wait_for_permits(semaphore: &Semaphore, count: u32) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            semaphore.acquire_many(count),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    }
+
+    #[tokio::test]
+    async fn refresh_guard_spans_load_exchange_and_completed_save() {
+        let store = refresh_store();
+        let manager = refresh_manager(store.clone(), refresh_http_client(&store)).await;
+
+        manager.refresh_token().await.unwrap();
+
+        assert_eq!(
+            *store.events.lock().unwrap(),
+            [
+                "acquire", "acquired", "load", "provider", "save", "saved", "release"
+            ]
+        );
+        let saved = store.credentials.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved
+                .token_response
+                .unwrap()
+                .refresh_token()
+                .unwrap()
+                .secret(),
+            "new-refresh"
+        );
+        assert_eq!(saved.granted_scopes, ["read"]);
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_wait_for_save_and_use_the_latest_token() {
+        let mut store = refresh_store();
+        let save_gate = Arc::new(Semaphore::new(0));
+        store.save_gate = Some(save_gate.clone());
+        let http_client = refresh_http_client(&store);
+        let first_manager = refresh_manager(store.clone(), http_client.clone()).await;
+        let second_manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        let first = tokio::spawn(async move { first_manager.refresh_token().await });
+        wait_for_permits(&store.save_started, 1).await;
+        let second = tokio::spawn(async move { second_manager.refresh_token().await });
+        wait_for_permits(&store.guard_requested, 2).await;
+        assert_eq!(http_client.recording.requests().len(), 1);
+        assert!(store.lock.try_lock().is_err());
+
+        save_gate.add_permits(2);
+        let (first, second) = tokio::join!(first, second);
+        assert_eq!(first.unwrap().unwrap().access_token().secret(), "new-token");
+        assert_eq!(
+            second.unwrap().unwrap().access_token().secret(),
+            "latest-token"
+        );
+        let refresh_tokens: Vec<String> = http_client
+            .recording
+            .requests()
+            .iter()
+            .map(|request| {
+                url::form_urlencoded::parse(&request.body)
+                    .find_map(|(key, value)| (key == "refresh_token").then(|| value.into_owned()))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(refresh_tokens, ["old-refresh", "new-refresh"]);
+        let saved = store.credentials.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved
+                .token_response
+                .unwrap()
+                .refresh_token()
+                .unwrap()
+                .secret(),
+            "latest-refresh"
+        );
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn guarded_refresh_rejects_credentials_for_another_client() {
+        let store = refresh_store();
+        let mut credentials = store.credentials.load().await.unwrap().unwrap();
+        credentials.client_id = "other-client".into();
+        store.credentials.save(credentials).await.unwrap();
+        let http_client = refresh_http_client(&store);
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        assert!(matches!(
+            manager.refresh_token().await,
+            Err(AuthError::AuthorizationRequired)
+        ));
+        assert!(http_client.recording.requests().is_empty());
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[rstest]
+    #[case("guard", 0)]
+    #[case("load", 0)]
+    #[case("save", 1)]
+    #[tokio::test]
+    async fn refresh_store_failures_release_the_guard(
+        #[case] phase: &'static str,
+        #[case] provider_requests: usize,
+    ) {
+        let mut store = refresh_store();
+        store.fail_at = Some(phase);
+        let http_client = refresh_http_client(&store);
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        assert!(matches!(manager.refresh_token().await,
+            Err(AuthError::CredentialStoreError(message)) if message == format!("{phase} failed")));
+        assert_eq!(http_client.recording.requests().len(), provider_requests);
+        let saved = store.credentials.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved
+                .token_response
+                .unwrap()
+                .refresh_token()
+                .unwrap()
+                .secret(),
+            "old-refresh"
+        );
+        assert!(store.lock.try_lock().is_ok());
     }
 }
