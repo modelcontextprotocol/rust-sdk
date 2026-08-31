@@ -28,6 +28,9 @@ use tracing::{debug, warn};
 
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 
+#[cfg(feature = "auth-enterprise-managed")]
+pub mod enterprise;
+
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OAUTH_DISCOVERY_REDIRECTS: usize = 10;

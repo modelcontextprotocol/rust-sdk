@@ -18,6 +18,7 @@ exhaustive_enums = "warn"
 features = [
   "auth",
   "auth-client-credentials-jwt",
+  "auth-enterprise-managed",
   "base64",
   "client",
   "client-side-sse",
@@ -196,6 +197,7 @@ transport-streamable-http-server-session = [
 tower = ["dep:tower-service"]
 auth = ["dep:async-trait", "dep:oauth2", "__reqwest", "dep:url"]
 auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
+auth-enterprise-managed = ["auth", "base64"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
