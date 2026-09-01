@@ -375,7 +375,7 @@ fn test_tool_result_content_requires_content() {
 #[case::array(serde_json::json!([{ "city": "SF", "temp": 72 }, { "city": "NY", "temp": 65 }]))]
 #[case::string(serde_json::json!("sunny"))]
 #[case::integer(serde_json::json!(42))]
-#[case::float(serde_json::json!(3.14))]
+#[case::float(serde_json::json!(3.5))]
 #[case::boolean(serde_json::json!(true))]
 fn tool_result_content_round_trips_non_object_structured_content(
     #[case] structured: serde_json::Value,
