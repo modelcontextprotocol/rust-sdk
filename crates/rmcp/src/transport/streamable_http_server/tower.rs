@@ -2084,27 +2084,32 @@ where
     }
 
     /// Build a `ClientInfo` (peer_info) for a stateless request so that
-    /// `context.protocol_version()` returns the correct value inside handlers.
+    /// `context.protocol_version()` returns the correct value inside handlers,
+    /// and so that `Peer::peer_info()` (and therefore the `serve_inner`
+    /// "Service initialized as server"/"as client" log) reflects the real
+    /// client identity for a genuine handshake, instead of a placeholder.
     ///
     /// `serve_directly` skips the MCP handshake and accepts `peer_info = None`,
     /// which means `context.protocol_version()` is always `None` in stateless mode.
-    /// We reconstruct the protocol version from the available signal per request type:
-    /// - initialize: version is in the request body params (authoritative)
-    /// - all other requests: version is in the MCP-Protocol-Version header
-    ///   (validated before this point; absent header defaults to 2025-03-26)
+    /// We reconstruct the peer info from the available signal per request type:
+    /// - initialize: the full `InitializeRequestParams` — protocol version,
+    ///   capabilities, and client_info — is right there in the request body
+    ///   (authoritative), so it is used verbatim.
+    /// - all other requests: only the protocol version is reconstructed here,
+    ///   from the MCP-Protocol-Version header when present (otherwise it defaults
+    ///   to 2025-03-26); `capabilities`/`client_info` remain placeholders.
     fn peer_info_for_stateless_request(
         request: &crate::model::JsonRpcRequest<ClientRequest>,
         headers: &HeaderMap,
     ) -> Option<InitializeRequestParams> {
-        let version = if let ClientRequest::InitializeRequest(ref init) = request.request {
-            init.params.protocol_version.clone()
-        } else {
-            headers
-                .get(HEADER_MCP_PROTOCOL_VERSION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
-                .unwrap_or(ProtocolVersion::V_2025_03_26)
-        };
+        if let ClientRequest::InitializeRequest(ref init) = request.request {
+            return Some(init.params.clone());
+        }
+        let version = headers
+            .get(HEADER_MCP_PROTOCOL_VERSION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())).ok())
+            .unwrap_or(ProtocolVersion::V_2025_03_26);
         Some(InitializeRequestParams {
             meta: None,
             protocol_version: version,

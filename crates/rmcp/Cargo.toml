@@ -312,6 +312,11 @@ required-features = ["server", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_stateless_protocol_version.rs"
 
 [[test]]
+name = "test_stateless_client_info"
+required-features = ["server", "transport-streamable-http-server", "reqwest"]
+path = "tests/test_stateless_client_info.rs"
+
+[[test]]
 name = "test_protocol_version_negotiation"
 required-features = ["server", "client"]
 path = "tests/test_protocol_version_negotiation.rs"
