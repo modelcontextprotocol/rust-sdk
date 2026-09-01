@@ -205,10 +205,16 @@ impl Default for FixedInterval {
 pub struct ExponentialBackoff {
     pub max_times: Option<usize>,
     pub base_duration: Duration,
+    /// Upper bound on a single reconnect delay. The unbounded doubling policy can otherwise
+    /// produce delays of decades (once the multiplier saturates), which would pin the stream in
+    /// `tokio::time::sleep` forever — neither reconnecting nor terminating. Capping keeps the
+    /// backoff monotonic and panic-free while guaranteeing the client actually retries.
+    pub max_delay: Option<Duration>,
 }
 
 impl ExponentialBackoff {
     pub const DEFAULT_DURATION: Duration = Duration::from_millis(1000);
+    pub const DEFAULT_MAX_DELAY: Duration = Duration::from_secs(30);
 }
 
 impl Default for ExponentialBackoff {
@@ -216,6 +222,7 @@ impl Default for ExponentialBackoff {
         Self {
             max_times: None,
             base_duration: Self::DEFAULT_DURATION,
+            max_delay: Some(Self::DEFAULT_MAX_DELAY),
         }
     }
 }
@@ -229,10 +236,14 @@ impl SseRetryPolicy for ExponentialBackoff {
         }
         // `current_times` is unbounded when `max_times` is unset, so the exponent can reach
         // the bit width. Saturate the multiplier at `u32::MAX` and use saturating multiplication
-        // for the base duration so a long-lived SSE client gets a monotonic, panic-free delay
-        // instead of an overflow panic (debug) or a wrapped-to-zero backoff (release).
+        // for the base duration so the delay stays monotonic and panic-free instead of an
+        // overflow panic (debug) or a wrapped-to-zero backoff (release).
         let multiplier = 2u32.saturating_pow(current_times as u32);
-        Some(self.base_duration.saturating_mul(multiplier))
+        let delay = self.base_duration.saturating_mul(multiplier);
+        Some(match self.max_delay {
+            Some(max_delay) => delay.min(max_delay),
+            None => delay,
+        })
     }
 }
 
@@ -786,7 +797,11 @@ mod tests {
         // With `max_times` unset, `current_times` can reach the bit width. The old
         // `2u32.pow(current_times)` panicked in debug builds and wrapped in release;
         // the saturating implementation must return a monotonic, non-zero delay instead.
-        let policy = ExponentialBackoff::default();
+        let policy = ExponentialBackoff {
+            max_times: None,
+            base_duration: Duration::from_millis(1),
+            max_delay: None,
+        };
         let mut previous = Duration::ZERO;
         for current_times in [31usize, 32, 63, 64, 100] {
             let delay = policy
@@ -805,10 +820,43 @@ mod tests {
     }
 
     #[test]
+    fn exponential_backoff_caps_delay_at_max_delay() {
+        // The default cap keeps the unbounded doubling policy from producing decades-long
+        // sleeps once the multiplier saturates. The delay must grow monotonically, stop at
+        // the configured ceiling, and never exceed it.
+        let policy = ExponentialBackoff {
+            max_times: None,
+            base_duration: Duration::from_secs(1),
+            max_delay: Some(Duration::from_secs(30)),
+        };
+        let mut previous = Duration::ZERO;
+        for current_times in [0usize, 1, 2, 3, 4, 5, 10, 32, 64, 100] {
+            let delay = policy
+                .retry(current_times)
+                .expect("unbounded policy never gives up");
+            assert!(
+                delay >= previous,
+                "delay must stay monotonic at {current_times}"
+            );
+            assert!(
+                delay <= Duration::from_secs(30),
+                "delay must respect max_delay at {current_times}"
+            );
+            previous = delay;
+        }
+        // Beyond the ceiling the delay stays pinned at max_delay.
+        assert_eq!(
+            policy.retry(100).expect("never gives up"),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
     fn exponential_backoff_respects_max_times() {
         let policy = ExponentialBackoff {
             max_times: Some(3),
             base_duration: Duration::from_millis(1),
+            max_delay: None,
         };
         assert!(policy.retry(0).is_some());
         assert!(policy.retry(2).is_some());
