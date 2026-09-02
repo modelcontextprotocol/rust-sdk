@@ -155,6 +155,20 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn empty_cache_scope_list_tools_result_does_not_fall_through() {
+        let result = parse_result(wrap_response(json!({
+            "tools": [{ "name": "search", "inputSchema": { "type": "object" } }],
+            "ttlMs": 0,
+            "cacheScope": ""
+        })));
+        let ServerResult::ListToolsResult(result) = result else {
+            panic!("expected ListToolsResult, got {result:?}");
+        };
+        assert_eq!(result.cache_scope, None);
+        assert_eq!(result.tools.len(), 1);
+    }
+
+    #[test]
     fn unknown_shape_falls_through_to_custom_result() {
         // A value that doesn't match any known result type should land in
         // CustomResult.
