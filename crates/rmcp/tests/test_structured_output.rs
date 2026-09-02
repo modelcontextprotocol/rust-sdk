@@ -1,7 +1,7 @@
 #![allow(clippy::exhaustive_structs)]
 //cargo test --test test_structured_output --features "client server macros"
 use rmcp::{
-    Json, ServerHandler,
+    Json, ServerHandler, StructuredOnly,
     handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
     model::{CallToolResponse, CallToolResult, ContentBlock, ServerResult, Tool},
     tool, tool_handler, tool_router,
@@ -114,6 +114,21 @@ impl TestServer {
     pub async fn get_count(&self) -> Result<Json<i32>, String> {
         Ok(Json(42))
     }
+
+    /// Tool that returns structured output without the text mirror
+    #[tool(
+        name = "calculate-structured-only",
+        description = "Perform calculations, returning structured content only"
+    )]
+    pub async fn calculate_structured_only(
+        &self,
+        params: Parameters<CalculationRequest>,
+    ) -> Result<StructuredOnly<CalculationResult>, String> {
+        Ok(StructuredOnly(CalculationResult {
+            sum: params.0.a + params.0.b,
+            product: params.0.a * params.0.b,
+        }))
+    }
 }
 
 #[tokio::test]
@@ -204,6 +219,69 @@ async fn test_structured_error_in_call_result() {
 }
 
 #[tokio::test]
+async fn test_structured_only_in_call_result() {
+    let structured_data = json!({
+        "sum": 7,
+        "product": 12
+    });
+
+    let result = CallToolResult::structured_only(structured_data.clone());
+
+    assert!(result.content.is_empty());
+    assert_eq!(result.structured_content, Some(structured_data));
+    assert_eq!(result.is_error, Some(false));
+
+    // The empty content array still serializes explicitly on the wire
+    let serialized = serde_json::to_value(&result).unwrap();
+    assert_eq!(serialized["content"], json!([]));
+    assert_eq!(serialized["structuredContent"]["sum"], 7);
+}
+
+#[tokio::test]
+async fn test_structured_only_retains_required_fallback_for_non_object_value() {
+    let structured_data = json!([1, 2, 3]);
+
+    let result = CallToolResult::structured_only(structured_data.clone());
+
+    assert_eq!(
+        result.content.first().and_then(ContentBlock::as_text),
+        Some(&rmcp::model::TextContent::new(structured_data.to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_structured_only_with_divergent_content() {
+    // with_content pairs structured_content with a custom rendering instead of
+    // the serialized mirror
+    let structured_data = json!({"rows": [1, 2, 3]});
+
+    let result = CallToolResult::structured_only(structured_data.clone())
+        .with_content(vec![ContentBlock::text("3 rows matched")]);
+
+    assert_eq!(result.content.len(), 1);
+    assert_eq!(
+        result.content.first().unwrap().as_text().unwrap().text,
+        "3 rows matched"
+    );
+    assert_eq!(result.structured_content, Some(structured_data));
+    assert_eq!(result.is_error, Some(false));
+}
+
+#[tokio::test]
+async fn test_structured_error_only_in_call_result() {
+    let error_data = json!({
+        "error_code": "NOT_FOUND",
+        "message": "User not found"
+    });
+
+    let result = CallToolResult::structured_error_only(error_data.clone());
+
+    assert!(result.content.is_empty());
+    assert_eq!(result.structured_content, Some(error_data));
+    assert_eq!(result.is_error, Some(true));
+}
+
+#[tokio::test]
 async fn test_mutual_exclusivity_validation() {
     #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
     pub struct Response {
@@ -273,6 +351,61 @@ async fn test_structured_return_conversion() {
 
     assert_eq!(structured_value["sum"], 7);
     assert_eq!(structured_value["product"], 12);
+}
+
+#[tokio::test]
+async fn test_structured_only_return_conversion() {
+    let calc_result = CalculationResult {
+        sum: 7,
+        product: 12,
+    };
+
+    let structured = StructuredOnly(calc_result);
+    let result: Result<CallToolResponse, rmcp::ErrorData> =
+        rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(structured);
+
+    assert!(result.is_ok());
+    let CallToolResponse::Complete(call_result) = result.unwrap() else {
+        panic!("expected complete CallToolResult");
+    };
+
+    assert!(call_result.content.is_empty());
+
+    let structured_value = call_result.structured_content.unwrap();
+    assert_eq!(structured_value["sum"], 7);
+    assert_eq!(structured_value["product"], 12);
+}
+
+#[tokio::test]
+async fn test_structured_only_wrapper_retains_required_fallback_for_primitive() {
+    let result = StructuredOnly(42).into_call_tool_result();
+
+    let CallToolResponse::Complete(call_result) = result.unwrap() else {
+        panic!("expected complete CallToolResult");
+    };
+
+    assert_eq!(
+        call_result.content.first().and_then(ContentBlock::as_text),
+        Some(&rmcp::model::TextContent::new("42"))
+    );
+}
+
+#[tokio::test]
+async fn test_structured_only_tool_has_output_schema() {
+    // The #[tool] macro derives outputSchema from StructuredOnly<T> just like Json<T>
+    let server = TestServer::new();
+    let tools = server.tool_router.list_all();
+
+    let tool = tools
+        .iter()
+        .find(|t| t.name == "calculate-structured-only")
+        .unwrap();
+
+    assert!(tool.output_schema.is_some());
+
+    let schema_str = serde_json::to_string(tool.output_schema.as_ref().unwrap()).unwrap();
+    assert!(schema_str.contains("sum"));
+    assert!(schema_str.contains("product"));
 }
 
 #[tokio::test]
