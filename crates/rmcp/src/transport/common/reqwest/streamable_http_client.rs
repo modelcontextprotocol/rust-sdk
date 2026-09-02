@@ -260,17 +260,20 @@ impl StreamableHttpClient for reqwest::Client {
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        // Spec requires 202 Accepted for these, but some servers return an empty 200.
-        // Treat empty success responses as equivalent to Accepted.
-        if status.is_success()
-            && content_length == Some(0)
-            && matches!(
-                message,
-                ClientJsonRpcMessage::Notification(_)
-                    | ClientJsonRpcMessage::Response(_)
-                    | ClientJsonRpcMessage::Error(_)
-            )
-        {
+        // A POST carrying only notifications/responses/errors leaves no request
+        // outstanding, so the spec says the server SHOULD reply 202 Accepted with
+        // no body — nothing in the response is load-bearing for us. Servers in the
+        // wild routinely reply 200 instead, with or without a body, with or without
+        // a Content-Length, and with or without a Content-Type. Record that here so
+        // the checks below never fail such a POST on response shape alone.
+        let awaits_no_response = matches!(
+            message,
+            ClientJsonRpcMessage::Notification(_)
+                | ClientJsonRpcMessage::Response(_)
+                | ClientJsonRpcMessage::Error(_)
+        );
+        // A body we know to be empty carries nothing to parse, whatever its type.
+        if status.is_success() && awaits_no_response && content_length == Some(0) {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
         // Non-success responses may carry valid JSON-RPC error payloads that
@@ -320,6 +323,18 @@ impl StreamableHttpClient for reqwest::Client {
                         Ok(StreamableHttpPostResponse::Accepted)
                     }
                 }
+            }
+            // Neither JSON nor SSE. If this POST awaits no response, the body is
+            // something we never needed, so drop it rather than failing the send.
+            // Failing here breaks the `notifications/initialized` handshake against
+            // servers that answer 200 with an unexpected or absent Content-Type.
+            // This also covers an empty body sent with chunked transfer encoding,
+            // where Content-Length is absent and the check above cannot fire.
+            _ if awaits_no_response => {
+                tracing::debug!(
+                    "ignoring unexpected content type {content_type:?} on a POST that awaits no response"
+                );
+                Ok(StreamableHttpPostResponse::Accepted)
             }
             _ => {
                 // unexpected content type
@@ -443,6 +458,125 @@ mod tests {
     #[case::truncated_json(r#"{"broken":"#)]
     fn parse_json_rpc_error_rejects_non_error_bodies(#[case] body: &str) {
         assert!(parse_json_rpc_error(body).is_none());
+    }
+
+    /// A POST carrying only a notification leaves no request outstanding, so the
+    /// response body is never load-bearing. Servers that answer such a POST with
+    /// 200 and an unexpected or absent Content-Type — rather than the 202 the
+    /// spec asks for — must not fail the send, or `notifications/initialized`
+    /// takes the whole handshake down with it.
+    #[rstest]
+    #[case::unexpected_content_type(
+        Some("text/plain"),
+        r#"{"jsonrpc":"2.0","result":{},"id":null}"#
+    )]
+    #[case::absent_content_type(None, "unexpected body")]
+    #[tokio::test]
+    async fn post_notification_accepts_unusable_success_body(
+        #[case] content_type: Option<&'static str>,
+        #[case] body: &'static str,
+    ) -> anyhow::Result<()> {
+        use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+
+        use axum::{Router, http::StatusCode, response::IntoResponse, routing::post};
+
+        use crate::{
+            model::{ClientNotification, InitializedNotification},
+            transport::streamable_http_client::{StreamableHttpClient, StreamableHttpPostResponse},
+        };
+
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/mcp",
+                post(move || async move {
+                    let mut response = (StatusCode::OK, body).into_response();
+                    match content_type {
+                        Some(ct) => {
+                            response
+                                .headers_mut()
+                                .insert(http::header::CONTENT_TYPE, ct.parse().unwrap());
+                        }
+                        // Also the shape of an empty body sent chunked: no
+                        // Content-Length, so the emptiness check cannot fire.
+                        None => {
+                            response.headers_mut().remove(http::header::CONTENT_TYPE);
+                        }
+                    }
+                    response
+                }),
+            );
+            axum::serve(listener, app).await
+        });
+
+        let response = reqwest::Client::new()
+            .post_message(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+                    InitializedNotification::default(),
+                )),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await;
+
+        server.abort();
+        assert!(
+            matches!(response, Ok(StreamableHttpPostResponse::Accepted)),
+            "expected Accepted, got {response:?}"
+        );
+        Ok(())
+    }
+
+    /// The counterpart guarantee: a POST that is still waiting on a reply cannot
+    /// make sense of an unexpected content type, and must keep failing.
+    #[tokio::test]
+    async fn post_request_still_rejects_unexpected_content_type() -> anyhow::Result<()> {
+        use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+
+        use axum::{Router, routing::post};
+
+        use crate::transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError};
+
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/mcp",
+                post(|| async {
+                    (
+                        [(http::header::CONTENT_TYPE, "text/plain")],
+                        "definitely not json",
+                    )
+                }),
+            );
+            axum::serve(listener, app).await
+        });
+
+        let response = reqwest::Client::new()
+            .post_message(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                ClientJsonRpcMessage::request(
+                    ClientRequest::PingRequest(PingRequest::default()),
+                    RequestId::Number(1),
+                ),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await;
+
+        server.abort();
+        assert!(
+            matches!(
+                response,
+                Err(StreamableHttpError::UnexpectedContentType(Some(_)))
+            ),
+            "expected UnexpectedContentType, got {response:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test]
