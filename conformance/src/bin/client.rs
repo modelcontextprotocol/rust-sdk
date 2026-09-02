@@ -1,3 +1,5 @@
+use anyhow::Context;
+use oauth2::{ClientSecret, RefreshToken};
 use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt, ErrorData, RoleClient, ServiceExt,
     model::*,
@@ -6,7 +8,8 @@ use rmcp::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
         auth::{
             AuthorizationCallback, AuthorizationRequest, ClientCredentialsConfig,
-            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState,
+            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState, default_oauth_http_client,
+            enterprise::{EmaAuthorizationServer, EmaClientAuthentication, EmaExchangeRequest},
         },
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
@@ -36,6 +39,17 @@ struct ConformanceContext {
     private_key_pem: Option<String>,
     #[serde(default)]
     signing_algorithm: Option<String>,
+    // enterprise-managed-authorization-refresh-token
+    #[serde(default)]
+    idp_client_id: Option<String>,
+    #[serde(default)]
+    idp_client_secret: Option<String>,
+    #[serde(default)]
+    idp_refresh_token: Option<String>,
+    #[serde(default)]
+    idp_issuer: Option<String>,
+    #[serde(default)]
+    idp_token_endpoint: Option<String>,
 }
 
 fn load_context() -> ConformanceContext {
@@ -760,6 +774,66 @@ async fn run_client_credentials_jwt(
     Ok(())
 }
 
+/// Exchange the fixture's IdP refresh token, then exercise authenticated MCP access.
+async fn run_ema_refresh_token_client(
+    server_url: &str,
+    ctx: &ConformanceContext,
+) -> anyhow::Result<()> {
+    let manager = AuthorizationManager::new(server_url).await?;
+    let metadata = manager.resolve_metadata().await?.metadata;
+    let idp = EmaAuthorizationServer::new(
+        ctx.idp_issuer.as_deref().context("Missing idp_issuer")?,
+        ctx.idp_token_endpoint
+            .as_deref()
+            .context("Missing idp_token_endpoint")?,
+        ctx.idp_client_id
+            .as_deref()
+            .context("Missing idp_client_id")?,
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(
+        ClientSecret::new(
+            ctx.idp_client_secret
+                .clone()
+                .context("Missing idp_client_secret")?,
+        ),
+    ));
+    let resource_as = EmaAuthorizationServer::new(
+        metadata
+            .issuer
+            .context("Missing authorization server issuer")?,
+        metadata.token_endpoint,
+        ctx.client_id.as_deref().context("Missing client_id")?,
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(
+        ClientSecret::new(ctx.client_secret.clone().context("Missing client_secret")?),
+    ));
+    let refresh_token = RefreshToken::new(
+        ctx.idp_refresh_token
+            .clone()
+            .context("Missing idp_refresh_token")?,
+    );
+    let http = default_oauth_http_client()?;
+    let token = EmaExchangeRequest::new(idp, resource_as, server_url, &refresh_token)
+        .with_scopes(manager.select_scopes(None, &[]))
+        .exchange(&http, &http)
+        .await?;
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server_url)
+            .auth_header(token.access_token.secret()),
+    );
+    let client = BasicClientHandler
+        .serve_with_lifecycle(transport, conformance_lifecycle())
+        .await?;
+    let tools = client.list_tools(Default::default()).await?;
+    for tool in tools.tools {
+        let args = build_tool_arguments(&tool);
+        client.call_tool(call_tool_params(tool.name, args)).await?;
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 /// Cross-app access flow (SEP-1046 extension).
 async fn run_cross_app_access_client(
     server_url: &str,
@@ -1109,6 +1183,11 @@ async fn run_scenario(
         // Auth - client credentials
         "auth/client-credentials-basic" => run_client_credentials_basic(server_url, ctx).await?,
         "auth/client-credentials-jwt" => run_client_credentials_jwt(server_url, ctx).await?,
+
+        // Auth - enterprise-managed authorization with a refresh-token subject
+        "auth/enterprise-managed-authorization-refresh-token" => {
+            run_ema_refresh_token_client(server_url, ctx).await?
+        }
 
         // Auth - cross-app access
         "auth/cross-app-access-complete-flow" => {
