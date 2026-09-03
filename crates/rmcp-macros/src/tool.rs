@@ -1,7 +1,7 @@
 use darling::{FromMeta, ast::NestedMeta};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
+use syn::{Expr, Ident, ImplItemFn, ReturnType, parse_quote};
 
 use crate::common::extract_doc_line;
 
@@ -65,7 +65,10 @@ pub struct ToolAttribute {
     pub name: Option<String>,
     /// Human readable title of tool
     pub title: Option<String>,
-    pub description: Option<String>,
+    /// The description of the tool. A string literal, an expression that
+    /// evaluates to a `&'static str` (such as a `const` path or `concat!`),
+    /// or a `#[doc]` attribute on the function.
+    pub description: Option<darling::util::PreservedStrExpr>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Option<Expr>,
     /// An optional JSON Schema object defining the structure of the tool's output
@@ -255,13 +258,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         }
     });
 
-    let description_expr = if let Some(s) = attribute.description {
-        Some(Expr::Lit(syn::ExprLit {
-            attrs: Vec::new(),
-            lit: syn::Lit::Str(LitStr::new(&s, Span::call_site())),
-        }))
-    } else {
-        fn_item.attrs.iter().try_fold(None, extract_doc_line)?
+    let description_expr = match attribute.description {
+        Some(description) => Some(description.into()),
+        None => fn_item.attrs.iter().try_fold(None, extract_doc_line)?,
     };
     let resolved_tool_attr = ResolvedToolAttribute {
         name: attribute.name.unwrap_or_else(|| fn_ident.to_string()),
