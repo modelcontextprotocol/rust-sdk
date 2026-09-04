@@ -322,13 +322,23 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                     .map_err(|e| StreamableHttpError::Client(UnixSocketError::Hyper(e)))?
                     .to_bytes();
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
-                    Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
-                    Err(e) => {
+                    Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
+                    Err(e)
+                        if matches!(
+                            message,
+                            ClientJsonRpcMessage::Notification(_)
+                                | ClientJsonRpcMessage::Response(_)
+                                | ClientJsonRpcMessage::Error(_)
+                        ) =>
+                    {
                         tracing::warn!(
                             "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
                         );
                         Ok(StreamableHttpPostResponse::Accepted)
                     }
+                    Err(e) => Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                        json_rpc_parse_error_message(&e, &body),
+                    ))),
                 }
             }
             _ => Err(StreamableHttpError::UnexpectedContentType(
