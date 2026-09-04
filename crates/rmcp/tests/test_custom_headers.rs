@@ -880,10 +880,11 @@ fn test_protocol_version_utilities() {
     assert!(ProtocolVersion::KNOWN_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
 }
 
-/// Integration test: Verify server validates only the Host header for DNS rebinding protection
+/// Integration test: Verify Host validation remains enabled when Origin validation is
+/// disabled by default
 #[tokio::test]
 #[cfg(all(feature = "transport-streamable-http-server", feature = "server",))]
-async fn test_server_validates_host_header_for_dns_rebinding_protection() {
+async fn test_server_validates_host_when_origin_validation_is_disabled_by_default() {
     use std::sync::Arc;
 
     use bytes::Bytes;
@@ -1127,7 +1128,7 @@ mod origin_validation {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use http::{Method, Request, header::CONTENT_TYPE};
+    use http::{HeaderValue, Method, Request, header::CONTENT_TYPE};
     use http_body_util::Full;
     use rmcp::{
         handler::server::ServerHandler,
@@ -1147,12 +1148,20 @@ mod origin_validation {
         }
     }
 
-    fn service_with_allowed_origins(
-        origins: &[&str],
+    fn service_with_config(
+        config: StreamableHttpServerConfig,
     ) -> StreamableHttpService<TestHandler, LocalSessionManager> {
         StreamableHttpService::new(
             || Ok(TestHandler),
             Arc::new(LocalSessionManager::default()),
+            config,
+        )
+    }
+
+    fn service_with_allowed_origins(
+        origins: &[&str],
+    ) -> StreamableHttpService<TestHandler, LocalSessionManager> {
+        service_with_config(
             StreamableHttpServerConfig::default().with_allowed_origins(origins.iter().copied()),
         )
     }
@@ -1197,6 +1206,80 @@ mod origin_validation {
             .handle(init_request(Some("http://attacker.example")))
             .await;
         assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn malformed_origin_is_forbidden() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let response = service.handle(init_request(Some("not-an-origin"))).await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_utf8_origin_is_forbidden() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let mut request = init_request(None);
+        request.headers_mut().insert(
+            http::header::ORIGIN,
+            HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        let response = service.handle(request).await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn enabled_empty_allowlist_forbids_present_origin() {
+        let service =
+            service_with_config(StreamableHttpServerConfig::default().enforce_origin_validation());
+        let response = service
+            .handle(init_request(Some("http://localhost:8080")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn enabled_empty_allowlist_allows_missing_origin() {
+        let service =
+            service_with_config(StreamableHttpServerConfig::default().enforce_origin_validation());
+        let response = service.handle(init_request(None)).await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn empty_allowed_origins_preserves_disabled_validation() {
+        let service = service_with_config(
+            StreamableHttpServerConfig::default().with_allowed_origins(std::iter::empty::<&str>()),
+        );
+        let response = service
+            .handle(init_request(Some("http://attacker.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn nonempty_public_allowed_origins_field_enables_validation() {
+        let mut config = StreamableHttpServerConfig::default();
+        config
+            .allowed_origins
+            .push("http://localhost:8080".to_string());
+        let service = service_with_config(config);
+        let response = service
+            .handle(init_request(Some("http://attacker.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn explicitly_disabled_validation_allows_present_origin() {
+        let service = service_with_config(
+            StreamableHttpServerConfig::default()
+                .enforce_origin_validation()
+                .disable_allowed_origins(),
+        );
+        let response = service
+            .handle(init_request(Some("http://attacker.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
     }
 
     #[tokio::test]
