@@ -294,6 +294,7 @@ impl CredentialRefreshGuard {
 /// Implementations of this trait can provide custom storage backends
 /// for OAuth2 credentials, such as file-based storage, keychain integration,
 /// or database storage.
+///
 /// Return [`AuthError::CredentialStoreError`] for backend or locking failures
 /// so they remain distinct from errors requiring reauthorization.
 #[async_trait]
@@ -2248,12 +2249,19 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
-        let refresh_guard = self.credential_store.acquire_refresh_guard().await?;
+        // Held for the rest of this function so the load, the exchange, and the
+        // save stay inside one guarded section.
+        let _refresh_guard = self.credential_store.acquire_refresh_guard().await?;
         let stored = self.credential_store.load().await?;
         let stored_credentials = stored.ok_or(AuthError::AuthorizationRequired)?;
-        if refresh_guard.is_some()
-            && stored_credentials.client_id != oauth_client.client_id().as_str()
-        {
+        // Refreshing with another client's stored token would put that token on a
+        // request authenticated as this client.
+        if stored_credentials.client_id != oauth_client.client_id().as_str() {
+            tracing::warn!(
+                stored_client_id = stored_credentials.client_id.as_str(),
+                configured_client_id = oauth_client.client_id().as_str(),
+                "stored credentials belong to a different client; reauthorization required"
+            );
             return Err(AuthError::AuthorizationRequired);
         }
         let current_credentials = stored_credentials
@@ -2271,8 +2279,8 @@ impl AuthorizationManager {
             // RFC 8707: the resource indicator is required on token requests, including refreshes
             .add_extra_param("resource", self.oauth_resource().await);
         let mut refresh_scopes = stored_credentials.granted_scopes;
-        let authoritative_scopes = refresh_guard.is_some().then(|| refresh_scopes.clone());
         self.add_offline_access_if_supported(&mut refresh_scopes);
+        let requested_scopes = refresh_scopes.clone();
         for scope in refresh_scopes {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
@@ -2298,10 +2306,12 @@ impl AuthorizationManager {
             token_result.set_refresh_token(Some(refresh_token_value));
         }
 
-        let granted_scopes: Vec<String> = match (token_result.scopes(), authoritative_scopes) {
-            (Some(scopes), _) => scopes.iter().map(|s| s.to_string()).collect(),
-            (None, Some(scopes)) => scopes,
-            (None, None) => self.current_scopes.read().await.clone(),
+        let response_scopes = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect());
+        let granted_scopes = {
+            let current = self.current_scopes.read().await;
+            Self::resolve_granted_scopes(response_scopes, &requested_scopes, &current)
         };
 
         *self.current_scopes.write().await = granted_scopes.clone();
@@ -8515,17 +8525,17 @@ mod tests {
         }
     }
 
-    fn refresh_store() -> RefreshStore {
+    async fn refresh_store() -> RefreshStore {
         let credentials = StoredCredentials::new(
             "my-client".into(),
             Some(make_token_response_with_refresh("old-token", "old-refresh")),
             vec!["read".into()],
             Some(AuthorizationManager::now_epoch_secs()),
         );
+        let credential_store = InMemoryCredentialStore::new();
+        credential_store.save(credentials).await.unwrap();
         RefreshStore {
-            credentials: InMemoryCredentialStore {
-                credentials: Arc::new(tokio::sync::RwLock::new(Some(credentials))),
-            },
+            credentials: credential_store,
             lock: Arc::new(Mutex::new(())),
             events: Arc::new(StdMutex::new(Vec::new())),
             guard_requested: Arc::new(Semaphore::new(0)),
@@ -8604,7 +8614,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_guard_spans_load_exchange_and_completed_save() {
-        let store = refresh_store();
+        let store = refresh_store().await;
         let manager = refresh_manager(store.clone(), refresh_http_client(&store)).await;
 
         manager.refresh_token().await.unwrap();
@@ -8631,7 +8641,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_refreshes_wait_for_save_and_use_the_latest_token() {
-        let mut store = refresh_store();
+        let mut store = refresh_store().await;
         let save_gate = Arc::new(Semaphore::new(0));
         store.save_gate = Some(save_gate.clone());
         let http_client = refresh_http_client(&store);
@@ -8677,8 +8687,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guarded_refresh_rejects_credentials_for_another_client() {
-        let store = refresh_store();
+    async fn refresh_rejects_credentials_for_another_client() {
+        let store = refresh_store().await;
         let mut credentials = store.credentials.load().await.unwrap().unwrap();
         credentials.client_id = "other-client".into();
         store.credentials.save(credentials).await.unwrap();
@@ -8693,6 +8703,78 @@ mod tests {
         assert!(store.lock.try_lock().is_ok());
     }
 
+    #[tokio::test]
+    async fn refresh_rejects_credentials_for_another_client_without_a_guard() {
+        let (base_url, captured) = start_token_server().await;
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{base_url}/authorize"),
+            token_endpoint: format!("{base_url}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials::new(
+                "other-client".into(),
+                Some(make_token_response_with_refresh("old-token", "old-refresh")),
+                vec!["read".into()],
+                Some(AuthorizationManager::now_epoch_secs()),
+            ))
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationRequired),
+            "a client mismatch must require reauthorization, got: {error:?}"
+        );
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "a client mismatch must be caught before the refresh token leaves the process"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_without_a_guard_keeps_stored_scopes_when_response_omits_them() {
+        // start_token_server answers without a `scope`, matching a provider that
+        // grants the request in full.
+        let (base_url, _captured) = start_token_server().await;
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{base_url}/authorize"),
+            token_endpoint: format!("{base_url}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials::new(
+                "my-client".into(),
+                Some(make_token_response_with_refresh("old-token", "old-refresh")),
+                vec!["read".into()],
+                Some(AuthorizationManager::now_epoch_secs()),
+            ))
+            .await
+            .unwrap();
+        *manager.current_scopes.write().await = vec!["stale".into()];
+
+        manager.refresh_token().await.unwrap();
+
+        let saved = manager.credential_store.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved.granted_scopes,
+            ["read"],
+            "the stored grant outranks the per-process scope cache"
+        );
+        assert_eq!(
+            manager.get_current_scopes().await,
+            ["read"],
+            "the refreshed grant must replace the stale scope cache"
+        );
+    }
+
     #[rstest]
     #[case("guard", 0)]
     #[case("load", 0)]
@@ -8702,7 +8784,7 @@ mod tests {
         #[case] phase: &'static str,
         #[case] provider_requests: usize,
     ) {
-        let mut store = refresh_store();
+        let mut store = refresh_store().await;
         store.fail_at = Some(phase);
         let http_client = refresh_http_client(&store);
         let manager = refresh_manager(store.clone(), http_client.clone()).await;
