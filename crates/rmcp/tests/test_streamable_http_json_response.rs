@@ -34,6 +34,23 @@ const NEGOTIATED_CALL_BODY: &str = r#"{
         }
     }
 }"#;
+const NEGOTIATED_HEADER_MISMATCH_BODY: &str = r#"{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+        "name": "header-mismatch",
+        "arguments": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "test",
+                "version": "1.0"
+            },
+            "io.modelcontextprotocol/clientCapabilities": {}
+        }
+    }
+}"#;
 const NEGOTIATED_CALL_WITH_PROGRESS_BODY: &str = r#"{
     "jsonrpc": "2.0",
     "id": 2,
@@ -66,6 +83,12 @@ impl ServerHandler for ProgressServer {
         request: CallToolRequestParams,
         context: RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        if request.name == "header-mismatch" {
+            return Err(ErrorData::header_mismatch(
+                "header does not match request parameter",
+                None,
+            ));
+        }
         if request.name == "progress" {
             let progress_token = context
                 .meta
@@ -215,6 +238,38 @@ async fn stateless_negotiated_terminal_response_returns_application_json() -> an
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["id"], 2);
     assert!(body["result"].is_object(), "Expected result object");
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn stateless_negotiated_header_mismatch_returns_bad_request() -> anyhow::Result<()> {
+    let ct = CancellationToken::new();
+    let (client, url, ct) = spawn_progress_server(
+        StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(false)
+            .with_json_response(true)
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    )
+    .await;
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "tools/call")
+        .header("Mcp-Name", "header-mismatch")
+        .body(NEGOTIATED_HEADER_MISMATCH_BODY)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["id"], 3);
+    assert_eq!(body["error"]["code"], -32020);
 
     ct.cancel();
     Ok(())
