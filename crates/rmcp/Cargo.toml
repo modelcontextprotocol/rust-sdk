@@ -18,6 +18,7 @@ exhaustive_enums = "warn"
 features = [
   "auth",
   "auth-client-credentials-jwt",
+  "auth-enterprise-managed",
   "base64",
   "client",
   "client-side-sse",
@@ -196,10 +197,11 @@ transport-streamable-http-server-session = [
 tower = ["dep:tower-service"]
 auth = ["dep:async-trait", "dep:oauth2", "__reqwest", "dep:url"]
 auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
+auth-enterprise-managed = ["auth", "base64"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 schemars = { version = "1.1.0", features = ["chrono04"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 hyper = { version = "1", features = ["server", "http1"] }
