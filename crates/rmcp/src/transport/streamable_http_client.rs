@@ -220,6 +220,10 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     /// A cancellation or reply POST did not finish in time.
     #[error("Control POST timed out")]
     ControlRequestTimeout,
+    /// A buffered JSON or error response exceeded its configured byte limit.
+    /// The response body is not included and this error does not trigger retries.
+    #[error("HTTP response body exceeded {limit} bytes before decoding")]
+    ResponseBodyTooLarge { limit: usize },
 }
 
 impl<E: std::error::Error + Send + Sync + 'static> StreamableHttpError<E> {
@@ -369,12 +373,40 @@ pub(super) fn legacy_discover_response(
     ))
 }
 
+/// Byte limits enforced by the built-in Streamable HTTP clients before parsing.
+///
+/// The defaults are 16 MiB per SSE event or JSON response and 64 KiB per HTTP
+/// error response. Zero accepts only empty bodies. For compressed responses,
+/// body limits count the decompressed bytes yielded by the HTTP backend.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct StreamableHttpResponseLimits {
+    /// Maximum raw size of an individual SSE event.
+    pub max_sse_event_size: usize,
+    /// Maximum buffered JSON success response body.
+    pub max_json_response_size: usize,
+    /// Maximum buffered non-success HTTP response body.
+    pub max_error_response_size: usize,
+}
+
+impl Default for StreamableHttpResponseLimits {
+    fn default() -> Self {
+        Self {
+            max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
+            max_json_response_size: 16 * 1024 * 1024,
+            max_error_response_size: 64 * 1024,
+        }
+    }
+}
+
 /// HTTP backend used by [`StreamableHttpClientTransport`].
 ///
 /// Custom implementations that parse SSE responses must override
 /// [`Self::post_message_with_max_sse_event_size`] and
 /// [`Self::get_stream_with_max_sse_event_size`] to enforce the transport's
 /// configured event-size limit.
+/// Implementations that buffer JSON or HTTP error responses must also override
+/// [`Self::post_message_with_response_limits`] to enforce the body-size limits.
 ///
 /// For legacy http, the transport keeps an open response stream alive until
 /// its cancellation send finishes or is dropped. This lets a custom client
@@ -413,6 +445,33 @@ pub trait StreamableHttpClient: Clone + Send + 'static {
     + Send
     + '_ {
         self.post_message(uri, message, session_id, auth_header, custom_headers)
+    }
+    /// Send a message with transport-wide limits applied before response parsing.
+    ///
+    /// The built-in reqwest and Unix socket clients enforce all three limits.
+    /// Custom clients that buffer responses must override this method. The
+    /// default preserves compatibility with existing clients and forwards only
+    /// the SSE limit to [`Self::post_message_with_max_sse_event_size`]; it cannot
+    /// impose byte limits on responses that a custom client has already decoded.
+    fn post_message_with_response_limits(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        limits: StreamableHttpResponseLimits,
+    ) -> impl Future<Output = Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>>>
+    + Send
+    + '_ {
+        self.post_message_with_max_sse_event_size(
+            uri,
+            message,
+            session_id,
+            auth_header,
+            custom_headers,
+            limits.max_sse_event_size,
+        )
     }
     fn delete_session(
         &self,
@@ -596,7 +655,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     ) -> BoxFuture<'static, PostResult<C>> {
         let uri = config.uri.clone();
         let auth_header = config.auth_header.clone();
-        let max_sse_event_size = config.max_sse_event_size;
+        let response_limits = config.response_limits();
         let control_request_timeout = config.control_request_timeout;
         let is_control = Self::is_control_message(&send_request.message);
         let cancellation = send_request
@@ -613,13 +672,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
                 _ = tokio::time::sleep(control_request_timeout), if is_control => {
                     Some(Err(StreamableHttpError::ControlRequestTimeout))
                 },
-                response = client.post_message_with_max_sse_event_size(
+                response = client.post_message_with_response_limits(
                     uri,
                     send_request.message.clone(),
                     session.id,
                     auth_header,
                     session.headers,
-                    max_sse_event_size,
+                    response_limits,
                 ) => Some(response),
             };
             PostResult {
@@ -959,7 +1018,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         uri: Arc<str>,
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
-        max_sse_event_size: usize,
+        response_limits: StreamableHttpResponseLimits,
     ) -> Result<
         (
             Option<Arc<str>>,
@@ -969,13 +1028,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         StreamableHttpError<C::Error>,
     > {
         let (init_msg, new_session_id_str) = client
-            .post_message_with_max_sse_event_size(
+            .post_message_with_response_limits(
                 uri.clone(),
                 saved_init_request,
                 None,
                 auth_header.clone(),
                 custom_headers.clone(),
-                max_sse_event_size,
+                response_limits,
             )
             .await?
             .expect_initialized::<C::Error>()
@@ -1000,13 +1059,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             &negotiated_version,
         );
         client
-            .post_message_with_max_sse_event_size(
+            .post_message_with_response_limits(
                 uri,
                 initialized_notification,
                 new_session_id.clone(),
                 auth_header,
                 initialized_headers,
-                max_sse_event_size,
+                response_limits,
             )
             .await?
             .expect_accepted_or_json::<C::Error>()?;
@@ -1077,13 +1136,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         };
         let (message, session_id) = match self
             .client
-            .post_message_with_max_sse_event_size(
+            .post_message_with_response_limits(
                 config.uri.clone(),
                 startup_request,
                 None,
                 config.auth_header.clone(),
                 bootstrap_headers.clone(),
-                config.max_sse_event_size,
+                config.response_limits(),
             )
             .await
         {
@@ -1144,13 +1203,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 &negotiated_version,
             );
             self.client
-                .post_message_with_max_sse_event_size(
+                .post_message_with_response_limits(
                     config.uri.clone(),
                     initialized_notification.message,
                     session_id.clone(),
                     config.auth_header.clone(),
                     initialized_headers,
-                    config.max_sse_event_size,
+                    config.response_limits(),
                 )
                 .await
                 .map_err(WorkerQuitReason::fatal_context(
@@ -1230,7 +1289,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             config.uri.clone(),
                             config.auth_header.clone(),
                             config.custom_headers.clone(),
-                            config.max_sse_event_size,
+                            config.response_limits(),
                         ),
                     ) => result.unwrap_or(Err(StreamableHttpError::SessionRecoveryTimeout)),
                 };
@@ -1473,13 +1532,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
 
                         let response = self
                             .client
-                            .post_message_with_max_sse_event_size(
+                            .post_message_with_response_limits(
                                 config.uri.clone(),
                                 message,
                                 None,
                                 config.auth_header.clone(),
                                 config.custom_headers.clone(),
-                                config.max_sse_event_size,
+                                config.response_limits(),
                             )
                             .await;
                         let response = match response {
@@ -2025,6 +2084,20 @@ pub struct StreamableHttpClientTransportConfig {
     /// [`StreamableHttpClient`] implementations must override the corresponding
     /// `*_with_max_sse_event_size` methods to enforce it.
     pub max_sse_event_size: usize,
+    /// Maximum buffered JSON success response body (default: 16 MiB).
+    ///
+    /// Built-in clients enforce this before decoding, including initialization,
+    /// discovery, control requests and session recovery. Custom clients must
+    /// override [`StreamableHttpClient::post_message_with_response_limits`].
+    /// Zero accepts only an empty body; increase this for larger tool results.
+    pub max_json_response_size: usize,
+    /// Maximum buffered HTTP error response body (default: 64 KiB).
+    ///
+    /// Enforced before JSON-RPC error parsing or legacy discovery fallback.
+    /// Authentication challenges and session-expired responses are returned
+    /// without buffering their bodies. Custom clients must override
+    /// [`StreamableHttpClient::post_message_with_response_limits`].
+    pub max_error_response_size: usize,
     /// Automatically creates a new session when the server reports an expired
     /// session (`http 404`).
     ///
@@ -2109,6 +2182,26 @@ impl StreamableHttpClientTransportConfig {
         self
     }
 
+    /// Set the maximum JSON response body size before decoding.
+    pub fn max_json_response_size(mut self, bytes: usize) -> Self {
+        self.max_json_response_size = bytes;
+        self
+    }
+
+    /// Set the maximum HTTP error response body size before decoding.
+    pub fn max_error_response_size(mut self, bytes: usize) -> Self {
+        self.max_error_response_size = bytes;
+        self
+    }
+
+    fn response_limits(&self) -> StreamableHttpResponseLimits {
+        StreamableHttpResponseLimits {
+            max_sse_event_size: self.max_sse_event_size,
+            max_json_response_size: self.max_json_response_size,
+            max_error_response_size: self.max_error_response_size,
+        }
+    }
+
     /// Set whether the transport should attempt transparent re-initialization on session expiration
     /// See [`Self::reinit_on_expired_session`] for details.
     /// # Example
@@ -2136,6 +2229,9 @@ impl Default for StreamableHttpClientTransportConfig {
             auth_header: None,
             custom_headers: HashMap::new(),
             max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
+            max_json_response_size: StreamableHttpResponseLimits::default().max_json_response_size,
+            max_error_response_size: StreamableHttpResponseLimits::default()
+                .max_error_response_size,
             reinit_on_expired_session: true,
         }
     }

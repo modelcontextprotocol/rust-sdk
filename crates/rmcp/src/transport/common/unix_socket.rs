@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use futures::stream::BoxStream;
+use futures::{TryStreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue, Method, Request, StatusCode, header::WWW_AUTHENTICATE};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -13,6 +13,7 @@ use crate::{
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
+            client_side_body::read_bounded_body,
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -172,13 +173,13 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.post_message_with_max_sse_event_size(
+        self.post_message_with_response_limits(
             uri,
             message,
             session_id,
             auth_token,
             custom_headers,
-            DEFAULT_MAX_SSE_EVENT_SIZE,
+            StreamableHttpResponseLimits::default(),
         )
         .await
     }
@@ -191,6 +192,29 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        self.post_message_with_response_limits(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            StreamableHttpResponseLimits {
+                max_sse_event_size,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    async fn post_message_with_response_limits(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        limits: StreamableHttpResponseLimits,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let json_body = serde_json::to_string(&message)
             .map_err(|e| StreamableHttpError::Client(UnixSocketError::Json(e)))?;
@@ -225,6 +249,11 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             .map_err(StreamableHttpError::Client)?;
 
         let status = response.status();
+        let content_length = response
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
 
         if status == StatusCode::UNAUTHORIZED
             && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
@@ -268,12 +297,20 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         }
 
         if !status.is_success() {
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            let body = match read_bounded_body(
+                response
+                    .into_body()
+                    .into_data_stream()
+                    .map_err(UnixSocketError::Hyper),
+                content_length,
+                limits.max_error_response_size,
+            )
+            .await
+            {
+                Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+                Err(StreamableHttpError::Client(_)) => "<failed to read response body>".to_owned(),
+                Err(error) => return Err(error),
+            };
             if let Some(response) =
                 legacy_discover_response(&message, session_was_attached, status, &body)
             {
@@ -285,11 +322,6 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         }
 
         let content_type = response.headers().get(http::header::CONTENT_TYPE).cloned();
-        let content_length = response
-            .headers()
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
         let session_id = response
             .headers()
             .get(HEADER_SESSION_ID)
@@ -310,17 +342,22 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         match content_type {
             Some(ref ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let sse_stream =
-                    bounded_sse_stream(response.into_body().into_data_stream(), max_sse_event_size);
+                let sse_stream = bounded_sse_stream(
+                    response.into_body().into_data_stream(),
+                    limits.max_sse_event_size,
+                );
                 Ok(StreamableHttpPostResponse::Sse(sse_stream, session_id))
             }
             Some(ref ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-                let body = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| StreamableHttpError::Client(UnixSocketError::Hyper(e)))?
-                    .to_bytes();
+                let body = read_bounded_body(
+                    response
+                        .into_body()
+                        .into_data_stream()
+                        .map_err(UnixSocketError::Hyper),
+                    content_length,
+                    limits.max_json_response_size,
+                )
+                .await?;
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
                     Err(e) => {
