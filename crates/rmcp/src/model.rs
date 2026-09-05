@@ -1572,6 +1572,28 @@ where
     Ok(value.map(|ttl_ms| ttl_ms.max(0) as u64))
 }
 
+/// Normalize a `cacheScope` value during deserialization.
+///
+/// SEP-2549 permits `"public"` or `"private"`. Omission is also valid. Some
+/// hosted servers emit an empty string; treat that exact sentinel as omitted
+/// instead of failing the entire list/read result. Unknown or whitespace
+/// values still error.
+fn deserialize_cache_scope<'de, D>(deserializer: D) -> Result<Option<CacheScope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value.as_deref() {
+        None | Some("") => Ok(None),
+        Some("public") => Ok(Some(CacheScope::Public)),
+        Some("private") => Ok(Some(CacheScope::Private)),
+        Some(other) => Err(serde::de::Error::unknown_variant(
+            other,
+            &["public", "private"],
+        )),
+    }
+}
+
 macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
@@ -1609,7 +1631,11 @@ macro_rules! paginated_result {
             /// Scope describing who may cache this result (SEP-2549).
             /// Required by spec version 2026-07-28, but optional here to maintain compatibility
             /// with older spec versions.
-            #[serde(default, skip_serializing_if = "Option::is_none")]
+            #[serde(
+                default,
+                deserialize_with = "deserialize_cache_scope",
+                skip_serializing_if = "Option::is_none"
+            )]
             pub cache_scope: Option<CacheScope>,
             pub $i_item: $t_item,
         }
@@ -1759,7 +1785,11 @@ pub struct ReadResourceResult {
     /// Scope describing who may cache this result (SEP-2549).
     /// Required by spec version 2026-07-28, but optional here to maintain compatibility
     /// with older spec versions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_cache_scope",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cache_scope: Option<CacheScope>,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
