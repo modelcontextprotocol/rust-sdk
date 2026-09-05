@@ -1323,6 +1323,105 @@ where
     tokio::task::spawn_local(future)
 }
 
+/// Local routing metadata retained separately from a handler's wire response.
+#[derive(Debug, Clone, Default)]
+struct ReplyContext {
+    #[cfg(feature = "transport-worker")]
+    origin: Option<crate::transport::worker::ResponseOrigin>,
+}
+
+impl ReplyContext {
+    fn from_request(request: &impl GetExtensions) -> Self {
+        #[cfg(feature = "transport-worker")]
+        {
+            Self {
+                origin: request
+                    .extensions()
+                    .get::<crate::transport::worker::ResponseOrigin>()
+                    .cloned(),
+            }
+        }
+        #[cfg(not(feature = "transport-worker"))]
+        {
+            let _ = request;
+            Self::default()
+        }
+    }
+
+    fn is_current(&self) -> bool {
+        #[cfg(feature = "transport-worker")]
+        {
+            self.origin
+                .as_ref()
+                .is_none_or(|origin| origin.is_current())
+        }
+        #[cfg(not(feature = "transport-worker"))]
+        {
+            true
+        }
+    }
+
+    fn send<R: ServiceRole, T: Transport<R>>(
+        self,
+        transport: &mut T,
+        message: TxJsonRpcMessage<R>,
+    ) -> impl Future<Output = Result<(), T::Error>> + Send + 'static {
+        let send = self.is_current().then(|| {
+            #[cfg(feature = "transport-worker")]
+            {
+                crate::transport::worker::with_response_origin(self.origin.clone(), || {
+                    transport.send(message)
+                })
+            }
+            #[cfg(not(feature = "transport-worker"))]
+            {
+                transport.send(message)
+            }
+        });
+        async move {
+            let Some(send) = send else {
+                return Ok(());
+            };
+            let result = send.await;
+            // Recovery may retire the origin between the initial check and the
+            // worker's dispatch check. Dropping that reply must not stop a drain
+            // from sending later, current-session replies.
+            if self.is_current() { result } else { Ok(()) }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct HandlerResponse<R: ServiceRole> {
+    message: TxJsonRpcMessage<R>,
+    owner: Arc<CancellationToken>,
+    context: ReplyContext,
+}
+
+impl<R: ServiceRole> HandlerResponse<R> {
+    fn finish(&self, handlers: &mut HashMap<RequestId, Arc<CancellationToken>>) -> bool {
+        // Complete this handler, never the handler that may have reused its id.
+        self.owner.cancel();
+        let id = match &self.message {
+            JsonRpcMessage::Response(response) => &response.id,
+            JsonRpcMessage::Error(error) => match &error.id {
+                Some(id) => id,
+                None => return false,
+            },
+            _ => return false,
+        };
+        if handlers
+            .get(id)
+            .is_some_and(|owner| Arc::ptr_eq(owner, &self.owner))
+        {
+            handlers.remove(id);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[instrument(skip_all)]
 fn serve_inner<R, S, T>(
     service: S,
@@ -1339,7 +1438,7 @@ where
 {
     const SINK_PROXY_BUFFER_SIZE: usize = 64;
     let (sink_proxy_tx, mut sink_proxy_rx) =
-        tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
+        tokio::sync::mpsc::channel::<HandlerResponse<R>>(SINK_PROXY_BUFFER_SIZE);
     let peer_info = peer.peer_info();
     if R::IS_CLIENT {
         tracing::info!(?peer_info, "Service initialized as client");
@@ -1349,7 +1448,7 @@ where
 
     let mut local_responder_pool =
         HashMap::<RequestId, Responder<Result<R::PeerResp, ServiceError>>>::new();
-    let mut local_ct_pool = HashMap::<RequestId, CancellationToken>::new();
+    let mut local_ct_pool = HashMap::<RequestId, Arc<CancellationToken>>::new();
     let shared_service = Arc::new(service);
     // for return
     let service = shared_service.clone();
@@ -1380,7 +1479,7 @@ where
         enum Event<R: ServiceRole> {
             ProxyMessage(PeerSinkMessage<R>),
             PeerMessage(RxJsonRpcMessage<R>),
-            ToSink(TxJsonRpcMessage<R>),
+            ToSink(HandlerResponse<R>),
             SendTaskResult(SendTaskResult),
             ResponseSendTaskResult(Result<(), tokio::task::JoinError>),
         }
@@ -1474,18 +1573,9 @@ where
                     }
                 }
                 // response and error
-                Event::ToSink(m) => {
-                    if let Some(id) = match &m {
-                        JsonRpcMessage::Response(response) => Some(&response.id),
-                        JsonRpcMessage::Error(error) => error.id.as_ref(),
-                        _ => None,
-                    } {
-                        let Some(ct) = local_ct_pool.remove(id) else {
-                            tracing::debug!(%id, "dropping response for cancelled request");
-                            continue;
-                        };
-                        ct.cancel();
-                        let send = transport.send(m);
+                Event::ToSink(response) => {
+                    if response.finish(&mut local_ct_pool) {
+                        let send = response.context.send(&mut transport, response.message);
                         let current_span = tracing::Span::current();
                         response_send_tasks.spawn(async move {
                             let send_result = send.await;
@@ -1538,6 +1628,7 @@ where
                     ..
                 })) => {
                     tracing::debug!(%id, ?request, "received request");
+                    let reply_context = ReplyContext::from_request(&request);
                     if let Err(error) = R::enforce_peer_request_association(
                         &request,
                         peer.peer_info().as_deref(),
@@ -1547,7 +1638,9 @@ where
                         // send directly: the sink proxy path would drop the
                         // error since the request was never registered in
                         // local_ct_pool
-                        let send = transport.send(JsonRpcMessage::error(error, Some(id)));
+                        let send = reply_context.send(
+                            &mut transport, JsonRpcMessage::error(error, Some(id)),
+                        );
                         let current_span = tracing::Span::current();
                         response_send_tasks.spawn(async move {
                             if let Err(error) = send.await {
@@ -1559,9 +1652,9 @@ where
                     {
                         let service = shared_service.clone();
                         let sink = sink_proxy_tx.clone();
-                        let request_ct = serve_loop_ct.child_token();
+                        let request_ct = Arc::new(serve_loop_ct.child_token());
                         let context_ct = request_ct.child_token();
-                        local_ct_pool.insert(id.clone(), request_ct);
+                        local_ct_pool.insert(id.clone(), request_ct.clone());
                         let mut extensions = Extensions::new();
                         let mut meta = RequestMetaObject::new();
                         // avoid clone
@@ -1591,7 +1684,11 @@ where
                                     JsonRpcMessage::error(error, Some(id))
                                 }
                             };
-                            let _send_result = sink.send(response).await;
+                            let _send_result = sink.send(HandlerResponse {
+                                message: response,
+                                owner: request_ct,
+                                context: reply_context,
+                            }).await;
                         }.instrument(current_span));
                     }
                 }
@@ -1748,8 +1845,11 @@ where
                 }
                 // Then drain any handler responses still in the channel
                 // (handlers that finished after the loop broke).
-                while let Some(m) = sink_proxy_rx.recv().await {
-                    if let Err(error) = transport.send(m).await {
+                while let Some(response) = sink_proxy_rx.recv().await {
+                    if !response.finish(&mut local_ct_pool) {
+                        continue;
+                    }
+                    if let Err(error) = response.context.send(&mut transport, response.message).await {
                         tracing::error!(%error, "failed to send pending response during drain");
                         break;
                     }
@@ -1774,6 +1874,240 @@ where
         handle: Some(handle),
         cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
+    }
+}
+
+#[cfg(all(test, feature = "client"))]
+mod reply_context_tests {
+    use super::*;
+    use crate::model::{ClientJsonRpcMessage, ClientResult};
+
+    #[test]
+    fn old_handler_completion_preserves_reused_id_owner() {
+        for error in [false, true] {
+            let id = RequestId::Number(7);
+            let old = Arc::new(CancellationToken::new());
+            let current = Arc::new(CancellationToken::new());
+            let mut handlers = HashMap::from([(id.clone(), current.clone())]);
+            let message = if error {
+                ClientJsonRpcMessage::error(
+                    McpError::internal_error("old handler", None),
+                    Some(id.clone()),
+                )
+            } else {
+                ClientJsonRpcMessage::response(ClientResult::empty(()), id.clone())
+            };
+            let response = HandlerResponse::<RoleClient> {
+                message,
+                owner: old.clone(),
+                context: ReplyContext::default(),
+            };
+            assert!(!response.finish(&mut handlers));
+            assert!(old.is_cancelled());
+            assert!(!current.is_cancelled());
+            assert!(Arc::ptr_eq(handlers.get(&id).unwrap(), &current));
+            let response = HandlerResponse::<RoleClient> {
+                message: ClientJsonRpcMessage::response(ClientResult::empty(()), id),
+                owner: current.clone(),
+                context: ReplyContext::default(),
+            };
+            assert!(response.finish(&mut handlers));
+            assert!(current.is_cancelled());
+            assert!(handlers.is_empty());
+        }
+    }
+
+    #[cfg(all(feature = "transport-worker", not(feature = "local")))]
+    mod drain {
+        use std::{
+            io,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+
+        use tokio::{
+            sync::{mpsc, oneshot},
+            time::timeout,
+        };
+
+        use super::*;
+        use crate::{
+            ClientHandler,
+            model::{CustomRequest, CustomResult, ServerJsonRpcMessage},
+            transport::worker::ResponseOrigin,
+        };
+
+        const TIMEOUT: Duration = Duration::from_secs(5);
+
+        struct DrainTransport {
+            incoming: mpsc::UnboundedReceiver<ServerJsonRpcMessage>,
+            outgoing: mpsc::UnboundedSender<ClientJsonRpcMessage>,
+            eof: Option<oneshot::Sender<()>>,
+            failed_send: Option<oneshot::Receiver<()>>,
+        }
+
+        impl Transport<RoleClient> for DrainTransport {
+            type Error = io::Error;
+
+            fn send(
+                &mut self,
+                message: ClientJsonRpcMessage,
+            ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+                let outgoing = self.outgoing.clone();
+                let failed_send = self.failed_send.take();
+                async move {
+                    if let Some(failed_send) = failed_send {
+                        failed_send.await.unwrap();
+                        return Err(io::Error::other("retired reply"));
+                    }
+                    outgoing.send(message).map_err(io::Error::other)
+                }
+            }
+
+            async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
+                let message = self.incoming.recv().await;
+                if message.is_none()
+                    && let Some(eof) = self.eof.take()
+                {
+                    let _ = eof.send(());
+                }
+                message
+            }
+
+            async fn close(&mut self) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+
+        struct HeldRequest {
+            cancellation: CancellationToken,
+            reply: oneshot::Sender<Result<CustomResult, McpError>>,
+        }
+
+        struct HeldClient(mpsc::UnboundedSender<HeldRequest>);
+
+        impl ClientHandler for HeldClient {
+            async fn on_custom_request(
+                &self,
+                _request: CustomRequest,
+                context: RequestContext<RoleClient>,
+            ) -> Result<CustomResult, McpError> {
+                let (reply, result) = oneshot::channel();
+                self.0
+                    .send(HeldRequest {
+                        cancellation: context.ct,
+                        reply,
+                    })
+                    .unwrap();
+                result.await.unwrap()
+            }
+        }
+
+        fn inbound(id: i64, generation: &Arc<AtomicU64>) -> ServerJsonRpcMessage {
+            let mut message: ServerJsonRpcMessage = serde_json::from_value(serde_json::json!({
+                "jsonrpc": "2.0", "id": id, "method": "test/held",
+            }))
+            .unwrap();
+            let JsonRpcMessage::Request(request) = &mut message else {
+                unreachable!()
+            };
+            request
+                .request
+                .extensions_mut()
+                .insert(ResponseOrigin::capture(generation));
+            message
+        }
+
+        #[tokio::test]
+        async fn shutdown_drain_preserves_current_handler_after_old_response_or_error() {
+            for error in [false, true] {
+                for replacement_id in [8, 7] {
+                    let (incoming, incoming_rx) = mpsc::unbounded_channel();
+                    let (outgoing, mut sent) = mpsc::unbounded_channel();
+                    let (eof, ended) = oneshot::channel();
+                    let (started, mut handlers) = mpsc::unbounded_channel();
+                    let running = serve_directly::<RoleClient, _, _, _, _>(
+                        HeldClient(started),
+                        DrainTransport {
+                            incoming: incoming_rx,
+                            outgoing,
+                            eof: Some(eof),
+                            failed_send: None,
+                        },
+                        None,
+                    );
+                    let generation = Arc::new(AtomicU64::new(0));
+                    incoming.send(inbound(7, &generation)).unwrap();
+                    let old = timeout(TIMEOUT, handlers.recv()).await.unwrap().unwrap();
+                    generation.fetch_add(1, Ordering::SeqCst);
+                    incoming.send(inbound(replacement_id, &generation)).unwrap();
+                    let current = timeout(TIMEOUT, handlers.recv()).await.unwrap().unwrap();
+                    // Both handlers remain held until receive returns eof and
+                    // the service leaves its main loop for the response drain.
+                    drop(incoming);
+                    timeout(TIMEOUT, ended).await.unwrap().unwrap();
+                    old.reply
+                        .send(if error {
+                            Err(McpError::internal_error("old handler", None))
+                        } else {
+                            Ok(CustomResult::new(serde_json::json!({"reply": "old"})))
+                        })
+                        .unwrap();
+                    timeout(TIMEOUT, old.cancellation.cancelled())
+                        .await
+                        .unwrap();
+                    assert!(!current.cancellation.is_cancelled());
+                    current
+                        .reply
+                        .send(Ok(CustomResult::new(
+                            serde_json::json!({"reply": "current"}),
+                        )))
+                        .unwrap();
+                    let message = timeout(TIMEOUT, sent.recv()).await.unwrap().unwrap();
+                    let value = serde_json::to_value(message).unwrap();
+                    assert_eq!(value["id"], replacement_id);
+                    assert_eq!(value["result"], serde_json::json!({"reply": "current"}));
+                    assert!(matches!(
+                        timeout(TIMEOUT, running.waiting()).await.unwrap().unwrap(),
+                        QuitReason::Closed
+                    ));
+                    assert!(sent.try_recv().is_err());
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn recovery_during_reply_send_does_not_stop_the_response_drain() {
+            let generation = Arc::new(AtomicU64::new(0));
+            let context = ReplyContext {
+                origin: Some(ResponseOrigin::capture(&generation)),
+            };
+            let (release, failed_send) = oneshot::channel();
+            let (outgoing, mut sent) = mpsc::unbounded_channel();
+            let mut transport = DrainTransport {
+                incoming: mpsc::unbounded_channel().1,
+                outgoing,
+                eof: None,
+                failed_send: Some(failed_send),
+            };
+            let message =
+                || ClientJsonRpcMessage::response(ClientResult::empty(()), RequestId::Number(7));
+            let send = context.send(&mut transport, message());
+            generation.fetch_add(1, Ordering::SeqCst);
+            release.send(()).unwrap();
+            assert!(
+                send.await.is_ok(),
+                "retired replies must not abort the drain"
+            );
+            let context = ReplyContext {
+                origin: Some(ResponseOrigin::capture(&generation)),
+            };
+            context.send(&mut transport, message()).await.unwrap();
+            assert_eq!(
+                serde_json::to_value(sent.recv().await.unwrap()).unwrap(),
+                serde_json::to_value(message()).unwrap()
+            );
+            assert!(sent.try_recv().is_err());
+        }
     }
 }
 
