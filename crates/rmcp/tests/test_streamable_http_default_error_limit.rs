@@ -47,11 +47,10 @@ impl MockServer {
 /// Exercise only the existing public API so this regression also compiles
 /// against an SDK that still buffers HTTP error responses without a bound.
 #[tokio::test]
-async fn default_client_rejects_oversized_error_without_exposing_body() {
-    const MARKER: &str = "SENSITIVE_TEST_MARKER_DO_NOT_ECHO";
-    let mut body = MARKER.to_owned();
-    body.push_str(&"x".repeat(65_537 - MARKER.len()));
-    assert_eq!(body.len(), 65_537);
+async fn default_client_truncates_error_body_without_exposing_the_tail() {
+    const MARKER: &str = "TAIL_TEST_MARKER_DO_NOT_ECHO";
+    let mut body = "x".repeat(65_536);
+    body.push_str(MARKER);
     let server = MockServer::start(body).await;
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -69,10 +68,17 @@ async fn default_client_rejects_oversized_error_without_exposing_body() {
         .expect_err("an oversized HTTP error must fail")
         .to_string();
 
-    assert!(error.contains("exceeded"), "expected a size-limit error");
+    assert!(
+        error.starts_with("unexpected server response: HTTP 500"),
+        "{error}"
+    );
+    assert!(
+        error.contains(&"x".repeat(65_536)),
+        "expected diagnostic prefix"
+    );
     assert!(
         !error.contains(MARKER),
-        "error must not expose response body"
+        "error must not expose the discarded tail"
     );
-    assert!(error.len() < 512, "error must remain bounded");
+    assert!(error.len() < 65_636, "error must remain bounded");
 }

@@ -369,7 +369,11 @@ impl Drop for LoopbackServer {
 }
 
 impl LoopbackServer {
-    async fn oversized_discover(error_response: bool, never_finishes: bool) -> Self {
+    async fn oversized_discover(
+        status: u16,
+        content_type: &'static str,
+        never_finishes: bool,
+    ) -> Self {
         let posts = Arc::new(Mutex::new(Vec::new()));
         let recorded_posts = posts.clone();
         let router = Router::new().route(
@@ -382,22 +386,33 @@ impl LoopbackServer {
                         .lock()
                         .unwrap()
                         .push(request["method"].as_str().unwrap().to_owned());
-                    let (status, content_type, payload) = if error_response {
-                        (
-                            422,
-                            "text/plain",
-                            "Unexpected message, expect initialize request".repeat(8),
-                        )
+                    if request["method"] == "initialize" {
+                        return Response::builder()
+                            .status(200)
+                            .header("content-type", "application/json")
+                            .body(Body::from(
+                                json!({
+                                    "jsonrpc": "2.0", "id": request["id"],
+                                    "result": {
+                                        "protocolVersion": "2025-11-25", "capabilities": {},
+                                        "serverInfo": {"name": "legacy", "version": "1.0"}
+                                    }
+                                })
+                                .to_string(),
+                            ))
+                            .unwrap();
+                    }
+                    if request["method"] == "notifications/initialized" {
+                        return Response::builder().status(202).body(Body::empty()).unwrap();
+                    }
+                    let payload = if content_type == "text/plain" {
+                        "Unexpected message, expect initialize request".repeat(2048)
                     } else {
-                        (
-                            200,
-                            "application/json",
-                            json!({
-                                "jsonrpc": "2.0", "id": request["id"],
-                                "error": { "code": -32601, "message": "legacy".repeat(80) },
-                            })
-                            .to_string(),
-                        )
+                        json!({
+                            "jsonrpc": "2.0", "id": request["id"],
+                            "error": { "code": -32601, "message": "legacy".repeat(80) },
+                        })
+                        .to_string()
                     };
                     let body = if never_finishes {
                         // The limit must abort reading without waiting for EOF.
@@ -430,16 +445,17 @@ impl LoopbackServer {
 }
 
 #[rstest]
-#[case::json(false, false)]
-#[case::error(true, false)]
-#[case::unfinished_json(false, true)]
-#[case::unfinished_error(true, true)]
+#[case::json(200, false)]
+#[case::json_error(400, false)]
+#[case::unfinished_json(200, true)]
+#[case::unfinished_json_error(400, true)]
 #[tokio::test]
 async fn oversized_discover_fails_without_fallback_or_retry(
-    #[case] error_response: bool,
+    #[case] status: u16,
     #[case] never_finishes: bool,
 ) {
-    let server = LoopbackServer::oversized_discover(error_response, never_finishes).await;
+    let server =
+        LoopbackServer::oversized_discover(status, "application/json", never_finishes).await;
     let transport = StreamableHttpClientTransport::with_client(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         StreamableHttpClientTransportConfig::with_uri(server.uri.clone())
@@ -473,4 +489,28 @@ async fn oversized_discover_fails_without_fallback_or_retry(
         "unexpected transport error: {error:?}"
     );
     assert_eq!(server.posts.lock().unwrap().as_slice(), ["server/discover"]);
+}
+
+#[rstest]
+#[case::fixed(false)]
+#[case::unfinished_chunked(true)]
+#[tokio::test]
+async fn oversized_error_page_completes_legacy_handshake(#[case] never_finishes: bool) {
+    let server = LoopbackServer::oversized_discover(422, "text/plain", never_finishes).await;
+    let transport = StreamableHttpClientTransport::with_client(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        StreamableHttpClientTransportConfig::with_uri(server.uri.clone()),
+    );
+    let client = tokio::time::timeout(
+        TIMEOUT,
+        ClientInfo::default().serve_with_lifecycle(transport, auto_lifecycle()),
+    )
+    .await
+    .expect("legacy startup must not wait for the error page to finish")
+    .expect("a truncated diagnostic must preserve legacy startup");
+    assert_eq!(
+        server.posts.lock().unwrap().as_slice(),
+        ["server/discover", "initialize", "notifications/initialized"]
+    );
+    client.cancel().await.unwrap();
 }

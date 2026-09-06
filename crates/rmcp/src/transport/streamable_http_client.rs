@@ -220,7 +220,7 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     /// A cancellation or reply POST did not finish in time.
     #[error("Control POST timed out")]
     ControlRequestTimeout,
-    /// A buffered JSON or error response exceeded its configured byte limit.
+    /// A buffered JSON response (including a JSON-RPC error) exceeded its byte limit.
     /// The response body is not included and this error does not trigger retries.
     #[error("HTTP response body exceeded {limit} bytes before decoding")]
     ResponseBodyTooLarge { limit: usize },
@@ -375,17 +375,24 @@ pub(super) fn legacy_discover_response(
 
 /// Byte limits enforced by the built-in Streamable HTTP clients before parsing.
 ///
-/// The defaults are 16 MiB per SSE event or JSON response and 64 KiB per HTTP
-/// error response. Zero accepts only empty bodies. For compressed responses,
-/// body limits count the decompressed bytes yielded by the HTTP backend.
+/// The defaults are 16 MiB per SSE event, 64 MiB per JSON response (regardless of
+/// HTTP status), and 64 KiB per HTTP diagnostic prefix. JSON bodies above their
+/// limit are rejected; non-JSON error bodies are truncated, preserving legacy
+/// discovery fallback. A zero JSON limit accepts only empty bodies, while a zero
+/// diagnostic limit skips the body. For compressed responses, body limits count
+/// the decompressed bytes yielded by the HTTP backend, not total memory usage.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct StreamableHttpResponseLimits {
     /// Maximum raw size of an individual SSE event.
     pub max_sse_event_size: usize,
-    /// Maximum buffered JSON success response body.
+    /// Maximum complete JSON response body, including HTTP error responses.
     pub max_json_response_size: usize,
-    /// Maximum buffered non-success HTTP response body.
+    /// Maximum diagnostic prefix of a non-success HTTP response body.
+    ///
+    /// Non-JSON bodies are read only up to this limit. JSON bodies are first
+    /// bounded by `max_json_response_size` and parsed in full; only when they are
+    /// not JSON-RPC errors is their diagnostic text truncated to this limit.
     pub max_error_response_size: usize,
 }
 
@@ -393,7 +400,7 @@ impl Default for StreamableHttpResponseLimits {
     fn default() -> Self {
         Self {
             max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
-            max_json_response_size: 16 * 1024 * 1024,
+            max_json_response_size: 64 * 1024 * 1024,
             max_error_response_size: 64 * 1024,
         }
     }
@@ -2084,16 +2091,19 @@ pub struct StreamableHttpClientTransportConfig {
     /// [`StreamableHttpClient`] implementations must override the corresponding
     /// `*_with_max_sse_event_size` methods to enforce it.
     pub max_sse_event_size: usize,
-    /// Maximum buffered JSON success response body (default: 16 MiB).
+    /// Maximum complete JSON response body, regardless of HTTP status (default: 64 MiB).
     ///
     /// Built-in clients enforce this before decoding, including initialization,
     /// discovery, control requests and session recovery. Custom clients must
     /// override [`StreamableHttpClient::post_message_with_response_limits`].
     /// Zero accepts only an empty body; increase this for larger tool results.
     pub max_json_response_size: usize,
-    /// Maximum buffered HTTP error response body (default: 64 KiB).
+    /// Maximum HTTP error diagnostic prefix (default: 64 KiB).
     ///
-    /// Enforced before JSON-RPC error parsing or legacy discovery fallback.
+    /// Non-JSON error bodies are truncated, without draining the stream, so a
+    /// large diagnostic page does not prevent legacy discovery fallback. JSON
+    /// errors instead use `max_json_response_size` before parsing; only malformed
+    /// or non-error JSON is truncated for diagnostics. Zero skips diagnostic text.
     /// Authentication challenges and session-expired responses are returned
     /// without buffering their bodies. Custom clients must override
     /// [`StreamableHttpClient::post_message_with_response_limits`].
@@ -2188,7 +2198,7 @@ impl StreamableHttpClientTransportConfig {
         self
     }
 
-    /// Set the maximum HTTP error response body size before decoding.
+    /// Set the maximum HTTP error diagnostic prefix size (not the JSON limit).
     pub fn max_error_response_size(mut self, bytes: usize) -> Self {
         self.max_error_response_size = bytes;
         self

@@ -10,10 +10,10 @@ use sse_stream::Sse;
 use tokio::net::UnixStream;
 
 use crate::{
-    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
+    model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
-            client_side_body::read_bounded_body,
+            client_side_body::{read_bounded_body, read_truncated_body},
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -296,21 +296,46 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::SessionExpired);
         }
 
+        let content_type = response.headers().get(http::header::CONTENT_TYPE).cloned();
+        let session_id = response
+            .headers()
+            .get(HEADER_SESSION_ID)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         if !status.is_success() {
-            let body = match read_bounded_body(
-                response
-                    .into_body()
-                    .into_data_stream()
-                    .map_err(UnixSocketError::Hyper),
-                content_length,
-                limits.max_error_response_size,
-            )
-            .await
-            {
-                Ok(body) => String::from_utf8_lossy(&body).into_owned(),
-                Err(StreamableHttpError::Client(_)) => "<failed to read response body>".to_owned(),
+            let is_json = content_type
+                .as_ref()
+                .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
+            let stream = response
+                .into_body()
+                .into_data_stream()
+                .map_err(UnixSocketError::Hyper);
+            let body = if is_json {
+                read_bounded_body(stream, content_length, limits.max_json_response_size).await
+            } else {
+                read_truncated_body(stream, limits.max_error_response_size).await
+            };
+            let body = match body {
+                Ok(body) => body,
+                Err(StreamableHttpError::Client(_)) => b"<failed to read response body>".to_vec(),
                 Err(error) => return Err(error),
             };
+            // Match reqwest: parse only complete JSON bodies, before considering
+            // legacy discovery fallback or truncating the diagnostic text.
+            if is_json {
+                match serde_json::from_str::<ServerJsonRpcMessage>(&String::from_utf8_lossy(&body))
+                {
+                    Ok(message @ JsonRpcMessage::Error(_)) => {
+                        return Ok(StreamableHttpPostResponse::Json(message, session_id));
+                    }
+                    _ => tracing::warn!(
+                        "HTTP {status}: could not parse JSON body as a JSON-RPC error"
+                    ),
+                }
+            }
+            let body =
+                String::from_utf8_lossy(&body[..body.len().min(limits.max_error_response_size)]);
             if let Some(response) =
                 legacy_discover_response(&message, session_was_attached, status, &body)
             {
@@ -320,13 +345,6 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 format!("HTTP {status}: {body}"),
             )));
         }
-
-        let content_type = response.headers().get(http::header::CONTENT_TYPE).cloned();
-        let session_id = response
-            .headers()
-            .get(HEADER_SESSION_ID)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
 
         if status.is_success()
             && content_length == Some(0)

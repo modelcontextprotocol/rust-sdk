@@ -196,10 +196,14 @@ async fn oversized_malformed_json_is_not_accepted(#[case] chunked: bool) {
 #[case::chunked_exact_limit(0, true)]
 #[case::chunked_over_limit(-1, true)]
 #[tokio::test]
-async fn json_rpc_error_uses_error_body_limit(#[case] margin: isize, #[case] chunked: bool) {
-    let server = MockServer::start(400, "application/json", JSON_ERROR, chunked).await;
+async fn json_rpc_error_uses_json_limit_for_every_status(
+    #[case] margin: isize,
+    #[case] chunked: bool,
+    #[values(200, 400)] status: u16,
+) {
+    let server = MockServer::start(status, "application/json", JSON_ERROR, chunked).await;
     let limit = JSON_ERROR.len().checked_add_signed(margin).unwrap();
-    let result = post(&server, ping(), limits(0, limit, 0)).await;
+    let result = post(&server, ping(), limits(limit, 0, 0)).await;
     if margin < 0 {
         assert!(
             matches!(result, Err(StreamableHttpError::ResponseBodyTooLarge { limit: got }) if got == limit)
@@ -219,20 +223,27 @@ async fn json_rpc_error_uses_error_body_limit(#[case] margin: isize, #[case] chu
 #[case::fixed(false)]
 #[case::chunked(true)]
 #[tokio::test]
-async fn oversized_discovery_rejection_cannot_trigger_legacy_fallback(#[case] chunked: bool) {
+async fn oversized_discovery_rejection_preserves_legacy_fallback(#[case] chunked: bool) {
     let body = "Unexpected message, expect initialize request";
     let server = MockServer::start(422, "text/plain", body, chunked).await;
-    assert!(matches!(
-        post(&server, discover(), limits(100, body.len() - 1, 100)).await,
-        Err(StreamableHttpError::ResponseBodyTooLarge { .. })
-    ));
-    assert!(matches!(
-        post(&server, discover(), limits(100, body.len(), 100)).await,
-        Ok(StreamableHttpPostResponse::Json(
-            JsonRpcMessage::Error(_),
-            _
-        ))
-    ));
+    for limit in [0, body.len() - 1, body.len()] {
+        let StreamableHttpPostResponse::Json(JsonRpcMessage::Error(error), session) =
+            post(&server, discover(), limits(0, limit, 0))
+                .await
+                .unwrap()
+        else {
+            panic!("expected legacy discovery rejection");
+        };
+        assert_eq!(error.id, Some(RequestId::Number(1)));
+        assert!(session.is_none());
+        assert_eq!(
+            error.error.message,
+            format!(
+                "server/discover rejected with HTTP 422 Unprocessable Entity: {}",
+                &body[..limit]
+            )
+        );
+    }
 }
 
 #[rstest]
@@ -243,7 +254,8 @@ async fn non_json_error_bodies_are_bounded(#[case] chunked: bool) {
     let server = MockServer::start(500, "text/plain", "failure", chunked).await;
     assert!(matches!(
         post(&server, ping(), limits(100, 6, 100)).await,
-        Err(StreamableHttpError::ResponseBodyTooLarge { limit: 6 })
+        Err(StreamableHttpError::UnexpectedServerResponse(message))
+            if message == format!("HTTP 500 Internal Server Error: {}", &"failure"[..6])
     ));
     assert!(matches!(
         post(&server, ping(), limits(0, 7, 0)).await,
@@ -346,7 +358,74 @@ async fn existing_entry_points_apply_default_body_limits(#[case] sse_limit_metho
             .post_message(server.uri.clone(), ping(), None, None, HashMap::new())
             .await
     };
-    assert!(
-        matches!(result, Err(StreamableHttpError::ResponseBodyTooLarge { limit: got }) if got == limit)
+    let Err(StreamableHttpError::UnexpectedServerResponse(message)) = result else {
+        panic!("expected a bounded HTTP diagnostic");
+    };
+    assert_eq!(
+        message,
+        format!("HTTP 500 Internal Server Error: {}", "x".repeat(limit))
     );
+}
+
+#[test]
+fn defaults_allow_larger_json_without_changing_sse_or_diagnostics() {
+    let limits = StreamableHttpResponseLimits::default();
+    assert_eq!(limits.max_json_response_size, 64 * 1024 * 1024);
+    assert_eq!(limits.max_sse_event_size, 16 * 1024 * 1024);
+    assert_eq!(limits.max_error_response_size, 64 * 1024);
+}
+
+#[tokio::test]
+async fn default_json_limit_accepts_base64_tool_results_above_sixteen_mib() {
+    let data = "A".repeat(17 * 1024 * 1024);
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "result": {"content": [{"type": "image", "data": data, "mimeType": "image/png"}]}
+    })
+    .to_string();
+    let server = MockServer::start(200, "application/json", body, false).await;
+    assert!(matches!(
+        client()
+            .post_message(server.uri.clone(), ping(), None, None, HashMap::new())
+            .await,
+        Ok(StreamableHttpPostResponse::Json(
+            JsonRpcMessage::Response(_),
+            _
+        ))
+    ));
+}
+
+#[rstest]
+#[case::fixed(false)]
+#[case::chunked(true)]
+#[tokio::test]
+async fn truncated_diagnostics_cannot_be_parsed_as_json_rpc(#[case] chunked: bool) {
+    // The prefix is valid JSON, but the complete body is not a protocol message.
+    let body = format!("{JSON_ERROR}not-json");
+    for content_type in ["text/plain", "application/json"] {
+        let server = MockServer::start(400, content_type, body.clone(), chunked).await;
+        assert!(matches!(
+            post(&server, ping(), limits(body.len(), JSON_ERROR.len(), 0)).await,
+            Err(StreamableHttpError::UnexpectedServerResponse(_))
+        ));
+        if content_type == "application/json" {
+            assert!(matches!(
+                post(&server, discover(), limits(JSON_ERROR.len(), body.len(), 0)).await,
+                Err(StreamableHttpError::ResponseBodyTooLarge { .. })
+            ));
+        }
+    }
+}
+
+#[rstest]
+#[case::unauthorized(401)]
+#[case::forbidden(403)]
+#[case::server_error(500)]
+#[tokio::test]
+async fn truncated_diagnostics_do_not_expand_discovery_fallback(#[case] status: u16) {
+    let server = MockServer::start(status, "text/html", "large error page", true).await;
+    assert!(matches!(
+        post(&server, discover(), limits(0, 2, 0)).await,
+        Err(StreamableHttpError::UnexpectedServerResponse(_))
+    ));
 }
