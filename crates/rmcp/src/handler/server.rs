@@ -321,16 +321,59 @@ macro_rules! server_handler_methods {
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
             context.peer.set_peer_info(request.clone());
+            std::future::ready(self.negotiate_initialize(&request))
+        }
+        /// Build the `initialize` response for `request`, negotiating the
+        /// protocol version against [`Self::supported_protocol_versions`].
+        ///
+        /// This is the whole body of the default [`Self::initialize`] minus its
+        /// `set_peer_info` side effect, so a server that overrides `initialize`
+        /// to add its own can call this instead of restating the negotiation
+        /// rule:
+        ///
+        /// ```
+        /// use rmcp::{
+        ///     ErrorData as McpError, RoleServer, ServerHandler,
+        ///     model::{InitializeRequestParams, InitializeResult, ServerInfo},
+        ///     service::RequestContext,
+        /// };
+        ///
+        /// struct MyServer;
+        ///
+        /// impl ServerHandler for MyServer {
+        ///     fn get_info(&self) -> ServerInfo {
+        ///         ServerInfo::default()
+        ///     }
+        ///
+        ///     async fn initialize(
+        ///         &self,
+        ///         request: InitializeRequestParams,
+        ///         context: RequestContext<RoleServer>,
+        ///     ) -> Result<InitializeResult, McpError> {
+        ///         // ... record telemetry, register the peer, etc.
+        ///         context.peer.set_peer_info(request.clone());
+        ///         self.negotiate_initialize(&request)
+        ///     }
+        /// }
+        /// ```
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`] when this server
+        /// supports no version that still has an `initialize` handshake.
+        ///
+        /// [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`]: crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+        fn negotiate_initialize(
+            &self,
+            request: &InitializeRequestParams,
+        ) -> Result<InitializeResult, McpError> {
             let mut info = self.get_info();
-            let negotiated = negotiate_protocol_version(
+            info.protocol_version = negotiate_protocol_version(
                 &request.protocol_version,
                 std::mem::take(&mut info.protocol_version),
                 &self.supported_protocol_versions(),
-            );
-            std::future::ready(negotiated.map(|version| {
-                info.protocol_version = version;
-                info
-            }))
+            )?;
+            Ok(info)
         }
         /// Return the protocol versions supported by this server.
         ///
@@ -339,6 +382,10 @@ macro_rules! server_handler_methods {
         /// list is advertised by [`Self::discover`], bounds what `initialize`
         /// negotiation may agree to, and is what per-request versions are
         /// validated against.
+        ///
+        /// To support everything up to some ceiling, use
+        /// [`ProtocolVersion::known_up_to`] rather than filtering
+        /// [`ProtocolVersion::KNOWN_VERSIONS`] by hand.
         fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
             Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
         }
@@ -619,6 +666,13 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).initialize(request, context)
+            }
+
+            fn negotiate_initialize(
+                &self,
+                request: &InitializeRequestParams,
+            ) -> Result<InitializeResult, McpError> {
+                (**self).negotiate_initialize(request)
             }
 
             fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {

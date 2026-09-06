@@ -5,13 +5,19 @@
 #![cfg(not(feature = "local"))]
 #![cfg(feature = "client")]
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use rmcp::{
     ClientHandler, ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
-        ClientInfo, ErrorCode, InitializeRequestParams, InitializeResult, ProtocolVersion,
-        ServerInfo,
+        ClientCapabilities, ClientInfo, ErrorCode, Implementation, InitializeRequestParams,
+        InitializeResult, ProtocolVersion, ServerInfo,
     },
     service::{ClientInitializeError, RequestContext},
 };
@@ -231,4 +237,92 @@ async fn narrowed_server_caps_even_when_it_overrides_initialize() {
         ProtocolVersion::V_2025_11_25,
         "the handshake layer should not raise the version above what the server supports"
     );
+}
+
+/// Overrides `initialize` to run a side effect, then delegates the version
+/// answer back to the SDK with [`ServerHandler::negotiate_initialize`].
+#[derive(Debug, Clone, Default)]
+struct DelegatingServer {
+    initializations: Arc<AtomicUsize>,
+}
+
+impl ServerHandler for DelegatingServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::default()
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(HANDSHAKE_VERSIONS)
+    }
+
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        self.initializations.fetch_add(1, Ordering::Relaxed);
+        context.peer.set_peer_info(request.clone());
+        self.negotiate_initialize(&request)
+    }
+}
+
+fn initialize_params(protocol_version: ProtocolVersion) -> InitializeRequestParams {
+    let mut params = InitializeRequestParams::new(
+        ClientCapabilities::default(),
+        Implementation::new("test-client", "0.0.0"),
+    );
+    params.protocol_version = protocol_version;
+    params
+}
+
+#[test]
+fn negotiate_initialize_echoes_a_supported_version() {
+    let result = NarrowedServer
+        .negotiate_initialize(&initialize_params(ProtocolVersion::V_2025_06_18))
+        .expect("a supported handshake version should negotiate");
+    assert_eq!(result.protocol_version, ProtocolVersion::V_2025_06_18);
+}
+
+#[test]
+fn negotiate_initialize_caps_at_supported_versions() {
+    let result = NarrowedServer
+        .negotiate_initialize(&initialize_params(ProtocolVersion::V_2026_07_28))
+        .expect("an unsupported version should fall back rather than fail");
+    assert_eq!(result.protocol_version, ProtocolVersion::V_2025_11_25);
+}
+
+#[test]
+fn negotiate_initialize_keeps_the_rest_of_get_info() {
+    let server = NarrowedServer;
+    let result = server
+        .negotiate_initialize(&initialize_params(ProtocolVersion::V_2026_07_28))
+        .expect("an unsupported version should fall back rather than fail");
+    assert_eq!(result.capabilities, server.get_info().capabilities);
+}
+
+#[test]
+fn negotiate_initialize_rejects_when_no_handshake_version_is_supported() {
+    let error = ModernOnlyServer
+        .negotiate_initialize(&initialize_params(ProtocolVersion::V_2026_07_28))
+        .expect_err("a server with no handshake version cannot answer initialize");
+    assert_eq!(error.code, ErrorCode::UNSUPPORTED_PROTOCOL_VERSION);
+}
+
+#[tokio::test]
+async fn delegating_server_negotiates_like_the_default_initialize() {
+    let negotiated =
+        negotiated_version_with(DelegatingServer::default(), ProtocolVersion::V_2026_07_28).await;
+    assert_eq!(
+        negotiated,
+        ProtocolVersion::V_2025_11_25,
+        "an override that delegates should answer what the default initialize would"
+    );
+}
+
+#[tokio::test]
+async fn delegating_server_still_runs_its_own_side_effect() {
+    let server = DelegatingServer::default();
+    let initializations = Arc::clone(&server.initializations);
+    negotiated_version_with(server, ProtocolVersion::V_2025_06_18).await;
+    assert_eq!(initializations.load(Ordering::Relaxed), 1);
 }

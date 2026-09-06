@@ -177,7 +177,7 @@ impl ProtocolVersion {
     /// First protocol version that requires SEP-2243 standard HTTP headers.
     pub const STANDARD_HEADERS: Self = Self::V_2026_07_28;
 
-    /// All protocol versions known to this SDK.
+    /// All protocol versions known to this SDK, oldest first.
     pub const KNOWN_VERSIONS: &[Self] = &[
         Self::V_2024_11_05,
         Self::V_2025_03_26,
@@ -189,6 +189,43 @@ impl ProtocolVersion {
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The known versions up to and including `max`, oldest first.
+    ///
+    /// Servers that implement every revision up to some ceiling can return
+    /// this from `supported_protocol_versions` instead of filtering
+    /// [`Self::KNOWN_VERSIONS`] by hand. `max` itself need not be a known
+    /// version; the result is empty when it predates all of them.
+    ///
+    /// The result borrows from [`Self::KNOWN_VERSIONS`], so call it directly
+    /// in the method body — it needs no `static` and no `LazyLock`:
+    ///
+    /// ```rust,ignore
+    /// const MAX_SUPPORTED: ProtocolVersion = ProtocolVersion::V_2025_11_25;
+    ///
+    /// fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+    ///     Cow::Borrowed(ProtocolVersion::known_up_to(&MAX_SUPPORTED))
+    /// }
+    /// ```
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert_eq!(
+    ///     ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_06_18),
+    ///     &[
+    ///         ProtocolVersion::V_2024_11_05,
+    ///         ProtocolVersion::V_2025_03_26,
+    ///         ProtocolVersion::V_2025_06_18,
+    ///     ],
+    /// );
+    /// ```
+    pub fn known_up_to(max: &Self) -> &'static [Self] {
+        let count = Self::KNOWN_VERSIONS
+            .iter()
+            .take_while(|version| version.as_str() <= max.as_str())
+            .count();
+        &Self::KNOWN_VERSIONS[..count]
     }
 }
 
@@ -4642,6 +4679,51 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn known_versions_are_ordered_oldest_first() {
+        // `known_up_to` walks the list as a sorted prefix.
+        assert!(
+            ProtocolVersion::KNOWN_VERSIONS
+                .windows(2)
+                .all(|pair| pair[0].as_str() < pair[1].as_str())
+        );
+    }
+
+    #[test]
+    fn known_up_to_includes_the_ceiling_itself() {
+        assert_eq!(
+            ProtocolVersion::known_up_to(&ProtocolVersion::V_2024_11_05),
+            &[ProtocolVersion::V_2024_11_05]
+        );
+    }
+
+    #[test]
+    fn known_up_to_the_newest_version_yields_every_known_version() {
+        assert_eq!(
+            ProtocolVersion::known_up_to(&ProtocolVersion::V_2026_07_28),
+            ProtocolVersion::KNOWN_VERSIONS
+        );
+    }
+
+    #[test]
+    fn known_up_to_an_unknown_ceiling_stops_at_the_versions_below_it() {
+        let unknown = ProtocolVersion(Cow::Borrowed("2025-07-01"));
+        assert_eq!(
+            ProtocolVersion::known_up_to(&unknown),
+            &[
+                ProtocolVersion::V_2024_11_05,
+                ProtocolVersion::V_2025_03_26,
+                ProtocolVersion::V_2025_06_18,
+            ]
+        );
+    }
+
+    #[test]
+    fn known_up_to_a_ceiling_below_every_known_version_is_empty() {
+        let ancient = ProtocolVersion(Cow::Borrowed("1999-01-01"));
+        assert!(ProtocolVersion::known_up_to(&ancient).is_empty());
+    }
 
     #[cfg(feature = "transport-streamable-http-client")]
     #[test]
