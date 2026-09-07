@@ -51,6 +51,203 @@ fn list_tools_request(id: u64) -> ClientJsonRpcMessage {
     ))
 }
 
+fn discover_request(id: u64, version: &str, complete: bool) -> ClientJsonRpcMessage {
+    let capabilities = if complete {
+        r#", "io.modelcontextprotocol/clientCapabilities": {}"#
+    } else {
+        ""
+    };
+    msg(&format!(
+        r#"{{
+            "jsonrpc": "2.0",
+            "id": {id},
+            "method": "server/discover",
+            "params": {{
+                "_meta": {{
+                    "io.modelcontextprotocol/protocolVersion": "{version}",
+                    "io.modelcontextprotocol/clientInfo": {{
+                        "name": "test-client",
+                        "version": "0.0.1"
+                    }}{capabilities}
+                }}
+            }}
+        }}"#
+    ))
+}
+
+fn inline_list_tools_request(id: u64, version: &str) -> ClientJsonRpcMessage {
+    msg(&format!(
+        r#"{{
+            "jsonrpc": "2.0",
+            "id": {id},
+            "method": "tools/list",
+            "params": {{
+                "_meta": {{
+                    "io.modelcontextprotocol/protocolVersion": "{version}",
+                    "io.modelcontextprotocol/clientInfo": {{
+                        "name": "test-client",
+                        "version": "0.0.1"
+                    }},
+                    "io.modelcontextprotocol/clientCapabilities": {{}}
+                }}
+            }}
+        }}"#
+    ))
+}
+
+async fn expect_response(client: &mut impl Transport<rmcp::RoleClient>) -> ServerResult {
+    let response = client.receive().await.expect("expected server response");
+    let ServerJsonRpcMessage::Response(response) = response else {
+        panic!("expected successful response, got {response:?}");
+    };
+    response.result
+}
+
+#[tokio::test]
+async fn discover_probe_then_initialize_selects_classic_lifecycle() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", true))
+        .await
+        .unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::DiscoverResult(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+    client.send(initialized_notification()).await.unwrap();
+    client.send(list_tools_request(2)).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::ListToolsResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn repeated_discover_probes_then_inline_request_select_inline_lifecycle() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    for id in 1..=2 {
+        client
+            .send(discover_request(id, "2026-07-28", true))
+            .await
+            .unwrap();
+        assert!(matches!(
+            expect_response(&mut client).await,
+            ServerResult::DiscoverResult(_)
+        ));
+    }
+    client
+        .send(inline_list_tools_request(3, "2026-07-28"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::ListToolsResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn malformed_discover_does_not_prevent_classic_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", false))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.receive().await.unwrap(),
+        ServerJsonRpcMessage::Error(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+    client.send(initialized_notification()).await.unwrap();
+    client.send(list_tools_request(2)).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::ListToolsResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_inline_request_does_not_prevent_classic_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", true))
+        .await
+        .unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::DiscoverResult(_)
+    ));
+    client
+        .send(inline_list_tools_request(2, "2099-99-99"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.receive().await.unwrap(),
+        ServerJsonRpcMessage::Error(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
 async fn do_initialize(client: &mut impl Transport<rmcp::RoleClient>) {
     client.send(init_request()).await.unwrap();
     let _response = client.receive().await.unwrap();
