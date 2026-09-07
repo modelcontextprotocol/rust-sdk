@@ -14,7 +14,7 @@ use rmcp::{
         ProgressToken, ProtocolVersion, RequestId, RequestMetaObject, ServerJsonRpcMessage,
         ServerNotification,
     },
-    service::{MaybeSendFuture, RequestContext, RoleServer, ServerInitializeError},
+    service::{MaybeSendFuture, RequestContext, RoleServer},
     transport::{IntoTransport, Transport},
 };
 
@@ -89,12 +89,38 @@ async fn stateless_server_rejects_missing_metadata_on_every_request() {
     };
     assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
 
-    server_task
+    let mut valid_request = list_tools_request(complete_meta());
+    if let ClientJsonRpcMessage::Request(request) = &mut valid_request {
+        request.id = RequestId::Number(3);
+    }
+    client
+        .send(valid_request)
         .await
-        .expect("server task")
-        .cancel()
+        .expect("send valid list tools");
+    assert!(matches!(
+        client.receive().await,
+        Some(ServerJsonRpcMessage::Response(_))
+    ));
+
+    let running = server_task.await.expect("server task");
+
+    client
+        .send(ClientJsonRpcMessage::request(
+            ClientRequest::ListToolsRequest(ListToolsRequest {
+                method: Default::default(),
+                params: None,
+                extensions: Default::default(),
+            }),
+            RequestId::Number(4),
+        ))
         .await
-        .expect("cancel server");
+        .expect("send list tools without metadata after inline selection");
+    let Some(ServerJsonRpcMessage::Error(error)) = client.receive().await else {
+        panic!("expected invalid params");
+    };
+    assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
+
+    running.cancel().await.expect("cancel server");
 }
 
 #[derive(Clone)]
@@ -166,7 +192,7 @@ async fn stateless_server_uses_each_requests_client_context() {
 }
 
 #[tokio::test]
-async fn stateless_server_rejects_malformed_metadata_opener_with_error_response() {
+async fn stateless_server_rejects_malformed_metadata_without_selecting_lifecycle() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_task = tokio::spawn(async move { StatelessServer.serve(server_transport).await });
     let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
@@ -208,13 +234,26 @@ async fn stateless_server_rejects_malformed_metadata_opener_with_error_response(
             .contains("io.modelcontextprotocol/clientCapabilities")
     );
 
-    let Err(error) = server_task.await.expect("server task") else {
-        panic!("malformed opener should not start a session");
-    };
+    let mut valid_request = list_tools_request(complete_meta());
+    if let ClientJsonRpcMessage::Request(request) = &mut valid_request {
+        request.id = RequestId::Number(2);
+    }
+    client
+        .send(valid_request)
+        .await
+        .expect("send valid list tools after malformed request");
     assert!(matches!(
-        error,
-        ServerInitializeError::ExpectedInitializeRequest(Some(_))
+        client.receive().await,
+        Some(ServerJsonRpcMessage::Response(_))
     ));
+
+    server_task
+        .await
+        .expect("server task")
+        .expect("valid inline request should start the server")
+        .cancel()
+        .await
+        .expect("cancel server");
 }
 
 #[derive(Clone)]
