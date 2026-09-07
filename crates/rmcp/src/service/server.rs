@@ -559,9 +559,14 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    // Get initialize request; the MCP spec permits ping before initialize.
+    let (peer, peer_rx) = Peer::new(id_provider, None);
+
+    // Select the lifecycle only after an initialize request or the first valid
+    // non-discover request with complete inline metadata. A discover request is
+    // a bootstrap probe: respond to it, but remain open to either lifecycle.
+    // The MCP spec also permits ping before initialize.
     // See: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
-    let (request, id) = loop {
+    let (initialize_request, id) = loop {
         let msg = expect_next_message(&mut transport, "initialize request").await?;
         match msg {
             ClientJsonRpcMessage::Request(req)
@@ -580,7 +585,86 @@ where
                         )
                     })?;
             }
-            ClientJsonRpcMessage::Request(req) => break (req.request, req.id),
+            ClientJsonRpcMessage::Request(req) => {
+                let id = req.id;
+                match req.request {
+                    ClientRequest::InitializeRequest(request) => break (request, id),
+                    mut request => {
+                        let missing_metadata = request
+                            .get_meta()
+                            .missing_required_keys(&ProtocolVersion::V_2026_07_28);
+                        if !missing_metadata.is_empty() {
+                            transport
+                                .send(ServerJsonRpcMessage::error(
+                                    missing_request_metadata_error(&missing_metadata),
+                                    Some(id),
+                                ))
+                                .await
+                                .map_err(|error| {
+                                    ServerInitializeError::transport::<T>(
+                                        error,
+                                        "sending pre-init metadata error response",
+                                    )
+                                })?;
+                            continue;
+                        }
+
+                        let is_discover = matches!(&request, ClientRequest::DiscoverRequest(_));
+                        if !is_discover {
+                            let requested_version = request
+                                .get_meta()
+                                .protocol_version()
+                                .expect("complete inline metadata has a protocol version");
+                            let supported_versions = service.supported_protocol_versions();
+                            if !supported_versions.contains(&requested_version) {
+                                transport
+                                    .send(ServerJsonRpcMessage::error(
+                                        ErrorData::unsupported_protocol_version(
+                                            requested_version,
+                                            &supported_versions,
+                                        ),
+                                        Some(id),
+                                    ))
+                                    .await
+                                    .map_err(|error| {
+                                        ServerInitializeError::transport::<T>(
+                                            error,
+                                            "sending unsupported inline version response",
+                                        )
+                                    })?;
+                                continue;
+                            }
+                            peer.require_request_metadata();
+                            return Ok(serve_inner_with_initial_message(
+                                service,
+                                transport,
+                                peer,
+                                peer_rx,
+                                ct,
+                                Some(ClientJsonRpcMessage::request(request, id)),
+                            ));
+                        }
+
+                        let context = RequestContext {
+                            ct: ct.child_token(),
+                            id: id.clone(),
+                            meta: std::mem::take(request.get_meta_mut()),
+                            extensions: std::mem::take(request.extensions_mut()),
+                            peer: peer.clone(),
+                        };
+                        let response = match service.handle_request(request, context).await {
+                            Ok(result) => ServerJsonRpcMessage::response(result, id),
+                            Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
+                        };
+                        transport.send(response).await.map_err(|error| {
+                            ServerInitializeError::transport::<T>(
+                                error,
+                                "sending bootstrap request response",
+                            )
+                        })?;
+                    }
+                }
+            }
             other => {
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     other,
@@ -588,52 +672,9 @@ where
             }
         }
     };
-
-    let initialize_request = match request {
-        ClientRequest::InitializeRequest(request) => request,
-        mut request => {
-            let missing_metadata = request
-                .get_meta()
-                .missing_required_keys(&ProtocolVersion::V_2026_07_28);
-            if !missing_metadata.is_empty() {
-                transport
-                    .send(ServerJsonRpcMessage::error(
-                        missing_request_metadata_error(&missing_metadata),
-                        Some(id.clone()),
-                    ))
-                    .await
-                    .map_err(|error| {
-                        ServerInitializeError::transport::<T>(
-                            error,
-                            "sending pre-init metadata error response",
-                        )
-                    })?;
-                return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
-                    ClientJsonRpcMessage::request(request, id),
-                )));
-            }
-            let (peer, peer_rx) = Peer::new(id_provider, None);
-            peer.require_request_metadata();
-            let context = RequestContext {
-                ct: ct.child_token(),
-                id: id.clone(),
-                meta: std::mem::take(request.get_meta_mut()),
-                extensions: std::mem::take(request.extensions_mut()),
-                peer: peer.clone(),
-            };
-            let response = match service.handle_request(request, context).await {
-                Ok(result) => ServerJsonRpcMessage::response(result, id),
-                Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
-            };
-            transport.send(response).await.map_err(|error| {
-                ServerInitializeError::transport::<T>(error, "sending negotiated request response")
-            })?;
-            return Ok(serve_inner(service, transport, peer, peer_rx, ct));
-        }
-    };
     let requested_protocol_version = initialize_request.params.protocol_version.clone();
     let mut negotiated_peer_info = initialize_request.params.clone();
-    let (peer, peer_rx) = Peer::new(id_provider, Some(negotiated_peer_info.clone()));
+    peer.set_peer_info(negotiated_peer_info.clone());
     let request = ClientRequest::InitializeRequest(initialize_request);
     let context = RequestContext {
         ct: ct.child_token(),
