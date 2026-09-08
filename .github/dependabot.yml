@@ -21,6 +21,10 @@ updates:
       # Mark PRs as CI related change.
       - T-CI
     open-pull-requests-limit: 3
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
     commit-message:
       prefix: "chore"
       include: "scope"
