@@ -19,7 +19,10 @@ where
     ///   401 propagates as [`StreamableHttpError::AuthRequired`] carrying the
     ///   `WWW-Authenticate` challenge for the caller to authorize with;
     /// - a token the server rejects (e.g. revoked) → one silent refresh, one
-    ///   retry, then the challenge propagates.
+    ///   retry, then the challenge propagates;
+    /// - a refresh that fails for any other reason (credential store, network,
+    ///   provider) → that error propagates so the caller can retry instead of
+    ///   being sent through a new authorization.
     async fn call_reacting_to_challenges<T, F, Fut>(
         &self,
         auth_token: Option<String>,
@@ -54,11 +57,13 @@ where
                 match refreshed {
                     Ok(fresh_token) if fresh_token != sent_token => call(Some(fresh_token)).await,
                     Ok(_) => Err(StreamableHttpError::AuthRequired(challenge)),
-                    Err(error @ AuthError::CredentialStoreError(_)) => Err(error.into()),
-                    Err(error) => {
-                        debug!("token refresh after server rejection failed: {error}");
+                    // `try_refresh_or_reauth` already reports the cases that need a
+                    // new authorization; anything else is retryable or infrastructural.
+                    Err(AuthError::AuthorizationRequired) => {
+                        debug!("token refresh after server rejection requires authorization");
                         Err(StreamableHttpError::AuthRequired(challenge))
                     }
+                    Err(error) => Err(error.into()),
                 }
             }
             result => result,
@@ -212,11 +217,16 @@ where
 
 #[cfg(all(test, feature = "transport-streamable-http-client-reqwest"))]
 mod tests {
+    use std::sync::Arc;
+
+    use oauth2::{AccessToken, RefreshToken, basic::BasicTokenType};
+
     use super::*;
     use crate::transport::{
         auth::{
             AuthorizationManager, AuthorizationMetadata, CredentialRefreshGuard, CredentialStore,
-            StoredCredentials,
+            InMemoryCredentialStore, OAuthHttpClient, OAuthHttpClientFuture, OAuthHttpRequest,
+            OAuthTokenResponse, StoredCredentials, VendorExtraTokenFields,
         },
         streamable_http_client::AuthRequiredError,
     };
@@ -268,5 +278,103 @@ mod tests {
         assert!(matches!(error,
             StreamableHttpError::Auth(AuthError::CredentialStoreError(message))
                 if message == "guard unavailable"));
+    }
+
+    struct UnreachableTokenEndpoint;
+
+    impl OAuthHttpClient for UnreachableTokenEndpoint {
+        fn execute(&self, _: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            Box::pin(async { Err("token endpoint unreachable".into()) })
+        }
+    }
+
+    struct RejectingTokenEndpoint;
+
+    impl OAuthHttpClient for RejectingTokenEndpoint {
+        fn execute(&self, _: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            Box::pin(async {
+                Ok(oauth2::http::Response::builder()
+                    .status(400)
+                    .header("content-type", "application/json")
+                    .body(br#"{"error":"invalid_grant"}"#.to_vec())
+                    .unwrap())
+            })
+        }
+    }
+
+    /// A manager holding a refresh token the given token endpoint will answer for.
+    async fn manager_with_stored_refresh_token(
+        token_endpoint: Arc<dyn OAuthHttpClient>,
+    ) -> AuthorizationManager {
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            token_endpoint,
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: "https://auth.example.com/token".into(),
+            ..Default::default()
+        });
+        manager.configure_client_id("client").unwrap();
+
+        let mut token_response = OAuthTokenResponse::new(
+            AccessToken::new("old-token".into()),
+            BasicTokenType::Bearer,
+            VendorExtraTokenFields::default(),
+        );
+        token_response.set_refresh_token(Some(RefreshToken::new("stored-refresh".into())));
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(StoredCredentials::new(
+                "client".into(),
+                Some(token_response),
+                vec![],
+                None,
+            ))
+            .await
+            .unwrap();
+        manager.set_credential_store(store);
+        manager
+    }
+
+    /// Drive one call whose server answer is a 401 challenge.
+    async fn challenge_once(manager: AuthorizationManager) -> StreamableHttpError<reqwest::Error> {
+        AuthClient::new(reqwest::Client::new(), manager)
+            .call_reacting_to_challenges(Some("old-token".into()), |_| async {
+                Err::<(), _>(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                    "Bearer".into(),
+                )))
+            })
+            .await
+            .unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn reactive_refresh_propagates_retryable_refresh_failure() {
+        let manager = manager_with_stored_refresh_token(Arc::new(UnreachableTokenEndpoint)).await;
+
+        let error = challenge_once(manager).await;
+
+        assert!(
+            matches!(
+                error,
+                StreamableHttpError::Auth(AuthError::TokenRefreshFailed(_))
+            ),
+            "a retryable refresh failure must reach the caller instead of asking for a new authorization, got: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reactive_refresh_reports_a_rejected_refresh_token_as_a_challenge() {
+        let manager = manager_with_stored_refresh_token(Arc::new(RejectingTokenEndpoint)).await;
+
+        let error = challenge_once(manager).await;
+
+        assert!(
+            matches!(error, StreamableHttpError::AuthRequired(_)),
+            "a definitively rejected refresh token must surface the challenge, got: {error:?}"
+        );
     }
 }
