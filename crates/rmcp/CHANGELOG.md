@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.2.0...rmcp-v3.3.0) - 2026-09-08
+
+### Added
+
+- add ServerHandler::negotiate_initialize ([#1247](https://github.com/modelcontextprotocol/rust-sdk/pull/1247))
+- *(macros)* reject empty tool_router ([#1233](https://github.com/modelcontextprotocol/rust-sdk/pull/1233))
+- *(auth)* add enterprise refresh-token and ID-JAG exchanges ([#1234](https://github.com/modelcontextprotocol/rust-sdk/pull/1234))
+
+### Fixed
+
+- resolve clippy warnings across workspace ([#1195](https://github.com/modelcontextprotocol/rust-sdk/pull/1195))
+- *(auth)* unify refresh checks and error handling ([#1236](https://github.com/modelcontextprotocol/rust-sdk/pull/1236))
+
+### Other
+
+- *(deps)* update process-wrap requirement from 9.0 to 10.0 ([#1229](https://github.com/modelcontextprotocol/rust-sdk/pull/1229))
+
 ## [3.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.1.4...rmcp-v3.2.0) - 2026-08-31
 
 ### Added
