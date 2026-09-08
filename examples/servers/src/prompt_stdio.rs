@@ -112,7 +112,7 @@ impl Default for PromptServer {
     }
 }
 
-#[prompt_router]
+#[prompt_router(router = "prompt_router")]
 impl PromptServer {
     /// Simple greeting prompt without parameters
     #[prompt(
@@ -305,17 +305,17 @@ impl PromptServer {
         ];
 
         // Add tried solutions if any
-        if let Some(tried) = args.tried_solutions {
-            if !tried.is_empty() {
-                messages.push(PromptMessage::new_text(
-                    Role::User,
-                    format!("I've already tried: {}", tried.join(", ")),
-                ));
-                messages.push(PromptMessage::new_text(
-                    Role::Assistant,
-                    "I see you've already attempted some solutions. Let me suggest different approaches.",
-                ));
-            }
+        if let Some(tried) = args.tried_solutions
+            && !tried.is_empty()
+        {
+            messages.push(PromptMessage::new_text(
+                Role::User,
+                format!("I've already tried: {}", tried.join(", ")),
+            ));
+            messages.push(PromptMessage::new_text(
+                Role::Assistant,
+                "I see you've already attempted some solutions. Let me suggest different approaches.",
+            ));
         }
 
         messages.push(PromptMessage::new_text(
@@ -361,7 +361,7 @@ impl PromptServer {
     }
 }
 
-#[prompt_handler]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for PromptServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_prompts().build()).with_instructions(

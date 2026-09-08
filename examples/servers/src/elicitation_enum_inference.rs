@@ -97,7 +97,7 @@ struct ElicitationEnumFormServer {
     tool_router: ToolRouter<ElicitationEnumFormServer>,
 }
 
-#[tool_router]
+#[tool_router(router = tool_router)]
 impl ElicitationEnumFormServer {
     pub fn new() -> Self {
         Self {
@@ -153,7 +153,7 @@ impl ElicitationEnumFormServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for ElicitationEnumFormServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

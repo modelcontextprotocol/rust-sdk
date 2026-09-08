@@ -61,8 +61,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      - name: Run clippy
+      - name: Run clippy (all features)
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run clippy (all features except local)
+        run: |
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
+                      | select(startswith("__") | not)
+                      | select(. != "local")] | join(",")')
+          cargo clippy --package rmcp --all-targets --no-default-features --features "$FEATURES" -- -D warnings
 
   semver:
     name: SemVer Check

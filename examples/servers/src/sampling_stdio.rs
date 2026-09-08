@@ -1,4 +1,7 @@
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "This example demonstrates the deprecated MCP sampling API"
+)]
 use std::sync::Arc;
 
 use anyhow::Result;

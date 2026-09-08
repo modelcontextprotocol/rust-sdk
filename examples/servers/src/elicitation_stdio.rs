@@ -64,7 +64,7 @@ impl Default for ElicitationServer {
     }
 }
 
-#[tool_router]
+#[tool_router(router = tool_router)]
 impl ElicitationServer {
     #[tool(description = "Greet user with name collection")]
     async fn greet_user(
@@ -145,7 +145,7 @@ impl ElicitationServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for ElicitationServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

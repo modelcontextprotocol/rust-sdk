@@ -69,10 +69,10 @@ impl McpOAuthStore {
         redirect_uri: &str,
     ) -> Option<OAuthClientConfig> {
         let clients = self.clients.read().await;
-        if let Some(client) = clients.get(client_id) {
-            if client.redirect_uri.contains(&redirect_uri.to_string()) {
-                return Some(client.clone());
-            }
+        if let Some(client) = clients.get(client_id)
+            && client.redirect_uri == redirect_uri
+        {
+            return Some(client.clone());
         }
         None
     }

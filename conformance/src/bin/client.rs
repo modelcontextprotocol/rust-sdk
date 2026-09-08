@@ -1,3 +1,8 @@
+#![expect(
+    deprecated,
+    reason = "The conformance suite still exercises deprecated sampling scenarios"
+)]
+
 use anyhow::Context;
 use oauth2::{ClientSecret, RefreshToken};
 use rmcp::{
