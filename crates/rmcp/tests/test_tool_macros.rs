@@ -573,3 +573,47 @@ fn test_manual_get_info_not_overridden() {
         "manual resources should be preserved"
     );
 }
+
+/// Server whose tools come from a `macro_rules!` helper wrapping the whole annotated impl.
+#[derive(Debug, Clone)]
+struct MacroGeneratedServer;
+
+macro_rules! define_tools {
+    ($($name:ident => $description:literal),* $(,)?) => {
+        #[tool_router]
+        impl MacroGeneratedServer {
+            $(
+                #[tool(description = $description)]
+                async fn $name(&self) -> String {
+                    stringify!($name).to_owned()
+                }
+            )*
+        }
+    };
+}
+
+define_tools!(probe => "what a capability would own");
+
+#[test]
+fn test_macro_rules_around_the_impl_registers_tools() {
+    let tools = MacroGeneratedServer::tool_router().list_all();
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "probe");
+    assert_eq!(
+        tools[0].description.as_deref(),
+        Some("what a capability would own")
+    );
+}
+
+/// Server that opts in to a router with no tools.
+#[derive(Debug, Clone)]
+struct EmptyRouterServer;
+
+#[tool_router(allow_empty)]
+impl EmptyRouterServer {}
+
+#[test]
+fn test_allow_empty_builds_a_router_without_tools() {
+    assert!(EmptyRouterServer::tool_router().list_all().is_empty());
+}

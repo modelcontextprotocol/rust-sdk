@@ -56,6 +56,7 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// | `router`         | `Ident`       | The name of the router function to be generated. Defaults to `tool_router`. |
 /// | `vis`            | `Visibility`  | The visibility of the generated router function. Defaults to empty. |
 /// | `server_handler` | `flag`        | When set, also emits `#[::rmcp::tool_handler]` on `impl ServerHandler for Self` so you can omit a separate `#[tool_handler]` block. |
+/// | `allow_empty`    | `flag`        | When set, accepts an impl block with no `#[tool]` fn. Without it, an empty router is a compile error. |
 ///
 /// ## Example
 ///
@@ -121,6 +122,37 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///         }
 ///     }
 /// }
+/// ```
+///
+/// ### Empty routers
+///
+/// Collecting tools is this attribute's whole purpose, so an impl block with no `#[tool]` fn is a
+/// compile error rather than a router that silently serves nothing. Pass `allow_empty` when that
+/// is what you want:
+///
+/// ```rust,ignore
+/// #[tool_router(allow_empty)]
+/// impl MyToolHandler {}
+/// ```
+///
+/// The usual way to hit this by accident is a `macro_rules!` helper *inside* the impl block. An
+/// attribute macro receives the unexpanded item, so `#[tool]` fns produced by such a helper are
+/// invisible to `#[tool_router]`. Let the `macro_rules!` emit the whole annotated impl instead:
+///
+/// ```rust,ignore
+/// macro_rules! define_tools {
+///     ($($name:ident => $description:literal),* $(,)?) => {
+///         #[tool_router]
+///         impl MyToolHandler {
+///             $(
+///                 #[tool(description = $description)]
+///                 async fn $name(&self) -> String { stringify!($name).to_owned() }
+///             )*
+///         }
+///     };
+/// }
+///
+/// define_tools!(my_tool => "what my tool does");
 /// ```
 #[proc_macro_attribute]
 pub fn tool_router(attr: TokenStream, input: TokenStream) -> TokenStream {
