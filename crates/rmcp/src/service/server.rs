@@ -499,7 +499,9 @@ pub(crate) fn negotiate_protocol_version(
             server_supported,
         ));
     };
-    tracing::warn!(
+    // Falling back is the designed answer for a pinned client, and stateless
+    // HTTP re-runs it on every request, so this is not a warning.
+    tracing::debug!(
         client_requested = %client_requested,
         server_fallback = %legacy_fallback,
         "client requested a protocol version unavailable over initialize; falling back to server default"
