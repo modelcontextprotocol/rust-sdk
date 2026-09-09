@@ -1230,6 +1230,7 @@ pub struct DiscoverResult {
     /// How long clients may consider this response fresh, in milliseconds.
     pub ttl_ms: u64,
     /// Whether the cached result may be shared across authorization contexts.
+    #[serde(default, deserialize_with = "deserialize_cache_scope_non_optional")]
     pub cache_scope: CacheScope,
     /// Protocol-level response metadata.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -1596,7 +1597,45 @@ pub enum CacheScope {
     Private,
 }
 
-/// Normalize a `ttlMs` value during deserialization.
+/// Normalize a `cacheScope` value during deserialization (non-optional).
+///
+/// Per SEP-2549, `cacheScope` MUST be `"public"`, `"private"`, or omitted.
+/// Some servers send an empty string `""`; this tolerates that case by
+/// defaulting to `CacheScope::Public` (the spec default).
+fn deserialize_cache_scope_non_optional<'de, D>(deserializer: D) -> Result<CacheScope, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value.as_deref() {
+        None | Some("") => Ok(CacheScope::Public),
+        Some(s) => match s {
+            "public" => Ok(CacheScope::Public),
+            "private" => Ok(CacheScope::Private),
+            _ => Err(serde::de::Error::unknown_variant(s, &["public", "private"])),
+        },
+    }
+}
+
+/// Normalize a `cacheScope` value during deserialization (optional).
+///
+/// Per SEP-2549, `cacheScope` MUST be `"public"`, `"private"`, or omitted.
+/// Some servers send an empty string `""`; this tolerates that case by
+/// treating it as `None` (absent) rather than erroring.
+fn deserialize_cache_scope<'de, D>(deserializer: D) -> Result<Option<CacheScope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value.as_deref() {
+        None | Some("") => Ok(None),
+        Some(s) => match s {
+            "public" => Ok(Some(CacheScope::Public)),
+            "private" => Ok(Some(CacheScope::Private)),
+            _ => Err(serde::de::Error::unknown_variant(s, &["public", "private"])),
+        },
+    }
+}
 ///
 /// Per SEP-2549, `ttlMs` MUST be `>= 0`; if a server returns a negative value,
 /// clients SHOULD treat it as `0` (immediately stale). This tolerates that case
@@ -1646,7 +1685,12 @@ macro_rules! paginated_result {
             /// Scope describing who may cache this result (SEP-2549).
             /// Required by spec version 2026-07-28, but optional here to maintain compatibility
             /// with older spec versions.
-            #[serde(default, skip_serializing_if = "Option::is_none")]
+            /// Empty string is tolerated as `None` (absent) per SEP-2549.
+            #[serde(
+                default,
+                deserialize_with = "deserialize_cache_scope",
+                skip_serializing_if = "Option::is_none"
+            )]
             pub cache_scope: Option<CacheScope>,
             pub $i_item: $t_item,
         }
@@ -1796,7 +1840,11 @@ pub struct ReadResourceResult {
     /// Scope describing who may cache this result (SEP-2549).
     /// Required by spec version 2026-07-28, but optional here to maintain compatibility
     /// with older spec versions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_cache_scope",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cache_scope: Option<CacheScope>,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
