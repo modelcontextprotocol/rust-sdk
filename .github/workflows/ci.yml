@@ -214,7 +214,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Spell Check Repo
-      uses: crate-ci/typos@1a51d4b5a03bb97576af186c813af67e9137ba7c # master
+      uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b # master
 
   msrv:
     name: Check MSRV
