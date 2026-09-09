@@ -217,7 +217,7 @@ async fn auto_http_client_falls_back_after_plain_text_4xx_rejection() {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
     );
-    let client = ClientInfo::default()
+    let client = InitializeRequestParams::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Auto {
