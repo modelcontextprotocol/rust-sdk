@@ -205,16 +205,15 @@ impl Default for FixedInterval {
 pub struct ExponentialBackoff {
     pub max_times: Option<usize>,
     pub base_duration: Duration,
-    /// Upper bound on a single reconnect delay. The unbounded doubling policy can otherwise
-    /// produce delays of decades (once the multiplier saturates), which would pin the stream in
-    /// `tokio::time::sleep` forever — neither reconnecting nor terminating. Capping keeps the
-    /// backoff monotonic and panic-free while guaranteeing the client actually retries.
+    /// Optional upper bound on a single reconnect delay. `None` (the default) preserves the
+    /// pre-existing unbounded doubling behavior. Once the multiplier saturates near the bit
+    /// width that can still produce very long sleeps, so callers that need the client to
+    /// actually reconnect can set `Some(...)` to clamp the delay.
     pub max_delay: Option<Duration>,
 }
 
 impl ExponentialBackoff {
     pub const DEFAULT_DURATION: Duration = Duration::from_millis(1000);
-    pub const DEFAULT_MAX_DELAY: Duration = Duration::from_secs(30);
 }
 
 impl Default for ExponentialBackoff {
@@ -222,7 +221,7 @@ impl Default for ExponentialBackoff {
         Self {
             max_times: None,
             base_duration: Self::DEFAULT_DURATION,
-            max_delay: Some(Self::DEFAULT_MAX_DELAY),
+            max_delay: None,
         }
     }
 }
@@ -821,7 +820,7 @@ mod tests {
 
     #[test]
     fn exponential_backoff_caps_delay_at_max_delay() {
-        // The default cap keeps the unbounded doubling policy from producing decades-long
+        // An explicit cap keeps the unbounded doubling policy from producing decades-long
         // sleeps once the multiplier saturates. The delay must grow monotonically, stop at
         // the configured ceiling, and never exceed it.
         let policy = ExponentialBackoff {
