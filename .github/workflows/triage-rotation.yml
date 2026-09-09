@@ -1,0 +1,120 @@
+name: Triage Rotation
+
+# Assigns newly opened issues and PRs to the maintainer currently on rotation.
+#
+# The roster is the membership of the GitHub team configured in ROTATION_TEAM
+# below. Logins are sorted for a stable order, then the ISO week number selects
+# whose turn it is. Adding or removing a team member changes the roster (and
+# therefore re-partitions future weeks) -- see README notes in the PR.
+#
+# Requires a secret ROTATION_TOKEN with `read:org` scope: the default
+# GITHUB_TOKEN cannot read org team membership and will 403 on
+# teams.listMembersInOrg. A GitHub App installation token is preferred over a
+# personal PAT so the rotation does not break when one maintainer's token
+# expires.
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: "Issue or PR number to assign (for testing)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry-run mode (log the pick, don't assign)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: triage-rotation-${{ github.event.issue.number || github.event.pull_request.number || github.event.inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  assign:
+    name: Assign to rotation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Skip bot-authored PRs (dependabot, release-plz) -- these are reviewed by
+    # whoever is handling releases, not the triage rotation.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.issue.user.type != 'Bot'
+      || github.event.pull_request.user.type != 'Bot'
+
+    env:
+      ROTATION_ORG: modelcontextprotocol
+      ROTATION_TEAM: rust-sdk-maintainers
+
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.ROTATION_TOKEN }}
+          script: |
+            const org = process.env.ROTATION_ORG;
+            const team_slug = process.env.ROTATION_TEAM;
+
+            // Roster: team membership, sorted so week-to-week order is stable.
+            const members = await github.paginate(
+              github.rest.teams.listMembersInOrg,
+              { org, team_slug, per_page: 100 },
+            );
+            const roster = members.map((m) => m.login).sort();
+
+            if (roster.length === 0) {
+              core.setFailed(`Team ${org}/${team_slug} has no members; nothing to assign.`);
+              return;
+            }
+
+            // ISO week number since epoch. Thursday-anchored so the rotation
+            // turns over on Monday 00:00 UTC rather than mid-Sunday.
+            const weeks = Math.floor((Date.now() / 86400000 + 3) / 7);
+            const onCall = roster[weeks % roster.length];
+
+            const number = Number(
+              context.payload.issue?.number ??
+              context.payload.pull_request?.number ??
+              context.payload.inputs?.number,
+            );
+
+            core.info(`Roster (${roster.length}): ${roster.join(', ')}`);
+            core.info(`Week ${weeks} -> on call: ${onCall}`);
+            core.info(`Target: #${number}`);
+
+            const dryRun = context.payload.inputs?.dry_run === 'true';
+            if (dryRun) {
+              core.notice(`Dry run: would assign #${number} to ${onCall}`);
+              return;
+            }
+
+            // addAssignees silently ignores users without write access, so
+            // verify the result and fall back to an @-mention comment.
+            const { data: updated } = await github.rest.issues.addAssignees({
+              ...context.repo,
+              issue_number: number,
+              assignees: [onCall],
+            });
+
+            const assigned = (updated.assignees || []).some((a) => a.login === onCall);
+
+            if (assigned) {
+              core.info(`Assigned #${number} to ${onCall}`);
+            } else {
+              core.warning(
+                `Could not assign ${onCall} (likely lacks write access); commenting instead.`,
+              );
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: number,
+                body: `@${onCall} is on triage rotation this week and will take a first look.`,
+              });
+            }
