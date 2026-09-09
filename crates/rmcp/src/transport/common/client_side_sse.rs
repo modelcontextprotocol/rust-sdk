@@ -227,7 +227,15 @@ impl SseRetryPolicy for ExponentialBackoff {
         {
             return None;
         }
-        Some(self.base_duration * (2u32.pow(current_times as u32)))
+        // Saturate the multiplier to avoid u32 overflow when current_times >= 32.
+        // Without saturation, 2u32.pow(32) panics in debug and wraps in release,
+        // causing either a panic or an unexpectedly short backoff delay.
+        let multiplier = if current_times >= 32 {
+            u32::MAX
+        } else {
+            2u32.pow(current_times as u32)
+        };
+        Some(self.base_duration * multiplier)
     }
 }
 
@@ -774,5 +782,35 @@ mod tests {
 
         assert!(stream.next().await.is_none());
         assert_eq!(attempts.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn exponential_backoff_saturates_at_high_retry_count() {
+        let backoff = ExponentialBackoff {
+            max_times: None,
+            base_duration: Duration::from_millis(1000),
+        };
+
+        // Normal case: 2^5 = 32 seconds
+        assert_eq!(backoff.retry(5), Some(Duration::from_millis(32000)));
+
+        // At current_times=32, 2u32.pow(32) would overflow.
+        // Should saturate to u32::MAX instead of panicking.
+        let result = backoff.retry(32);
+        assert!(result.is_some(), "should still return Some at retry 32");
+        assert_eq!(
+            result,
+            Some(Duration::from_millis(1000) * u32::MAX),
+            "should saturate at u32::MAX multiplier"
+        );
+
+        // Even higher values should still work (saturated)
+        let result = backoff.retry(100);
+        assert!(result.is_some(), "should still return Some at retry 100");
+        assert_eq!(
+            result,
+            Some(Duration::from_millis(1000) * u32::MAX),
+            "should remain saturated at u32::MAX"
+        );
     }
 }
