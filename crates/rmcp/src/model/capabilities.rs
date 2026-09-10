@@ -192,6 +192,13 @@ pub struct ClientCapabilities {
     /// Capability to handle elicitation requests from servers for interactive user input
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationCapability>,
+    /// Additional capability entries not yet modeled by this SDK.
+    ///
+    /// MCP capability objects are open sets. Retaining these values allows
+    /// intermediaries to preserve additive or extension-defined capabilities
+    /// without requiring a new SDK release for every field.
+    #[serde(flatten)]
+    pub additional_capabilities: JsonObject,
 }
 
 impl ClientCapabilities {
@@ -240,6 +247,13 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
+    /// Additional capability entries not yet modeled by this SDK.
+    ///
+    /// MCP capability objects are open sets. Retaining these values allows
+    /// intermediaries to preserve additive or extension-defined capabilities
+    /// without requiring a new SDK release for every field.
+    #[serde(flatten)]
+    pub additional_capabilities: JsonObject,
 }
 
 impl ServerCapabilities {
@@ -277,6 +291,7 @@ macro_rules! builder {
                 pub fn build(self) -> $Target {
                     $Target {
                         $( $f: self.$f, )*
+                        ..Default::default()
                     }
                 }
             }
@@ -675,6 +690,43 @@ mod test {
         assert_eq!(
             json["extensions"]["io.modelcontextprotocol/oauth-client-credentials"],
             serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn client_capabilities_preserve_unknown_top_level_fields() {
+        let input = serde_json::json!({
+            "sampling": {},
+            "com.example/futureCoreCapability": {
+                "mode": "future",
+                "nested": [1, {"enabled": true}]
+            }
+        });
+
+        let capabilities: ClientCapabilities = serde_json::from_value(input.clone()).unwrap();
+        let output = serde_json::to_value(capabilities).unwrap();
+
+        assert_eq!(
+            output["com.example/futureCoreCapability"],
+            input["com.example/futureCoreCapability"]
+        );
+    }
+
+    #[test]
+    fn server_capabilities_preserve_unknown_top_level_fields() {
+        let input = serde_json::json!({
+            "tools": {"listChanged": true},
+            "com.example/futureCoreCapability": {
+                "arbitrary": ["data", 42]
+            }
+        });
+
+        let capabilities: ServerCapabilities = serde_json::from_value(input.clone()).unwrap();
+        let output = serde_json::to_value(capabilities).unwrap();
+
+        assert_eq!(
+            output["com.example/futureCoreCapability"],
+            input["com.example/futureCoreCapability"]
         );
     }
 }

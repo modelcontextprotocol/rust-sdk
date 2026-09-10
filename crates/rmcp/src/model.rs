@@ -1964,6 +1964,13 @@ pub struct SubscriptionFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schemars", schemars(with = "Vec<String>"))]
     pub resource_subscriptions: Option<Vec<String>>,
+    /// Extension-owned subscription filter entries not modeled by the core SDK.
+    ///
+    /// The server handler remains responsible for validating and accepting
+    /// these values. Core capability filtering preserves handler-accepted
+    /// extension fields instead of interpreting their schemas.
+    #[serde(flatten)]
+    pub additional_fields: JsonObject,
 }
 
 impl SubscriptionFilter {
@@ -1992,6 +1999,12 @@ impl SubscriptionFilter {
                 })
             })
             .filter(|uris: &Vec<String>| !uris.is_empty());
+        let additional_fields = other
+            .additional_fields
+            .iter()
+            .filter(|(key, _)| self.additional_fields.contains_key(*key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         Self {
             tools_list_changed: (self.tools_list_changed == Some(true)
                 && other.tools_list_changed == Some(true))
@@ -2003,6 +2016,7 @@ impl SubscriptionFilter {
                 && other.resources_list_changed == Some(true))
             .then_some(true),
             resource_subscriptions,
+            additional_fields,
         }
     }
 
@@ -2023,7 +2037,11 @@ impl SubscriptionFilter {
                     .is_some_and(|requested| requested.contains(uri))
             })
         });
-        booleans_are_subset && resources_are_subset
+        let additional_fields_are_subset = self
+            .additional_fields
+            .keys()
+            .all(|key| other.additional_fields.contains_key(key));
+        booleans_are_subset && resources_are_subset && additional_fields_are_subset
     }
 
     /// Return the requested notification types advertised by server capabilities.
@@ -2053,6 +2071,7 @@ impl SubscriptionFilter {
                 .is_some_and(|resources| resources.subscribe == Some(true))
                 .then(|| self.resource_subscriptions.clone())
                 .flatten(),
+            additional_fields: self.additional_fields.clone(),
         }
     }
 }
