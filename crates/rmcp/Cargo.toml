@@ -339,6 +339,16 @@ required-features = [
 path = "tests/test_discover_http_client_startup.rs"
 
 [[test]]
+name = "test_streamable_http_sessionless_version"
+required-features = [
+  "client",
+  "reqwest",
+  "transport-streamable-http-client-reqwest",
+  "transport-streamable-http-server",
+]
+path = "tests/test_streamable_http_sessionless_version.rs"
+
+[[test]]
 name = "test_streamable_http_standard_headers"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_standard_headers.rs"

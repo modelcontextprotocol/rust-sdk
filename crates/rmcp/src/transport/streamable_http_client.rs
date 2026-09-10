@@ -90,6 +90,37 @@ fn request_version_headers(
     (version, headers)
 }
 
+/// Decides whether a session id survives version negotiation.
+///
+/// SEP-2567 removes sessions and the standalone GET endpoint at
+/// [`ProtocolVersion::STANDARD_HEADERS`], so at that version an `Mcp-Session-Id` and a GET
+/// stream are both artifacts of a pre-`2026-07-28` server shape. A legacy-shaped handshake
+/// can still answer with a session id while negotiating that version; the id is dropped
+/// rather than echoed, which also leaves every `spawn_common_stream` call site — all three
+/// of which are guarded on a session id being present — with no stream to open.
+///
+/// Dropping is deliberate rather than fatal: refusing to start would break clients against
+/// servers that work today, and the receive-side enforcement added for SEP-2260 still
+/// rejects anything that reaches the client over a stream it should not have. The caller
+/// keeps the original id for the shutdown `DELETE`, so a session the server really did
+/// create is still torn down.
+fn session_id_for_version(
+    session_id: Option<Arc<str>>,
+    negotiated_version: &ProtocolVersion,
+) -> Option<Arc<str>> {
+    if negotiated_version < &ProtocolVersion::STANDARD_HEADERS {
+        return session_id;
+    }
+    if session_id.is_some() {
+        tracing::warn!(
+            version = negotiated_version.as_str(),
+            "server returned an Mcp-Session-Id while negotiating a version that has no sessions; \
+             the id will not be sent on requests and no standalone GET stream will be opened"
+        );
+    }
+    None
+}
+
 fn cache_tools_from_response(
     cache: &mut HashMap<String, Arc<JsonObject>>,
     message: &mut ServerJsonRpcMessage,
@@ -1133,6 +1164,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             auth_header: config.auth_header.clone(),
             protocol_headers: protocol_headers.clone(),
         });
+        session_id = session_id_for_version(session_id, &negotiated_version);
 
         context.send_to_handler(message).await?;
         if is_legacy_startup {
@@ -1261,6 +1293,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             auth_header: config.auth_header.clone(),
                             protocol_headers: protocol_headers.clone(),
                         });
+                        session_id = session_id_for_version(session_id, &negotiated_version);
                         // Do not send controls queued during recovery to the new session.
                         context.advance_control_generation();
                         session_cancellation = CancellationToken::new();
@@ -1517,6 +1550,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 auth_header: config.auth_header.clone(),
                                 protocol_headers: protocol_headers.clone(),
                             });
+                        session_id = session_id_for_version(session_id, &negotiated_version);
                         context.send_to_handler(initialize_response).await?;
                         awaiting_fallback_initialized = true;
                         continue;
