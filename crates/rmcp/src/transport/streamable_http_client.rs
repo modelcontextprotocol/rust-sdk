@@ -1386,7 +1386,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     }
                     let cancellation_request_id =
                         Self::cancellation_request_id(&send_request.message);
-                    let stale = send_request.control_generation() != context.control_generation();
+                    let stale = !context.is_current_control(&send_request);
                     if stale {
                         // Do not send old controls to a replacement session.
                         let result = match cancellation_request_id {
