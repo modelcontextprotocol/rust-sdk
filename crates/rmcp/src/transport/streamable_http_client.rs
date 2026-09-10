@@ -2293,6 +2293,7 @@ mod tests {
                 Arc::new(ExponentialBackoff {
                     max_times: Some(1),
                     base_duration: Duration::ZERO,
+                    max_delay: None,
                 }),
             );
         let mut stream = std::pin::pin!(stream);
@@ -2397,6 +2398,7 @@ mod tests {
                 Arc::new(ExponentialBackoff {
                     max_times: Some(1),
                     base_duration: Duration::ZERO,
+                    max_delay: None,
                 }),
             );
 
