@@ -1,54 +1,115 @@
-name: Auto Triage Issues
+name: Triage
+
+# Two-stage triage for newly opened issues and pull requests.
+#
+#   1. Codex classifies the item and applies type/priority/component labels.
+#   2. The maintainer on rotation this week is assigned as the human reviewer,
+#      and is responsible for confirming or correcting that classification.
+#
+# Stage 2 does not depend on stage 1 succeeding. If Codex is unavailable,
+# misconfigured, or wrong, the item is still assigned to a human -- the AI pass
+# is an accelerator for triage, never the thing that decides it.
+#
+# The rotation roster is the membership of ROTATION_TEAM, sorted for a stable
+# order, with the ISO week number selecting whose turn it is. Adding or removing
+# a team member re-partitions future weeks. See docs/CONTRIBUTE.MD ("Triage")
+# for the response-time expectations that go with being on rotation.
+#
+# Secrets:
+#   CODEX_AUTH_JSON        Codex credentials; refreshed and written back each run.
+#   CODEX_AUTH_STORE_TOKEN Fine-grained PAT with `secrets: write`. GITHUB_TOKEN
+#                          has no `secrets` scope and cannot persist the refresh.
+#   ROTATION_TOKEN         Reads org team membership and assigns the reviewer.
+#                          Needs `read:org` plus write on issues and pull
+#                          requests -- `read:org` alone cannot call addAssignees
+#                          or createComment. A GitHub App installation token is
+#                          preferred over a PAT so the rotation does not break
+#                          when one maintainer's token expires.
+#
+# Any missing secret degrades that stage to a skip, never a red X on the item.
 
 on:
   issues:
     types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened]
 
   workflow_dispatch:
     inputs:
-      issue_number:
-        description: "Issue number to triage"
+      number:
+        description: "Issue or PR number to triage"
         required: true
         type: string
+      dry_run:
+        description: "Dry-run mode (log the verdict and the pick, change nothing)"
+        required: false
+        type: boolean
+        default: true
 
 permissions: {}
 
-# auth.json carries a rotating refresh token; overlapping runs would clobber it.
 concurrency:
-  group: codex-auth
+  group: triage-${{ github.event.issue.number || github.event.pull_request.number || inputs.number }}
   cancel-in-progress: false
 
 jobs:
   preflight:
     name: Check prerequisites
-    if: github.repository == 'modelcontextprotocol/rust-sdk'
+    if: >-
+      github.repository == 'modelcontextprotocol/rust-sdk'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (github.event.issue.user.type || github.event.pull_request.user.type) != 'Bot'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      enabled: ${{ steps.check.outputs.enabled }}
-      issue: ${{ steps.check.outputs.issue }}
+      number: ${{ steps.check.outputs.number }}
+      kind: ${{ steps.check.outputs.kind }}
+      classify: ${{ steps.check.outputs.classify }}
+      assign: ${{ steps.check.outputs.assign }}
+      dry_run: ${{ steps.check.outputs.dry_run }}
     steps:
       - id: check
         env:
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           AUTH_STORE_TOKEN: ${{ secrets.CODEX_AUTH_STORE_TOKEN }}
-          ISSUE: ${{ inputs.issue_number || github.event.issue.number }}
+          ROTATION_TOKEN: ${{ secrets.ROTATION_TOKEN }}
+          NUMBER: ${{ inputs.number || github.event.issue.number || github.event.pull_request.number }}
+          # `issue` drives Codex: only issues get classified, since a PR's
+          # signal is its diff and that is `auto-label-pr.yml`'s job.
+          KIND: ${{ github.event.pull_request && 'pr' || 'issue' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
-          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          {
+            echo "number=$NUMBER"
+            echo "kind=$KIND"
+            echo "dry_run=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
 
-          if [ -n "$CODEX_AUTH_JSON" ] && [ -n "$AUTH_STORE_TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if [ "$KIND" = "issue" ] && [ -n "$CODEX_AUTH_JSON" ] && [ -n "$AUTH_STORE_TOKEN" ]; then
+            echo "classify=true" >> "$GITHUB_OUTPUT"
           else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "CODEX_AUTH_JSON or CODEX_AUTH_STORE_TOKEN is not configured; skipping triage." \
+            echo "classify=false" >> "$GITHUB_OUTPUT"
+            if [ "$KIND" = "issue" ]; then
+              echo "CODEX_AUTH_JSON or CODEX_AUTH_STORE_TOKEN is not configured; skipping AI classification." \
+                >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          if [ -n "$ROTATION_TOKEN" ]; then
+            echo "assign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "assign=false" >> "$GITHUB_OUTPUT"
+            echo "ROTATION_TOKEN is not configured; skipping reviewer assignment." \
               >> "$GITHUB_STEP_SUMMARY"
           fi
 
   classify:
     name: Classify issue
     needs: preflight
-    if: needs.preflight.outputs.enabled == 'true'
+    if: needs.preflight.outputs.classify == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -56,8 +117,13 @@ jobs:
       issues: read
     outputs:
       classification: ${{ steps.extract.outputs.classification }}
+    # auth.json carries a rotating refresh token; overlapping runs would clobber
+    # it, so every classify job across every issue serializes on one group.
+    concurrency:
+      group: codex-auth
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
 
@@ -101,7 +167,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          ISSUE: ${{ needs.preflight.outputs.issue }}
+          ISSUE: ${{ needs.preflight.outputs.number }}
         run: |
           set -euo pipefail
           gh issue view "$ISSUE" --json number,title,body,labels > triage-issue.json
@@ -277,7 +343,7 @@ jobs:
   apply:
     name: Apply labels
     needs: [preflight, classify]
-    if: needs.classify.outputs.classification != ''
+    if: needs.classify.outputs.classification != '' && needs.preflight.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -287,7 +353,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          ISSUE: ${{ needs.preflight.outputs.issue }}
+          ISSUE: ${{ needs.preflight.outputs.number }}
           CLASSIFICATION: ${{ needs.classify.outputs.classification }}
         run: |
           set -euo pipefail
@@ -358,3 +424,118 @@ jobs:
               echo "Removed: ${stale[*]}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  assign:
+    name: Assign human reviewer
+    needs: [preflight, classify, apply]
+    # The human backstop is the point of this workflow, so it runs even when
+    # classification or labeling failed or was skipped -- `always()` plus an
+    # explicit gate on preflight, which is the only prerequisite it truly has.
+    if: always() && needs.preflight.outputs.assign == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROTATION_ORG: modelcontextprotocol
+      ROTATION_TEAM: rust-sdk-maintainers
+      # Passed through env, never interpolated into the script body: the
+      # classification is model output and `${{ }}` there would be injection.
+      TARGET_NUMBER: ${{ needs.preflight.outputs.number }}
+      CLASSIFICATION: ${{ needs.classify.outputs.classification }}
+      DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
+    steps:
+      - uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
+        with:
+          # Needs `read:org` for team membership plus write on issues and pull
+          # requests; the default GITHUB_TOKEN 403s on listMembersInOrg.
+          github-token: ${{ secrets.ROTATION_TOKEN }}
+          script: |
+            const org = process.env.ROTATION_ORG;
+            const team_slug = process.env.ROTATION_TEAM;
+
+            // Roster: team membership, sorted so week-to-week order is stable.
+            const members = await github.paginate(
+              github.rest.teams.listMembersInOrg,
+              { org, team_slug, per_page: 100 },
+            );
+            const roster = members.map((m) => m.login).sort();
+
+            if (roster.length === 0) {
+              core.setFailed(`Team ${org}/${team_slug} has no members; nothing to assign.`);
+              return;
+            }
+
+            // ISO week number since epoch. Thursday-anchored so the rotation
+            // turns over on Monday 00:00 UTC rather than mid-Sunday.
+            const weeks = Math.floor((Date.now() / 86400000 + 3) / 7);
+            const onCall = roster[weeks % roster.length];
+
+            const number = Number(process.env.TARGET_NUMBER);
+            const classification = process.env.CLASSIFICATION;
+
+            core.info(`Roster (${roster.length}): ${roster.join(', ')}`);
+            core.info(`Week ${weeks} -> on call: ${onCall}`);
+            core.info(`Target: #${number}`);
+
+            // What the AI pass concluded, so the reviewer knows what to check
+            // rather than starting from scratch. Absent when Codex was skipped
+            // or failed, which is exactly when the human matters most.
+            let verdict = null;
+            if (classification) {
+              try {
+                verdict = JSON.parse(classification);
+              } catch {
+                core.warning('Could not parse the classification; assigning without it.');
+              }
+            }
+
+            // The verdict reaches a comment body, so each field is checked
+            // against the allowed set rather than trusted from model output.
+            const TYPES = ['bug', 'enhancement', 'question'];
+            const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+            const COMPONENT = /^T-[A-Za-z]+$/;
+
+            const type = TYPES.includes(verdict?.type) ? verdict.type : null;
+            const priority = PRIORITIES.includes(verdict?.priority) ? verdict.priority : null;
+            const components = (verdict?.components || []).filter(
+              (c) => typeof c === 'string' && COMPONENT.test(c),
+            );
+
+            const summary = type && priority
+              ? `Codex labeled this **${type}** / **${priority}**` +
+                (components.length ? ` (${components.join(', ')})` : '') +
+                `. Please confirm or correct those labels.`
+              : `Automated classification did not run for this one, so it needs a full manual pass.`;
+
+            if (process.env.DRY_RUN === 'true') {
+              core.notice(`Dry run: would assign #${number} to ${onCall}. ${summary}`);
+              return;
+            }
+
+            // addAssignees silently ignores users without write access, so
+            // verify the result and fall back to an @-mention comment.
+            const { data: updated } = await github.rest.issues.addAssignees({
+              ...context.repo,
+              issue_number: number,
+              assignees: [onCall],
+            });
+
+            const assigned = (updated.assignees || []).some((a) => a.login === onCall);
+
+            if (assigned) {
+              core.info(`Assigned #${number} to ${onCall}`);
+            } else {
+              core.warning(
+                `Could not assign ${onCall} (likely lacks write access); commenting instead.`,
+              );
+            }
+
+            const mention = assigned ? `@${onCall}` : `@${onCall} (assignment failed)`;
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: number,
+              body:
+                `${mention} is on triage rotation this week and is the reviewer for this one.\n\n` +
+                `${summary}\n\n` +
+                `<sub>Automated triage. Labels are a first pass and the assigned maintainer has ` +
+                `the final say.</sub>`,
+            });
