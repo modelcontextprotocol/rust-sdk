@@ -243,13 +243,17 @@ async fn stateless_negotiated_terminal_response_returns_application_json() -> an
     Ok(())
 }
 
+#[rstest::rstest]
 #[tokio::test]
-async fn stateless_negotiated_header_mismatch_returns_bad_request() -> anyhow::Result<()> {
+async fn stateless_negotiated_header_mismatch_returns_bad_request(
+    #[values(false, true)] json_response: bool,
+    #[values(false, true)] legacy_session_mode: bool,
+) -> anyhow::Result<()> {
     let ct = CancellationToken::new();
     let (client, url, ct) = spawn_progress_server(
         StreamableHttpServerConfig::default()
-            .with_legacy_session_mode(false)
-            .with_json_response(true)
+            .with_legacy_session_mode(legacy_session_mode)
+            .with_json_response(json_response)
             .with_sse_keep_alive(None)
             .with_cancellation_token(ct.child_token()),
     )
@@ -267,9 +271,14 @@ async fn stateless_negotiated_header_mismatch_returns_bad_request() -> anyhow::R
         .await?;
 
     assert_eq!(response.status(), 400);
+    assert_eq!(response.headers()["content-type"], "application/json");
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["id"], 3);
     assert_eq!(body["error"]["code"], -32020);
+    assert_eq!(
+        body["error"]["message"],
+        "header does not match request parameter"
+    );
 
     ct.cancel();
     Ok(())
