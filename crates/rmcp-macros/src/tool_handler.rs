@@ -116,7 +116,7 @@ pub(crate) enum CallerCapability {
     Prompts,
 }
 
-/// Build a `get_info()` method that returns `ServerInfo` with the appropriate capabilities.
+/// Build a `get_info()` method that returns `InitializeResult` with the appropriate capabilities.
 ///
 /// The caller declares its own capability via `caller`. Sibling handler attributes
 /// (`prompt_handler`, `tool_handler`) are detected automatically
@@ -157,8 +157,8 @@ pub(crate) fn build_get_info(
     }
 
     syn::parse2::<ImplItem>(quote! {
-        fn get_info(&self) -> rmcp::model::ServerInfo {
-            rmcp::model::ServerInfo::new(
+        fn get_info(&self) -> rmcp::model::InitializeResult {
+            rmcp::model::InitializeResult::new(
                 rmcp::model::ServerCapabilities::builder()
                     #(#capability_calls)*
                     .build()

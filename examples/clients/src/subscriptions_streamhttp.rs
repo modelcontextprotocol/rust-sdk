@@ -1,6 +1,6 @@
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt,
-    model::{ClientInfo, ProtocolVersion, SubscriptionFilter},
+    model::{InitializeRequestParams, ProtocolVersion, SubscriptionFilter},
     transport::StreamableHttpClientTransport,
 };
 
@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let transport = StreamableHttpClientTransport::from_uri("http://127.0.0.1:8000/mcp");
-    let client = ClientInfo::default()
+    let client = InitializeRequestParams::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {

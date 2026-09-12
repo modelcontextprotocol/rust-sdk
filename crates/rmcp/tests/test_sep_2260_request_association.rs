@@ -9,9 +9,10 @@ use std::sync::{Arc, Mutex};
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ClientInfo, ContentBlock,
-        CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult, ProtocolVersion,
-        SamplingMessage, ServerCapabilities, ServerInfo, ServerRequest,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult,
+        InitializeRequestParams, InitializeResult, ProtocolVersion, SamplingMessage,
+        ServerCapabilities, ServerRequest,
     },
     service::{RequestContext, RunningService, serve_directly},
 };
@@ -29,8 +30,8 @@ struct SamplingServer {
 }
 
 impl ServerHandler for SamplingServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(
@@ -93,8 +94,8 @@ impl ClientHandler for SamplingClient {
         .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN))
     }
 
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info
     }

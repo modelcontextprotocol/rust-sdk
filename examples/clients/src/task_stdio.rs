@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Declare the tasks extension in our client capabilities (SEP-2663).
-    let client_info = rmcp::model::ClientInfo::new(
+    let client_info = rmcp::model::InitializeRequestParams::new(
         ClientCapabilities::builder().enable_tasks().build(),
         rmcp::model::Implementation::from_build_env(),
     );

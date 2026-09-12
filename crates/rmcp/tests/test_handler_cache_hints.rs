@@ -5,7 +5,8 @@ use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler,
     handler::server::router::{prompt::PromptRouter, tool::ToolRouter},
     model::{
-        CacheScope, ClientInfo, ListPromptsResult, ListToolsResult, ProtocolVersion, ServerInfo,
+        CacheScope, InitializeRequestParams, InitializeResult, ListPromptsResult, ListToolsResult,
+        ProtocolVersion,
     },
     prompt_handler,
     service::serve_directly,
@@ -37,8 +38,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> InitializeRequestParams {
+        let mut info = InitializeRequestParams::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }
@@ -53,7 +54,7 @@ async fn list_results(protocol_version: ProtocolVersion) -> (ListToolsResult, Li
     let client_handler = VersionedClient {
         protocol_version: protocol_version.clone(),
     };
-    let mut server_peer_info = ServerInfo::default();
+    let mut server_peer_info = InitializeResult::default();
     server_peer_info.protocol_version = protocol_version;
 
     let server = serve_directly::<RoleServer, _, _, _, _>(

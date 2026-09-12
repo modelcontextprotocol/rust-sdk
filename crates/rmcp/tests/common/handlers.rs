@@ -115,8 +115,8 @@ impl TestServer {
 
 impl ServerHandler for TestServer {
     #[allow(deprecated)]
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_logging().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_logging().build())
     }
 
     #[allow(deprecated)]
