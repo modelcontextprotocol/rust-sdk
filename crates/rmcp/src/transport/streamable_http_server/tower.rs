@@ -644,9 +644,49 @@ fn jsonrpc_http_status(message: &ServerJsonRpcMessage) -> http::StatusCode {
     match error.error.code {
         ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
         | ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
-        | ErrorCode::INVALID_PARAMS => http::StatusCode::BAD_REQUEST,
+        | ErrorCode::INVALID_PARAMS
+        | ErrorCode::HEADER_MISMATCH => http::StatusCode::BAD_REQUEST,
         ErrorCode::METHOD_NOT_FOUND => http::StatusCode::NOT_FOUND,
         _ => http::StatusCode::OK,
+    }
+}
+
+#[cfg(test)]
+mod jsonrpc_http_status_tests {
+    use super::*;
+
+    fn error_message(code: ErrorCode) -> ServerJsonRpcMessage {
+        ServerJsonRpcMessage::Error(JsonRpcError::new(
+            Some(RequestId::Number(1)),
+            ErrorData::new(code, "test error", None),
+        ))
+    }
+
+    /// A handler returning `ErrorData::header_mismatch(..)` on the modern per-request path
+    /// must map to HTTP 400, not the default HTTP 200. Regression test for
+    /// https://github.com/modelcontextprotocol/rust-sdk/issues/1225
+    #[test]
+    fn header_mismatch_maps_to_bad_request() {
+        assert_eq!(
+            jsonrpc_http_status(&error_message(ErrorCode::HEADER_MISMATCH)),
+            http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn method_not_found_maps_to_not_found() {
+        assert_eq!(
+            jsonrpc_http_status(&error_message(ErrorCode::METHOD_NOT_FOUND)),
+            http::StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn unmapped_error_defaults_to_ok() {
+        assert_eq!(
+            jsonrpc_http_status(&error_message(ErrorCode::INTERNAL_ERROR)),
+            http::StatusCode::OK
+        );
     }
 }
 
