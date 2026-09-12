@@ -1,14 +1,17 @@
 //! SEP-2260 follow-up (#1033): stream-based receive-side enforcement.
 //!
-//! Scripted streamable HTTP "server": answers a legacy initialize with
-//! protocol 2026-07-28 AND a session id. That combination is NOT
-//! spec-compliant: the 2026-07-28 revision removes protocol-level sessions
-//! and the standalone GET stream (SEP-2567; transports spec: "do not mint
-//! or echo session IDs"). Receive-side enforcement (#1033) exists precisely
-//! to protect the client from non-conforming servers, and rmcp's client
-//! tolerates the session id and opens the standalone GET stream — so this
-//! is the reachable path where the client has BOTH a GET stream and strict
-//! SEP-2260 enforcement.
+//! Scripted streamable HTTP "server" negotiating 2026-07-28, which is the
+//! range where enforcement is strict (`enforce_peer_request_association`
+//! only tightens at `>= V_2026_07_28`).
+//!
+//! The unassociated stream here is the SSE body the server returns for the
+//! `notifications/initialized` POST. A POST carrying no request id gets
+//! `InboundStreamOrigin::Unassociated`, so a server request arriving on it
+//! is unassociated by construction — the same condition the standalone GET
+//! stream used to provide, minus the session. Answering a notification POST
+//! with a stream instead of `202 Accepted` is itself server misbehaviour,
+//! which is the point: receive-side enforcement exists to protect the
+//! client from non-conforming servers.
 #![cfg(all(
     feature = "client",
     feature = "transport-streamable-http-client",
@@ -55,13 +58,14 @@ fn message_stream(rx: mpsc::Receiver<Value>) -> BoxStream<'static, Result<Sse, S
         .boxed()
 }
 
-/// Scripted server: initialize -> JSON init result (2026-07-28 + session);
+/// Scripted server: initialize -> JSON init result (2026-07-28, no session);
 /// first non-initialize request POST -> SSE stream fed by `post_stream`;
+/// first notification POST -> SSE stream fed by `notification_stream`;
 /// everything else -> Accepted. Every message the client POSTs is forwarded
 /// to `posted`.
 #[derive(Clone)]
 struct ScriptedServer {
-    get_stream: Arc<Mutex<Option<mpsc::Receiver<Value>>>>,
+    notification_stream: Arc<Mutex<Option<mpsc::Receiver<Value>>>>,
     post_stream: Arc<Mutex<Option<mpsc::Receiver<Value>>>>,
     posted: mpsc::UnboundedSender<Value>,
 }
@@ -87,10 +91,9 @@ impl StreamableHttpClient for ScriptedServer {
                 rmcp::model::ServerResult::InitializeResult(info),
                 serde_json::from_value(value["id"].clone()).expect("request id"),
             );
-            return Ok(StreamableHttpPostResponse::Json(
-                response,
-                Some("scripted-session".into()),
-            ));
+            // No session id: 2026-07-28 removed protocol-level sessions
+            // (SEP-2567), so a conforming server mints none.
+            return Ok(StreamableHttpPostResponse::Json(response, None));
         }
         if matches!(message, ClientJsonRpcMessage::Request(_)) {
             // Fail as a transport error rather than panicking: this code runs
@@ -101,6 +104,16 @@ impl StreamableHttpClient for ScriptedServer {
                     "scripted server expects exactly one non-initialize request POST",
                 ))
             })?;
+            return Ok(StreamableHttpPostResponse::Sse(message_stream(rx), None));
+        }
+        // A notification POST carries no request id, so the stream the client
+        // opens for it is `Unassociated`. `notifications/initialized` is
+        // excluded: startup requires `202 Accepted` or JSON there and treats a
+        // stream as fatal, so the harness uses a post-startup notification.
+        if matches!(message, ClientJsonRpcMessage::Notification(_))
+            && value["method"] != "notifications/initialized"
+            && let Some(rx) = self.notification_stream.lock().await.take()
+        {
             return Ok(StreamableHttpPostResponse::Sse(message_stream(rx), None));
         }
         Ok(StreamableHttpPostResponse::Accepted)
@@ -124,11 +137,10 @@ impl StreamableHttpClient for ScriptedServer {
         _auth_header: Option<String>,
         _custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
-        match self.get_stream.lock().await.take() {
-            Some(rx) => Ok(message_stream(rx)),
-            // Reconnect after the scripted stream ends: stay silent.
-            None => Ok(futures::stream::pending().boxed()),
-        }
+        // Unreached: with no session there is no standalone GET stream. Left
+        // silent rather than failing so an auto-reconnect after a scripted
+        // stream ends at teardown cannot surface as a spurious error.
+        Ok(futures::stream::pending().boxed())
     }
 }
 
@@ -185,8 +197,9 @@ struct Harness {
     client: rmcp::service::RunningService<RoleClient, SamplingClient>,
     /// Every message the client POSTs to the scripted server.
     posted: mpsc::UnboundedReceiver<Value>,
-    /// Feeds the standalone GET stream.
-    get_tx: mpsc::Sender<Value>,
+    /// Feeds the unassociated stream (the SSE body of the initialized
+    /// notification POST).
+    unassociated_tx: mpsc::Sender<Value>,
     /// Feeds the SSE stream of the in-flight tools/list POST.
     post_tx: mpsc::Sender<Value>,
     /// In-flight tools/list call (response withheld until the test releases it).
@@ -198,12 +211,12 @@ struct Harness {
 
 /// Drive startup + one in-flight tools/list.
 async fn setup() -> Harness {
-    let (get_tx, get_rx) = mpsc::channel(8);
+    let (unassociated_tx, unassociated_rx) = mpsc::channel(8);
     let (post_tx, post_rx) = mpsc::channel(8);
     let (posted_tx, mut posted_rx) = mpsc::unbounded_channel();
     let (sampled_tx, sampled_rx) = mpsc::unbounded_channel();
     let server = ScriptedServer {
-        get_stream: Arc::new(Mutex::new(Some(get_rx))),
+        notification_stream: Arc::new(Mutex::new(Some(unassociated_rx))),
         post_stream: Arc::new(Mutex::new(Some(post_rx))),
         posted: posted_tx,
     };
@@ -230,15 +243,29 @@ async fn setup() -> Harness {
 
     // Unrelated outbound request, kept in flight (response withheld).
     let peer = client.peer().clone();
-    let call = tokio::spawn(async move { peer.list_tools(None).await });
+    let call = tokio::spawn({
+        let peer = peer.clone();
+        async move { peer.list_tools(None).await }
+    });
     let tools_list = next_posted(&mut posted_rx).await;
     assert_eq!(tools_list["method"], "tools/list");
     let tools_list_id = tools_list["id"].clone();
 
+    // Open the unassociated stream. Any post-startup notification does: the
+    // POST carries no request id, so the SSE body the server returns for it
+    // is `InboundStreamOrigin::Unassociated`.
+    peer.notify_roots_list_changed()
+        .await
+        .expect("send roots/list_changed");
+    assert_eq!(
+        next_posted(&mut posted_rx).await["method"],
+        "notifications/roots/list_changed"
+    );
+
     Harness {
         client,
         posted: posted_rx,
-        get_tx,
+        unassociated_tx,
         post_tx,
         call,
         tools_list_id,
@@ -246,15 +273,16 @@ async fn setup() -> Harness {
     }
 }
 
-/// #1033 scenario 1: a restricted request on the standalone GET stream while
-/// an unrelated outbound request is in flight must be rejected with -32602.
-/// (The coarse check from #1029 incorrectly accepted this.)
+/// #1033 scenario 1: a restricted request on a stream unassociated with any
+/// outbound request, while an unrelated outbound request is in flight, must
+/// be rejected with -32602. (The coarse check from #1029 incorrectly accepted
+/// this, because it only asked whether *any* request was in flight.)
 #[tokio::test]
-async fn restricted_request_on_get_stream_rejected_while_unrelated_request_in_flight()
+async fn restricted_request_on_unassociated_stream_rejected_while_unrelated_request_in_flight()
 -> anyhow::Result<()> {
     let mut h = setup().await;
 
-    h.get_tx.send(sampling_request(100)).await?;
+    h.unassociated_tx.send(sampling_request(100)).await?;
 
     let rejection = next_posted(&mut h.posted).await;
     assert_eq!(
@@ -263,8 +291,8 @@ async fn restricted_request_on_get_stream_rejected_while_unrelated_request_in_fl
     );
     assert_eq!(
         rejection["error"]["code"], -32602,
-        "SEP-2260: GET-stream request must be rejected even with an unrelated \
-         request in flight, got {rejection}"
+        "SEP-2260: unassociated-stream request must be rejected even with an \
+         unrelated request in flight, got {rejection}"
     );
 
     h.post_tx
