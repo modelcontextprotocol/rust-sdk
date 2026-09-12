@@ -121,6 +121,20 @@ fn session_id_for_version(
     None
 }
 
+/// The session established by [`StreamableHttpClientWorker::perform_reinitialization`].
+///
+/// The two ids are the same id at different stages of [`session_id_for_version`], and they
+/// are deliberately not interchangeable: `cleanup_session_id` is what the server sent, kept
+/// so the shutdown `DELETE` still tears down a session the server really created, while
+/// `session_id` is what may be echoed on requests and used to open a standalone GET stream.
+/// At [`ProtocolVersion::STANDARD_HEADERS`] the latter is always `None`.
+struct Reinitialized {
+    session_id: Option<Arc<str>>,
+    cleanup_session_id: Option<Arc<str>>,
+    negotiated_version: ProtocolVersion,
+    protocol_headers: HashMap<HeaderName, HeaderValue>,
+}
+
 fn cache_tools_from_response(
     cache: &mut HashMap<String, Arc<JsonObject>>,
     message: &mut ServerJsonRpcMessage,
@@ -981,9 +995,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     /// future remains `Send` without requiring `C: Sync`).  POSTs the saved
     /// initialize request without a session ID, extracts the new session ID and
     /// protocol version, sends `notifications/initialized`, and returns the new
-    /// `(session_id, protocol_headers)` pair.  The init result message is **not**
+    /// session in a [`Reinitialized`].  The init result message is **not**
     /// forwarded to the handler because the handler already processed the original
     /// initialization.
+    ///
+    /// The handshake completes here, so [`session_id_for_version`] is applied here too:
+    /// the `initialized` notification is part of the new session and must not echo an id
+    /// the negotiated version has no sessions for.
     async fn perform_reinitialization(
         client: C,
         saved_init_request: ClientJsonRpcMessage,
@@ -991,14 +1009,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
-    ) -> Result<
-        (
-            Option<Arc<str>>,
-            ProtocolVersion,
-            HashMap<HeaderName, HeaderValue>,
-        ),
-        StreamableHttpError<C::Error>,
-    > {
+    ) -> Result<Reinitialized, StreamableHttpError<C::Error>> {
         let (init_msg, new_session_id_str) = client
             .post_message_with_max_sse_event_size(
                 uri.clone(),
@@ -1012,10 +1023,13 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             .expect_initialized::<C::Error>()
             .await?;
 
-        let new_session_id: Option<Arc<str>> = new_session_id_str.map(|s| Arc::from(s.as_str()));
+        let cleanup_session_id: Option<Arc<str>> =
+            new_session_id_str.map(|s| Arc::from(s.as_str()));
 
         let (negotiated_version, new_protocol_headers) =
             negotiate_version_headers(&init_msg, custom_headers);
+        let new_session_id =
+            session_id_for_version(cleanup_session_id.clone(), &negotiated_version);
 
         let initialized_notification = ClientJsonRpcMessage::notification(
             ClientNotification::InitializedNotification(InitializedNotification {
@@ -1042,7 +1056,12 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             .await?
             .expect_accepted_or_json::<C::Error>()?;
 
-        Ok((new_session_id, negotiated_version, new_protocol_headers))
+        Ok(Reinitialized {
+            session_id: new_session_id,
+            cleanup_session_id,
+            negotiated_version,
+            protocol_headers: new_protocol_headers,
+        })
     }
 }
 
@@ -1267,7 +1286,12 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     ) => result.unwrap_or(Err(StreamableHttpError::SessionRecoveryTimeout)),
                 };
                 match recovery {
-                    Ok((new_session_id, new_version, new_headers)) => {
+                    Ok(Reinitialized {
+                        session_id: new_session_id,
+                        cleanup_session_id,
+                        negotiated_version: new_version,
+                        protocol_headers: new_headers,
+                    }) => {
                         streams.abort_all();
                         while streams.join_next().await.is_some() {}
                         request_stream_cancellations.clear();
@@ -1286,14 +1310,15 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         session_id = new_session_id;
                         negotiated_version = new_version;
                         protocol_headers = new_headers;
-                        session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
+                        // Built from the id as sent, not the gated one, so a session the
+                        // server really created is still torn down at shutdown.
+                        session_cleanup_info = cleanup_session_id.map(|sid| SessionCleanupInfo {
                             client: self.client.clone(),
                             uri: config.uri.clone(),
-                            session_id: sid.clone(),
+                            session_id: sid,
                             auth_header: config.auth_header.clone(),
                             protocol_headers: protocol_headers.clone(),
                         });
-                        session_id = session_id_for_version(session_id, &negotiated_version);
                         // Do not send controls queued during recovery to the new session.
                         context.advance_control_generation();
                         session_cancellation = CancellationToken::new();
