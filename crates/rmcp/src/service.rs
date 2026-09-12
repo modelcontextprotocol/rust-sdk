@@ -1298,7 +1298,14 @@ where
 {
     let (peer, peer_rx) = Peer::new(Arc::new(AtomicU32RequestIdProvider::default()), peer_info);
     R::configure_direct_peer(&peer, &service.get_info());
-    serve_inner(service, transport.into_transport(), peer, peer_rx, ct)
+    serve_inner(
+        service,
+        transport.into_transport(),
+        peer,
+        peer_rx,
+        VecDeque::new(),
+        ct,
+    )
 }
 
 /// Spawn a task that may hold `!Send` state when the `local` feature is active.
@@ -1323,12 +1330,19 @@ where
     tokio::task::spawn_local(future)
 }
 
+/// Run the service loop over `transport`.
+///
+/// `initial_messages` are messages the caller already read from `transport`
+/// (e.g. the first request of an `initialize`-less session). They are
+/// dispatched by the loop, in order, before anything else is read from the
+/// transport, so that their handlers run with the loop draining `peer_rx`.
 #[instrument(skip_all)]
 fn serve_inner<R, S, T>(
     service: S,
     transport: T,
     peer: Peer<R>,
     mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
+    initial_messages: VecDeque<RxJsonRpcMessage<R>>,
     ct: CancellationToken,
 ) -> RunningService<R, S>
 where
@@ -1361,7 +1375,7 @@ where
     let current_span = tracing::Span::current();
     let handle = spawn_service_task(async move {
         let mut transport = transport.into_transport();
-        let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
+        let mut batch_messages = initial_messages;
         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
         let mut response_send_tasks = tokio::task::JoinSet::<()>::new();
         #[derive(Debug)]
