@@ -9,7 +9,7 @@ use std::sync::{
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRoute, tool::ToolCallContext},
-    model::{CallToolResponse, CallToolResult, InitializeResult, ServerCapabilities, Tool},
+    model::{CallToolResponse, CallToolResult, ServerCapabilities, ServerConfig, Tool},
     service::{MaybeSendFuture, NotificationContext},
 };
 use tokio::sync::{Notify, RwLock};
@@ -41,8 +41,8 @@ impl TestToolServer {
 }
 
 impl ServerHandler for TestToolServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(

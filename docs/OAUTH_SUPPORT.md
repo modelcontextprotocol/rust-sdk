@@ -253,7 +253,7 @@ let transport = StreamableHttpClientTransport::with_client(
 );
 
 // create client and connect to MCP server
-let client_service = InitializeRequestParams::default();
+let client_service = ClientConfig::default();
 let client = client_service.serve(transport).await?;
 ```
 
@@ -325,7 +325,7 @@ bindings, not signatures; the resource authorization server verifies signatures.
 use oauth2::{ClientSecret, RefreshToken};
 use rmcp::{
     ServiceExt,
-    model::ClientInfo,
+    model::ClientConfig,
     transport::{
         StreamableHttpClientTransport,
         auth::{
@@ -359,7 +359,7 @@ async fn connect(
         StreamableHttpClientTransportConfig::with_uri(resource)
             .auth_header(token.access_token.secret()),
     );
-    let client = ClientInfo::default().serve(transport).await?;
+    let client = ClientConfig::default().serve(transport).await?;
     client.list_tools(Default::default()).await?;
     client.cancel().await?;
     Ok(())

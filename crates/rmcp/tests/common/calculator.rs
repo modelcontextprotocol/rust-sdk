@@ -2,7 +2,7 @@
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{InitializeResult, ServerCapabilities},
+    model::{ServerCapabilities, ServerConfig},
     schemars, tool, tool_router,
 };
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -52,8 +52,8 @@ impl Calculator {
 }
 
 impl ServerHandler for Calculator {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("A simple calculator")
     }
 }

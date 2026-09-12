@@ -704,8 +704,8 @@ impl ServerHandler for ConformanceServer {
         (name == "test_custom_header").then(custom_header_tool)
     }
 
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_prompts_list_changed()
