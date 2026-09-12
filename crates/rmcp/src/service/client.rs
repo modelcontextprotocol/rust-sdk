@@ -292,6 +292,20 @@ impl ServiceRole for RoleClient {
         }
     }
 
+    fn peer_cancels_subscriptions(peer: &Peer<Self>) -> bool {
+        // Discovery keeps modern lifecycle semantics even with an older application version.
+        !super::uses_legacy_lifecycle(
+            peer.peer_info()
+                .as_deref()
+                .map(|info| &info.protocol_version),
+            peer.client_request_metadata.get().is_some(),
+        )
+    }
+
+    fn is_subscription_request(request: &Self::Req) -> bool {
+        matches!(request, ClientRequest::SubscriptionsListenRequest(_))
+    }
+
     // SEP-2260: reject restricted server requests that arrived unassociated
     // with any in-flight outbound request. Without stream separation
     // (`Unknown`) the coarse in-flight check under-approximates the SHOULD.
@@ -2192,6 +2206,232 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn server_cancellation_retires_subscription_responder() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (discover, version) in [
+                    (false, ProtocolVersion::V_2026_07_28),
+                    (true, ProtocolVersion::V_2026_07_28),
+                    (true, ProtocolVersion::V_2025_11_25),
+                ] {
+                    tokio::time::timeout(
+                        Duration::from_secs(5),
+                        check_subscription_cancellation(discover, version),
+                    )
+                    .await
+                    .expect("subscription cancellation timed out");
+                }
+            })
+            .await;
+    }
+
+    async fn check_subscription_cancellation(discover: bool, version: ProtocolVersion) {
+        use crate::model::{
+            GetMeta, PingRequest, ServerInfo, SubscriptionsAcknowledgedNotification,
+            SubscriptionsAcknowledgedNotificationParams,
+        };
+
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+        let mut server =
+            crate::transport::IntoTransport::<RoleServer, _, _>::into_transport(server_transport);
+        let info = ServerInfo {
+            protocol_version: version.clone(),
+            ..Default::default()
+        };
+        let client = if discover {
+            let (client, ()) = tokio::join!(
+                serve_client_with_lifecycle(
+                    (),
+                    client_transport,
+                    ClientLifecycleMode::Discover {
+                        preferred_versions: vec![version.clone()]
+                    }
+                ),
+                async {
+                    let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await
+                    else {
+                        panic!("expected discover request");
+                    };
+                    assert!(matches!(request.request, ClientRequest::DiscoverRequest(_)));
+                    server
+                        .send(ServerJsonRpcMessage::response(
+                            ServerResult::DiscoverResult(DiscoverResult::new(
+                                vec![version],
+                                info.capabilities,
+                            )),
+                            request.id,
+                        ))
+                        .await
+                        .unwrap();
+                }
+            );
+            client.unwrap()
+        } else {
+            super::super::serve_directly::<RoleClient, _, _, _, _>(
+                (),
+                client_transport,
+                Some(info.into()),
+            )
+        };
+        let filter = SubscriptionFilter::default();
+        let (subscription, ()) = tokio::join!(client.listen(filter.clone()), async {
+            let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await else {
+                panic!("expected listen request");
+            };
+            assert!(matches!(
+                request.request,
+                ClientRequest::SubscriptionsListenRequest(_)
+            ));
+            let mut ack: ServerNotification = SubscriptionsAcknowledgedNotification::new(
+                SubscriptionsAcknowledgedNotificationParams::new(filter),
+            )
+            .into();
+            ack.get_meta_mut().set_subscription_id(request.id);
+            server
+                .send(ServerJsonRpcMessage::notification(ack))
+                .await
+                .unwrap();
+        });
+        let mut subscription = subscription.unwrap();
+        let id = subscription.id().clone();
+        let mut ordinary = client
+            .send_cancellable_request(
+                PingRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }
+                .into(),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Request(_))
+        ));
+        for unknown in [
+            ordinary.id.clone(),
+            RequestId::String(id.to_string().into()),
+            RequestId::String("unknown".into()),
+        ] {
+            server
+                .send(ServerJsonRpcMessage::notification(
+                    CancelledNotification::new(CancelledNotificationParam::new(
+                        Some(unknown),
+                        None,
+                    ))
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        server
+            .send(ServerJsonRpcMessage::request(
+                PingRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }
+                .into(),
+                RequestId::String("before-cancellation".into()),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Response(_))
+        ));
+        assert!(matches!(
+            subscription.request.as_mut().unwrap().rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            ordinary.rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            subscription.notifications.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        server
+            .send(ServerJsonRpcMessage::notification(
+                CancelledNotification::new(CancelledNotificationParam::new(
+                    Some(id.clone()),
+                    Some("subscription ended".to_owned()),
+                ))
+                .into(),
+            ))
+            .await
+            .unwrap();
+        // Ordered input makes the ping response a barrier for cancellation handling.
+        server
+            .send(ServerJsonRpcMessage::request(
+                PingRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }
+                .into(),
+                RequestId::String("after-cancellation".into()),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Response(_))
+        ));
+        assert!(
+            matches!(
+                subscription.request.as_mut().unwrap().rx.try_recv(),
+                Ok(Err(ServiceError::Cancelled { .. }))
+            ),
+            "the outbound responder must retire without a final response or disconnect"
+        );
+        assert!(subscription.next().await.unwrap().is_none());
+        assert!(matches!(
+            subscription.end(),
+            Some(SubscriptionEnd::Cancelled)
+        ));
+        assert!(client.peer().subscription_sender(&id).is_none());
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::empty(()),
+                ordinary.id.clone(),
+            ))
+            .await
+            .unwrap();
+        assert!(ordinary.await_response().await.is_ok());
+
+        // Raw listen requests also retire, even without a registered notification channel.
+        let raw = client
+            .send_cancellable_request(
+                ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
+                    SubscriptionsListenRequestParams::new(SubscriptionFilter::default()),
+                )),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Request(_))
+        ));
+        server
+            .send(ServerJsonRpcMessage::notification(
+                CancelledNotification::new(CancelledNotificationParam::new(
+                    Some(raw.id.clone()),
+                    None,
+                ))
+                .into(),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            raw.await_response().await,
+            Err(ServiceError::Cancelled { .. })
+        ));
+        client.cancel().await.unwrap();
+    }
 
     #[tokio::test]
     async fn auto_startup_falls_back_when_discover_is_ignored() {
