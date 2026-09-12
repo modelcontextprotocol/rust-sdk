@@ -1323,13 +1323,30 @@ where
     tokio::task::spawn_local(future)
 }
 
-#[instrument(skip_all)]
 fn serve_inner<R, S, T>(
+    service: S,
+    transport: T,
+    peer: Peer<R>,
+    peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
+    ct: CancellationToken,
+) -> RunningService<R, S>
+where
+    R: ServiceRole,
+    R::PeerNot: ProgressNotificationToken,
+    S: Service<R>,
+    T: Transport<R> + 'static,
+{
+    serve_inner_with_initial_message(service, transport, peer, peer_rx, ct, None)
+}
+
+#[instrument(skip_all)]
+fn serve_inner_with_initial_message<R, S, T>(
     service: S,
     transport: T,
     peer: Peer<R>,
     mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
     ct: CancellationToken,
+    initial_message: Option<RxJsonRpcMessage<R>>,
 ) -> RunningService<R, S>
 where
     R: ServiceRole,
@@ -1361,7 +1378,7 @@ where
     let current_span = tracing::Span::current();
     let handle = spawn_service_task(async move {
         let mut transport = transport.into_transport();
-        let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
+        let mut batch_messages = initial_message.into_iter().collect::<VecDeque<_>>();
         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
         let mut response_send_tasks = tokio::task::JoinSet::<()>::new();
         #[derive(Debug)]
