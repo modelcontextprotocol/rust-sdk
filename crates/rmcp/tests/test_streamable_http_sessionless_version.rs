@@ -98,10 +98,21 @@ impl Recorder {
             .collect()
     }
 
+    fn delete_requests(&self) -> Vec<Call> {
+        self.calls()
+            .into_iter()
+            .filter(|(http_method, ..)| http_method == "DELETE")
+            .collect()
+    }
+
+    /// Session headers on everything after the handshake that is not the teardown DELETE,
+    /// which carries the id on purpose so the server tears the session down.
     fn session_headers_after_handshake(&self) -> Vec<Option<String>> {
         self.calls()
             .into_iter()
-            .filter(|(_, jsonrpc_method, _)| jsonrpc_method != "initialize")
+            .filter(|(http_method, jsonrpc_method, _)| {
+                jsonrpc_method != "initialize" && http_method != "DELETE"
+            })
             .map(|(.., session)| session)
             .collect()
     }
@@ -142,6 +153,19 @@ async fn handler(
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body(Body::empty())
             .expect("build GET rejection");
+    }
+
+    // The shutdown DELETE carries no body, so record it before anything parses one.
+    if method == axum::http::Method::DELETE {
+        state.seen.lock().expect("recorder poisoned").push((
+            "DELETE".to_owned(),
+            "-".to_owned(),
+            session,
+        ));
+        return Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .expect("build session teardown response");
     }
 
     let request: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON-RPC body");
@@ -347,7 +371,7 @@ async fn replacement_handshake_at_a_modern_version_drops_the_session_too() {
     // Nor on anything after it, and no stream on the replacement session either.
     let echoed: Vec<_> = replacement
         .iter()
-        .filter(|(.., session)| session.is_some())
+        .filter(|(http_method, _, session)| session.is_some() && http_method != "DELETE")
         .collect();
     assert!(
         echoed.is_empty(),
@@ -358,6 +382,16 @@ async fn replacement_handshake_at_a_modern_version_drops_the_session_too() {
         1,
         "expected only the legacy session's GET stream, got {:?}",
         recorder.get_requests()
+    );
+
+    // Dropping the id is a request-and-stream decision, not a licence to leak server
+    // state: the session the server really did create is still torn down at shutdown.
+    let deletes = recorder.delete_requests();
+    assert!(
+        deletes
+            .iter()
+            .any(|(.., session)| session.as_deref() == Some(REPLACEMENT_SESSION_ID)),
+        "the replacement session was never deleted at shutdown: {deletes:?}"
     );
 }
 
