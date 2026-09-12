@@ -194,13 +194,16 @@ impl ClientHandler for WaitForReverseCancelClient {
 }
 
 #[cfg(all(feature = "client", not(feature = "local")))]
+#[rstest::rstest]
+#[case::initialize("initialize")]
+#[case::direct_legacy("direct-legacy")]
+#[case::direct_unknown("direct-unknown")]
 #[tokio::test]
-async fn peer_cancels_reverse_request_without_cancelling_outbound_request() -> anyhow::Result<()> {
-    for startup in ["initialize", "direct-legacy", "direct-unknown"] {
-        for equal_ids in [false, true] {
-            tokio::time::timeout(READ_TIMEOUT, reverse_cancellation(startup, equal_ids)).await??;
-        }
-    }
+async fn peer_cancels_reverse_request_without_cancelling_outbound_request(
+    #[case] startup: &str,
+    #[values(false, true)] equal_ids: bool,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(READ_TIMEOUT, reverse_cancellation(startup, equal_ids)).await??;
     Ok(())
 }
 
