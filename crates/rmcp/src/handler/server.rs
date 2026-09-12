@@ -334,15 +334,15 @@ macro_rules! server_handler_methods {
         /// ```
         /// use rmcp::{
         ///     ErrorData as McpError, RoleServer, ServerHandler,
-        ///     model::{InitializeRequestParams, InitializeResult, ServerInfo},
+        ///     model::{InitializeRequestParams, InitializeResult, ServerConfig},
         ///     service::RequestContext,
         /// };
         ///
         /// struct MyServer;
         ///
         /// impl ServerHandler for MyServer {
-        ///     fn get_info(&self) -> ServerInfo {
-        ///         ServerInfo::default()
+        ///     fn get_info(&self) -> ServerConfig {
+        ///         ServerConfig::default()
         ///     }
         ///
         ///     async fn initialize(
@@ -600,8 +600,8 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
-        fn get_info(&self) -> ServerInfo {
-            InitializeResult::default()
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::default()
         }
 
         /// SEP-2663 `tasks/get`: return the current [`DetailedTask`] state.
@@ -839,7 +839,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_custom_notification(notification, context)
             }
 
-            fn get_info(&self) -> ServerInfo {
+            fn get_info(&self) -> ServerConfig {
                 (**self).get_info()
             }
 

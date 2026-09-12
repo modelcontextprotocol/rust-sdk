@@ -13,10 +13,10 @@ use crate::{
     model::{
         ArgumentInfo, CacheScope, CallToolRequest, CallToolRequestParams, CallToolResponse,
         CallToolResult, CancelTaskParams, CancelTaskRequest, CancelledNotification,
-        CancelledNotificationParam, ClientJsonRpcMessage, ClientNotification, ClientRequest,
-        ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult, CompletionContext,
-        CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest, DiscoverRequestParams,
-        DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
+        CancelledNotificationParam, ClientConfig, ClientJsonRpcMessage, ClientNotification,
+        ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
+        CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
+        DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskRequest,
         GetTaskResult, InitializeRequest, InitializeRequestParams, InitializedNotification,
         InputRequest, InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
@@ -266,7 +266,7 @@ impl ServiceRole for RoleClient {
     type PeerReq = ServerRequest;
     type PeerResp = ServerResult;
     type PeerNot = ServerNotification;
-    type Info = InitializeRequestParams;
+    type Info = ClientConfig;
     type PeerInfo = ServerPeerInfo;
     type InitializeError = ClientInitializeError;
     const IS_CLIENT: bool = true;

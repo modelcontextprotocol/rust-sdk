@@ -363,13 +363,12 @@ impl PromptServer {
 
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for PromptServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_prompts().build())
-            .with_instructions(
-                "This server provides various prompt templates for code review, data analysis, \
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().build()).with_instructions(
+            "This server provides various prompt templates for code review, data analysis, \
                  writing assistance, debugging help, and personalized learning paths. \
                  All prompts are designed to provide structured, context-aware assistance.",
-            )
+        )
     }
 }
 

@@ -1119,26 +1119,58 @@ impl InitializeResult {
     }
 }
 
-/// Full server initialize payload (`InitializeResult`).
+/// A server's own configuration: the protocol version, capabilities,
+/// implementation identity, and instructions it advertises to clients.
 ///
-/// Prefer [`InitializeResult`]. The name collides with the protocol's
-/// `serverInfo` field, which is only the [`Implementation`] identity (#1082).
-//
-// The signatures this crate publishes (`ServerHandler::get_info`,
-// `DiscoverResult::from_server_info`, and the `ClientInfo` equivalents below)
-// keep spelling the alias. It resolves to the same type, so the spelling makes
-// no difference to callers, but rustdoc records the name as written and the
-// public API check treats a respelling as a changed item. Moving those
-// signatures onto the canonical names is a documented API change and belongs in
-// the next major release.
-#[deprecated(note = "use `InitializeResult` instead")]
+/// This is what `ServerHandler::get_info` returns. It is an alias for
+/// [`InitializeResult`] because the same value is sent as the `initialize`
+/// response on the wire.
+///
+/// # Examples
+///
+/// ```
+/// use rmcp::model::{ServerCapabilities, ServerConfig};
+///
+/// let config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+///     .with_instructions("Call `add` to sum two numbers.");
+/// assert!(config.capabilities.tools.is_some());
+/// ```
+pub type ServerConfig = InitializeResult;
+
+/// A client's own configuration: the protocol version, capabilities, and
+/// implementation identity it advertises to servers.
+///
+/// This is what `ClientHandler::get_info` returns. It is an alias for
+/// [`InitializeRequestParams`] because the same value is sent as the
+/// `initialize` request on the wire.
+///
+/// # Examples
+///
+/// ```
+/// use rmcp::model::{ClientCapabilities, ClientConfig, Implementation};
+///
+/// let config = ClientConfig::new(
+///     ClientCapabilities::builder().enable_elicitation().build(),
+///     Implementation::new("my-client", "1.0.0"),
+/// );
+/// assert!(config.capabilities.elicitation.is_some());
+/// ```
+pub type ClientConfig = InitializeRequestParams;
+
+/// Deprecated alias for [`ServerConfig`].
+///
+/// The name collides with the protocol's `serverInfo` field, which is only the
+/// [`Implementation`] identity, so `server_info.server_info` was easy to
+/// misread (#1082).
+#[deprecated(note = "use `ServerConfig` instead")]
 pub type ServerInfo = InitializeResult;
 
-/// Full client initialize params (`InitializeRequestParams`).
+/// Deprecated alias for [`ClientConfig`].
 ///
-/// Prefer [`InitializeRequestParams`]. The name collides with the protocol's
-/// `clientInfo` field, which is only the [`Implementation`] identity (#1082).
-#[deprecated(note = "use `InitializeRequestParams` instead")]
+/// The name collides with the protocol's `clientInfo` field, which is only the
+/// [`Implementation`] identity, so `client_info.client_info` was easy to
+/// misread (#1082).
+#[deprecated(note = "use `ClientConfig` instead")]
 pub type ClientInfo = InitializeRequestParams;
 
 /// Information negotiated about a server peer.
@@ -1298,18 +1330,18 @@ impl DiscoverResult {
         self
     }
 
-    /// Create a discovery result from the server's initialization information.
+    /// Create a discovery result from the server's configuration.
     pub fn from_server_info(
         supported_versions: Vec<ProtocolVersion>,
-        server_info: ServerInfo,
+        server_config: ServerConfig,
     ) -> Self {
-        let InitializeResult {
+        let ServerConfig {
             capabilities,
             server_info,
             instructions,
             meta,
             ..
-        } = server_info;
+        } = server_config;
         let mut result = Self {
             result_type: ResultType::COMPLETE,
             supported_versions,

@@ -5,7 +5,7 @@ use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler,
     handler::server::router::{prompt::PromptRouter, tool::ToolRouter},
     model::{
-        CacheScope, InitializeRequestParams, InitializeResult, ListPromptsResult, ListToolsResult,
+        CacheScope, ClientConfig, InitializeResult, ListPromptsResult, ListToolsResult,
         ProtocolVersion,
     },
     prompt_handler,
@@ -38,8 +38,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> InitializeRequestParams {
-        let mut info = InitializeRequestParams::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }

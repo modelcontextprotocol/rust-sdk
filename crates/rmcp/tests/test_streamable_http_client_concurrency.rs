@@ -16,9 +16,9 @@ use futures::{StreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
     model::{
-        CallToolRequestParams, CancelledNotificationParam, ClientJsonRpcMessage, ClientRequest,
-        DiscoverResult, InitializeRequestParams, ProtocolVersion, Request, RequestId,
-        RequestMetaObject, ServerJsonRpcMessage,
+        CallToolRequestParams, CancelledNotificationParam, ClientConfig, ClientJsonRpcMessage,
+        ClientRequest, DiscoverResult, InitializeRequestParams, ProtocolVersion, Request,
+        RequestId, RequestMetaObject, ServerJsonRpcMessage,
     },
     service::{
         ClientLifecycleMode, PeerRequestOptions, RequestHandle, RoleClient, RunningService,
@@ -345,7 +345,7 @@ impl StreamableHttpClient for ScriptedClient {
 }
 
 struct Harness {
-    client: RunningService<RoleClient, InitializeRequestParams>,
+    client: RunningService<RoleClient, ClientConfig>,
     started: mpsc::UnboundedReceiver<Posted>,
     controls: mpsc::UnboundedReceiver<ControlPost>,
     incoming: mpsc::UnboundedSender<Result<Sse, SseError>>,
@@ -402,8 +402,7 @@ impl Harness {
             config,
         );
         let client =
-            serve_client_with_lifecycle(InitializeRequestParams::default(), transport, lifecycle)
-                .await?;
+            serve_client_with_lifecycle(ClientConfig::default(), transport, lifecycle).await?;
         Ok(Self {
             client,
             started: requests,
