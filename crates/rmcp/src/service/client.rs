@@ -827,7 +827,14 @@ where
             }
         }
     }
-    Ok(serve_inner(service, transport, peer, peer_rx, ct))
+    Ok(serve_inner(
+        service,
+        transport,
+        peer,
+        peer_rx,
+        VecDeque::new(),
+        ct,
+    ))
 }
 
 /// Modern-era JSON-RPC error codes a server can return from `server/discover`

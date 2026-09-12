@@ -593,7 +593,7 @@ where
 
     let initialize_request = match request {
         ClientRequest::InitializeRequest(request) => request,
-        mut request => {
+        request => {
             let missing_metadata = request
                 .get_meta()
                 .missing_required_keys(&ProtocolVersion::V_2026_07_28);
@@ -616,21 +616,17 @@ where
             }
             let (peer, peer_rx) = Peer::new(id_provider, None);
             peer.require_request_metadata();
-            let context = RequestContext {
-                ct: ct.child_token(),
-                id: id.clone(),
-                meta: std::mem::take(request.get_meta_mut()),
-                extensions: std::mem::take(request.extensions_mut()),
-                peer: peer.clone(),
-            };
-            let response = match service.handle_request(request, context).await {
-                Ok(result) => ServerJsonRpcMessage::response(result, id),
-                Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
-            };
-            transport.send(response).await.map_err(|error| {
-                ServerInitializeError::transport::<T>(error, "sending negotiated request response")
-            })?;
-            return Ok(serve_inner(service, transport, peer, peer_rx, ct));
+            // Dispatch the request from inside the service loop rather than
+            // inline: its handler may send notifications through `peer`, which
+            // only complete once the loop drains `peer_rx`.
+            return Ok(serve_inner(
+                service,
+                transport,
+                peer,
+                peer_rx,
+                VecDeque::from([ClientJsonRpcMessage::request(request, id)]),
+                ct,
+            ));
         }
     };
     let requested_protocol_version = initialize_request.params.protocol_version.clone();
@@ -680,7 +676,14 @@ where
     // Streamable HTTP has no ordering guarantee between POSTs, and the MCP spec uses
     // SHOULD NOT (not MUST NOT) for pre-initialized messages, so any request arriving
     // before initialized is processed normally.
-    Ok(serve_inner(service, transport, peer, peer_rx, ct))
+    Ok(serve_inner(
+        service,
+        transport,
+        peer,
+        peer_rx,
+        VecDeque::new(),
+        ct,
+    ))
 }
 
 macro_rules! method {
