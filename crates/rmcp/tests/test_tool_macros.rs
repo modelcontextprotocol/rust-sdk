@@ -61,6 +61,24 @@ impl Server {
 
     #[tool]
     async fn empty_param(&self) {}
+
+    #[tool(description = CONST_TOOL_DESCRIPTION)]
+    async fn const_description_tool(&self) {}
+
+    #[tool(description = concat!("part-a-", "part-b"))]
+    async fn concat_description_tool(&self) {}
+}
+
+const CONST_TOOL_DESCRIPTION: &str = "Description from a const";
+
+#[test]
+fn test_description_accepts_const_and_concat_exprs() {
+    // tests https://github.com/modelcontextprotocol/rust-sdk/issues/1175
+    let tool = Server::const_description_tool_tool_attr();
+    assert_eq!(tool.description.as_deref(), Some(CONST_TOOL_DESCRIPTION));
+
+    let tool = Server::concat_description_tool_tool_attr();
+    assert_eq!(tool.description.as_deref(), Some("part-a-part-b"));
 }
 
 /// Generic service trait.
