@@ -689,11 +689,12 @@ struct ResourceServerMetadata {
 /// decides what a document that is not metadata means there.
 #[derive(Debug, Clone, Copy)]
 enum ResourceMetadataUrlOrigin {
-    /// The server named this url in the `resource_metadata` parameter of a
-    /// `WWW-Authenticate` challenge.
+    /// The resource itself named this url in the `resource_metadata` parameter
+    /// of its `WWW-Authenticate` challenge.
     Advertised,
-    /// The url was derived from the base url, on the chance that the document is
-    /// published there.
+    /// The url was derived from the base url on the chance that the document is
+    /// published there, or named by a challenge on such a url. Either way the
+    /// run only guessed its way here.
     WellKnownGuess,
 }
 
@@ -2570,7 +2571,9 @@ impl AuthorizationManager {
     }
 
     /// Walk the authorization servers a protected resource metadata document
-    /// names, keeping the first one that answers with usable metadata.
+    /// names, keeping the first one that answers with usable metadata. A document
+    /// that names servers and none of them answers is an error, not a reason to
+    /// go looking elsewhere; a document that names none returns `Ok(None)`.
     ///
     /// The document arrives here through `read_resource_metadata`, which is where
     /// it is decided to be this resource's metadata at all.
@@ -2609,10 +2612,17 @@ impl AuthorizationManager {
             push_candidate(candidate);
         }
 
-        for candidate in candidates {
-            let candidate_url = match Url::parse(&candidate) {
+        if candidates.is_empty() {
+            debug!(
+                "protected resource metadata at {resource_metadata_url} names no authorization server"
+            );
+            return Ok(None);
+        }
+
+        for candidate in &candidates {
+            let candidate_url = match Url::parse(candidate) {
                 Ok(url) => url,
-                Err(_) => match resource_metadata_url.join(&candidate) {
+                Err(_) => match resource_metadata_url.join(candidate) {
                     Ok(url) => url,
                     Err(e) => {
                         debug!("Failed to resolve authorization server URL `{candidate}`: {e}");
@@ -2646,7 +2656,12 @@ impl AuthorizationManager {
             }
         }
 
-        Ok(None)
+        // Falling back to the base url would send the user somewhere the resource
+        // never named.
+        Err(AuthError::MetadataError(format!(
+            "protected resource metadata at {resource_metadata_url} names authorization servers {}, but none published usable metadata",
+            candidates.join(", ")
+        )))
     }
 
     fn validate_resource_metadata_resource(
@@ -2762,23 +2777,25 @@ impl AuthorizationManager {
                     }
                 }
                 StatusCode::UNAUTHORIZED => {
-                    let Some(advertised_url) = self
+                    let Some(pointer_url) = self
                         .extract_resource_metadata_url_from_www_authenticate(&response)
                         .await
                     else {
                         continue;
                     };
-                    if !requested.insert(advertised_url.clone()) {
+                    if !requested.insert(pointer_url.clone()) {
                         continue;
                     }
+                    // Found on a url this run guessed at, so a wrong answer only rules
+                    // out the pointer.
                     if let Some(metadata) = self
                         .fetch_resource_metadata_from_url(
-                            &advertised_url,
-                            ResourceMetadataUrlOrigin::Advertised,
+                            &pointer_url,
+                            ResourceMetadataUrlOrigin::WellKnownGuess,
                         )
                         .await?
                     {
-                        return Ok(Some((advertised_url, metadata)));
+                        return Ok(Some((pointer_url, metadata)));
                     }
                 }
                 status => debug!("resource metadata probe returned unexpected status: {status}"),
@@ -5496,11 +5513,105 @@ mod tests {
                 }),
             ),
         ];
-        // the authorization server publishes no metadata, so every form of its
-        // discovery url is tried before the run settles on the legacy endpoints
+        // the authorization server publishes no metadata; more 404s than the walk
+        // can use, so that requesting it twice would show up in the sequence
         responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
         let client = RecordingOAuthHttpClient::with_responses(responses);
         let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        manager.resolve_metadata().await.unwrap_err();
+
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/",
+                "https://mcp.example.com/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+                "https://auth.example.com/.well-known/openid-configuration",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_reports_named_authorization_servers_that_publish_no_metadata() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document names two authorization servers
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com", "https://sso.example.com"]
+                }),
+            ),
+        ];
+        // neither publishes metadata; the surplus 404s would let the run reach the
+        // resource host's own well-known urls and the legacy endpoints if it kept going
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource names authorization servers https://auth.example.com, https://sso.example.com, but none published usable metadata"
+        );
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/",
+                "https://mcp.example.com/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+                "https://auth.example.com/.well-known/openid-configuration",
+                "https://sso.example.com/.well-known/oauth-authorization-server",
+                "https://sso.example.com/.well-known/openid-configuration",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_keeps_falling_back_when_the_document_names_no_authorization_server() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document says nothing about where to authorize
+            http_response(
+                200,
+                serde_json::json!({"resource": "https://mcp.example.com/"}),
+            ),
+        ];
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
         let manager = AuthorizationManager::new_with_oauth_http_client(
             "https://mcp.example.com/",
             Arc::new(client),
@@ -5514,18 +5625,79 @@ mod tests {
             resolution.source,
             AuthorizationMetadataSource::LegacyEndpointFallback
         );
-        let discovery_requests = recorder
-            .requests()
-            .iter()
-            .filter(|request| {
-                request.uri == "https://auth.example.com/.well-known/oauth-authorization-server"
-            })
-            .count();
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_candidate_past_a_pointer_found_while_guessing() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/prm""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // auth sits in front of the first candidate and its challenge names a url
+            challenge,
+            // which serves something that is not the document
+            http_response(200, serde_json::json!({})),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
         assert_eq!(
-            discovery_requests,
-            1,
-            "the authorization server was walked once per field naming it: {:?}",
-            recorder.requests()
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/mcp",
+                "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+                "https://mcp.example.com/prm",
+                "https://mcp.example.com/mcp/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+            ]
         );
     }
 
