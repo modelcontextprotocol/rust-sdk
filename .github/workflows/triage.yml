@@ -15,6 +15,11 @@ name: Triage
 # a team member re-partitions future weeks. See docs/CONTRIBUTE.MD ("Triage")
 # for the response-time expectations that go with being on rotation.
 #
+# Both stages also run on `reopened`, so labels get refreshed on an item coming
+# back to life. Assignment is skipped when the item already has an assignee --
+# an owner from the first triage pass keeps it instead of being swapped for
+# whoever is on rotation the week it reopens.
+#
 # Secrets:
 #   CODEX_AUTH_JSON        Codex credentials; refreshed and written back each run.
 #   CODEX_AUTH_STORE_TOKEN Fine-grained PAT with `secrets: write`. GITHUB_TOKEN
@@ -123,7 +128,7 @@ jobs:
       group: codex-auth
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -437,7 +442,7 @@ jobs:
       CLASSIFICATION: ${{ needs.classify.outputs.classification }}
       DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
     steps:
-      - uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9.0.0
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           # Needs `read:org` for team membership plus write on issues and pull
           # requests; the default GITHUB_TOKEN 403s on listMembersInOrg.
@@ -445,6 +450,25 @@ jobs:
           script: |
             const org = process.env.ROTATION_ORG;
             const team_slug = process.env.ROTATION_TEAM;
+            const number = Number(process.env.TARGET_NUMBER);
+
+            // This workflow also runs on `reopened`, so an item may already
+            // have been triaged. An existing assignee means a human already
+            // owns it; re-assigning would hand it to whoever is on rotation
+            // this week and comment a second time. Leave it alone.
+            const { data: target } = await github.rest.issues.get({
+              ...context.repo,
+              issue_number: number,
+            });
+            const existing = (target.assignees || []).map((a) => a.login);
+
+            if (existing.length > 0) {
+              core.notice(
+                `#${number} is already assigned to ${existing.join(', ')}; ` +
+                  `leaving the existing owner in place.`,
+              );
+              return;
+            }
 
             // Roster: team membership, sorted so week-to-week order is stable.
             const members = await github.paginate(
@@ -463,7 +487,6 @@ jobs:
             const weeks = Math.floor((Date.now() / 86400000 + 3) / 7);
             const onCall = roster[weeks % roster.length];
 
-            const number = Number(process.env.TARGET_NUMBER);
             const classification = process.env.CLASSIFICATION;
 
             core.info(`Roster (${roster.length}): ${roster.join(', ')}`);
