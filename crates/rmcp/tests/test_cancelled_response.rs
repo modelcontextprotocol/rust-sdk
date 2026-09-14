@@ -218,7 +218,7 @@ async fn reverse_cancellation(startup: &str, equal_ids: bool) -> anyhow::Result<
         return_error: false,
     };
     let mut server = IntoTransport::<RoleServer, _, _>::into_transport(server_transport);
-    let mut info = ServerInfo::default();
+    let mut info = InitializeResult::default();
     info.protocol_version = ProtocolVersion::V_2025_11_25;
     let client = if startup == "initialize" {
         let (client, handshake) = tokio::join!(handler.serve(client_transport), async {
