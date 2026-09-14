@@ -16,13 +16,13 @@ use crate::{
         CancelledNotification, CancelledNotificationParam, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
         CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData,
-        InitializeRequestParams, InitializeResult, ListRootsRequest, ListRootsResult,
-        LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
-        ProgressNotificationParam, PromptListChangedNotification, ProtocolVersion,
-        ResourceListChangedNotification, ResourceUpdatedNotification,
-        ResourceUpdatedNotificationParam, ServerNotification, ServerRequest, ServerResult,
-        SubscriptionFilter, SubscriptionsAcknowledgedNotification,
-        SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
+        InitializeRequestParams, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
+        LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
+        PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
+        ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerConfig,
+        ServerNotification, ServerRequest, ServerResult, SubscriptionFilter,
+        SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
+        ToolListChangedNotification,
     },
     transport::DynamicTransportError,
 };
@@ -38,7 +38,7 @@ impl ServiceRole for RoleServer {
     type PeerReq = ClientRequest;
     type PeerResp = ClientResult;
     type PeerNot = ClientNotification;
-    type Info = InitializeResult;
+    type Info = ServerConfig;
     type PeerInfo = InitializeRequestParams;
 
     type InitializeError = ServerInitializeError;

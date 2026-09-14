@@ -27,8 +27,8 @@ use crate::{
     model::{
         ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode,
         ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
-        InitializeRequestParams, InitializeResult, InitializedNotification, JsonObject,
-        JsonRpcError, ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
+        InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
+        ProtocolVersion, RequestId, ServerConfig, ServerJsonRpcMessage, ServerResult,
     },
     serve_server,
     service::{
@@ -367,7 +367,7 @@ impl<S: Service<RoleServer>> Service<RoleServer> for NegotiatingStatelessHttpSer
         self.0.handle_notification(notification, context).await
     }
 
-    fn get_info(&self) -> InitializeResult {
+    fn get_info(&self) -> ServerConfig {
         self.0.get_info()
     }
 

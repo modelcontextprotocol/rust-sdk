@@ -7,8 +7,7 @@ use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::prompt::PromptRouter, wrapper::Parameters},
     model::{
-        ContentBlock, GetPromptRequestParams, GetPromptResult, InitializeRequestParams,
-        PromptMessage, Role,
+        ClientConfig, ContentBlock, GetPromptRequestParams, GetPromptResult, PromptMessage, Role,
     },
     prompt, prompt_handler, prompt_router,
 };
@@ -298,8 +297,8 @@ fn test_optional_field_schema_generation_via_macro() {
 struct DummyClientHandler {}
 
 impl ClientHandler for DummyClientHandler {
-    fn get_info(&self) -> InitializeRequestParams {
-        InitializeRequestParams::default()
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::default()
     }
 }
 

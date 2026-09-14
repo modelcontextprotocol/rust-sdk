@@ -74,8 +74,8 @@ impl ClientHandler for BasicClientHandler {}
 struct ElicitationDefaultsClientHandler;
 
 impl ClientHandler for ElicitationDefaultsClientHandler {
-    fn get_info(&self) -> InitializeRequestParams {
-        let mut info = InitializeRequestParams::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.capabilities.elicitation = Some(
             ElicitationCapability::new()
                 .with_form(FormElicitationCapability::new().with_schema_validation(true)),
@@ -163,8 +163,8 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
 struct FullClientHandler;
 
 impl ClientHandler for FullClientHandler {
-    fn get_info(&self) -> InitializeRequestParams {
-        let mut info = InitializeRequestParams::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.capabilities.elicitation = Some(
             ElicitationCapability::new()
                 .with_form(FormElicitationCapability::new().with_schema_validation(true)),

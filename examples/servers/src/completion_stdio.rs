@@ -310,8 +310,8 @@ impl SqlQueryServer {
 
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for SqlQueryServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()

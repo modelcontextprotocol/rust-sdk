@@ -114,8 +114,8 @@ impl MacroMrtrServer {
 
 #[tool_handler]
 impl ServerHandler for MacroMrtrServer {
-    fn get_info(&self) -> InitializeResult {
-        let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info
     }
@@ -221,8 +221,8 @@ impl MrtrServer {
 }
 
 impl ServerHandler for MrtrServer {
-    fn get_info(&self) -> InitializeResult {
-        let mut info = InitializeResult::new(
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -609,9 +609,8 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
     struct SealingServer;
 
     impl ServerHandler for SealingServer {
-        fn get_info(&self) -> InitializeResult {
-            let mut info =
-                InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
+        fn get_info(&self) -> ServerConfig {
+            let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
             info.protocol_version = ProtocolVersion::V_2026_07_28;
             info
         }

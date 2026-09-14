@@ -8,8 +8,8 @@
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-        InitializeRequestParams, InitializeResult, ProtocolVersion, ResultType,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
+        ErrorData, InitializeResult, ProtocolVersion, ResultType,
     },
     service::{RequestContext, serve_directly},
 };
@@ -33,8 +33,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> InitializeRequestParams {
-        let mut info = InitializeRequestParams::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }

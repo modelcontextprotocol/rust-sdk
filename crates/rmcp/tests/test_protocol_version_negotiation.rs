@@ -16,8 +16,8 @@ use std::{
 use rmcp::{
     ClientHandler, ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
-        ClientCapabilities, ErrorCode, Implementation, InitializeRequestParams, InitializeResult,
-        ProtocolVersion,
+        ClientCapabilities, ClientConfig, ErrorCode, Implementation, InitializeRequestParams,
+        InitializeResult, ProtocolVersion, ServerConfig,
     },
     service::{ClientInitializeError, RequestContext},
 };
@@ -26,8 +26,8 @@ use rmcp::{
 struct EchoServer;
 
 impl ServerHandler for EchoServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::default()
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::default()
     }
 }
 
@@ -45,8 +45,8 @@ const HANDSHAKE_VERSIONS: &[ProtocolVersion] = &[
 struct NarrowedServer;
 
 impl ServerHandler for NarrowedServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::default()
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::default()
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -61,8 +61,8 @@ struct ModernOnlyServer;
 const MODERN_ONLY_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::V_2026_07_28];
 
 impl ServerHandler for ModernOnlyServer {
-    fn get_info(&self) -> InitializeResult {
-        let mut info = InitializeResult::default();
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::default();
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info
     }
@@ -79,8 +79,8 @@ impl ServerHandler for ModernOnlyServer {
 struct NarrowedOverridingServer;
 
 impl ServerHandler for NarrowedOverridingServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::default()
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::default()
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -102,8 +102,8 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> InitializeRequestParams {
-        let mut info = InitializeRequestParams::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }
@@ -247,8 +247,8 @@ struct DelegatingServer {
 }
 
 impl ServerHandler for DelegatingServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::default()
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::default()
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {

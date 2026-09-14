@@ -16,7 +16,7 @@ use axum::{
 };
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
-    model::{DiscoverResult, ErrorCode, ErrorData, InitializeRequestParams, ProtocolVersion},
+    model::{ClientConfig, DiscoverResult, ErrorCode, ErrorData, ProtocolVersion},
     service::{MaybeSendFuture, RequestContext, RoleServer},
     transport::{
         StreamableHttpClientTransport,
@@ -132,7 +132,7 @@ async fn discover_http_client_bootstraps_headers_without_initialize() {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -176,7 +176,7 @@ async fn auto_http_client_falls_back_to_stateful_legacy_startup() {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Auto {
@@ -217,7 +217,7 @@ async fn auto_http_client_falls_back_after_plain_text_4xx_rejection() {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Auto {
