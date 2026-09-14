@@ -3,7 +3,7 @@ use std::env;
 use anyhow::{Context, Result};
 use rmcp::{
     ServiceExt,
-    model::ClientInfo,
+    model::InitializeRequestParams,
     transport::{
         StreamableHttpClientTransport,
         auth::{AuthClient, ClientCredentialsConfig, OAuthState},
@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
     );
 
     // Connect to MCP server and list tools
-    let client_service = ClientInfo::default();
+    let client_service = InitializeRequestParams::default();
     let client = client_service.serve(transport).await?;
     tracing::info!("Connected to MCP server");
 

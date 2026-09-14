@@ -16,9 +16,9 @@ use futures::{StreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
     model::{
-        CallToolRequestParams, CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage,
-        ClientRequest, DiscoverResult, ProtocolVersion, Request, RequestId, RequestMetaObject,
-        ServerJsonRpcMessage,
+        CallToolRequestParams, CancelledNotificationParam, ClientJsonRpcMessage, ClientRequest,
+        DiscoverResult, InitializeRequestParams, ProtocolVersion, Request, RequestId,
+        RequestMetaObject, ServerJsonRpcMessage,
     },
     service::{
         ClientLifecycleMode, PeerRequestOptions, RequestHandle, RoleClient, RunningService,
@@ -345,7 +345,7 @@ impl StreamableHttpClient for ScriptedClient {
 }
 
 struct Harness {
-    client: RunningService<RoleClient, ClientInfo>,
+    client: RunningService<RoleClient, InitializeRequestParams>,
     started: mpsc::UnboundedReceiver<Posted>,
     controls: mpsc::UnboundedReceiver<ControlPost>,
     incoming: mpsc::UnboundedSender<Result<Sse, SseError>>,
@@ -402,7 +402,8 @@ impl Harness {
             config,
         );
         let client =
-            serve_client_with_lifecycle(ClientInfo::default(), transport, lifecycle).await?;
+            serve_client_with_lifecycle(InitializeRequestParams::default(), transport, lifecycle)
+                .await?;
         Ok(Self {
             client,
             started: requests,
@@ -601,7 +602,12 @@ async fn common_stream_response_keeps_numeric_and_string_ids_distinct() -> anyho
         config(),
     );
     for message in [
-        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ClientInfo::default() }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": InitializeRequestParams::default()
+        }),
         json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
     ] {
         timeout(
@@ -820,7 +826,12 @@ async fn dropping_a_parked_barrier_send_unblocks_the_ordinary_queue() -> anyhow:
         config,
     );
     for message in [
-        json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": ClientInfo::default() }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": InitializeRequestParams::default()
+        }),
         json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
     ] {
         timeout(

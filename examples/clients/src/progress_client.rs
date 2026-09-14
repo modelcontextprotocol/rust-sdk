@@ -8,7 +8,7 @@ use clap::{Parser, ValueEnum};
 use rmcp::{
     ClientHandler, ServiceExt,
     model::{
-        CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
+        CallToolRequestParams, ClientCapabilities, Implementation, InitializeRequestParams,
         ProgressNotificationParam,
     },
     service::{NotificationContext, RoleClient},
@@ -100,10 +100,10 @@ impl ProgressAwareClient {
     }
 
     fn stop_tracking(&self) {
-        if let Ok(mut tracker_opt) = self.tracker.lock() {
-            if let Some(tracker) = tracker_opt.take() {
-                tracker.print_summary();
-            }
+        if let Ok(mut tracker_opt) = self.tracker.lock()
+            && let Some(tracker) = tracker_opt.take()
+        {
+            tracker.print_summary();
         }
     }
 }
@@ -114,15 +114,15 @@ impl ClientHandler for ProgressAwareClient {
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
-        if let Ok(tracker_opt) = self.tracker.lock() {
-            if let Some(tracker) = tracker_opt.as_ref() {
-                tracker.handle_progress(&params);
-            }
+        if let Ok(tracker_opt) = self.tracker.lock()
+            && let Some(tracker) = tracker_opt.as_ref()
+        {
+            tracker.handle_progress(&params);
         }
     }
 
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::new(
             ClientCapabilities::default(),
             Implementation::new("progress-test-client", "1.0.0"),
         )
@@ -182,10 +182,10 @@ async fn test_stdio_transport(records: u32) -> Result<()> {
         .call_tool(CallToolRequestParams::new("stream_processor"))
         .await?;
 
-    if let Some(content) = tool_result.content.first() {
-        if let Some(text) = content.as_text() {
-            tracing::info!("Processing completed: {}", text.text);
-        }
+    if let Some(content) = tool_result.content.first()
+        && let Some(text) = content.as_text()
+    {
+        tracing::info!("Processing completed: {}", text.text);
     }
 
     service.cancel().await?;
@@ -236,10 +236,10 @@ async fn test_http_transport(http_url: &str, records: u32) -> Result<()> {
         .call_tool(CallToolRequestParams::new("stream_processor"))
         .await?;
 
-    if let Some(content) = tool_result.content.first() {
-        if let Some(text) = content.as_text() {
-            tracing::info!("processing completed: {}", text.text);
-        }
+    if let Some(content) = tool_result.content.first()
+        && let Some(text) = content.as_text()
+    {
+        tracing::info!("processing completed: {}", text.text);
     }
 
     client.cancel().await?;

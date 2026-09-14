@@ -9,7 +9,7 @@ use axum::{
 };
 use rmcp::{
     RoleClient, ServiceExt,
-    model::ClientInfo,
+    model::InitializeRequestParams,
     service::RunningService,
     transport::{
         StreamableHttpClientTransport,
@@ -58,7 +58,7 @@ async fn callback_handler(
 
 enum ConnectOutcome {
     /// The server accepted the unauthenticated connection.
-    Connected(RunningService<RoleClient, ClientInfo>),
+    Connected(RunningService<RoleClient, InitializeRequestParams>),
     /// The server answered 401; authorize with this `WWW-Authenticate`
     /// challenge and reconnect.
     AuthRequired(String),
@@ -72,7 +72,7 @@ async fn try_connect(http_client: reqwest::Client, server_url: &str) -> Result<C
         http_client,
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
-    match ClientInfo::default().serve(transport).await {
+    match InitializeRequestParams::default().serve(transport).await {
         Ok(client) => Ok(ConnectOutcome::Connected(client)),
         Err(error) => match error.auth_challenge() {
             Some(challenge) => Ok(ConnectOutcome::AuthRequired(challenge.to_string())),
@@ -90,7 +90,7 @@ async fn authorize_and_connect(
     client_metadata_url: &str,
     code_receiver: oneshot::Receiver<CallbackParams>,
     output: &mut BufWriter<tokio::io::Stdout>,
-) -> Result<RunningService<RoleClient, ClientInfo>> {
+) -> Result<RunningService<RoleClient, InitializeRequestParams>> {
     tracing::info!("Server requires authorization: {challenge}");
 
     // initialize oauth state machine
@@ -156,7 +156,7 @@ async fn authorize_and_connect(
         auth_client,
         StreamableHttpClientTransportConfig::with_uri(server_url),
     );
-    Ok(ClientInfo::default().serve(transport).await?)
+    Ok(InitializeRequestParams::default().serve(transport).await?)
 }
 
 #[tokio::main]

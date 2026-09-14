@@ -18,7 +18,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use rmcp::{
     RoleServer, ServerHandler,
-    model::{Implementation, ServerCapabilities, ServerInfo, ToolsCapability},
+    model::{Implementation, InitializeResult, ServerCapabilities, ToolsCapability},
     service::NotificationContext,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -45,8 +45,8 @@ impl TestServer {
 }
 
 impl ServerHandler for TestServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools_with({
                     let mut tools = ToolsCapability::default();

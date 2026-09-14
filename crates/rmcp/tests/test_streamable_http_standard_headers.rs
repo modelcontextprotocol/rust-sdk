@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rmcp::{
     ServerHandler,
-    model::{ServerCapabilities, ServerInfo, Tool},
+    model::{InitializeResult, ServerCapabilities, Tool},
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -18,8 +18,8 @@ const SEP_VERSION: &str = "2026-07-28";
 struct HeaderValidationServer;
 
 impl ServerHandler for HeaderValidationServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

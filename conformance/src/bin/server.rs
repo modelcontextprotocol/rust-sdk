@@ -704,8 +704,8 @@ impl ServerHandler for ConformanceServer {
         (name == "test_custom_header").then(custom_header_tool)
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_prompts_list_changed()
@@ -1744,7 +1744,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting conformance server on {}", bind_addr);
 
     let server = ConformanceServer::new();
-    let config = StreamableHttpServerConfig::default();
+    let config = StreamableHttpServerConfig::default()
+        .with_allowed_origins([format!("http://{bind_addr}")])
+        .enforce_origin_validation();
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),

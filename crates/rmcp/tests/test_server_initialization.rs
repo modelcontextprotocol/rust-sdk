@@ -6,7 +6,7 @@ use common::handlers::TestServer;
 use rmcp::{
     ServerHandler, ServiceExt,
     model::{
-        ClientJsonRpcMessage, ProtocolVersion, ServerCapabilities, ServerInfo,
+        ClientJsonRpcMessage, InitializeResult, ProtocolVersion, ServerCapabilities,
         ServerJsonRpcMessage, ServerResult,
     },
     transport::{IntoTransport, Transport},
@@ -281,8 +281,8 @@ async fn server_falls_back_when_client_protocol_version_unknown() {
 struct PinnedServer;
 
 impl ServerHandler for PinnedServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().build())
             .with_protocol_version(ProtocolVersion::V_2025_06_18)
     }
 }

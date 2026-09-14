@@ -5,7 +5,7 @@ use std::time::Instant;
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolRequestParams, ClientInfo, ServerCapabilities, ServerInfo},
+    model::{CallToolRequestParams, InitializeRequestParams, InitializeResult, ServerCapabilities},
     schemars, tool, tool_handler, tool_router,
     transport::{
         StreamableHttpClientTransport,
@@ -46,8 +46,8 @@ impl SumServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SumServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 }
 
@@ -83,7 +83,7 @@ async fn test_subsequent_tool_calls_reuse_connections() -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    let client = ClientInfo::default().serve(transport).await?;
+    let client = InitializeRequestParams::default().serve(transport).await?;
 
     // Warm up: first call may include one-time setup costs.
     let args: serde_json::Map<String, serde_json::Value> =

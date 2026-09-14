@@ -18,8 +18,8 @@ use std::{sync::Arc, time::Duration};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
-        ServerInfo,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InitializeResult,
+        ServerCapabilities,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -37,8 +37,8 @@ struct CancelProbe {
 
 impl ServerHandler for CancelProbe {
     #[allow(deprecated)]
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(

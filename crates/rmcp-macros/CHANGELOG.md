@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.2.0...rmcp-macros-v3.3.0) - 2026-09-10
+
+### Added
+
+- *(macros)* reject empty tool_router ([#1233](https://github.com/modelcontextprotocol/rust-sdk/pull/1233))
+
 ## [3.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.4...rmcp-macros-v3.2.0) - 2026-08-31
 
 ### Added

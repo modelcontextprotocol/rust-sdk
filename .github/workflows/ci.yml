@@ -31,12 +31,10 @@ jobs:
           node-version: '22'
           
       - name: Install commitlint
-        run: |
-          npm install --save-dev @commitlint/cli @commitlint/config-conventional
-          echo "module.exports = {extends: ['@commitlint/config-conventional']}" > commitlint.config.js
-          
+        run: npm install --global @commitlint/cli@20.4.3 @commitlint/config-conventional@20.4.3
+
       - name: Lint commit messages
-        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+        run: commitlint --extends @commitlint/config-conventional --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
 
   fmt:
     name: Code Formatting
@@ -61,8 +59,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      - name: Run clippy
+      - name: Run clippy (all features)
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run clippy (all features except local)
+        run: |
+          FEATURES=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.name == "rmcp") | .features | keys[]
+                      | select(startswith("__") | not)
+                      | select(. != "local")] | join(",")')
+          cargo clippy --package rmcp --all-targets --no-default-features --features "$FEATURES" -- -D warnings
 
   semver:
     name: SemVer Check
@@ -79,7 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-semver-checks
 
@@ -133,7 +139,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Install cargo-public-api
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-public-api
 
@@ -206,7 +212,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Spell Check Repo
-      uses: crate-ci/typos@1a51d4b5a03bb97576af186c813af67e9137ba7c # master
+      uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b # master
 
   msrv:
     name: Check MSRV
