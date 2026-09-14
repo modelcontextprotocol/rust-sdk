@@ -1042,46 +1042,18 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
 
         Ok((new_session_id, negotiated_version, new_protocol_headers))
     }
-}
 
-impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
-    type Role = RoleClient;
-    type Error = StreamableHttpError<C::Error>;
-    fn is_control_message(message: &ClientJsonRpcMessage) -> bool {
-        match message {
-            ClientJsonRpcMessage::Response(_) | ClientJsonRpcMessage::Error(_) => true,
-            ClientJsonRpcMessage::Notification(notification) => matches!(
-                notification.notification,
-                ClientNotification::CancelledNotification(_)
-            ),
-            ClientJsonRpcMessage::Request(_) => false,
-        }
-    }
-    fn supports_request_cancellation() -> bool {
-        true
-    }
-    fn err_closed() -> Self::Error {
-        StreamableHttpError::TransportChannelClosed
-    }
-    fn err_join(e: tokio::task::JoinError) -> Self::Error {
-        StreamableHttpError::TokioJoinError(e)
-    }
-    fn config(&self) -> super::worker::WorkerConfig {
-        super::worker::WorkerConfig {
-            name: Some("StreamableHttpClientWorker".into()),
-            channel_buffer_capacity: self.config.channel_buffer_capacity,
-        }
-    }
-    async fn run(
+    /// Runs initialization and message processing, leaving session cleanup to the owner.
+    async fn run_session(
         self,
         mut context: super::worker::WorkerContext<Self>,
-    ) -> Result<(), WorkerQuitReason<Self::Error>> {
+        session_cleanup_info: &mut Option<SessionCleanupInfo<C>>,
+    ) -> Result<(), WorkerQuitReason<StreamableHttpError<C::Error>>> {
         let channel_buffer_capacity = self.config.channel_buffer_capacity;
         let (sse_worker_tx, mut sse_worker_rx) =
             tokio::sync::mpsc::channel::<ServerJsonRpcMessage>(channel_buffer_capacity);
         let config = self.config.clone();
         let transport_task_ct = context.cancellation_token.clone();
-        let _drop_guard = transport_task_ct.clone().drop_guard();
         let WorkerSendRequest {
             responder,
             message: startup_request,
@@ -1155,7 +1127,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let mut tool_header_cache: HashMap<String, Arc<JsonObject>> = HashMap::new();
 
         // Store session info for cleanup when run() exits (not spawned, so cleanup completes before close() returns)
-        let mut session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
+        *session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
             client: self.client.clone(),
             uri: config.uri.clone(),
             session_id: sid.clone(),
@@ -1234,7 +1206,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         }
         // Each POST uses the session and headers chosen when it starts.
         // Only this loop updates the current session and protocol version.
-        let loop_result: Result<(), WorkerQuitReason<Self::Error>> = 'main_loop: loop {
+        'main_loop: loop {
             if retrying_recovery && recovery_posts.is_empty() && posts.is_empty() {
                 retrying_recovery = false;
             }
@@ -1283,7 +1255,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         session_id = new_session_id;
                         negotiated_version = new_version;
                         protocol_headers = new_headers;
-                        session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
+                        *session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
                             client: self.client.clone(),
                             uri: config.uri.clone(),
                             session_id: sid.clone(),
@@ -1538,7 +1510,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             &initialize_response,
                             config.custom_headers.clone(),
                         );
-                        session_cleanup_info =
+                        *session_cleanup_info =
                             session_id.as_ref().map(|session_id| SessionCleanupInfo {
                                 client: self.client.clone(),
                                 uri: config.uri.clone(),
@@ -1571,7 +1543,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             protocol_headers
                                 .insert(HeaderName::from_static("mcp-protocol-version"), value);
                         }
-                        if let Some(cleanup) = &mut session_cleanup_info {
+                        if let Some(cleanup) = session_cleanup_info.as_mut() {
                             cleanup.protocol_headers = protocol_headers.clone();
                         }
                     }
@@ -1787,15 +1759,54 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     }
                 }
             }
+        }
+    }
+}
+
+impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
+    type Role = RoleClient;
+    type Error = StreamableHttpError<C::Error>;
+    fn is_control_message(message: &ClientJsonRpcMessage) -> bool {
+        match message {
+            ClientJsonRpcMessage::Response(_) | ClientJsonRpcMessage::Error(_) => true,
+            ClientJsonRpcMessage::Notification(notification) => matches!(
+                notification.notification,
+                ClientNotification::CancelledNotification(_)
+            ),
+            ClientJsonRpcMessage::Request(_) => false,
+        }
+    }
+    fn supports_request_cancellation() -> bool {
+        true
+    }
+    fn err_closed() -> Self::Error {
+        StreamableHttpError::TransportChannelClosed
+    }
+    fn err_join(e: tokio::task::JoinError) -> Self::Error {
+        StreamableHttpError::TokioJoinError(e)
+    }
+    fn config(&self) -> super::worker::WorkerConfig {
+        super::worker::WorkerConfig {
+            name: Some("StreamableHttpClientWorker".into()),
+            channel_buffer_capacity: self.config.channel_buffer_capacity,
+        }
+    }
+    async fn run(
+        self,
+        context: super::worker::WorkerContext<Self>,
+    ) -> Result<(), WorkerQuitReason<Self::Error>> {
+        let transport_task_ct = context.cancellation_token.clone();
+        let _drop_guard = transport_task_ct.clone().drop_guard();
+        let mut session_cleanup_info = None;
+        let loop_result = tokio::select! {
+            biased;
+            _ = transport_task_ct.cancelled() => Err(WorkerQuitReason::Cancelled),
+            result = self.run_session(context, &mut session_cleanup_info) => result,
         };
 
-        // Stop outstanding http requests before deleting their session.
+        // Dropping the session future releases pending POSTs and aborts its stream tasks.
+        // DELETE must remain outside cancellation so close() can await bounded cleanup.
         transport_task_ct.cancel();
-        drop(posts);
-        drop(control_posts);
-        drop(pending_message);
-        drop(recovery_posts);
-        streams.abort_all();
 
         // Cleanup session before returning (ensures close() waits for session deletion)
         // Use a timeout to prevent indefinite hangs if the server is unresponsive
