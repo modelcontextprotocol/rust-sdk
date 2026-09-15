@@ -182,6 +182,9 @@ variant_extension! {
         ListResourcesRequest
         ListResourceTemplatesRequest
         ReadResourceRequest
+        ResourcesDirectoryReadRequest
+        SkillsGetRequest
+        SkillsListRequest
         SubscriptionsListenRequest
         SubscribeRequest
         UnsubscribeRequest
@@ -201,6 +204,9 @@ variant_extension! {
         ListRootsRequest
         ElicitRequest
         CustomRequest
+        ResourcesDirectoryReadRequest
+        SkillsGetRequest
+        SkillsListRequest
     }
 }
 
