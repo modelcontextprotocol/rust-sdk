@@ -63,6 +63,45 @@ fn cache_hints_default_to_none_and_negative_ttl_is_normalized_to_zero() {
 }
 
 #[test]
+fn empty_cache_scope_is_treated_as_omitted() {
+    let result: ListToolsResult = serde_json::from_value(json!({
+        "tools": [{ "name": "search", "inputSchema": { "type": "object" } }],
+        "ttlMs": 0,
+        "cacheScope": ""
+    }))
+    .expect("empty cacheScope should deserialize as omitted");
+
+    assert_eq!(result.ttl_ms, Some(0));
+    assert_eq!(result.cache_scope, None);
+    assert_eq!(result.tools.len(), 1);
+    assert_eq!(result.tools[0].name.as_ref(), "search");
+
+    let resources: ReadResourceResult = serde_json::from_value(json!({
+        "contents": [],
+        "cacheScope": ""
+    }))
+    .expect("empty cacheScope should deserialize as omitted on read results");
+    assert_eq!(resources.cache_scope, None);
+}
+
+#[test]
+fn unknown_cache_scope_still_errors() {
+    let err = serde_json::from_value::<ListToolsResult>(json!({
+        "tools": [],
+        "cacheScope": "shared"
+    }))
+    .expect_err("unknown cacheScope values must still fail");
+    assert!(err.to_string().contains("shared"), "{err}");
+
+    let err = serde_json::from_value::<ListToolsResult>(json!({
+        "tools": [],
+        "cacheScope": " "
+    }))
+    .expect_err("whitespace cacheScope values must still fail");
+    assert!(err.to_string().contains("unknown variant"), "{err}");
+}
+
+#[test]
 fn cache_scope_round_trips() {
     assert_eq!(
         serde_json::to_value(CacheScope::Public).unwrap(),
