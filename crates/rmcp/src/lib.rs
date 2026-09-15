@@ -14,7 +14,7 @@ pub use handler::client::ClientHandler;
 #[cfg(feature = "server")]
 pub use handler::server::ServerHandler;
 #[cfg(feature = "server")]
-pub use handler::server::wrapper::Json;
+pub use handler::server::wrapper::{Json, StructuredOnly};
 #[cfg(feature = "client")]
 pub use service::{
     ClientCacheConfig, ClientLifecycleMode, ClientServiceExt, MAX_CLIENT_CACHE_TTL, RoleClient,
