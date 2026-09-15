@@ -742,18 +742,14 @@ mod standard_header_init_tests {
     #[test]
     fn initialize_accepts_missing_mcp_method_header() {
         let headers = headers_with(None);
-        assert!(
-            validate_standard_headers(&headers, &initialize_message(), no_tool_schema).is_ok()
-        );
+        assert!(validate_standard_headers(&headers, &initialize_message(), no_tool_schema).is_ok());
     }
 
     /// A supplied Mcp-Method header matching the initialize body is accepted.
     #[test]
     fn initialize_accepts_matching_mcp_method_header() {
         let headers = headers_with(Some("initialize"));
-        assert!(
-            validate_standard_headers(&headers, &initialize_message(), no_tool_schema).is_ok()
-        );
+        assert!(validate_standard_headers(&headers, &initialize_message(), no_tool_schema).is_ok());
     }
 }
 
