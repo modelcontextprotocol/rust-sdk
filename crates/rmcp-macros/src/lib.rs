@@ -21,7 +21,7 @@ mod tool_router;
 /// | field             | type                       | usage |
 /// | :-                | :-                         | :-    |
 /// | `name`            | `String`                   | The name of the tool. If not provided, it defaults to the function name. |
-/// | `description`     | `String`                   | A description of the tool. The document of this function will be used. |
+/// | `description`     | `Expr`                     | A description of the tool. A string literal or an expression that evaluates to a `&'static str` (such as a `const` path or `concat!`). The document of this function will be used if not provided. |
 /// | `input_schema`    | `Expr`                     | A JSON Schema object defining the expected parameters for the tool. If not provide, if will use the json schema of its argument with type `Parameters<T>` |
 /// | `annotations`     | `ToolAnnotationsAttribute` | Additional tool information. Defaults to `None`. |
 ///
@@ -208,7 +208,7 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// | field             | type     | usage |
 /// | :-                | :-       | :-    |
 /// | `name`            | `String` | The name of the prompt. If not provided, it defaults to the function name. |
-/// | `description`     | `String` | A description of the prompt. The document of this function will be used if not provided. |
+/// | `description`     | `Expr`   | A description of the prompt. A string literal or an expression that evaluates to a `&'static str` (such as a `const` path or `concat!`). The document of this function will be used if not provided. |
 /// | `arguments`       | `Expr`   | An expression that evaluates to `Option<Vec<PromptArgument>>` defining the prompt's arguments. If not provided, it will automatically generate arguments from the `Parameters<T>` type found in the function signature. |
 ///
 /// ## Example
