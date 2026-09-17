@@ -6,8 +6,10 @@
 ))]
 //! SEP-2567 removes sessions and the standalone GET stream at 2026-07-28. A legacy-shaped
 //! handshake can still answer with an `Mcp-Session-Id` while negotiating that version; the
-//! client must not then echo the id or open the stream. That holds for the replacement
-//! handshake after an expired-session 404 as much as for the first one.
+//! client must not then echo the id or open the stream. That holds for every handshake that
+//! can settle on such a version — reached directly, reached as a fallback after
+//! `server/discover` is refused, or replacing an expired session after a 404 — and for a
+//! request that moves the transport there itself with its own `_meta.protocolVersion`.
 
 use std::{
     collections::VecDeque,
@@ -23,7 +25,8 @@ use axum::{
 };
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt,
-    model::ClientInfo,
+    model::{ClientInfo, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject},
+    service::PeerRequestOptions,
     transport::{
         StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
     },
@@ -106,14 +109,25 @@ impl Recorder {
     }
 
     /// Session headers on everything after the handshake that is not the teardown DELETE,
-    /// which carries the id on purpose so the server tears the session down.
+    /// which carries the id on purpose so the server tears the session down. A
+    /// `server/discover` probe precedes the handshake, so it is not evidence either way.
     fn session_headers_after_handshake(&self) -> Vec<Option<String>> {
         self.calls()
             .into_iter()
             .filter(|(http_method, jsonrpc_method, _)| {
-                jsonrpc_method != "initialize" && http_method != "DELETE"
+                jsonrpc_method != "initialize"
+                    && jsonrpc_method != "server/discover"
+                    && http_method != "DELETE"
             })
             .map(|(.., session)| session)
+            .collect()
+    }
+
+    /// Every `tools/list` the client sent, in order.
+    fn list_requests(&self) -> Vec<Call> {
+        self.calls()
+            .into_iter()
+            .filter(|(_, jsonrpc_method, _)| jsonrpc_method == "tools/list")
             .collect()
     }
 
@@ -148,7 +162,8 @@ async fn handler(
             "-".to_owned(),
             session,
         ));
-        // Hang so the client keeps the stream if it opens one; the test cancels it.
+        // Refused the way a server without the endpoint refuses it. The attempt is already
+        // recorded above, which is all these tests need to know.
         return Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .body(Body::empty())
@@ -256,20 +271,41 @@ async fn serve(recorder: &Recorder) -> (String, CancellationToken, tokio::task::
     (format!("http://{address}/mcp"), ct, server)
 }
 
-async fn start_client(uri: String) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+async fn start_client(
+    uri: String,
+    startup: ClientLifecycleMode,
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(uri),
     );
     ClientInfo::default()
-        .serve_with_lifecycle(transport, ClientLifecycleMode::Initialize)
+        .serve_with_lifecycle(transport, startup)
         .await
         .expect("client should start against a legacy handshake")
 }
 
-async fn connect_and_record(negotiated_version: &'static str) -> Recorder {
+/// The legacy handshake, reached directly.
+fn direct_startup() -> ClientLifecycleMode {
+    ClientLifecycleMode::Initialize
+}
+
+/// The same handshake reached as a fallback: `server/discover` goes first and the scripted
+/// server refuses it. The transport runs that `initialize` from inside its message loop
+/// rather than at startup, so the session id is adopted at a different place.
+fn fallback_startup() -> ClientLifecycleMode {
+    ClientLifecycleMode::Auto {
+        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+    }
+}
+
+async fn connect_and_record(
+    startup: ClientLifecycleMode,
+    negotiated_version: &'static str,
+) -> Recorder {
     let recorder = Recorder::new((SESSION_ID, negotiated_version));
     let (uri, ct, server) = serve(&recorder).await;
-    let client = start_client(uri).await;
+    let client = start_client(uri, startup).await;
 
     // Give a standalone GET stream, if one were opened, time to reach the server.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -287,7 +323,7 @@ async fn connect_through_recovery(replacement_version: &'static str) -> Recorder
         (REPLACEMENT_SESSION_ID, replacement_version),
     );
     let (uri, ct, server) = serve(&recorder).await;
-    let client = start_client(uri).await;
+    let client = start_client(uri, direct_startup()).await;
 
     // The first tools/list is answered 404; the transport re-initializes and retries it.
     client
@@ -305,10 +341,47 @@ async fn connect_through_recovery(replacement_version: &'static str) -> Recorder
     recorder
 }
 
-#[tokio::test]
-async fn modern_version_drops_the_session_and_opens_no_stream() {
-    let recorder = connect_and_record("2026-07-28").await;
+/// Start on a legacy session, list tools on the negotiated version, then list them again on
+/// a request carrying its own `_meta.protocolVersion` (SEP-2575) — which replaces the
+/// negotiated version for that request and everything after it.
+async fn connect_and_override_version(inline_version: ProtocolVersion) -> Recorder {
+    let recorder = Recorder::new((SESSION_ID, "2025-11-25"));
+    let (uri, ct, server) = serve(&recorder).await;
+    let client = start_client(uri, direct_startup()).await;
 
+    // The first list is the control: it goes out on the negotiated version, so the
+    // recording shows the id being echoed before the override moves the version.
+    client
+        .list_tools(None)
+        .await
+        .expect("list tools on the negotiated version");
+
+    let mut meta = RequestMetaObject::new();
+    meta.set_protocol_version(inline_version);
+    client
+        .send_request_with_option(
+            ClientRequest::ListToolsRequest(ListToolsRequest {
+                method: Default::default(),
+                params: None,
+                extensions: Default::default(),
+            }),
+            PeerRequestOptions::default().with_meta(meta),
+        )
+        .await
+        .expect("send the list that carries its own version")
+        .await_response()
+        .await
+        .expect("the overriding list should be answered");
+
+    client.cancel().await.expect("cancel client");
+    ct.cancel();
+    let _ = server.await;
+    recorder
+}
+
+/// A handshake that settled on a version without sessions: nothing the server volunteered
+/// is echoed, and no standalone GET stream is opened.
+fn assert_session_dropped(recorder: &Recorder) {
     // No standalone GET stream: SEP-2567 removed the endpoint at this version.
     assert_eq!(
         recorder.get_requests(),
@@ -327,11 +400,9 @@ async fn modern_version_drops_the_session_and_opens_no_stream() {
     );
 }
 
-#[tokio::test]
-async fn legacy_version_keeps_the_session_and_opens_the_stream() {
-    let recorder = connect_and_record("2025-11-25").await;
-
-    // The legacy shape is untouched: the stream is opened and carries the session id.
+/// A handshake that settled on a legacy version: the shape is untouched, so the stream is
+/// opened and the id is echoed.
+fn assert_session_kept(recorder: &Recorder) {
     let gets = recorder.get_requests();
     assert_eq!(
         gets.len(),
@@ -344,6 +415,26 @@ async fn legacy_version_keeps_the_session_and_opens_the_stream() {
         sessions.iter().any(|s| s.as_deref() == Some(SESSION_ID)),
         "legacy session id was not echoed after the handshake: {sessions:?}"
     );
+}
+
+#[tokio::test]
+async fn modern_version_drops_the_session_and_opens_no_stream() {
+    assert_session_dropped(&connect_and_record(direct_startup(), "2026-07-28").await);
+}
+
+#[tokio::test]
+async fn legacy_version_keeps_the_session_and_opens_the_stream() {
+    assert_session_kept(&connect_and_record(direct_startup(), "2025-11-25").await);
+}
+
+#[tokio::test]
+async fn fallback_handshake_at_a_modern_version_drops_the_session_too() {
+    assert_session_dropped(&connect_and_record(fallback_startup(), "2026-07-28").await);
+}
+
+#[tokio::test]
+async fn fallback_handshake_at_a_legacy_version_keeps_its_session() {
+    assert_session_kept(&connect_and_record(fallback_startup(), "2025-11-25").await);
 }
 
 #[tokio::test]
@@ -416,5 +507,56 @@ async fn replacement_handshake_at_a_legacy_version_keeps_its_session() {
         2,
         "expected a GET stream on each legacy session, got {:?}",
         recorder.get_requests()
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_moves_to_a_modern_version_drops_the_session() {
+    let recorder = connect_and_override_version(ProtocolVersion::V_2026_07_28).await;
+
+    let lists = recorder.list_requests();
+    assert_eq!(
+        lists.len(),
+        2,
+        "expected the control list and the overriding one, got {lists:?}"
+    );
+    assert_eq!(
+        lists[0].2.as_deref(),
+        Some(SESSION_ID),
+        "the control list on the negotiated version should still carry the id"
+    );
+    // The version the request declares is the version it is sent at, so the id has to be
+    // gone on this request and not merely on the next one.
+    assert_eq!(
+        lists[1].2, None,
+        "the request that moved the transport to a version without sessions echoed \
+         Mcp-Session-Id: {lists:?}"
+    );
+
+    // Dropping the id does not leak the session the server really did create.
+    let deletes = recorder.delete_requests();
+    assert!(
+        deletes
+            .iter()
+            .any(|(.., session)| session.as_deref() == Some(SESSION_ID)),
+        "the session was never deleted at shutdown: {deletes:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_moves_to_another_legacy_version_keeps_the_session() {
+    let recorder = connect_and_override_version(ProtocolVersion::V_2025_06_18).await;
+
+    let lists = recorder.list_requests();
+    assert_eq!(
+        lists.len(),
+        2,
+        "expected the control list and the overriding one, got {lists:?}"
+    );
+    // The version still has sessions, so moving to it changes nothing about the id.
+    assert_eq!(
+        lists[1].2.as_deref(),
+        Some(SESSION_ID),
+        "a move between legacy versions dropped a session id that version still has: {lists:?}"
     );
 }
