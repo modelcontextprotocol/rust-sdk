@@ -96,8 +96,8 @@ fn request_version_headers(
 /// [`ProtocolVersion::STANDARD_HEADERS`], so at that version an `Mcp-Session-Id` and a GET
 /// stream are both artifacts of a pre-`2026-07-28` server shape. A legacy-shaped handshake
 /// can still answer with a session id while negotiating that version; the id is dropped
-/// rather than echoed, which also leaves every `spawn_common_stream` call site — all three
-/// of which are guarded on a session id being present — with no stream to open.
+/// rather than echoed, which also leaves every `spawn_common_stream` call site — each
+/// guarded on a session id being present — with no stream to open.
 ///
 /// Dropping is deliberate rather than fatal: refusing to start would break clients against
 /// servers that work today, and the receive-side enforcement added for SEP-2260 still
@@ -1597,6 +1597,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     );
                     if inline_version.is_some() {
                         negotiated_version = request_version.clone();
+                        // A per-request version replaces the negotiated one, so it can move
+                        // the transport onto a version that has no sessions. Gate here, above
+                        // the POST built below, so that request is the first one to go without
+                        // the id rather than the last one to carry it.
+                        session_id = session_id_for_version(session_id, &negotiated_version);
                         if let Ok(value) = HeaderValue::from_str(request_version.as_str()) {
                             protocol_headers
                                 .insert(HeaderName::from_static("mcp-protocol-version"), value);
