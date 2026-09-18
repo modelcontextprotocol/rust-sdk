@@ -20,7 +20,7 @@ mod prompt;
 mod request_state;
 mod resource;
 mod serde_impl;
-mod skills;
+pub mod skills;
 mod task;
 mod tool;
 pub use annotated::*;

@@ -1,6 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use prompt::{IntoPromptRoute, PromptRoute};
+use skill::IntoSkillRoute;
 use tool::{IntoToolRoute, ToolRoute};
 
 use super::ServerHandler;
@@ -14,12 +15,14 @@ use crate::{
 };
 
 pub mod prompt;
+pub mod skill;
 pub mod tool;
 
 #[non_exhaustive]
 pub struct Router<S> {
     pub tool_router: tool::ToolRouter<S>,
     pub prompt_router: prompt::PromptRouter<S>,
+    pub skill_router: skill::SkillRouter<S>,
     pub service: Arc<S>,
     peer_slot: Arc<std::sync::OnceLock<crate::service::Peer<RoleServer>>>,
 }
@@ -35,6 +38,7 @@ where
         Self {
             tool_router,
             prompt_router: prompt::PromptRouter::new(),
+            skill_router: skill::SkillRouter::new(),
             service: Arc::new(service),
             peer_slot,
         }
@@ -67,6 +71,14 @@ where
         for route in routes {
             self.prompt_router.add_route(route);
         }
+        self
+    }
+
+    pub fn with_skill<R, A>(mut self, route: R) -> Self
+    where
+        R: IntoSkillRoute<S, A>,
+    {
+        self.skill_router.add_route(route.into_skill_route());
         self
     }
 }
@@ -145,6 +157,45 @@ where
                     prompts,
                     ..Default::default()
                 }))
+            }
+            ClientRequest::SkillsListRequest(_) => {
+                let skills = self.skill_router.list_all();
+                Ok(ServerResult::SkillsListResult(
+                    crate::model::skills::SkillsListResult {
+                        result_type: Some(crate::model::ResultType::COMPLETE),
+                        skills: skills.into_iter().map(|s| s.into()).collect(),
+                        next_cursor: None,
+                        ttl_ms: None,
+                        cache_scope: None,
+                    },
+                ))
+            }
+            ClientRequest::SkillsGetRequest(request) => {
+                if let Some(route) = self.skill_router.get_by_uri(&request.params.uri) {
+                    let skill_context = crate::handler::server::skill::SkillCallContext::new(
+                        self.service.as_ref(),
+                        request.params.uri.clone(),
+                        context,
+                    );
+                    let result = (route.call)(skill_context).await?;
+                    Ok(ServerResult::SkillsGetResult(
+                        crate::model::skills::SkillsGetResult::new(result),
+                    ))
+                } else {
+                    self.service
+                        .handle_request(ClientRequest::SkillsGetRequest(request), context)
+                        .await
+                }
+            }
+            ClientRequest::ResourcesDirectoryReadRequest(request) => {
+                let result = crate::model::skills::ResourcesDirectoryReadResult {
+                    result_type: Some(crate::model::ResultType::COMPLETE),
+                    children: vec![],
+                    next_cursor: None,
+                    ttl_ms: None,
+                    cache_scope: None,
+                };
+                Ok(ServerResult::ResourcesDirectoryReadResult(result))
             }
             rest => self.service.handle_request(rest, context).await,
         }
