@@ -1704,7 +1704,11 @@ impl Peer<RoleClient> {
                 self.cache_result(
                     Some(cache_key),
                     result.ttl_ms,
-                    result.cache_scope.unwrap_or(CacheScope::Public),
+                    result.cache_scope.as_deref().and_then(|scope| match scope {
+                        "private" => Some(CacheScope::Private),
+                        "public" => Some(CacheScope::Public),
+                        _ => None,
+                    }),
                     generation,
                     ServerResult::SkillsListResult(result.clone()),
                 )
@@ -1946,18 +1950,29 @@ impl Peer<RoleClient> {
         peer: &Peer<RoleClient>,
         uri: impl Into<String>,
     ) -> Result<ReadResourceResult, ServiceError> {
-        let resource = Reference::Uri(uri.into());
-        peer.read_resource_once(resource).await
+        let params = ReadResourceRequestParams::new(uri);
+        peer.read_resource_once(params)
+            .await
+            .map(|response| match response {
+                ReadResourceResponse::Complete(result) => result,
+                ReadResourceResponse::InputRequired(_) => {
+                    // The skills extension does not define input_required for skill
+                    // files; collapse the unexpected variant into the caller as a
+                    // transport-level error by returning the complete result path
+                    // through UnexpectedResponse.
+                    unreachable!("skills/read_resource MUST NOT return input_required")
+                }
+            })
     }
 
     /// List the contents of a skill directory.
     ///
-    /// Delegates to [`Peer<RoleClient>::read_directory`].
+    /// Delegates to [`Peer<RoleClient>::resources_directory_read_once`].
     pub async fn read_directory(
         peer: &Peer<RoleClient>,
         uri: impl Into<String>,
     ) -> Result<ResourcesDirectoryReadResult, ServiceError> {
-        peer.read_directory(uri.into()).await
+        Self::resources_directory_read_once(peer, uri.into()).await
     }
 
     /// Convenient method to get completion suggestions for a prompt argument

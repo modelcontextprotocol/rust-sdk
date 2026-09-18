@@ -36,6 +36,39 @@ impl<H: ClientHandler> Service<RoleClient> for H {
                 .on_custom_request(request, context)
                 .await
                 .map(ClientResult::CustomResult),
+            ServerRequest::ResourcesDirectoryReadRequest(request) => self
+                .on_custom_request(
+                    CustomRequest {
+                        method: "resources/directory/read".to_string(),
+                        params: Some(serde_json::to_value(&request.params).unwrap_or_default()),
+                        extensions: Default::default(),
+                    },
+                    context,
+                )
+                .await
+                .map(ClientResult::CustomResult),
+            ServerRequest::SkillsListRequest(request) => self
+                .on_custom_request(
+                    CustomRequest {
+                        method: "skills/list".to_string(),
+                        params: Some(serde_json::to_value(&request.params).unwrap_or_default()),
+                        extensions: Default::default(),
+                    },
+                    context,
+                )
+                .await
+                .map(ClientResult::CustomResult),
+            ServerRequest::SkillsGetRequest(request) => self
+                .on_custom_request(
+                    CustomRequest {
+                        method: "skills/get".to_string(),
+                        params: Some(serde_json::to_value(&request.params).unwrap_or_default()),
+                        extensions: Default::default(),
+                    },
+                    context,
+                )
+                .await
+                .map(ClientResult::CustomResult),
         }
     }
 

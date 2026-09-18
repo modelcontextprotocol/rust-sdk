@@ -15,6 +15,7 @@ pub mod common;
 pub mod prompt;
 mod resource;
 pub mod router;
+pub mod skill;
 pub mod tool;
 pub mod tool_name_validation;
 pub mod wrapper;
