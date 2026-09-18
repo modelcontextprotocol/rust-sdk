@@ -1321,28 +1321,36 @@ mod origin_validation {
     #[tokio::test]
     async fn explicit_https_443_entry_allows_portless_origin() {
         let service = service_with_allowed_origins(&["https://example.com:443"]);
-        let response = service.handle(init_request(Some("https://example.com"))).await;
+        let response = service
+            .handle(init_request(Some("https://example.com")))
+            .await;
         assert_eq!(response.status(), http::StatusCode::OK);
     }
 
     #[tokio::test]
     async fn explicit_https_443_entry_allows_explicit_443_origin() {
         let service = service_with_allowed_origins(&["https://example.com:443"]);
-        let response = service.handle(init_request(Some("https://example.com:443"))).await;
+        let response = service
+            .handle(init_request(Some("https://example.com:443")))
+            .await;
         assert_eq!(response.status(), http::StatusCode::OK);
     }
 
     #[tokio::test]
     async fn explicit_https_443_entry_forbids_8443_origin() {
         let service = service_with_allowed_origins(&["https://example.com:443"]);
-        let response = service.handle(init_request(Some("https://example.com:8443"))).await;
+        let response = service
+            .handle(init_request(Some("https://example.com:8443")))
+            .await;
         assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn explicit_http_80_entry_allows_portless_origin() {
         let service = service_with_allowed_origins(&["http://example.com:80"]);
-        let response = service.handle(init_request(Some("http://example.com"))).await;
+        let response = service
+            .handle(init_request(Some("http://example.com")))
+            .await;
         assert_eq!(response.status(), http::StatusCode::OK);
     }
 
@@ -1351,7 +1359,9 @@ mod origin_validation {
         // The effective port resolves per-scheme: an https:443 entry must
         // not match an http origin whose implicit port is 80.
         let service = service_with_allowed_origins(&["https://example.com:443"]);
-        let response = service.handle(init_request(Some("http://example.com"))).await;
+        let response = service
+            .handle(init_request(Some("http://example.com")))
+            .await;
         assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
     }
 
@@ -1361,7 +1371,9 @@ mod origin_validation {
         // that scheme+host (relied upon by deployments that front the
         // server with different TLS terminators).
         let service = service_with_allowed_origins(&["https://example.com"]);
-        let response = service.handle(init_request(Some("https://example.com:8443"))).await;
+        let response = service
+            .handle(init_request(Some("https://example.com:8443")))
+            .await;
         assert_eq!(response.status(), http::StatusCode::OK);
     }
 }
