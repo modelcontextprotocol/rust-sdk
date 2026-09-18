@@ -215,7 +215,7 @@ tracing-subscriber = { version = "0.3", features = [
   "fmt",
 ] }
 async-trait = "0.1"
-rstest = "0.26.1"
+rstest = "0.27.0"
 [[test]]
 name = "test_tool_macros"
 required-features = ["server", "client"]
