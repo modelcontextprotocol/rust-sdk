@@ -713,6 +713,28 @@
     "CustomResult": {
       "description": "A catch-all response either side can use for custom requests."
     },
+    "DirectoryEntry": {
+      "description": "A single entry in a directory listing.\n\nThe spec's `resources/directory/read` result carries the same `Resource`-shaped\nobjects as `resources/list`, but in practice skill directory listings only need\nURI, name, and a directory flag. We model the minimal shape here.",
+      "type": "object",
+      "properties": {
+        "isDirectory": {
+          "description": "Whether this entry is a directory (`inode/directory`).",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The entry's name — the final segment of its URI.",
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "isDirectory",
+        "name"
+      ]
+    },
     "DiscoverResult": {
       "description": "The server's response to a [`DiscoverRequest`].",
       "type": "object",
@@ -963,6 +985,10 @@
       "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
       "type": "object",
       "properties": {
+        "$schema": {
+          "description": "Optional JSON Schema dialect identifier (the `$schema` keyword).\n\nThe 2025-11-25 protocol revision allows a `requestedSchema` to declare its\ndialect. It is preserved verbatim so a declared dialect survives a\ndecode/re-encode round-trip instead of being silently dropped.",
+          "type": "string"
+        },
         "description": {
           "description": "Optional description of what this schema represents",
           "type": [
@@ -1666,6 +1692,15 @@
         },
         {
           "$ref": "#/definitions/CustomRequest"
+        },
+        {
+          "$ref": "#/definitions/Request3"
+        },
+        {
+          "$ref": "#/definitions/Request4"
+        },
+        {
+          "$ref": "#/definitions/RequestOptionalParam"
         }
       ],
       "required": [
@@ -2330,6 +2365,28 @@
       "format": "const",
       "const": "object"
     },
+    "PaginatedRequestParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Protocol-level metadata for this request (SEP-1319)",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "PingRequestMethod": {
       "type": "string",
       "format": "const",
@@ -2642,6 +2699,38 @@
         "params"
       ]
     },
+    "Request3": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ResourcesDirectoryReadRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ResourcesDirectoryReadRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request4": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SkillsGetRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsGetRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
     "RequestMetaObject": {
       "description": "Metadata reserved by MCP on requests. Extension keys are also allowed.",
       "type": "object",
@@ -2680,6 +2769,27 @@
       "properties": {
         "method": {
           "$ref": "#/definitions/ListRootsRequestMethod"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SkillsListRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2953,6 +3063,84 @@
           ]
         }
       }
+    },
+    "ResourcesDirectoryReadRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/directory/read"
+    },
+    "ResourcesDirectoryReadRequestParams": {
+      "description": "Parameters for reading a directory resource.\n\nThe request carries the directory URI and an optional pagination cursor.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "ResourcesDirectoryReadResult": {
+      "description": "Response listing the children of a directory.\n\nCarries the `resultType` discriminator (SEP-2322) so it can be stripped for\nlegacy peers the same way as other resource list results.",
+      "type": "object",
+      "properties": {
+        "cacheScope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DirectoryEntry"
+          }
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resultType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ttlMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "children"
+      ]
     },
     "ResultType": {
       "description": "Indicates the type of a result object, allowing the client to\ndetermine how to parse the response.\n\nThe spec defines this as an open string (`\"complete\" | \"input_required\" | string`),\nso unknown values are preserved rather than rejected. Servers implementing this\nprotocol version MUST include `resultType` in every result. For backward\ncompatibility, clients MUST treat an absent field as `\"complete\"`.\n\nOrdinary results model the field as `Option<ResultType>`: `None` means the\nfield is absent on the wire. Constructors default to `Some(COMPLETE)`, and\nthe server handler strips the `\"complete\"` discriminator before responding\nto peers that negotiated a protocol version older than `2026-07-28`, so\nlegacy sessions keep their historical wire shape (see\n[`ServerResult::strip_result_type_for_legacy_peer`]).",
@@ -3251,6 +3439,15 @@
           "$ref": "#/definitions/ReadResourceResult"
         },
         {
+          "$ref": "#/definitions/ResourcesDirectoryReadResult"
+        },
+        {
+          "$ref": "#/definitions/SkillsGetResult"
+        },
+        {
+          "$ref": "#/definitions/SkillsListResult"
+        },
+        {
           "$ref": "#/definitions/SubscriptionsListenResult"
         },
         {
@@ -3291,6 +3488,192 @@
         {
           "$ref": "#/definitions/TitledSingleSelectEnumSchema"
         }
+      ]
+    },
+    "SkillEntry": {
+      "description": "A skill entry returned by `skills/list` or `skills/get`.\n\nMirrors the spec's JSON shape (see §Enumeration via `skills/list` in SEP-2640):\n\n```json\n{\n  \"uri\": \"skill://doc-workflow/SKILL.md\",\n  \"frontmatter\": { \"name\": \"doc-workflow\", \"description\": \"...\" },\n  \"resources\": [\n    { \"uri\": \"skill://doc-workflow/SKILL.md\", \"digest\": \"sha256:...\", \"size\": 1234 }\n  ],\n  \"_meta\": { \"ttlMs\": 600000, \"cacheScope\": \"metatarsal\" }\n}\n```",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata, including SEP-2549 caching fields.\nREQUIRED on `skills/list` results in protocol version 2026-07-28+\n(SEP-2549); not required on `skills/get` results.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frontmatter": {
+          "description": "Verbatim copy of the `SKILL.md` YAML frontmatter, rendered as JSON.\n\nThe spec calls this \"the frontmatter properties, rendered as JSON\".\nRequired keys: `name` (MUST equal the final segment of the skill path),\n`description`. Optional: `version`, `license`, plus any custom metadata."
+        },
+        "resources": {
+          "description": "Optional array of the skill's files with their URIs, SHA-256 digests,\nand sizes, or the literal string `\"dynamic\"` for dynamically-generated\nskills. Omitted from bare `SKILL.md`-only skills.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillResources"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uri": {
+          "description": "Resource URI of the skill's `SKILL.md`, e.g. `skill://doc-workflow/SKILL.md`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "frontmatter"
+      ]
+    },
+    "SkillResource": {
+      "description": "A single file inside a skill, with its URI, SHA-256 digest, and size.",
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "digest",
+        "size"
+      ]
+    },
+    "SkillResources": {
+      "description": "The `resources` field of a skill entry.\n\nThe spec allows either a concrete file list or the literal `\"dynamic\"`.",
+      "oneOf": [
+        {
+          "description": "Fixed list of file entries with digests and sizes.",
+          "type": "object",
+          "properties": {
+            "FileList": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/SkillResource"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "FileList"
+          ]
+        },
+        {
+          "description": "Dynamic skill whose content is generated on the fly.\nThe wire form is the bare JSON string `\"dynamic\"`.",
+          "type": "string",
+          "const": "Dynamic"
+        }
+      ]
+    },
+    "SkillsGetRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "skills/get"
+    },
+    "SkillsGetRequestParams": {
+      "description": "Parameters for retrieving a single skill by URI.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "SkillsGetResult": {
+      "description": "Response to `skills/get`.\n\nCarries a single skill entry. No pagination cursor (a single entry is not\na list). The caching fields (`ttlMs`/`cacheScope`) are left open — the\nspec does not settle whether `skills/get` results carry them.",
+      "type": "object",
+      "properties": {
+        "resultType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skill": {
+          "$ref": "#/definitions/SkillEntry"
+        }
+      },
+      "required": [
+        "skill"
+      ]
+    },
+    "SkillsListRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "skills/list"
+    },
+    "SkillsListResult": {
+      "description": "Response to `skills/list`.\n\nCarries the skill entries for this page plus (for protocol 2026-07-28+)\nthe SEP-2549 caching fields (`ttlMs`/`cacheScope`).",
+      "type": "object",
+      "properties": {
+        "cacheScope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resultType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillEntry"
+          }
+        },
+        "ttlMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "skills"
       ]
     },
     "StringFormat": {
