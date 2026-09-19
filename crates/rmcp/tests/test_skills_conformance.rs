@@ -15,8 +15,6 @@ use std::{
     process::{Command, Stdio},
 };
 
-use rmcp::model::skills::{self, SkillResources};
-
 fn skills_dir() -> std::path::PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let crate_root = std::path::PathBuf::from(manifest_dir);

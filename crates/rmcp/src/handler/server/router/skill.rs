@@ -10,8 +10,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use crate::{
     handler::server::skill::{CallSkillHandler, DynCallSkillHandler, SkillCallContext},
-    model::skills::{SkillEntry, SkillResources},
-    service::{MaybeBoxFuture, MaybeSend},
+    model::skills::SkillEntry,
+    service::MaybeSend,
 };
 
 #[non_exhaustive]
@@ -87,6 +87,7 @@ where
     }
 }
 
+#[non_exhaustive]
 pub struct SkillAttrGenerateFunctionAdapter;
 
 impl<S, F> IntoSkillRoute<S, SkillAttrGenerateFunctionAdapter> for F

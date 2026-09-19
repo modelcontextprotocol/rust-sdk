@@ -78,6 +78,7 @@ impl SkillEntry {
 /// The spec allows either a concrete file list or the literal `"dynamic"`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub enum SkillResources {
     /// Fixed list of file entries with digests and sizes.
     FileList(Vec<SkillResource>),
