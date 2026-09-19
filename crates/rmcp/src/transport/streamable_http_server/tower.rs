@@ -113,7 +113,10 @@ pub struct StreamableHttpServerConfig {
     /// Defaults to an empty list, which disables Origin validation for backward
     /// compatibility. A non-empty list enables validation. Requests carrying
     /// an `Origin` header must match per RFC 6454 `(scheme, host, port)`;
-    /// missing-`Origin` requests still pass. Entries must include a scheme;
+    /// missing-`Origin` requests still pass. An entry that omits the port
+    /// permits any port; an entry with an explicit port matches only that
+    /// port, resolving an origin's omitted port to the scheme default
+    /// (443 for `https`, 80 for `http`). Entries must include a scheme;
     /// `"null"` matches the browser's `Origin: null`.
     ///
     /// Call [`StreamableHttpServerConfig::enforce_origin_validation`] to enable
@@ -853,6 +856,15 @@ fn parse_origin_value(value: &str) -> Option<NormalizedOrigin> {
     })
 }
 
+/// The port a scheme implies when an origin serialization omits it (RFC 6454 §4).
+fn default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
+    }
+}
+
 fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> bool {
     allowed_origins
         .iter()
@@ -870,7 +882,17 @@ fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> b
                     host: o_host,
                     port: o_port,
                 },
-            ) => a_scheme == o_scheme && a_host == o_host && (a_port.is_none() || a_port == o_port),
+            ) => {
+                a_scheme == o_scheme
+                    && a_host == o_host
+                    && match a_port {
+                        // An omitted configured port permits any port.
+                        None => true,
+                        // RFC 6454 §6.2 omits the default port when serializing an
+                        // origin, so an absent incoming port means the scheme default.
+                        Some(a_port) => o_port.or_else(|| default_port(o_scheme)) == Some(*a_port),
+                    }
+            }
             _ => false,
         })
 }
