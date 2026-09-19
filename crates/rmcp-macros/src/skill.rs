@@ -45,7 +45,7 @@ impl ResolvedSkillAttribute {
             description,
             dynamic,
         } = self;
-        let description = if let Some(description) = description {
+        let _description = if let Some(description) = description {
             quote! { Some(#description.into()) }
         } else {
             quote! { None }
@@ -149,13 +149,13 @@ pub fn skill(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> 
         let omit_send = cfg!(feature = "local") || attribute.local;
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
-            if let Some(receiver) = fn_item.sig.receiver() {
-                if let syn::ReceiverKind::Reference(_, receiver_lt, _) = &receiver.kind {
-                    if let Some(receiver_lt) = receiver_lt {
-                        lt = quote! { #receiver_lt };
-                    } else {
-                        lt = quote! { '_ };
-                    }
+            if let Some(receiver) = fn_item.sig.receiver()
+                && let syn::ReceiverKind::Reference(_, receiver_lt, _) = &receiver.kind
+            {
+                if let Some(receiver_lt) = receiver_lt {
+                    lt = quote! { #receiver_lt };
+                } else {
+                    lt = quote! { '_ };
                 }
             }
             match &fn_item.sig.output {

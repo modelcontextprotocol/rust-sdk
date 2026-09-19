@@ -52,10 +52,10 @@ impl FileSystemSkillServer {
             let path = entry.path();
             if path.is_dir() {
                 Self::walk_dir(root, &path, skills)?;
-            } else if path.file_name().and_then(|s| s.to_str()) == Some(SKILL_FILE) {
-                if let Some(skill) = Self::parse_skill_file(root, &path) {
-                    skills.insert(skill.uri.clone(), skill);
-                }
+            } else if path.file_name().and_then(|s| s.to_str()) == Some(SKILL_FILE)
+                && let Some(skill) = Self::parse_skill_file(root, &path)
+            {
+                skills.insert(skill.uri.clone(), skill);
             }
         }
         Ok(())

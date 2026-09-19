@@ -7,10 +7,11 @@
 
 use crate::{
     model::skills::SkillEntry,
-    service::{MaybeBoxFuture, MaybeSend, RequestContext, RoleServer},
+    service::{MaybeBoxFuture, RequestContext, RoleServer},
 };
 
 /// Context passed to a skill handler when invoked.
+#[non_exhaustive]
 pub struct SkillCallContext<'a, S> {
     pub service: &'a S,
     pub uri: String,

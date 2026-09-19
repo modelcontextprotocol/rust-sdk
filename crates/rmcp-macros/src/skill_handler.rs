@@ -1,7 +1,7 @@
 use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
-use syn::{Expr, ImplItem, ItemImpl, parse_quote};
+use quote::{ToTokens, quote};
+use syn::{Expr, ImplItem, ItemImpl};
 
 use crate::common::{has_method, has_sibling_handler};
 
@@ -82,7 +82,7 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
     let attr_args = NestedMeta::parse_meta_list(attr)?;
     let SkillHandlerAttribute {
         router,
-        meta,
+        meta: _,
         name,
         version,
         instructions,
@@ -186,17 +186,15 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
         item_impl.items.push(directory_read_fn);
     }
 
-    if !has_method("get_info", &item_impl) {
-        if !has_sibling_handler(&item_impl, "tool_handler") {
-            let get_info_fn = build_get_info(
-                &item_impl,
-                name,
-                version,
-                instructions,
-                CallerCapability::Skills,
-            )?;
-            item_impl.items.push(get_info_fn);
-        }
+    if !has_method("get_info", &item_impl) && !has_sibling_handler(&item_impl, "tool_handler") {
+        let get_info_fn = build_get_info(
+            &item_impl,
+            name,
+            version,
+            instructions,
+            CallerCapability::Skills,
+        )?;
+        item_impl.items.push(get_info_fn);
     }
 
     Ok(item_impl.into_token_stream())

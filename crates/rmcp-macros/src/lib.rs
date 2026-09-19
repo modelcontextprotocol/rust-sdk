@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![allow(dead_code)]
 
 #[allow(unused_imports)]
 use proc_macro::TokenStream;

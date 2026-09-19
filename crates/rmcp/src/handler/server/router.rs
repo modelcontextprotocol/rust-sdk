@@ -163,7 +163,7 @@ where
                 Ok(ServerResult::SkillsListResult(
                     crate::model::skills::SkillsListResult {
                         result_type: Some(crate::model::ResultType::COMPLETE),
-                        skills: skills.into_iter().map(|s| s.into()).collect(),
+                        skills: skills.into_iter().collect(),
                         next_cursor: None,
                         ttl_ms: None,
                         cache_scope: None,
@@ -187,7 +187,7 @@ where
                         .await
                 }
             }
-            ClientRequest::ResourcesDirectoryReadRequest(request) => {
+            ClientRequest::ResourcesDirectoryReadRequest(_request) => {
                 let result = crate::model::skills::ResourcesDirectoryReadResult {
                     result_type: Some(crate::model::ResultType::COMPLETE),
                     children: vec![],
