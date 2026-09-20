@@ -788,15 +788,15 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
     }
 }
 
-impl<'de, Req, Resp, Not> serde::Deserialize<'de> for JsonRpcMessage<Req, Resp, Not>
+impl<'de, Req, Resp, Noti> serde::Deserialize<'de> for JsonRpcMessage<Req, Resp, Noti>
 where
-    Req: DeserializeOwned,
-    Resp: DeserializeOwned,
-    Not: DeserializeOwned,
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<__D>(deserializer: __D) -> Result<Self, __D::Error>
     where
-        D: serde::Deserializer<'de>,
+        __D: serde::Deserializer<'de>,
     {
         use serde::de::Error as _;
 
@@ -807,11 +807,16 @@ where
         // `result`/`error` matches `Request`. Dispatch on field presence first
         // so spec violations are rejected instead of silently resolved, while
         // extra extension fields stay accepted.
+        //
+        // Bounds stay `Deserialize<'de>` (not `DeserializeOwned`) so the public
+        // API matches the previous `#[derive(Deserialize)]` impl. We deserialize
+        // variants via `Deserialize::deserialize(value)` rather than
+        // `serde_json::from_value`, which would force `DeserializeOwned`.
         let value = Value::deserialize(deserializer)?;
         let obj = match value.as_object() {
             Some(obj) => obj,
             None => {
-                return Err(D::Error::custom(
+                return Err(__D::Error::custom(
                     "data did not match any variant of untagged enum JsonRpcMessage",
                 ));
             }
@@ -822,37 +827,37 @@ where
         let has_error = obj.contains_key("error");
 
         if has_result && has_error {
-            return Err(D::Error::custom(
+            return Err(__D::Error::custom(
                 "invalid JSON-RPC message: both `result` and `error` are present",
             ));
         }
         if has_method && (has_result || has_error) {
-            return Err(D::Error::custom(
+            return Err(__D::Error::custom(
                 "invalid JSON-RPC message: a request or notification must not carry `result` or `error`",
             ));
         }
 
         if has_method {
             if has_id {
-                return serde_json::from_value(value)
+                return JsonRpcRequest::<Req>::deserialize(value)
                     .map(JsonRpcMessage::Request)
-                    .map_err(|e| D::Error::custom(format!("invalid JSON-RPC request: {e}")));
+                    .map_err(__D::Error::custom);
             }
-            return serde_json::from_value(value)
+            return JsonRpcNotification::<Noti>::deserialize(value)
                 .map(JsonRpcMessage::Notification)
-                .map_err(|e| D::Error::custom(format!("invalid JSON-RPC notification: {e}")));
+                .map_err(__D::Error::custom);
         }
         if has_error {
-            return serde_json::from_value(value)
+            return JsonRpcError::deserialize(value)
                 .map(JsonRpcMessage::Error)
-                .map_err(|e| D::Error::custom(format!("invalid JSON-RPC error response: {e}")));
+                .map_err(__D::Error::custom);
         }
         if has_result {
-            return serde_json::from_value(value)
+            return JsonRpcResponse::<Resp>::deserialize(value)
                 .map(JsonRpcMessage::Response)
-                .map_err(|e| D::Error::custom(format!("invalid JSON-RPC response: {e}")));
+                .map_err(__D::Error::custom);
         }
-        Err(D::Error::custom(
+        Err(__D::Error::custom(
             "data did not match any variant of untagged enum JsonRpcMessage",
         ))
     }
