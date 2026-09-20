@@ -707,7 +707,7 @@ impl ErrorData {
 /// This enum covers all possible message types in the JSON-RPC protocol:
 /// individual requests/responses, notifications, and errors.
 /// It serves as the top-level message container for MCP communication.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
@@ -785,6 +785,76 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
 
             _ => None,
         }
+    }
+}
+
+impl<'de, Req, Resp, Not> serde::Deserialize<'de> for JsonRpcMessage<Req, Resp, Not>
+where
+    Req: DeserializeOwned,
+    Resp: DeserializeOwned,
+    Not: DeserializeOwned,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        // JSON-RPC 2.0 defines four mutually exclusive message shapes. A derived
+        // untagged enum cannot express that: a response carrying both `result`
+        // and `error` matches the `Response` variant (the stray `error` is
+        // dropped as an unknown field, #1283), and a request carrying a stray
+        // `result`/`error` matches `Request`. Dispatch on field presence first
+        // so spec violations are rejected instead of silently resolved, while
+        // extra extension fields stay accepted.
+        let value = Value::deserialize(deserializer)?;
+        let obj = match value.as_object() {
+            Some(obj) => obj,
+            None => {
+                return Err(D::Error::custom(
+                    "data did not match any variant of untagged enum JsonRpcMessage",
+                ));
+            }
+        };
+        let has_method = obj.contains_key("method");
+        let has_id = obj.contains_key("id");
+        let has_result = obj.contains_key("result");
+        let has_error = obj.contains_key("error");
+
+        if has_result && has_error {
+            return Err(D::Error::custom(
+                "invalid JSON-RPC message: both `result` and `error` are present",
+            ));
+        }
+        if has_method && (has_result || has_error) {
+            return Err(D::Error::custom(
+                "invalid JSON-RPC message: a request or notification must not carry `result` or `error`",
+            ));
+        }
+
+        if has_method {
+            if has_id {
+                return serde_json::from_value(value)
+                    .map(JsonRpcMessage::Request)
+                    .map_err(|e| D::Error::custom(format!("invalid JSON-RPC request: {e}")));
+            }
+            return serde_json::from_value(value)
+                .map(JsonRpcMessage::Notification)
+                .map_err(|e| D::Error::custom(format!("invalid JSON-RPC notification: {e}")));
+        }
+        if has_error {
+            return serde_json::from_value(value)
+                .map(JsonRpcMessage::Error)
+                .map_err(|e| D::Error::custom(format!("invalid JSON-RPC error response: {e}")));
+        }
+        if has_result {
+            return serde_json::from_value(value)
+                .map(JsonRpcMessage::Response)
+                .map_err(|e| D::Error::custom(format!("invalid JSON-RPC response: {e}")));
+        }
+        Err(D::Error::custom(
+            "data did not match any variant of untagged enum JsonRpcMessage",
+        ))
     }
 }
 
@@ -4928,6 +4998,118 @@ mod tests {
 
         let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
+    }
+
+    #[test]
+    fn test_response_with_result_and_error_is_rejected() {
+        // https://github.com/modelcontextprotocol/rust-sdk/issues/1283
+        let raw = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": { "content": [] },
+            "error": { "code": -32603, "message": "injected error" },
+        });
+
+        let result: Result<JsonRpcMessage, _> = serde_json::from_value(raw);
+        assert!(
+            result.is_err(),
+            "a response carrying both `result` and `error` must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_request_with_stray_result_or_error_is_rejected() {
+        let with_result = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 2,
+            "method": "ping",
+            "result": { "injected": true },
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(with_result).is_err(),
+            "a request carrying `result` must be rejected"
+        );
+
+        let with_error = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 3,
+            "method": "ping",
+            "error": { "code": -32603, "message": "injected error" },
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(with_error).is_err(),
+            "a request carrying `error` must be rejected"
+        );
+
+        let notification_with_result = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/initialized",
+            "result": {},
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(notification_with_result).is_err(),
+            "a notification carrying `result` must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_clean_shapes_and_extension_fields_still_deserialize() {
+        // The four clean shapes keep working.
+        let request = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "method": "ping",
+            "params": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(request).expect("request"),
+            JsonRpcMessage::Request(_)
+        ));
+
+        let response = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(response).expect("response"),
+            JsonRpcMessage::Response(_)
+        ));
+
+        let notification = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/initialized",
+            "params": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(notification).expect("notification"),
+            JsonRpcMessage::Notification(_)
+        ));
+
+        let error = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "error": { "code": -32603, "message": "boom" },
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(error).expect("error"),
+            JsonRpcMessage::Error(_)
+        ));
+
+        // Extension fields stay accepted (no deny_unknown_fields semantics).
+        let extended = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": {},
+            "x-vendor-extension": { "any": true },
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(extended).expect("extended response"),
+            JsonRpcMessage::Response(_)
+        ));
+
+        // Unrecognized shapes still fail.
+        assert!(serde_json::from_value::<JsonRpcMessage>(json!({ "id": 1 })).is_err());
     }
 
     #[test]
