@@ -1,4 +1,6 @@
-use rmcp::model::{CacheScope, ListToolsResult, ReadResourceResult, ResourceContents, ServerResult};
+use rmcp::model::{
+    CacheScope, ListToolsResult, ReadResourceResult, ResourceContents, ServerResult,
+};
 use serde_json::json;
 
 #[test]
