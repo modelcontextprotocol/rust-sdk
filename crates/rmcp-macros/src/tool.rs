@@ -65,7 +65,6 @@ pub struct ToolAttribute {
     pub name: Option<String>,
     /// Human readable title of tool
     pub title: Option<String>,
-    /// The description of the tool
     pub description: Option<darling::util::PreservedStrExpr>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Option<Expr>,
