@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.4.0...rmcp-macros-v3.4.1) - 2026-09-22
+
+### Fixed
+
+- *(macros)* accept const paths and concat! in tool/prompt descriptions ([#1243](https://github.com/modelcontextprotocol/rust-sdk/pull/1243))
+
 ## [3.4.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.3.0...rmcp-macros-v3.4.0) - 2026-09-15
 
 ### Added
