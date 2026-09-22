@@ -362,11 +362,15 @@ impl StreamableHttpPostResponse {
 }
 
 /// Convert a sessionless discovery rejection into a response the lifecycle
-/// layer can classify as a legacy-server signal.
+/// layer can classify. The server's own JSON-RPC error is preserved so the
+/// lifecycle can tell a modern rejection (retry at a supported version) from a
+/// legacy one; `invalid_request` is synthesized only when the body has no error
+/// to keep, as with an empty or plain-text 4xx from middleware.
 ///
-/// Some legacy streamable-HTTP servers reject `server/discover` in middleware
-/// before it reaches JSON-RPC dispatch. Their response may be an empty or
-/// plain-text 4xx, so there is no JSON-RPC error for the client to forward.
+/// The id is re-correlated because such middleware rejections cannot echo it
+/// (the Python SDK sends the literal `"server-error"`); otherwise the lifecycle
+/// discards the response as uncorrelated without classifying it.
+///
 /// Keep authentication failures and server errors on their original paths.
 pub(super) fn legacy_discover_response(
     message: &ClientJsonRpcMessage,
@@ -388,10 +392,13 @@ pub(super) fn legacy_discover_response(
         return None;
     }
 
-    let error = ErrorData::invalid_request(
-        format!("server/discover rejected with HTTP {status}: {body}"),
-        None,
-    );
+    let error = match serde_json::from_str::<ServerJsonRpcMessage>(body) {
+        Ok(ServerJsonRpcMessage::Error(error)) => error.error,
+        _ => ErrorData::invalid_request(
+            format!("server/discover rejected with HTTP {status}: {body}"),
+            None,
+        ),
+    };
     Some(StreamableHttpPostResponse::Json(
         ServerJsonRpcMessage::error(error, Some(request.id.clone())),
         None,
