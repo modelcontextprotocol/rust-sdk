@@ -113,16 +113,21 @@ pub struct StreamableHttpServerConfig {
     /// Defaults to an empty list, which disables Origin validation for backward
     /// compatibility. A non-empty list enables validation. Requests carrying
     /// an `Origin` header must match per RFC 6454 `(scheme, host, port)`;
-    /// missing-`Origin` requests still pass. An entry that omits the port
-    /// permits any port; an entry with an explicit port matches only that
-    /// port, resolving an origin's omitted port to the scheme default
-    /// (443 for `https`, 80 for `http`). Entries must include a scheme;
+    /// missing-`Origin` requests still pass. Entries must include a scheme;
     /// `"null"` matches the browser's `Origin: null`.
+    ///
+    /// Ports:
+    /// - `:*` matches any port.
+    /// - An explicit port matches only that port. An `Origin` without a port
+    ///   uses the scheme default (443 for `https`, 80 for `http`).
+    /// - An entry without a port currently matches any port. This is
+    ///   deprecated: a future release will match only the scheme default
+    ///   port. Use `:*` or an explicit port instead.
     ///
     /// Call [`StreamableHttpServerConfig::enforce_origin_validation`] to enable
     /// validation with an empty list, rejecting every present Origin value.
     /// examples:
-    ///     allowed_origins = ["https://app.example.com", "http://localhost:8080"]
+    ///     allowed_origins = ["https://app.example.com:443", "http://localhost:*"]
     pub allowed_origins: Vec<String>,
     validate_empty_origin_allowlist: bool,
     /// Optional external session store for cross-instance recovery.
@@ -865,14 +870,70 @@ fn default_port(scheme: &str) -> Option<u16> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AllowedPort {
+    /// `:*`
+    Any,
+    /// No port in the entry. Matches any port until the deprecation ends.
+    Unspecified,
+    Exact(u16),
+}
+
+impl AllowedPort {
+    fn matches(self, scheme: &str, port: Option<u16>) -> bool {
+        match self {
+            AllowedPort::Any | AllowedPort::Unspecified => true,
+            // RFC 6454 §6.2 omits the default port when serializing an origin.
+            AllowedPort::Exact(allowed) => port.or_else(|| default_port(scheme)) == Some(allowed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AllowedOrigin {
+    Null,
+    Tuple {
+        scheme: String,
+        host: String,
+        port: AllowedPort,
+    },
+}
+
+fn parse_allowed_origin(value: &str) -> Option<AllowedOrigin> {
+    let value = value.trim();
+    if let Some(base) = value.strip_suffix(":*") {
+        let NormalizedOrigin::Tuple {
+            scheme,
+            host,
+            port: None,
+        } = parse_origin_value(base)?
+        else {
+            return None;
+        };
+        return Some(AllowedOrigin::Tuple {
+            scheme,
+            host,
+            port: AllowedPort::Any,
+        });
+    }
+    Some(match parse_origin_value(value)? {
+        NormalizedOrigin::Null => AllowedOrigin::Null,
+        NormalizedOrigin::Tuple { scheme, host, port } => AllowedOrigin::Tuple {
+            scheme,
+            host,
+            port: port.map_or(AllowedPort::Unspecified, AllowedPort::Exact),
+        },
+    })
+}
+
 fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> bool {
     allowed_origins
         .iter()
-        .filter_map(|raw| parse_origin_value(raw))
+        .filter_map(|raw| parse_allowed_origin(raw))
         .any(|allowed| match (&allowed, origin) {
-            (NormalizedOrigin::Null, NormalizedOrigin::Null) => true,
+            (AllowedOrigin::Null, NormalizedOrigin::Null) => true,
             (
-                NormalizedOrigin::Tuple {
+                AllowedOrigin::Tuple {
                     scheme: a_scheme,
                     host: a_host,
                     port: a_port,
@@ -882,19 +943,80 @@ fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> b
                     host: o_host,
                     port: o_port,
                 },
-            ) => {
-                a_scheme == o_scheme
-                    && a_host == o_host
-                    && match a_port {
-                        // An omitted configured port permits any port.
-                        None => true,
-                        // RFC 6454 §6.2 omits the default port when serializing an
-                        // origin, so an absent incoming port means the scheme default.
-                        Some(a_port) => o_port.or_else(|| default_port(o_scheme)) == Some(*a_port),
-                    }
-            }
+            ) => a_scheme == o_scheme && a_host == o_host && a_port.matches(o_scheme, *o_port),
             _ => false,
         })
+}
+
+fn warn_on_portless_allowed_origins(allowed_origins: &[String]) {
+    for raw in allowed_origins {
+        if let Some(AllowedOrigin::Tuple {
+            port: AllowedPort::Unspecified,
+            ..
+        }) = parse_allowed_origin(raw)
+        {
+            tracing::warn!(
+                allowed_origin = raw.as_str(),
+                "allowed origin without a port matches any port; a future release will match \
+                 only the scheme default port. Use `:*` or an explicit port instead",
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod parse_allowed_origin_tests {
+    use super::*;
+
+    fn tuple(scheme: &str, host: &str, port: AllowedPort) -> Option<AllowedOrigin> {
+        Some(AllowedOrigin::Tuple {
+            scheme: scheme.to_string(),
+            host: host.to_string(),
+            port,
+        })
+    }
+
+    #[test]
+    fn wildcard_port_parses_as_any() {
+        assert_eq!(
+            parse_allowed_origin("https://client.example:*"),
+            tuple("https", "client.example", AllowedPort::Any)
+        );
+    }
+
+    #[test]
+    fn wildcard_port_on_ipv6_host_parses_as_any() {
+        assert_eq!(
+            parse_allowed_origin("http://[::1]:*"),
+            tuple("http", "::1", AllowedPort::Any)
+        );
+    }
+
+    #[test]
+    fn portless_entry_parses_as_unspecified() {
+        assert_eq!(
+            parse_allowed_origin("https://client.example"),
+            tuple("https", "client.example", AllowedPort::Unspecified)
+        );
+    }
+
+    #[test]
+    fn explicit_port_parses_as_exact() {
+        assert_eq!(
+            parse_allowed_origin("https://client.example:8443"),
+            tuple("https", "client.example", AllowedPort::Exact(8443))
+        );
+    }
+
+    #[test]
+    fn wildcard_after_explicit_port_is_rejected() {
+        assert_eq!(parse_allowed_origin("https://client.example:443:*"), None);
+    }
+
+    #[test]
+    fn wildcard_on_null_is_rejected() {
+        assert_eq!(parse_allowed_origin("null:*"), None);
+    }
 }
 
 fn bad_request_response(message: &str) -> BoxResponse {
@@ -1158,6 +1280,7 @@ where
         session_manager: Arc<M>,
         config: StreamableHttpServerConfig,
     ) -> Self {
+        warn_on_portless_allowed_origins(&config.allowed_origins);
         let pending_restores = config
             .session_store
             .is_some()
