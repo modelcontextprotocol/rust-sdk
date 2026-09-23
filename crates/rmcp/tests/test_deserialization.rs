@@ -71,6 +71,41 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn call_tool_result_with_null_structured_content_deserializes_to_correct_variant() {
+        for payload in [
+            json!({
+                "resultType": "complete",
+                "content": [],
+                "structuredContent": null
+            }),
+            json!({
+                "resultType": "complete",
+                "structuredContent": null
+            }),
+            json!({ "structuredContent": null }),
+        ] {
+            let result = parse_result(wrap_response(payload.clone()));
+            let ServerResult::CallToolResult(result) = result else {
+                panic!("{payload} should deserialize as CallToolResult, got {result:?}");
+            };
+            assert_eq!(result.structured_content, Some(serde_json::Value::Null));
+        }
+    }
+
+    #[test]
+    fn null_structured_content_does_not_shadow_custom_result() {
+        // Counting a present `structuredContent: null` as a known field must not
+        // make CallToolResult swallow other objects carrying only null values.
+        let result = parse_result(wrap_response(json!({
+            "somethingElse": null
+        })));
+        assert!(
+            matches!(result, ServerResult::CustomResult(_)),
+            "expected CustomResult, got {result:?}"
+        );
+    }
+
+    #[test]
     fn input_required_result_with_meta_deserializes_to_correct_variant() {
         let result = parse_result(wrap_response(json!({
             "resultType": "input_required",

@@ -210,7 +210,7 @@
           ]
         },
         "structuredContent": {
-          "description": "An optional JSON object that represents the structured result of the tool call"
+          "description": "An optional JSON value that represents the structured result of the tool call.\nIt can be any JSON value, including `null`; an explicit `null` is kept\ndistinct from an absent field."
         }
       }
     },
