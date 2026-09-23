@@ -310,8 +310,8 @@ pub trait CredentialStore: Send + Sync {
     /// Called only for a definitive `invalid_grant` response, with the credentials used
     /// for that exchange, before its refresh guard (if any) is released. Implementations
     /// must not reacquire that guard or change credentials that have since been replaced.
-    /// The default leaves credentials unchanged. On success, the manager returns
-    /// [`AuthError::TokenRefreshRejected`]; a callback error is propagated instead.
+    /// The default leaves credentials unchanged. Callback errors are logged, and the
+    /// manager still returns [`AuthError::TokenRefreshRejected`] so callers can reauthorize.
     async fn on_refresh_token_rejected(
         &self,
         _credentials: &StoredCredentials,
@@ -2324,9 +2324,16 @@ impl AuthorizationManager {
                 RequestTokenError::ServerResponse(response)
                     if response.error() == &BasicErrorResponseType::InvalidGrant =>
                 {
-                    self.credential_store
+                    if let Err(store_error) = self
+                        .credential_store
                         .on_refresh_token_rejected(&stored_credentials)
-                        .await?;
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %store_error,
+                            "Failed to handle rejected refresh token"
+                        );
+                    }
                     return Err(AuthError::TokenRefreshRejected(error.to_string()));
                 }
                 _ => return Err(AuthError::TokenRefreshFailed(error.to_string())),
@@ -9437,11 +9444,7 @@ mod tests {
 
         let error = manager.refresh_token().await.unwrap_err();
 
-        match fail_at {
-            Some(_) => assert!(matches!(error,
-                AuthError::CredentialStoreError(message) if message == "rejection failed")),
-            None => assert!(matches!(error, AuthError::TokenRefreshRejected(_))),
-        }
+        assert!(matches!(error, AuthError::TokenRefreshRejected(_)));
         assert_eq!(
             serde_json::to_value(&*store.rejected_credentials.lock().unwrap()).unwrap(),
             serde_json::to_value(attempted).unwrap()
@@ -9450,6 +9453,35 @@ mod tests {
             *store.events.lock().unwrap(),
             [
                 "acquire", "acquired", "load", "provider", "rejected", "release"
+            ]
+        );
+        assert_eq!(http_client.recording.requests().len(), 1);
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn get_access_token_requires_reauth_when_rejection_callback_fails() {
+        let mut store = refresh_store().await;
+        store.fail_at = Some("rejected");
+        let mut credentials = store.credentials.load().await.unwrap().unwrap();
+        credentials
+            .token_response
+            .as_mut()
+            .unwrap()
+            .set_expires_in(Some(&std::time::Duration::ZERO));
+        store.credentials.save(credentials).await.unwrap();
+        let http_client = refresh_error_http_client(&store, "invalid_grant");
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        assert!(matches!(
+            manager.get_access_token().await,
+            Err(AuthError::AuthorizationRequired)
+        ));
+
+        assert_eq!(
+            *store.events.lock().unwrap(),
+            [
+                "load", "acquire", "acquired", "load", "provider", "rejected", "release"
             ]
         );
         assert_eq!(http_client.recording.requests().len(), 1);
