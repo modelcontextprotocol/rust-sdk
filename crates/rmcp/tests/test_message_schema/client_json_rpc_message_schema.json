@@ -1095,13 +1095,13 @@
           "$ref": "#/definitions/Request8"
         },
         {
+          "$ref": "#/definitions/RequestOptionalParam4"
+        },
+        {
           "$ref": "#/definitions/Request9"
         },
         {
           "$ref": "#/definitions/Request10"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam4"
         },
         {
           "$ref": "#/definitions/Request11"
@@ -1110,7 +1110,16 @@
           "$ref": "#/definitions/Request12"
         },
         {
+          "$ref": "#/definitions/RequestOptionalParam5"
+        },
+        {
           "$ref": "#/definitions/Request13"
+        },
+        {
+          "$ref": "#/definitions/Request14"
+        },
+        {
+          "$ref": "#/definitions/Request15"
         },
         {
           "$ref": "#/definitions/CustomRequest"
@@ -1488,6 +1497,38 @@
       "type": "object",
       "properties": {
         "method": {
+          "$ref": "#/definitions/SubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/SubscribeRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request11": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/UnsubscribeRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/UnsubscribeRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request12": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
           "$ref": "#/definitions/CallToolRequestMethod"
         },
         "params": {
@@ -1499,7 +1540,7 @@
         "params"
       ]
     },
-    "Request11": {
+    "Request13": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1515,7 +1556,7 @@
         "params"
       ]
     },
-    "Request12": {
+    "Request14": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1531,7 +1572,7 @@
         "params"
       ]
     },
-    "Request13": {
+    "Request15": {
       "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
       "type": "object",
       "properties": {
@@ -1632,10 +1673,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/SubscriptionsListenRequestMethod"
+          "$ref": "#/definitions/ResourcesDirectoryReadRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SubscriptionsListenRequestParams"
+          "$ref": "#/definitions/ResourcesDirectoryReadRequestParams"
         }
       },
       "required": [
@@ -1648,10 +1689,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/SubscribeRequestMethod"
+          "$ref": "#/definitions/SkillsGetRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/SubscribeRequestParams"
+          "$ref": "#/definitions/SkillsGetRequestParams"
         }
       },
       "required": [
@@ -1664,10 +1705,10 @@
       "type": "object",
       "properties": {
         "method": {
-          "$ref": "#/definitions/UnsubscribeRequestMethod"
+          "$ref": "#/definitions/SubscriptionsListenRequestMethod"
         },
         "params": {
-          "$ref": "#/definitions/UnsubscribeRequestParams"
+          "$ref": "#/definitions/SubscriptionsListenRequestParams"
         }
       },
       "required": [
@@ -1772,6 +1813,27 @@
       ]
     },
     "RequestOptionalParam4": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/SkillsListRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam5": {
       "type": "object",
       "properties": {
         "method": {
@@ -1942,6 +2004,39 @@
     "ResourceTemplateReference": {
       "type": "object",
       "properties": {
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "ResourcesDirectoryReadRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/directory/read"
+    },
+    "ResourcesDirectoryReadRequestParams": {
+      "description": "Parameters for reading a directory resource.\n\nThe request carries the directory URI and an optional pagination cursor.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "uri": {
           "type": "string"
         }
@@ -2172,6 +2267,38 @@
       "required": [
         "level"
       ]
+    },
+    "SkillsGetRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "skills/get"
+    },
+    "SkillsGetRequestParams": {
+      "description": "Parameters for retrieving a single skill by URI.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
+    "SkillsListRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "skills/list"
     },
     "SubscribeRequestMethod": {
       "type": "string",
