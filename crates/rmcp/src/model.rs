@@ -3862,6 +3862,15 @@ pub type ElicitRequest = Request<ElicitationCreateRequestMethod, ElicitRequestPa
 // TOOL EXECUTION RESULTS
 // =============================================================================
 
+/// Deserialize a field that is present on the wire as `Some`, even when its
+/// value is `null`. Combined with `#[serde(default)]`, an absent field stays `None`.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// The result of a tool call operation.
 ///
 /// Contains the content returned by the tool execution and an optional
@@ -3886,7 +3895,9 @@ pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
     pub content: Vec<ContentBlock>,
-    /// An optional JSON object that represents the structured result of the tool call
+    /// An optional JSON value that represents the structured result of the tool call.
+    /// It can be any JSON value, including `null`; an explicit `null` is kept
+    /// distinct from an absent field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
     /// Whether this result represents an error condition
@@ -3903,6 +3914,8 @@ pub struct CallToolResult {
 //    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
 //    (e.g. `ServerResult`), which would shadow `CustomResult`.
 // 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
+// 4. Keeps a present `"structuredContent": null` as `Some(Value::Null)`, distinct
+//    from an absent field, since structured content can be any JSON value.
 impl<'de> Deserialize<'de> for CallToolResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -3914,6 +3927,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
             #[serde(default)]
             result_type: Option<ResultType>,
             content: Option<Vec<ContentBlock>>,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
             structured_content: Option<Value>,
             is_error: Option<bool>,
             #[serde(rename = "_meta")]
