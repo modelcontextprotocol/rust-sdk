@@ -695,8 +695,8 @@ async fn dropping_shadows_does_not_affect_primary() {
 // ─── Tests: Cache replay on dead primary replacement ─────────────────────────
 
 /// When a notification is sent while the primary is alive, then the primary
-/// dies and a new GET resumes with Last-Event-ID "0", the replacement primary
-/// should receive the cached notification via sync() replay.
+/// dies and a fresh GET connects without Last-Event-ID, the replacement primary
+/// should receive the locally cached notification.
 #[tokio::test]
 async fn dead_primary_replacement_replays_cached_events() {
     let ct = CancellationToken::new();
@@ -721,15 +721,15 @@ async fn dead_primary_replacement_replays_cached_events() {
     drop(get1);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Resume with Last-Event-ID "0" — primary is dead, should replace it
-    // and replay cached events from index 0
-    let get_resume = open_resume_get(&client, &url, &session_id, "0").await;
+    // Fresh GET without Last-Event-ID — primary is dead, so it should replace
+    // the old primary and replay the locally retained cache.
+    let get_resume = open_standalone_get(&client, &url, &session_id).await;
     assert_eq!(get_resume.status(), 200);
 
     // The cached notification should be replayed on the new primary
     assert!(
         wait_for_sse_event(get_resume, "tools/list_changed", Duration::from_secs(3)).await,
-        "Replacement primary should receive cached notification via sync() replay"
+        "Replacement primary should receive cached notification"
     );
 
     ct.cancel();
