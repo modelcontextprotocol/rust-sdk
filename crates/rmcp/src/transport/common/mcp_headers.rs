@@ -99,80 +99,135 @@ fn is_tchar(c: char) -> bool {
         )
 }
 
-/// Top-level properties carrying an `x-mcp-header` annotation, as `(property, header)` pairs.
-fn param_header_annotations(input_schema: &JsonObject) -> Vec<(String, String)> {
+/// Properties carrying an `x-mcp-header` annotation, as `(property path, header)` pairs.
+fn param_header_annotations(input_schema: &JsonObject) -> Vec<(Vec<String>, String)> {
     let mut out = Vec::new();
     if let Some(Value::Object(props)) = input_schema.get("properties") {
-        for (prop, schema) in props {
-            if let Some(Value::String(header)) = schema.get("x-mcp-header")
-                && !header.is_empty()
-            {
-                out.push((prop.clone(), header.clone()));
-            }
-        }
+        collect_param_header_annotations(props, &mut Vec::new(), &mut out);
     }
     out
+}
+
+fn collect_param_header_annotations(
+    properties: &JsonObject,
+    path: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, String)>,
+) {
+    for (property, schema) in properties {
+        path.push(property.clone());
+        if let Some(Value::String(header)) = schema.get("x-mcp-header")
+            && !header.is_empty()
+        {
+            out.push((path.clone(), header.clone()));
+        }
+        if let Some(Value::Object(nested)) = schema.get("properties") {
+            collect_param_header_annotations(nested, path, out);
+        }
+        path.pop();
+    }
+}
+
+fn value_at_property_path<'a>(value: &'a Value, path: &[String]) -> Option<&'a Value> {
+    path.iter()
+        .try_fold(value, |current, property| current.get(property))
 }
 
 /// Validates the `x-mcp-header` annotations in a tool input schema.
 ///
 /// Annotations must be non-empty RFC 9110 tokens, case-insensitively unique,
-/// applied only to top-level primitive (`string`/`integer`/`boolean`) properties.
+/// applied only to primitive (`string`/`integer`/`boolean`) properties reached
+/// through an unbroken chain of `properties` members.
 /// Returns the offending reason on the first violation.
 #[cfg(feature = "client-side-sse")]
 pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Result<(), String> {
+    if input_schema.contains_key("x-mcp-header") {
+        return Err("schema root: x-mcp-header must annotate a property".to_owned());
+    }
+    reject_annotations_outside_properties(input_schema, "schema root")?;
     let Some(Value::Object(props)) = input_schema.get("properties") else {
         return Ok(());
     };
     let mut seen = std::collections::HashSet::new();
-    for (prop, schema) in props {
-        reject_nested_annotations(schema, prop)?;
+    validate_property_annotations(props, &mut Vec::new(), &mut seen)
+}
+
+#[cfg(feature = "client-side-sse")]
+fn validate_property_annotations(
+    properties: &JsonObject,
+    path: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) -> Result<(), String> {
+    for (prop, schema) in properties {
+        path.push(prop.clone());
+        let display_path = path.join(".");
+        if let Some(object) = schema.as_object() {
+            reject_annotations_outside_properties(object, &format!("property `{display_path}`"))?;
+        }
         let Some(raw) = schema.get("x-mcp-header") else {
+            if let Some(Value::Object(nested)) = schema.get("properties") {
+                validate_property_annotations(nested, path, seen)?;
+            }
+            path.pop();
             continue;
         };
         let Value::String(header) = raw else {
-            return Err(format!("property `{prop}`: x-mcp-header must be a string"));
+            return Err(format!(
+                "property `{display_path}`: x-mcp-header must be a string"
+            ));
         };
         if header.is_empty() {
-            return Err(format!("property `{prop}`: x-mcp-header must not be empty"));
+            return Err(format!(
+                "property `{display_path}`: x-mcp-header must not be empty"
+            ));
         }
         if !header.chars().all(is_tchar) {
             return Err(format!(
-                "property `{prop}`: x-mcp-header `{header}` is not a valid HTTP token"
+                "property `{display_path}`: x-mcp-header `{header}` is not a valid HTTP token"
             ));
         }
         if !seen.insert(header.to_ascii_lowercase()) {
             return Err(format!(
-                "property `{prop}`: duplicate x-mcp-header `{header}` (case-insensitive)"
+                "property `{display_path}`: duplicate x-mcp-header `{header}` (case-insensitive)"
             ));
         }
         match schema.get("type").and_then(Value::as_str) {
             Some("string" | "integer" | "boolean") => {}
             other => {
                 return Err(format!(
-                    "property `{prop}`: x-mcp-header requires a primitive type \
+                    "property `{display_path}`: x-mcp-header requires a primitive type \
                      (string/integer/boolean), got {other:?}"
                 ));
             }
+        }
+        if let Some(Value::Object(nested)) = schema.get("properties") {
+            validate_property_annotations(nested, path, seen)?;
+        }
+        path.pop();
+    }
+    Ok(())
+}
+
+#[cfg(feature = "client-side-sse")]
+fn reject_annotations_outside_properties(schema: &JsonObject, path: &str) -> Result<(), String> {
+    for (keyword, value) in schema {
+        if keyword != "properties" && keyword != "x-mcp-header" && contains_annotation(value) {
+            return Err(format!(
+                "{path}: x-mcp-header under `{keyword}` is not reachable through properties"
+            ));
         }
     }
     Ok(())
 }
 
-/// Rejects `x-mcp-header` on nested properties (only top-level promotion is supported).
 #[cfg(feature = "client-side-sse")]
-fn reject_nested_annotations(schema: &Value, path: &str) -> Result<(), String> {
-    if let Some(Value::Object(nested)) = schema.get("properties") {
-        for (key, value) in nested {
-            if value.get("x-mcp-header").is_some() {
-                return Err(format!(
-                    "property `{path}.{key}`: x-mcp-header is not supported on nested properties"
-                ));
-            }
-            reject_nested_annotations(value, &format!("{path}.{key}"))?;
+fn contains_annotation(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.contains_key("x-mcp-header") || object.values().any(contains_annotation)
         }
+        Value::Array(values) => values.iter().any(contains_annotation),
+        _ => false,
     }
-    Ok(())
 }
 
 /// Wraps a value as `=?base64?<b64>?=` when it cannot travel as a bare header value.
@@ -240,8 +295,8 @@ pub(crate) fn standard_request_headers(
         && let (Some(schema), Some(arguments)) =
             (tool_schema, params.and_then(|p| p.get("arguments")))
     {
-        for (prop, header) in param_header_annotations(schema) {
-            let Some(arg) = arguments.get(&prop) else {
+        for (path, header) in param_header_annotations(schema) {
+            let Some(arg) = value_at_property_path(arguments, &path) else {
                 continue;
             };
             let Some(encoded) = primitive_to_string(arg).map(|s| encode_header_value(&s)) else {
@@ -298,21 +353,22 @@ pub(crate) fn validate_request_headers(
         && let Some(schema) = tool_schema
     {
         let arguments = params.and_then(|p| p.get("arguments"));
-        for (prop, header) in param_header_annotations(schema) {
+        for (path, header) in param_header_annotations(schema) {
             let full = format!("{HEADER_MCP_PARAM_PREFIX}{header}");
             let header_value = header_str(headers, &full);
-            let arg = arguments.and_then(|a| a.get(&prop));
+            let arg = arguments.and_then(|arguments| value_at_property_path(arguments, &path));
             let body_value = arg.filter(|v| !v.is_null()).and_then(primitive_to_string);
+            let property = path.join(".");
 
             match (header_value, body_value) {
                 (None, None) => {}
                 (Some(_), None) => {
                     return Err(format!(
-                        "unexpected {full} header for absent or null `{prop}`"
+                        "unexpected {full} header for absent or null `{property}`"
                     ));
                 }
                 (None, Some(_)) => {
-                    return Err(format!("missing {full} header for `{prop}`"));
+                    return Err(format!("missing {full} header for `{property}`"));
                 }
                 (Some(raw), Some(expected)) => {
                     let decoded = decode_header_value(raw)
@@ -526,13 +582,44 @@ mod tests {
         }
 
         #[test]
-        fn rejects_nested_annotation() {
+        fn accepts_plain_nested_annotation() {
             let schema = schema_with(json!({
                 "outer": {
                     "type": "object",
                     "properties": { "inner": { "type": "string", "x-mcp-header": "Inner" } }
                 }
             }));
+            assert!(validate_param_header_annotations(&schema).is_ok());
+        }
+
+        #[test]
+        fn rejects_annotations_outside_plain_property_chains() {
+            for keyword in ["items", "allOf", "if", "$defs"] {
+                let schema = schema_with(json!({
+                    "outer": {
+                        "type": "object",
+                        (keyword): [{ "type": "string", "x-mcp-header": "Hidden" }]
+                    }
+                }));
+                assert!(
+                    validate_param_header_annotations(&schema).is_err(),
+                    "keyword {keyword} must not create a promotable path"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_annotation_reached_through_ref() {
+            let schema = schema_with(json!({
+                "outer": {
+                    "$ref": "#/$defs/inner"
+                }
+            }));
+            let mut schema = schema;
+            schema.insert(
+                "$defs".to_owned(),
+                json!({ "inner": { "type": "string", "x-mcp-header": "Hidden" } }),
+            );
             assert!(validate_param_header_annotations(&schema).is_err());
         }
     }
@@ -576,6 +663,33 @@ mod tests {
                 tools_call_headers()
                     .get("mcp-param-region")
                     .map(String::as_str),
+                Some("us-west1")
+            );
+        }
+
+        #[test]
+        fn sets_plain_nested_annotated_param_header() {
+            let schema = schema_with(json!({
+                "deployment": {
+                    "type": "object",
+                    "properties": {
+                        "region": { "type": "string", "x-mcp-header": "Region" }
+                    }
+                }
+            }));
+            let request = json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "deploy",
+                    "arguments": { "deployment": { "region": "us-west1" } }
+                }
+            });
+            let headers = super::super::standard_request_headers(&request, Some(&schema))
+                .into_iter()
+                .map(|(name, value)| (name.as_str().to_owned(), value.to_str().unwrap().to_owned()))
+                .collect::<HashMap<_, _>>();
+            assert_eq!(
+                headers.get("mcp-param-region").map(String::as_str),
                 Some("us-west1")
             );
         }
@@ -653,6 +767,31 @@ mod tests {
                 ("Mcp-Param-Region", "eu-central1"),
             ]);
             assert!(validate_request_headers(&headers, &request, Some(&schema)).is_err());
+        }
+
+        #[test]
+        fn accepts_matching_nested_param() {
+            let schema = schema_with(json!({
+                "deployment": {
+                    "type": "object",
+                    "properties": {
+                        "region": { "type": "string", "x-mcp-header": "Region" }
+                    }
+                }
+            }));
+            let request = json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "deploy",
+                    "arguments": { "deployment": { "region": "us-west1" } }
+                }
+            });
+            let headers = header_map(&[
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", "deploy"),
+                ("Mcp-Param-Region", "us-west1"),
+            ]);
+            assert!(validate_request_headers(&headers, &request, Some(&schema)).is_ok());
         }
     }
 }
