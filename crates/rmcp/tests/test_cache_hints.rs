@@ -1,5 +1,32 @@
-use rmcp::model::{CacheScope, ListToolsResult, ReadResourceResult, ResourceContents};
+use rmcp::model::{
+    CacheScope, ListToolsResult, ReadResourceResult, ResourceContents, ServerResult,
+};
 use serde_json::json;
+
+#[test]
+fn repro_empty_cache_scope_drops_every_tool_via_untagged_fallthrough() {
+    let payload = json!({
+        "tools": [{ "name": "search", "inputSchema": { "type": "object" } }],
+        "cacheScope": ""
+    });
+
+    let direct = serde_json::from_value::<ListToolsResult>(payload.clone());
+    assert!(
+        direct.is_ok(),
+        "ListToolsResult itself must accept an empty cacheScope, got {direct:?}"
+    );
+    assert_eq!(direct.unwrap().tools.len(), 1);
+
+    let via_server_result: ServerResult =
+        serde_json::from_value(payload).expect("ServerResult must deserialize this payload");
+    match via_server_result {
+        ServerResult::ListToolsResult(r) => assert_eq!(r.tools.len(), 1),
+        other => panic!(
+            "expected ListToolsResult, got {other:?} \
+             (untagged fallthrough silently reinterpreted a valid tools/list result)"
+        ),
+    }
+}
 
 #[test]
 fn paginated_results_serialize_cache_hints_as_top_level_fields() {
