@@ -788,6 +788,9 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
     }
 }
 
+/// Token used by `serde_json` for zero-copy raw JSON value deserialization.
+const JSON_RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
+
 impl<'de, Req, Resp, Noti> serde::Deserialize<'de> for JsonRpcMessage<Req, Resp, Noti>
 where
     Req: Deserialize<'de>,
@@ -798,8 +801,6 @@ where
     where
         __D: serde::Deserializer<'de>,
     {
-        use serde::de::Error as _;
-
         // JSON-RPC 2.0 defines four mutually exclusive message shapes. A derived
         // untagged enum cannot express that: a response carrying both `result`
         // and `error` matches the `Response` variant (the stray `error` is
@@ -808,56 +809,193 @@ where
         // so spec violations are rejected instead of silently resolved, while
         // extra extension fields stay accepted.
         //
-        // Bounds stay `Deserialize<'de>` (not `DeserializeOwned`) so the public
-        // API matches the previous `#[derive(Deserialize)]` impl. We deserialize
-        // variants via `Deserialize::deserialize(value)` rather than
-        // `serde_json::from_value`, which would force `DeserializeOwned`.
-        let value = Value::deserialize(deserializer)?;
-        let obj = match value.as_object() {
-            Some(obj) => obj,
-            None => {
-                return Err(__D::Error::custom(
-                    "data did not match any variant of untagged enum JsonRpcMessage",
-                ));
+        // Use serde_json's RawValue newtype token so `from_str`/`from_slice` can
+        // borrow the original JSON text (preserving `Deserialize<'de>` payload
+        // borrows), while `from_value` still works via an owned buffer.
+        deserializer.deserialize_newtype_struct(
+            JSON_RAW_VALUE_TOKEN,
+            JsonRpcMessageVisitor {
+                _marker: std::marker::PhantomData,
+            },
+        )
+    }
+}
+
+struct JsonRpcMessageVisitor<Req, Resp, Noti> {
+    _marker: std::marker::PhantomData<fn() -> (Req, Resp, Noti)>,
+}
+
+impl<'de, Req, Resp, Noti> serde::de::Visitor<'de> for JsonRpcMessageVisitor<Req, Resp, Noti>
+where
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
+{
+    type Value = JsonRpcMessage<Req, Resp, Noti>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON-RPC 2.0 message")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        use serde::de::Error as _;
+
+        // serde_json RawValue protocol: a single field named TOKEN whose value
+        // is the raw JSON text (borrowed for from_str, owned for from_value).
+        let key: Option<std::borrow::Cow<'de, str>> = map.next_key()?;
+        match key.as_deref() {
+            Some(JSON_RAW_VALUE_TOKEN) => {}
+            Some(other) => {
+                return Err(A::Error::custom(format!(
+                    "unexpected raw value key {other:?}"
+                )));
             }
-        };
+            None => {
+                return Err(A::Error::invalid_type(serde::de::Unexpected::Map, &self));
+            }
+        }
+
+        let text = map.next_value_seed(PreferBorrowedStr)?;
+        if map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+            return Err(A::Error::custom("unexpected extra raw value field"));
+        }
+
+        match text {
+            std::borrow::Cow::Borrowed(text) => {
+                JsonRpcMessage::<Req, Resp, Noti>::from_checked_json_text(text)
+                    .map_err(A::Error::custom)
+            }
+            std::borrow::Cow::Owned(text) => {
+                let value: Value = serde_json::from_str(&text).map_err(A::Error::custom)?;
+                JsonRpcMessage::<Req, Resp, Noti>::from_checked_owned_value(value)
+                    .map_err(A::Error::custom)
+            }
+        }
+    }
+}
+
+/// Like `Cow<'de, str>` but guarantees `visit_borrowed_str` stays borrowed.
+struct PreferBorrowedStr;
+
+impl<'de> serde::de::DeserializeSeed<'de> for PreferBorrowedStr {
+    type Value = std::borrow::Cow<'de, str>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct PreferBorrowedStrVisitor;
+        impl<'de> serde::de::Visitor<'de> for PreferBorrowedStrVisitor {
+            type Value = std::borrow::Cow<'de, str>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a raw JSON string")
+            }
+
+            fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(std::borrow::Cow::Borrowed(v))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(std::borrow::Cow::Owned(v.to_owned()))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(std::borrow::Cow::Owned(v))
+            }
+        }
+
+        deserializer.deserialize_str(PreferBorrowedStrVisitor)
+    }
+}
+
+impl<'de, Req, Resp, Noti> JsonRpcMessage<Req, Resp, Noti>
+where
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
+{
+    fn classify_object_keys(
+        obj: &serde_json::Map<String, Value>,
+    ) -> Result<(bool, bool, bool, bool), serde_json::Error> {
         let has_method = obj.contains_key("method");
         let has_id = obj.contains_key("id");
         let has_result = obj.contains_key("result");
         let has_error = obj.contains_key("error");
 
         if has_result && has_error {
-            return Err(__D::Error::custom(
+            return Err(serde::de::Error::custom(
                 "invalid JSON-RPC message: both `result` and `error` are present",
             ));
         }
         if has_method && (has_result || has_error) {
-            return Err(__D::Error::custom(
+            return Err(serde::de::Error::custom(
                 "invalid JSON-RPC message: a request or notification must not carry `result` or `error`",
             ));
         }
+        Ok((has_method, has_id, has_result, has_error))
+    }
+
+    fn from_checked_json_text(text: &'de str) -> Result<Self, serde_json::Error> {
+        let value: Value = serde_json::from_str(text)?;
+        let obj = value.as_object().ok_or_else(|| {
+            serde::de::Error::custom(
+                "data did not match any variant of untagged enum JsonRpcMessage",
+            )
+        })?;
+        let (has_method, has_id, has_result, has_error) = Self::classify_object_keys(obj)?;
 
         if has_method {
             if has_id {
-                return JsonRpcRequest::<Req>::deserialize(value)
-                    .map(JsonRpcMessage::Request)
-                    .map_err(__D::Error::custom);
+                return serde_json::from_str(text).map(JsonRpcMessage::Request);
             }
-            return JsonRpcNotification::<Noti>::deserialize(value)
-                .map(JsonRpcMessage::Notification)
-                .map_err(__D::Error::custom);
+            return serde_json::from_str(text).map(JsonRpcMessage::Notification);
         }
         if has_error {
-            return JsonRpcError::deserialize(value)
-                .map(JsonRpcMessage::Error)
-                .map_err(__D::Error::custom);
+            return serde_json::from_str(text).map(JsonRpcMessage::Error);
         }
         if has_result {
-            return JsonRpcResponse::<Resp>::deserialize(value)
-                .map(JsonRpcMessage::Response)
-                .map_err(__D::Error::custom);
+            return serde_json::from_str(text).map(JsonRpcMessage::Response);
         }
-        Err(__D::Error::custom(
+        Err(serde::de::Error::custom(
+            "data did not match any variant of untagged enum JsonRpcMessage",
+        ))
+    }
+
+    fn from_checked_owned_value(value: Value) -> Result<Self, serde_json::Error> {
+        let obj = value.as_object().ok_or_else(|| {
+            serde::de::Error::custom(
+                "data did not match any variant of untagged enum JsonRpcMessage",
+            )
+        })?;
+        let (has_method, has_id, has_result, has_error) = Self::classify_object_keys(obj)?;
+
+        if has_method {
+            if has_id {
+                return JsonRpcRequest::<Req>::deserialize(value).map(JsonRpcMessage::Request);
+            }
+            return JsonRpcNotification::<Noti>::deserialize(value)
+                .map(JsonRpcMessage::Notification);
+        }
+        if has_error {
+            return JsonRpcError::deserialize(value).map(JsonRpcMessage::Error);
+        }
+        if has_result {
+            return JsonRpcResponse::<Resp>::deserialize(value).map(JsonRpcMessage::Response);
+        }
+        Err(serde::de::Error::custom(
             "data did not match any variant of untagged enum JsonRpcMessage",
         ))
     }
@@ -5055,6 +5193,58 @@ mod tests {
             serde_json::from_value::<JsonRpcMessage>(notification_with_result).is_err(),
             "a notification carrying `result` must be rejected"
         );
+    }
+
+    #[test]
+    fn generic_borrowed_request_deserializes_from_str() {
+        // Regression: field-presence dispatch must not force owned Value so hard
+        // that generic payload types containing `&str` lose input borrows.
+        #[derive(Debug, Deserialize)]
+        struct BorrowedRequest<'a> {
+            method: &'a str,
+        }
+
+        let input = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let parsed =
+            serde_json::from_str::<JsonRpcMessage<BorrowedRequest<'_>, Value, Value>>(input)
+                .expect("generic Deserialize API accepts borrowed request strings");
+        match parsed {
+            JsonRpcMessage::Request(request) => {
+                assert_eq!(request.request.method, "ping");
+                let start = input.as_ptr() as usize;
+                let borrowed = request.request.method.as_ptr() as usize;
+                assert!(
+                    borrowed >= start && borrowed < start + input.len(),
+                    "method must borrow from the original input"
+                );
+            }
+            other => panic!("expected Request, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_borrowed_response_deserializes_from_str() {
+        #[derive(Debug, Deserialize)]
+        struct BorrowedResponse<'a> {
+            status: &'a str,
+        }
+
+        let input = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}"#;
+        let parsed =
+            serde_json::from_str::<JsonRpcMessage<Value, BorrowedResponse<'_>, Value>>(input)
+                .expect("generic Deserialize API accepts borrowed response strings");
+        match parsed {
+            JsonRpcMessage::Response(response) => {
+                assert_eq!(response.result.status, "ok");
+                let start = input.as_ptr() as usize;
+                let borrowed = response.result.status.as_ptr() as usize;
+                assert!(
+                    borrowed >= start && borrowed < start + input.len(),
+                    "status must borrow from the original input"
+                );
+            }
+            other => panic!("expected Response, received {other:?}"),
+        }
     }
 
     #[test]
