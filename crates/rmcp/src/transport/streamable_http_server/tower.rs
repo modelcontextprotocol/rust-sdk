@@ -116,6 +116,14 @@ pub struct StreamableHttpServerConfig {
     /// missing-`Origin` requests still pass. Entries must include a scheme;
     /// `"null"` matches the browser's `Origin: null`.
     ///
+    /// Port matching follows RFC 6454 §4/§6.2: browsers omit the port from the
+    /// serialized `Origin` header when it equals the scheme default (443 for
+    /// https, 80 for http), so an incoming portless origin carries the scheme
+    /// default implicitly. An entry with an explicit port therefore matches
+    /// both spellings (`https://example.com:443` matches an incoming
+    /// `https://example.com`), while an entry with an *omitted* port permits
+    /// ANY port for that scheme+host — use the explicit form to restrict.
+    ///
     /// Call [`StreamableHttpServerConfig::enforce_origin_validation`] to enable
     /// validation with an empty list, rejecting every present Origin value.
     /// examples:
@@ -978,6 +986,20 @@ fn parse_origin_value(value: &str) -> Option<NormalizedOrigin> {
     })
 }
 
+/// RFC 6454 §4: an origin tuple with an omitted port carries the scheme's
+/// default port implicitly (443 for https/wss, 80 for http/ws) — browsers
+/// omit the port in the serialized `Origin` header when it equals the
+/// default (RFC 6454 §6.2). Resolve the incoming origin's effective port so
+/// an explicitly configured `https://example.com:443` matches a browser-sent
+/// `https://example.com`.
+fn effective_origin_port(port: Option<u16>, scheme: &str) -> Option<u16> {
+    port.or(match scheme {
+        "https" | "wss" => Some(443),
+        "http" | "ws" => Some(80),
+        _ => None,
+    })
+}
+
 fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> bool {
     allowed_origins
         .iter()
@@ -995,7 +1017,11 @@ fn origin_is_allowed(origin: &NormalizedOrigin, allowed_origins: &[String]) -> b
                     host: o_host,
                     port: o_port,
                 },
-            ) => a_scheme == o_scheme && a_host == o_host && (a_port.is_none() || a_port == o_port),
+            ) => {
+                a_scheme == o_scheme
+                    && a_host == o_host
+                    && (a_port.is_none() || a_port == &effective_origin_port(*o_port, o_scheme))
+            }
             _ => false,
         })
 }

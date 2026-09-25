@@ -1311,4 +1311,69 @@ mod origin_validation {
         let response = service.handle(init_request(Some("null"))).await;
         assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
     }
+
+    // RFC 6454 §4/§6.2: browsers omit the port from the serialized Origin
+    // header when it equals the scheme default, so a portless incoming
+    // origin carries the default port implicitly. An allowlist entry with
+    // an explicit port must match both spellings of the SAME effective
+    // port — and still reject a genuinely different port.
+
+    #[tokio::test]
+    async fn explicit_https_443_entry_allows_portless_origin() {
+        let service = service_with_allowed_origins(&["https://example.com:443"]);
+        let response = service
+            .handle(init_request(Some("https://example.com")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn explicit_https_443_entry_allows_explicit_443_origin() {
+        let service = service_with_allowed_origins(&["https://example.com:443"]);
+        let response = service
+            .handle(init_request(Some("https://example.com:443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn explicit_https_443_entry_forbids_8443_origin() {
+        let service = service_with_allowed_origins(&["https://example.com:443"]);
+        let response = service
+            .handle(init_request(Some("https://example.com:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn explicit_http_80_entry_allows_portless_origin() {
+        let service = service_with_allowed_origins(&["http://example.com:80"]);
+        let response = service
+            .handle(init_request(Some("http://example.com")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn explicit_https_443_entry_forbids_portless_http_origin() {
+        // The effective port resolves per-scheme: an https:443 entry must
+        // not match an http origin whose implicit port is 80.
+        let service = service_with_allowed_origins(&["https://example.com:443"]);
+        let response = service
+            .handle(init_request(Some("http://example.com")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn omitted_port_entry_still_matches_any_port() {
+        // Preserved wildcard: an entry with NO port permits any port for
+        // that scheme+host (relied upon by deployments that front the
+        // server with different TLS terminators).
+        let service = service_with_allowed_origins(&["https://example.com"]);
+        let response = service
+            .handle(init_request(Some("https://example.com:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
 }
