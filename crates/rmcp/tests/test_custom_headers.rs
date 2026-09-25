@@ -1311,4 +1311,94 @@ mod origin_validation {
         let response = service.handle(init_request(Some("null"))).await;
         assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
     }
+
+    #[tokio::test]
+    async fn explicit_https_default_port_allows_port_less_origin() {
+        let service = service_with_allowed_origins(&["https://client.example:443"]);
+        let response = service
+            .handle(init_request(Some("https://client.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn explicit_http_default_port_allows_port_less_origin() {
+        let service = service_with_allowed_origins(&["http://client.example:80"]);
+        let response = service
+            .handle(init_request(Some("http://client.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn explicit_default_port_allows_matching_explicit_origin_port() {
+        let service = service_with_allowed_origins(&["https://client.example:443"]);
+        let response = service
+            .handle(init_request(Some("https://client.example:443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn explicit_default_port_forbids_non_default_origin_port() {
+        let service = service_with_allowed_origins(&["https://client.example:443"]);
+        let response = service
+            .handle(init_request(Some("https://client.example:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn explicit_non_default_port_forbids_port_less_origin() {
+        let service = service_with_allowed_origins(&["https://client.example:8443"]);
+        let response = service
+            .handle(init_request(Some("https://client.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn omitted_configured_port_allows_any_origin_port() {
+        let service = service_with_allowed_origins(&["https://client.example"]);
+        let response = service
+            .handle(init_request(Some("https://client.example:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wildcard_port_allows_non_default_origin_port() {
+        let service = service_with_allowed_origins(&["https://client.example:*"]);
+        let response = service
+            .handle(init_request(Some("https://client.example:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wildcard_port_allows_port_less_origin() {
+        let service = service_with_allowed_origins(&["https://client.example:*"]);
+        let response = service
+            .handle(init_request(Some("https://client.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wildcard_port_forbids_other_host() {
+        let service = service_with_allowed_origins(&["https://client.example:*"]);
+        let response = service
+            .handle(init_request(Some("https://attacker.example:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn wildcard_port_forbids_scheme_mismatch() {
+        let service = service_with_allowed_origins(&["https://client.example:*"]);
+        let response = service
+            .handle(init_request(Some("http://client.example:8443")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
 }
