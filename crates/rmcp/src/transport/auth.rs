@@ -1207,10 +1207,6 @@ impl AuthorizationManager {
             && base.port_or_known_default() == candidate.port_or_known_default()
     }
 
-    fn is_same_origin_resource_metadata_url(base_url: &Url, candidate: &Url) -> bool {
-        Self::is_http_url(candidate) && Self::is_same_origin(base_url, candidate)
-    }
-
     fn is_disallowed_metadata_ipv4(addr: Ipv4Addr) -> bool {
         let octets = addr.octets();
         addr.is_private()
@@ -1264,7 +1260,7 @@ impl AuthorizationManager {
             || matches!(host.parse::<IpAddr>(), Ok(IpAddr::V6(addr)) if addr.is_loopback())
     }
 
-    fn is_allowed_authorization_server_metadata_url(base_url: &Url, url: &Url) -> bool {
+    fn is_allowed_metadata_url(base_url: &Url, url: &Url) -> bool {
         if !Self::is_http_url(url) {
             return false;
         }
@@ -1298,12 +1294,10 @@ impl AuthorizationManager {
             }
         };
 
-        if Self::is_same_origin_resource_metadata_url(base_url, &url) {
+        if Self::is_allowed_metadata_url(base_url, &url) {
             Some(url)
         } else {
-            warn!(
-                "rejecting resource metadata URL `{url}` because it is not same-origin with `{base_url}`"
-            );
+            warn!("rejecting resource metadata URL `{url}`");
             None
         }
     }
@@ -2631,7 +2625,7 @@ impl AuthorizationManager {
                 },
             };
 
-            if !Self::is_allowed_authorization_server_metadata_url(&self.base_url, &candidate_url) {
+            if !Self::is_allowed_metadata_url(&self.base_url, &candidate_url) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
@@ -5064,6 +5058,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_metadata_from_challenge_follows_cross_origin_resource_metadata() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(
+                r#"Bearer resource_metadata="https://prm.example.net/.well-known/oauth-protected-resource/mcp""#,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+                client.requests().first().map(|request| request.uri.clone()),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+                Some(
+                    "https://prm.example.net/.well-known/oauth-protected-resource/mcp".to_string()
+                ),
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_metadata_from_challenge_falls_back_without_metadata_pointer() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             empty_response(404),
@@ -6818,13 +6861,41 @@ mod tests {
     }
 
     #[test]
-    fn rejects_cross_origin_resource_metadata_parameter() {
-        let header = r#"Bearer error="invalid_request", resource_metadata="http://169.254.169.254/latest/meta-data/", scope="read""#;
+    fn parses_cross_origin_resource_metadata_parameter() {
+        let header = r#"Bearer resource_metadata="https://prm.example.net/.well-known/oauth-protected-resource/api""#;
         let base = Url::parse("https://example.com/api").unwrap();
         let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://prm.example.net/.well-known/oauth-protected-resource/api"
+        );
+    }
 
-        assert!(params.resource_metadata_url.is_none());
-        assert_eq!(params.scope.unwrap(), "read");
+    #[rstest]
+    #[case::cloud_metadata("http://169.254.169.254/latest/meta-data/")]
+    #[case::private_network("http://10.0.0.1/.well-known/oauth-protected-resource")]
+    #[case::loopback("http://127.0.0.1/.well-known/oauth-protected-resource")]
+    #[case::localhost("http://localhost/.well-known/oauth-protected-resource")]
+    fn rejects_disallowed_host_resource_metadata_parameter(#[case] resource_metadata: &str) {
+        let header = format!(r#"Bearer resource_metadata="{resource_metadata}", scope="read""#);
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(&header, &base);
+
+        assert_eq!(
+            (params.resource_metadata_url, params.scope.as_deref()),
+            (None, Some("read"))
+        );
+    }
+
+    #[test]
+    fn parses_loopback_resource_metadata_parameter_for_loopback_resource() {
+        let header = r#"Bearer resource_metadata="http://127.0.0.1:9000/.well-known/oauth-protected-resource""#;
+        let base = Url::parse("http://localhost:8080/mcp").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "http://127.0.0.1:9000/.well-known/oauth-protected-resource"
+        );
     }
 
     #[test]
