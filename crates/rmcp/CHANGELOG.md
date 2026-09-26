@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.4.1...rmcp-v3.5.0) - 2026-09-26
+
+### Added
+
+- update LATEST and add LATEST_WITH_INITIALIZE ([#1105](https://github.com/modelcontextprotocol/rust-sdk/pull/1105))
+
+### Fixed
+
+- *(rmcp)* reject duplicate sep-2243 headers ([#1274](https://github.com/modelcontextprotocol/rust-sdk/pull/1274))
+- *(transport)* match explicit default ports in Origin allowlist ([#1270](https://github.com/modelcontextprotocol/rust-sdk/pull/1270))
+- *(rmcp)* tolerate empty cacheScope instead of silently dropping the whole result ([#1281](https://github.com/modelcontextprotocol/rust-sdk/pull/1281))
+- *(model)* preserve explicit null structuredContent in CallToolResult ([#1295](https://github.com/modelcontextprotocol/rust-sdk/pull/1295))
+
+### Other
+
+- cargo fmt fixes on validate_standard_headers changes ([#1275](https://github.com/modelcontextprotocol/rust-sdk/pull/1275))
+
 ## [3.4.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.4.0...rmcp-v3.4.1) - 2026-09-23
 
 ### Fixed
