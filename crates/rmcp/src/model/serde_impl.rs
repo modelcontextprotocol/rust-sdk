@@ -8,6 +8,49 @@ use super::{
     RequestOptionalParam,
 };
 
+/// Deserializers for the model's float fields.
+///
+/// Serde buffers a value whose type it does not know yet (untagged and
+/// internally tagged enums, `#[serde(flatten)]`), and every [`JsonRpcMessage`]
+/// takes that path. With serde_json's `arbitrary_precision` feature, which
+/// Cargo turns on for every crate in a build once any crate enables it, a
+/// buffered decimal is replayed as serde_json's private number map, and a
+/// plain `f32`/`f64` field rejects it (serde-rs/json#721).
+/// [`serde_json::Number`] reads both forms.
+///
+/// [`JsonRpcMessage`]: super::JsonRpcMessage
+pub(crate) mod json_float {
+    use serde::{Deserialize, Deserializer, de::Error};
+    use serde_json::Number;
+
+    fn to_f64<E: Error>(number: Number) -> Result<f64, E> {
+        // `None` only for a value beyond `f64`, which serde_json also rejects
+        // without the feature.
+        number
+            .as_f64()
+            .ok_or_else(|| E::custom(format_args!("number out of range: {number}")))
+    }
+
+    pub(crate) fn f64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        to_f64(Number::deserialize(deserializer)?)
+    }
+
+    pub(crate) fn option_f64<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<f64>, D::Error> {
+        Option::<Number>::deserialize(deserializer)?
+            .map(to_f64)
+            .transpose()
+    }
+
+    pub(crate) fn option_f32<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<f32>, D::Error> {
+        // serde_json also reads an `f32` field as `f64` and narrows it with `as`.
+        Ok(option_f64(deserializer)?.map(|value| value as f32))
+    }
+}
+
 /// Wire-side view of `params`: the `_meta` map plus the remaining fields.
 ///
 /// All metadata types are transparent wrappers over [`JsonObject`], so the
@@ -847,5 +890,166 @@ mod test {
         let req: CallToolRequest = serde_json::from_value(input.clone()).unwrap();
         let output = serde_json::to_value(&req).unwrap();
         assert_eq!(input, output);
+    }
+
+    /// The float fields read through [`super::json_float`].
+    mod json_float {
+        use std::fmt::Debug;
+
+        use rstest::rstest;
+        use serde::{Deserialize, Serialize, de::DeserializeOwned};
+        use serde_json::{Value, json};
+
+        use crate::model::{
+            Annotations, CreateMessageRequestParams, ModelPreferences, NumberSchema,
+            ProgressNotificationParam,
+        };
+
+        /// Untagged, so serde buffers the input before `T` reads it, as it
+        /// does for every JSON-RPC message.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Buffered<T> {
+            Inner(T),
+        }
+
+        /// Decodes `text` directly and through serde's buffer, checks that both
+        /// agree, and that the value survives a round trip.
+        fn decode<T>(text: &str) -> T
+        where
+            T: DeserializeOwned + Serialize + PartialEq + Debug,
+        {
+            let direct: T = serde_json::from_str(text).unwrap();
+            let Buffered::Inner(buffered) = serde_json::from_str(text).unwrap();
+            assert_eq!(direct, buffered, "{text}");
+            let encoded = serde_json::to_string(&direct).unwrap();
+            assert_eq!(
+                serde_json::from_str::<T>(&encoded).unwrap(),
+                direct,
+                "{encoded}"
+            );
+            direct
+        }
+
+        fn rejects<T: DeserializeOwned>(text: &str) {
+            assert!(serde_json::from_str::<T>(text).is_err(), "{text}");
+            assert!(serde_json::from_str::<Buffered<T>>(text).is_err(), "{text}");
+        }
+
+        #[rstest]
+        #[case::decimal("0.6", 0.6)]
+        #[case::trailing_zero("0.60", 0.6)]
+        #[case::exponent("6e-1", 0.6)]
+        #[case::integer("1", 1.0)]
+        #[case::integral_decimal("1.0", 1.0)]
+        #[case::zero("0", 0.0)]
+        fn fields_read_every_spelling(#[case] n: &str, #[case] expected: f64) {
+            // An `f32` field holds the `f64` narrowed, as serde_json reads it.
+            let narrowed = Some(expected as f32);
+
+            let annotations: Annotations = decode(&format!(r#"{{"priority":{n}}}"#));
+            assert_eq!(annotations.priority, narrowed);
+
+            let progress: ProgressNotificationParam = decode(&format!(
+                r#"{{"progressToken":1,"progress":{n},"total":{n}}}"#
+            ));
+            assert_eq!(progress.progress, expected);
+            assert_eq!(progress.total, Some(expected));
+
+            let params: CreateMessageRequestParams = decode(&format!(
+                r#"{{"messages":[],"maxTokens":1,"temperature":{n}}}"#
+            ));
+            assert_eq!(params.temperature, narrowed);
+
+            let preferences: ModelPreferences = decode(&format!(
+                r#"{{"costPriority":{n},"speedPriority":{n},"intelligencePriority":{n}}}"#
+            ));
+            assert_eq!(preferences.cost_priority, narrowed);
+            assert_eq!(preferences.speed_priority, narrowed);
+            assert_eq!(preferences.intelligence_priority, narrowed);
+
+            let schema: NumberSchema = decode(&format!(
+                r#"{{"type":"number","minimum":{n},"maximum":{n},"default":{n}}}"#
+            ));
+            assert_eq!(schema.minimum, Some(expected));
+            assert_eq!(schema.maximum, Some(expected));
+            assert_eq!(schema.default, Some(expected));
+        }
+
+        #[test]
+        fn decimal_narrows_to_the_nearest_f32() {
+            let annotations: Annotations = decode(r#"{"priority":0.6}"#);
+            assert_eq!(annotations.priority, Some(0.6_f32));
+        }
+
+        #[rstest]
+        #[case::missing(None)]
+        #[case::null(Some(Value::Null))]
+        fn optional_fields_read_absent_as_none(#[case] value: Option<Value>) {
+            // `base` with each of `keys` set to `value`, or left out.
+            let with = |mut base: Value, keys: &[&str]| {
+                if let Some(value) = &value {
+                    for key in keys {
+                        base[*key] = value.clone();
+                    }
+                }
+                base.to_string()
+            };
+
+            let annotations: Annotations = decode(&with(json!({}), &["priority"]));
+            assert_eq!(annotations, Annotations::default());
+
+            let progress: ProgressNotificationParam = decode(&with(
+                json!({"progressToken": 1, "progress": 0}),
+                &["total"],
+            ));
+            assert_eq!(progress.total, None);
+
+            let params: CreateMessageRequestParams = decode(&with(
+                json!({"messages": [], "maxTokens": 1}),
+                &["temperature"],
+            ));
+            assert_eq!(params.temperature, None);
+
+            let preferences: ModelPreferences = decode(&with(
+                json!({}),
+                &["costPriority", "speedPriority", "intelligencePriority"],
+            ));
+            assert_eq!(preferences, ModelPreferences::new());
+
+            let schema: NumberSchema = decode(&with(
+                json!({"type": "number"}),
+                &["minimum", "maximum", "default"],
+            ));
+            assert_eq!(schema, NumberSchema::new());
+        }
+
+        #[test]
+        fn progress_is_required() {
+            rejects::<ProgressNotificationParam>(r#"{"progressToken":1}"#);
+            rejects::<ProgressNotificationParam>(r#"{"progressToken":1,"progress":null}"#);
+        }
+
+        #[rstest]
+        #[case::string(r#""high""#)]
+        #[case::out_of_range("1e400")]
+        fn fields_reject_anything_but_a_finite_number(#[case] n: &str) {
+            rejects::<Annotations>(&format!(r#"{{"priority":{n}}}"#));
+            rejects::<ProgressNotificationParam>(&format!(
+                r#"{{"progressToken":1,"progress":{n}}}"#
+            ));
+            rejects::<ProgressNotificationParam>(&format!(
+                r#"{{"progressToken":1,"progress":0,"total":{n}}}"#
+            ));
+            rejects::<CreateMessageRequestParams>(&format!(
+                r#"{{"messages":[],"maxTokens":1,"temperature":{n}}}"#
+            ));
+            for key in ["costPriority", "speedPriority", "intelligencePriority"] {
+                rejects::<ModelPreferences>(&format!(r#"{{"{key}":{n}}}"#));
+            }
+            for key in ["minimum", "maximum", "default"] {
+                rejects::<NumberSchema>(&format!(r#"{{"type":"number","{key}":{n}}}"#));
+            }
+        }
     }
 }
