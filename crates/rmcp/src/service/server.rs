@@ -570,70 +570,107 @@ where
 
     // Get initialize request; the MCP spec permits ping before initialize.
     // See: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
-    let (request, id) = loop {
+    let (initialize_request, id) = loop {
         let msg = expect_next_message(&mut transport, "initialize request").await?;
-        match msg {
-            ClientJsonRpcMessage::Request(req)
-                if matches!(req.request, ClientRequest::PingRequest(_)) =>
-            {
-                transport
-                    .send(ServerJsonRpcMessage::response(
-                        ServerResult::EmptyResult(EmptyResult {}),
-                        req.id,
-                    ))
-                    .await
-                    .map_err(|error| {
-                        ServerInitializeError::transport::<T>(
-                            error,
-                            "sending pre-init ping response",
-                        )
-                    })?;
-            }
-            ClientJsonRpcMessage::Request(req) => break (req.request, req.id),
+        let request = match msg {
+            ClientJsonRpcMessage::Request(request) => request,
             other => {
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     other,
                 )));
             }
-        }
-    };
+        };
 
-    let initialize_request = match request {
-        ClientRequest::InitializeRequest(request) => request,
-        request => {
-            let missing_metadata = request
-                .get_meta()
-                .missing_required_keys(&ProtocolVersion::V_2026_07_28);
-            if !missing_metadata.is_empty() {
-                transport
-                    .send(ServerJsonRpcMessage::error(
-                        missing_request_metadata_error(&missing_metadata),
-                        Some(id.clone()),
-                    ))
-                    .await
-                    .map_err(|error| {
+        if matches!(&request.request, ClientRequest::PingRequest(_)) {
+            transport
+                .send(ServerJsonRpcMessage::response(
+                    ServerResult::EmptyResult(EmptyResult {}),
+                    request.id,
+                ))
+                .await
+                .map_err(|error| {
+                    ServerInitializeError::transport::<T>(error, "sending pre-init ping response")
+                })?;
+            continue;
+        }
+
+        let id = request.id;
+        match request.request {
+            ClientRequest::InitializeRequest(request) => break (request, id),
+            mut request => {
+                let missing_metadata = request
+                    .get_meta()
+                    .missing_required_keys(&ProtocolVersion::V_2026_07_28);
+                if !missing_metadata.is_empty() {
+                    transport
+                        .send(ServerJsonRpcMessage::error(
+                            missing_request_metadata_error(&missing_metadata),
+                            Some(id.clone()),
+                        ))
+                        .await
+                        .map_err(|error| {
+                            ServerInitializeError::transport::<T>(
+                                error,
+                                "sending pre-init metadata error response",
+                            )
+                        })?;
+                    return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
+                        ClientJsonRpcMessage::request(request, id),
+                    )));
+                }
+
+                let (peer, peer_rx) = Peer::new(id_provider.clone(), None);
+                if matches!(&request, ClientRequest::DiscoverRequest(_)) {
+                    let context = RequestContext {
+                        ct: ct.child_token(),
+                        id: id.clone(),
+                        meta: std::mem::take(request.get_meta_mut()),
+                        extensions: std::mem::take(request.extensions_mut()),
+                        peer: peer.clone(),
+                    };
+                    let response = match service.handle_request(request, context).await {
+                        Ok(result) => ServerJsonRpcMessage::response(result, id),
+                        Err(error) => {
+                            transport
+                                .send(ServerJsonRpcMessage::error(error, Some(id)))
+                                .await
+                                .map_err(|error| {
+                                    ServerInitializeError::transport::<T>(
+                                        error,
+                                        "sending rejected discover response",
+                                    )
+                                })?;
+                            continue;
+                        }
+                    };
+
+                    peer.require_request_metadata();
+                    transport.send(response).await.map_err(|error| {
                         ServerInitializeError::transport::<T>(
                             error,
-                            "sending pre-init metadata error response",
+                            "sending negotiated request response",
                         )
                     })?;
-                return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
-                    ClientJsonRpcMessage::request(request, id),
-                )));
+                    return Ok(serve_inner(
+                        service,
+                        transport,
+                        peer,
+                        peer_rx,
+                        VecDeque::new(),
+                        ct,
+                    ));
+                }
+
+                peer.require_request_metadata();
+                return Ok(serve_inner(
+                    service,
+                    transport,
+                    peer,
+                    peer_rx,
+                    VecDeque::from([ClientJsonRpcMessage::request(request, id)]),
+                    ct,
+                ));
             }
-            let (peer, peer_rx) = Peer::new(id_provider, None);
-            peer.require_request_metadata();
-            // Dispatch the request from inside the service loop rather than
-            // inline: its handler may send notifications through `peer`, which
-            // only complete once the loop drains `peer_rx`.
-            return Ok(serve_inner(
-                service,
-                transport,
-                peer,
-                peer_rx,
-                VecDeque::from([ClientJsonRpcMessage::request(request, id)]),
-                ct,
-            ));
         }
     };
     let requested_protocol_version = initialize_request.params.protocol_version.clone();
