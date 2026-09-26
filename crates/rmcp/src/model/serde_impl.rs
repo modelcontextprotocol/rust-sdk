@@ -8,17 +8,9 @@ use super::{
     RequestOptionalParam,
 };
 
-/// Deserializers for the model's float fields.
-///
-/// Serde buffers a value whose type it does not know yet (untagged and
-/// internally tagged enums, `#[serde(flatten)]`), and every [`JsonRpcMessage`]
-/// takes that path. With serde_json's `arbitrary_precision` feature, which
-/// Cargo turns on for every crate in a build once any crate enables it, a
-/// buffered decimal is replayed as serde_json's private number map, and a
-/// plain `f32`/`f64` field rejects it (serde-rs/json#721).
-/// [`serde_json::Number`] reads both forms.
-///
-/// [`JsonRpcMessage`]: super::JsonRpcMessage
+/// Float deserializers that also accept the number map serde_json's
+/// `arbitrary_precision` feature produces for buffered (untagged/flattened) values.
+/// Like JSON itself, they reject NaN and infinities.
 pub(crate) mod json_float {
     use serde::{Deserialize, Deserializer, de::Error};
     use serde_json::Number;
