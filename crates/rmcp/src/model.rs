@@ -20,6 +20,7 @@ mod prompt;
 mod request_state;
 mod resource;
 mod serde_impl;
+pub mod skills;
 mod task;
 mod tool;
 pub use annotated::*;
@@ -35,6 +36,7 @@ pub use request_state::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+pub use skills::*;
 pub use task::*;
 pub use tool::*;
 
@@ -4621,6 +4623,9 @@ ts_union!(
     | ListResourcesRequest
     | ListResourceTemplatesRequest
     | ReadResourceRequest
+    | ResourcesDirectoryReadRequest
+    | SkillsGetRequest
+    | SkillsListRequest
     | SubscriptionsListenRequest
     | SubscribeRequest
     | UnsubscribeRequest
@@ -4645,6 +4650,9 @@ impl ClientRequest {
             ClientRequest::ListResourcesRequest(r) => r.method.as_str(),
             ClientRequest::ListResourceTemplatesRequest(r) => r.method.as_str(),
             ClientRequest::ReadResourceRequest(r) => r.method.as_str(),
+            ClientRequest::ResourcesDirectoryReadRequest(r) => r.method.as_str(),
+            ClientRequest::SkillsGetRequest(r) => r.method.as_str(),
+            ClientRequest::SkillsListRequest(r) => r.method.as_str(),
             ClientRequest::SubscriptionsListenRequest(r) => r.method.as_str(),
             ClientRequest::SubscribeRequest(r) => r.method.as_str(),
             ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
@@ -4654,6 +4662,21 @@ impl ClientRequest {
             ClientRequest::UpdateTaskRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
+        }
+    }
+}
+
+impl ServerRequest {
+    pub fn method(&self) -> &str {
+        match &self {
+            ServerRequest::PingRequest(r) => r.method.as_str(),
+            ServerRequest::CreateMessageRequest(r) => r.method.as_str(),
+            ServerRequest::ListRootsRequest(r) => r.method.as_str(),
+            ServerRequest::ElicitRequest(r) => r.method.as_str(),
+            ServerRequest::CustomRequest(r) => r.method.as_str(),
+            ServerRequest::ResourcesDirectoryReadRequest(r) => r.method.as_str(),
+            ServerRequest::SkillsGetRequest(r) => r.method.as_str(),
+            ServerRequest::SkillsListRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -4690,7 +4713,10 @@ ts_union!(
     | CreateMessageRequest
     | ListRootsRequest
     | ElicitRequest
-    | CustomRequest;
+    | CustomRequest
+    | ResourcesDirectoryReadRequest
+    | SkillsGetRequest
+    | SkillsListRequest;
 );
 
 ts_union!(
@@ -4717,6 +4743,9 @@ ts_union!(
     | ListResourcesResult
     | ListResourceTemplatesResult
     | ReadResourceResult
+    | ResourcesDirectoryReadResult
+    | SkillsGetResult
+    | SkillsListResult
     | SubscriptionsListenResult
     | ListToolsResult
     | ElicitResult
@@ -4773,11 +4802,12 @@ impl ServerResult {
             ServerResult::ListResourcesResult(r) => &mut r.result_type,
             ServerResult::ListResourceTemplatesResult(r) => &mut r.result_type,
             ServerResult::ReadResourceResult(r) => &mut r.result_type,
+            ServerResult::ResourcesDirectoryReadResult(r) => &mut r.result_type,
             ServerResult::ListToolsResult(r) => &mut r.result_type,
             ServerResult::CallToolResult(r) => &mut r.result_type,
             _ => return,
         };
-        result_type.take_if(|result_type| result_type.is_complete());
+        result_type.take_if(|rt| rt.is_complete());
     }
 }
 

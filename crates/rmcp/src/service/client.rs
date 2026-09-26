@@ -24,12 +24,14 @@ use crate::{
         ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
         NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
         ProtocolVersion, ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse,
-        ReadResourceResult, Reference, RequestId, RequestMetaObject, RootsListChangedNotification,
-        ServerJsonRpcMessage, ServerNotification, ServerPeerInfo, ServerRequest, ServerResult,
-        SetLevelRequest, SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams,
-        SubscriptionFilter, SubscriptionsListenRequest, SubscriptionsListenRequestParams,
-        SubscriptionsListenResult, UnsubscribeRequest, UnsubscribeRequestParams, UpdateTaskParams,
-        UpdateTaskRequest,
+        ReadResourceResult, Reference, RequestId, RequestMetaObject, ResourcesDirectoryReadRequest,
+        ResourcesDirectoryReadRequestParams, ResourcesDirectoryReadResult,
+        RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification, ServerPeerInfo,
+        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SkillsGetRequest,
+        SkillsGetRequestParams, SkillsGetResult, SkillsListRequest, SkillsListResult,
+        SubscribeRequest, SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
+        SubscriptionsListenRequestParams, SubscriptionsListenResult, UnsubscribeRequest,
+        UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
     transport::DynamicTransportError,
 };
@@ -1065,6 +1067,7 @@ const PROMPT_LIST_CACHE_PREFIX: &str = "prompts/list:";
 const RESOURCE_LIST_CACHE_PREFIX: &str = "resources/list:";
 const RESOURCE_TEMPLATE_LIST_CACHE_PREFIX: &str = "resources/templates/list:";
 const RESOURCE_READ_CACHE_PREFIX: &str = "resources/read:";
+const SKILLS_LIST_CACHE_PREFIX: &str = "skills/list:";
 
 // Cache keys are built only from the request method plus the parameters that
 // affect the result (SEP-2549). Request `_meta` (progress tokens, trace
@@ -1688,6 +1691,103 @@ impl Peer<RoleClient> {
         }
     }
 
+    // =========================================================================
+    // SEP-2640: Skills
+    // =========================================================================
+
+    /// Send one `skills/list` request and return the list result, without
+    /// pagination support. For paginated listing that follows `nextCursor`,
+    /// use [`Peer::skills_list`] with the desired pagination params.
+    pub async fn skills_list(
+        &self,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<SkillsListResult, ServiceError> {
+        let cache_key = list_response_cache_key(SKILLS_LIST_CACHE_PREFIX, &params);
+        if let Some(ServerResult::SkillsListResult(result)) = self.cached_response(&cache_key).await
+        {
+            return Ok(result);
+        }
+        let generation = self.capture_response_cache_generation().await;
+        let uses_cursor = request_uses_cursor(&params);
+        let result = self
+            .send_request(ClientRequest::SkillsListRequest(SkillsListRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if uses_cursor {
+                    self.invalidate_cached_responses(SKILLS_LIST_CACHE_PREFIX)
+                        .await;
+                    return Err(error);
+                }
+                if let Some(ServerResult::SkillsListResult(result)) =
+                    self.stale_cached_response(&cache_key).await
+                {
+                    return Ok(result);
+                }
+                return Err(error);
+            }
+        };
+        match result {
+            ServerResult::SkillsListResult(result) => {
+                self.cache_result(
+                    Some(cache_key),
+                    result.ttl_ms,
+                    result.cache_scope.as_deref().and_then(|scope| match scope {
+                        "private" => Some(CacheScope::Private),
+                        "public" => Some(CacheScope::Public),
+                        _ => None,
+                    }),
+                    generation,
+                    ServerResult::SkillsListResult(result.clone()),
+                )
+                .await;
+                Ok(result)
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// Send one `skills/get` request and return the skill result.
+    /// Does not use the response cache (skills are typically unique per URI).
+    pub async fn skills_get(
+        &self,
+        uri: impl Into<String>,
+    ) -> Result<SkillsGetResult, ServiceError> {
+        let params = SkillsGetRequestParams::new(uri.into());
+        let result = self
+            .send_request(ClientRequest::SkillsGetRequest(SkillsGetRequest::new(
+                params,
+            )))
+            .await;
+        match result {
+            Ok(ServerResult::SkillsGetResult(result)) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// Send one `resources/directory/read` request and return the directory
+    /// listing result.
+    pub async fn resources_directory_read_once(
+        &self,
+        uri: impl Into<String>,
+    ) -> Result<ResourcesDirectoryReadResult, ServiceError> {
+        let params = ResourcesDirectoryReadRequestParams::new(uri.into());
+        let result = self
+            .send_request(ClientRequest::ResourcesDirectoryReadRequest(
+                ResourcesDirectoryReadRequest::new(params),
+            ))
+            .await;
+        match result {
+            Ok(ServerResult::ResourcesDirectoryReadResult(result)) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
     pub async fn read_resource(
         &self,
         params: ReadResourceRequestParams,
@@ -1830,6 +1930,82 @@ impl Peer<RoleClient> {
             }
         }
         Ok(resource_templates)
+    }
+
+    // =========================================================================
+    // SEP-2640: Skills convenience wrappers
+    // =========================================================================
+
+    /// List all skills on the server, following pagination.
+    ///
+    /// Calls [`Peer<RoleClient>::skills_list`] repeatedly until no more
+    /// `nextCursor` is returned, mirroring [`Peer<RoleClient>::list_all_tools`].
+    pub async fn list_all_skills(&self) -> Result<Vec<crate::model::SkillEntry>, ServiceError> {
+        let mut skills = Vec::new();
+        let mut cursor = None;
+        loop {
+            let result = self
+                .skills_list(Some(PaginatedRequestParams { meta: None, cursor }))
+                .await?;
+            skills.extend(result.skills);
+            cursor = result.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(skills)
+    }
+
+    /// List available skills on the server, without pagination.
+    ///
+    /// Delegates to [`Peer<RoleClient>::skills_list`] with no pagination params.
+    /// Use [`Peer<RoleClient>::list_all_skills`] when you need every skill across
+    /// multiple pages.
+    pub async fn list_skills(peer: &Peer<RoleClient>) -> Result<SkillsListResult, ServiceError> {
+        peer.skills_list(None).await
+    }
+
+    /// Retrieve a single skill by URI.
+    ///
+    /// Delegates to [`Peer<RoleClient>::skills_get`].
+    pub async fn get_skill(
+        peer: &Peer<RoleClient>,
+        uri: impl Into<String>,
+    ) -> Result<SkillsGetResult, ServiceError> {
+        peer.skills_get(uri.into()).await
+    }
+
+    /// Retrieve the contents of a skill file by URI.
+    ///
+    /// Delegates to [`Peer<RoleClient>::read_resource`] with a resource reference
+    /// built from the URI.
+    pub async fn read_skill_uri(
+        peer: &Peer<RoleClient>,
+        uri: impl Into<String>,
+    ) -> Result<ReadResourceResult, ServiceError> {
+        let params = ReadResourceRequestParams::new(uri);
+        peer.read_resource_once(params)
+            .await
+            .map(|response| match response {
+                ReadResourceResponse::Complete(result) => result,
+                ReadResourceResponse::InputRequired(_) => {
+                    // The skills extension does not define input_required for skill
+                    // files; collapse the unexpected variant into the caller as a
+                    // transport-level error by returning the complete result path
+                    // through UnexpectedResponse.
+                    unreachable!("skills/read_resource MUST NOT return input_required")
+                }
+            })
+    }
+
+    /// List the contents of a skill directory.
+    ///
+    /// Delegates to [`Peer<RoleClient>::resources_directory_read_once`].
+    pub async fn read_directory(
+        peer: &Peer<RoleClient>,
+        uri: impl Into<String>,
+    ) -> Result<ResourcesDirectoryReadResult, ServiceError> {
+        Self::resources_directory_read_once(peer, uri.into()).await
     }
 
     /// Convenient method to get completion suggestions for a prompt argument
