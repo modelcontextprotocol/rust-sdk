@@ -386,6 +386,55 @@ fn test_call_tool_result_deserialize_without_content() {
     assert!(result.structured_content.is_some());
 }
 
+/// Per the 2026-07-28 spec, `structuredContent` can be any JSON value,
+/// including `null`. A present `null` must stay distinct from an absent field.
+#[test]
+fn test_explicit_null_structured_content_is_preserved() {
+    let json = json!({
+        "resultType": "complete",
+        "content": [],
+        "structuredContent": null
+    });
+    let result: CallToolResult = serde_json::from_value(json).unwrap();
+    assert_eq!(result.structured_content, Some(Value::Null));
+}
+
+#[test]
+fn test_explicit_null_structured_content_without_content_deserializes() {
+    let json = json!({
+        "resultType": "complete",
+        "structuredContent": null
+    });
+    let result: CallToolResult = serde_json::from_value(json).unwrap();
+    assert!(result.content.is_empty());
+    assert_eq!(result.structured_content, Some(Value::Null));
+}
+
+#[test]
+fn test_absent_structured_content_is_none() {
+    let json = json!({
+        "resultType": "complete",
+        "content": []
+    });
+    let result: CallToolResult = serde_json::from_value(json).unwrap();
+    assert_eq!(result.structured_content, None);
+}
+
+#[test]
+fn test_null_structured_content_serialization_roundtrip() {
+    let with_null = CallToolResult::structured(Value::Null);
+    let v = serde_json::to_value(&with_null).unwrap();
+    assert_eq!(v.get("structuredContent"), Some(&Value::Null));
+    let deserialized: CallToolResult = serde_json::from_value(v).unwrap();
+    assert_eq!(deserialized, with_null);
+
+    let absent = CallToolResult::success(vec![]);
+    let v = serde_json::to_value(&absent).unwrap();
+    assert!(v.get("structuredContent").is_none());
+    let deserialized: CallToolResult = serde_json::from_value(v).unwrap();
+    assert_eq!(deserialized.structured_content, None);
+}
+
 #[tokio::test]
 async fn test_tool_with_array_output_schema() {
     let server = TestServer::new();

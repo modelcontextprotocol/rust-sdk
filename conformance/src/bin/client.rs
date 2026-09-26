@@ -1,3 +1,10 @@
+#![expect(
+    deprecated,
+    reason = "The conformance suite still exercises deprecated sampling scenarios"
+)]
+
+use anyhow::Context;
+use oauth2::{ClientSecret, RefreshToken};
 use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt, ErrorData, RoleClient, ServiceExt,
     model::*,
@@ -6,7 +13,8 @@ use rmcp::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
         auth::{
             AuthorizationCallback, AuthorizationRequest, ClientCredentialsConfig,
-            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState,
+            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState, default_oauth_http_client,
+            enterprise::{EmaAuthorizationServer, EmaClientAuthentication, EmaExchangeRequest},
         },
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
@@ -36,6 +44,17 @@ struct ConformanceContext {
     private_key_pem: Option<String>,
     #[serde(default)]
     signing_algorithm: Option<String>,
+    // enterprise-managed-authorization-refresh-token
+    #[serde(default)]
+    idp_client_id: Option<String>,
+    #[serde(default)]
+    idp_client_secret: Option<String>,
+    #[serde(default)]
+    idp_refresh_token: Option<String>,
+    #[serde(default)]
+    idp_issuer: Option<String>,
+    #[serde(default)]
+    idp_token_endpoint: Option<String>,
 }
 
 fn load_context() -> ConformanceContext {
@@ -55,8 +74,8 @@ impl ClientHandler for BasicClientHandler {}
 struct ElicitationDefaultsClientHandler;
 
 impl ClientHandler for ElicitationDefaultsClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.capabilities.elicitation = Some(
             ElicitationCapability::new()
                 .with_form(FormElicitationCapability::new().with_schema_validation(true)),
@@ -144,8 +163,8 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
 struct FullClientHandler;
 
 impl ClientHandler for FullClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.capabilities.elicitation = Some(
             ElicitationCapability::new()
                 .with_form(FormElicitationCapability::new().with_schema_validation(true)),
@@ -195,25 +214,73 @@ const REDIRECT_URI: &str = "http://localhost:3000/callback";
 const SCOPE_STEP_UP_INITIAL_SCOPES: &[&str] = &["mcp:basic"];
 const SCOPE_STEP_UP_ESCALATED_SCOPES: &[&str] = &["mcp:basic", "mcp:write"];
 
-/// Perform the headless OAuth authorization-code flow.
+/// Attempt the real connection unauthenticated and return the server's
+/// `WWW-Authenticate` challenge from the 401 — the reactive discovery
+/// trigger.
 ///
-/// 1. Discover metadata, register (or use CIMD), get auth URL
-/// 2. Fetch the auth URL with redirect:manual → extract code from Location header
-/// 3. Exchange code for token
-/// 4. Return an `AuthClient` wrapping `reqwest::Client`
+/// `None` (server accepted the unauthenticated connection, which is then
+/// closed cleanly) is a legitimate outcome, not an error: the scope-step-up
+/// and scope-retry-limit mocks allow unauthenticated `initialize` and only
+/// enforce authorization on tool calls.
+async fn initialize_challenge(
+    server_url: &str,
+    lifecycle: ClientLifecycleMode,
+) -> anyhow::Result<Option<String>> {
+    let transport = StreamableHttpClientTransport::from_uri(server_url);
+    match BasicClientHandler
+        .serve_with_lifecycle(transport, lifecycle)
+        .await
+    {
+        Ok(client) => {
+            client.cancel().await.ok();
+            Ok(None)
+        }
+        Err(error) => match error.auth_challenge() {
+            Some(challenge) => Ok(Some(challenge.to_string())),
+            None => Err(error.into()),
+        },
+    }
+}
+
+fn with_optional_challenge(
+    request: AuthorizationRequest,
+    challenge: Option<String>,
+) -> AuthorizationRequest {
+    match challenge {
+        Some(challenge) => request.with_challenge(challenge),
+        None => request,
+    }
+}
+
+/// Perform the headless OAuth authorization-code flow, reactively:
+///
+/// 1. Attempt the real connection; take the 401's WWW-Authenticate challenge
+/// 2. Discover from the challenge, register (or use CIMD), get auth URL
+/// 3. Fetch the auth URL with redirect:manual → extract code from Location header
+/// 4. Exchange code for token
+/// 5. Return an `AuthClient` wrapping `reqwest::Client`
 async fn perform_oauth_flow(
     server_url: &str,
     _ctx: &ConformanceContext,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
+    // Always the discover lifecycle here (not `conformance_lifecycle()`):
+    // this flow serves `run_auth_client`, whose 2026-07-28 auth mocks require
+    // the per-request MCP-Protocol-Version negotiation.
+    let challenge = initialize_challenge(
+        server_url,
+        ClientLifecycleMode::Discover {
+            preferred_versions: preferred_protocol_versions(),
+        },
+    )
+    .await?;
     let mut oauth = OAuthState::new(server_url, None).await?;
 
     // Discover + register + get auth URL
+    let request = AuthorizationRequest::new(REDIRECT_URI)
+        .with_client_name("conformance-client")
+        .with_client_metadata_url(CIMD_CLIENT_METADATA_URL);
     oauth
-        .start_authorization(
-            AuthorizationRequest::new(REDIRECT_URI)
-                .with_client_name("conformance-client")
-                .with_client_metadata_url(CIMD_CLIENT_METADATA_URL),
-        )
+        .start_authorization(with_optional_challenge(request, challenge))
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
@@ -255,14 +322,14 @@ async fn perform_oauth_flow_preregistered(
     client_id: &str,
     client_secret: &str,
 ) -> anyhow::Result<AuthClient<reqwest::Client>> {
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
     let mut oauth = OAuthState::new(server_url, None).await?;
 
+    let request = AuthorizationRequest::new(REDIRECT_URI)
+        .with_preregistered_client(client_id)
+        .with_client_secret(client_secret);
     oauth
-        .start_authorization(
-            AuthorizationRequest::new(REDIRECT_URI)
-                .with_preregistered_client(client_id)
-                .with_client_secret(client_secret),
-        )
+        .start_authorization(with_optional_challenge(request, challenge))
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
@@ -325,14 +392,14 @@ async fn run_auth_scope_step_up_client(
     server_url: &str,
     _ctx: &ConformanceContext,
 ) -> anyhow::Result<()> {
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
     let mut oauth = OAuthState::new(server_url, None).await?;
+    let request = AuthorizationRequest::new(REDIRECT_URI)
+        .with_scopes(SCOPE_STEP_UP_INITIAL_SCOPES.iter().copied())
+        .with_client_name("conformance-client")
+        .with_client_metadata_url(CIMD_CLIENT_METADATA_URL);
     oauth
-        .start_authorization(
-            AuthorizationRequest::new(REDIRECT_URI)
-                .with_scopes(SCOPE_STEP_UP_INITIAL_SCOPES.iter().copied())
-                .with_client_name("conformance-client")
-                .with_client_metadata_url(CIMD_CLIENT_METADATA_URL),
-        )
+        .start_authorization(with_optional_challenge(request, challenge))
         .await?;
 
     let auth_url = oauth.get_authorization_url().await?;
@@ -427,15 +494,15 @@ async fn run_auth_scope_retry_limit_client(
 ) -> anyhow::Result<()> {
     let max_retries = 3u32;
     let mut attempt = 0u32;
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
 
     loop {
         let mut oauth = OAuthState::new(server_url, None).await?;
+        let request = AuthorizationRequest::new(REDIRECT_URI)
+            .with_client_name("conformance-client")
+            .with_client_metadata_url(CIMD_CLIENT_METADATA_URL);
         oauth
-            .start_authorization(
-                AuthorizationRequest::new(REDIRECT_URI)
-                    .with_client_name("conformance-client")
-                    .with_client_metadata_url(CIMD_CLIENT_METADATA_URL),
-            )
+            .start_authorization(with_optional_challenge(request, challenge.clone()))
             .await?;
         let auth_url = oauth.get_authorization_url().await?;
         let callback = headless_authorize(&auth_url).await?;
@@ -509,7 +576,10 @@ async fn migration_token(
         return Ok(manager.get_access_token().await?);
     }
 
-    let resolution = manager.resolve_metadata().await?;
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
+    let resolution = manager
+        .resolve_metadata_from_challenge(challenge.as_deref())
+        .await?;
     manager.set_metadata(resolution.metadata);
     manager
         .register_client("conformance-client", REDIRECT_URI, &[])
@@ -609,7 +679,10 @@ async fn run_client_credentials_basic(
         .unwrap_or("conformance-test-secret");
 
     let mut manager = AuthorizationManager::new(server_url).await?;
-    let resolution = manager.resolve_metadata().await?;
+    let challenge = initialize_challenge(server_url, conformance_lifecycle()).await?;
+    let resolution = manager
+        .resolve_metadata_from_challenge(challenge.as_deref())
+        .await?;
     let token_endpoint = resolution.metadata.token_endpoint.clone();
     manager.set_metadata(resolution.metadata);
 
@@ -701,6 +774,66 @@ async fn run_client_credentials_jwt(
         let _ = client
             .call_tool(call_tool_params(tool.name.clone(), args))
             .await;
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
+/// Exchange the fixture's IdP refresh token, then exercise authenticated MCP access.
+async fn run_ema_refresh_token_client(
+    server_url: &str,
+    ctx: &ConformanceContext,
+) -> anyhow::Result<()> {
+    let manager = AuthorizationManager::new(server_url).await?;
+    let metadata = manager.resolve_metadata().await?.metadata;
+    let idp = EmaAuthorizationServer::new(
+        ctx.idp_issuer.as_deref().context("Missing idp_issuer")?,
+        ctx.idp_token_endpoint
+            .as_deref()
+            .context("Missing idp_token_endpoint")?,
+        ctx.idp_client_id
+            .as_deref()
+            .context("Missing idp_client_id")?,
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(
+        ClientSecret::new(
+            ctx.idp_client_secret
+                .clone()
+                .context("Missing idp_client_secret")?,
+        ),
+    ));
+    let resource_as = EmaAuthorizationServer::new(
+        metadata
+            .issuer
+            .context("Missing authorization server issuer")?,
+        metadata.token_endpoint,
+        ctx.client_id.as_deref().context("Missing client_id")?,
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(
+        ClientSecret::new(ctx.client_secret.clone().context("Missing client_secret")?),
+    ));
+    let refresh_token = RefreshToken::new(
+        ctx.idp_refresh_token
+            .clone()
+            .context("Missing idp_refresh_token")?,
+    );
+    let http = default_oauth_http_client()?;
+    let token = EmaExchangeRequest::new(idp, resource_as, server_url, &refresh_token)
+        .with_scopes(manager.select_scopes(None, &[]))
+        .exchange(&http, &http)
+        .await?;
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server_url)
+            .auth_header(token.access_token.secret()),
+    );
+    let client = BasicClientHandler
+        .serve_with_lifecycle(transport, conformance_lifecycle())
+        .await?;
+    let tools = client.list_tools(Default::default()).await?;
+    for tool in tools.tools {
+        let args = build_tool_arguments(&tool);
+        client.call_tool(call_tool_params(tool.name, args)).await?;
     }
     client.cancel().await?;
     Ok(())
@@ -889,8 +1022,7 @@ fn preferred_protocol_versions() -> Vec<ProtocolVersion> {
     preferred_versions
 }
 
-/// Runs draft stateless scenarios through the public discover lifecycle and
-/// Streamable HTTP transport.
+/// Runs scenarios through the discover lifecycle and Streamable HTTP transport.
 async fn run_discover_client(server_url: &str) -> anyhow::Result<()> {
     let preferred_versions = preferred_protocol_versions();
     let transport = StreamableHttpClientTransport::from_uri(server_url);
@@ -1056,6 +1188,11 @@ async fn run_scenario(
         // Auth - client credentials
         "auth/client-credentials-basic" => run_client_credentials_basic(server_url, ctx).await?,
         "auth/client-credentials-jwt" => run_client_credentials_jwt(server_url, ctx).await?,
+
+        // Auth - enterprise-managed authorization with a refresh-token subject
+        "auth/enterprise-managed-authorization-refresh-token" => {
+            run_ema_refresh_token_client(server_url, ctx).await?
+        }
 
         // Auth - cross-app access
         "auth/cross-app-access-complete-flow" => {

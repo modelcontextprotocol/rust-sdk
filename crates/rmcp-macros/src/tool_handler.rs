@@ -66,15 +66,19 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
             async fn list_tools(
                 &self,
                 _request: Option<rmcp::model::PaginatedRequestParams>,
-                _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+                context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+                let supports_cache_hints = context.protocol_version().is_some_and(|version| {
+                    version >= rmcp::model::ProtocolVersion::V_2026_07_28
+                });
                 Ok(rmcp::model::ListToolsResult{
                     result_type: Some(rmcp::model::ResultType::COMPLETE),
                     tools: #router.list_all(),
                     meta: #result_meta,
                     next_cursor: None,
-                    ttl_ms: None,
-                    cache_scope: None,
+                    ttl_ms: supports_cache_hints.then_some(0),
+                    cache_scope: supports_cache_hints
+                        .then_some(rmcp::model::CacheScope::Public),
                 })
             }
         })?;
@@ -112,7 +116,7 @@ pub(crate) enum CallerCapability {
     Prompts,
 }
 
-/// Build a `get_info()` method that returns `ServerInfo` with the appropriate capabilities.
+/// Build a `get_info()` method that returns `ServerConfig` with the appropriate capabilities.
 ///
 /// The caller declares its own capability via `caller`. Sibling handler attributes
 /// (`prompt_handler`, `tool_handler`) are detected automatically
@@ -153,8 +157,8 @@ pub(crate) fn build_get_info(
     }
 
     syn::parse2::<ImplItem>(quote! {
-        fn get_info(&self) -> rmcp::model::ServerInfo {
-            rmcp::model::ServerInfo::new(
+        fn get_info(&self) -> rmcp::model::ServerConfig {
+            rmcp::model::ServerConfig::new(
                 rmcp::model::ServerCapabilities::builder()
                     #(#capability_calls)*
                     .build()

@@ -36,11 +36,13 @@ async fn discover_startup_accepts_stringified_numeric_response_id() {
         };
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 RequestId::String(response_id.to_string().into()),
             ))
             .await
@@ -56,6 +58,110 @@ async fn discover_startup_accepts_stringified_numeric_response_id() {
         )
         .await
         .expect("client should accept stringified discover response ID");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn discover_startup_accepts_missing_optional_server_info() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let (rejection_observed_tx, rejection_observed_rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover_request) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        let mut result = DiscoverResult::new(
+            vec![ProtocolVersion::V_2026_07_28],
+            ServerCapabilities::builder().enable_tools().build(),
+        );
+        result.instructions = Some("discovery instructions".into());
+        result.meta = Some(rmcp::model::MetaObject::new());
+        result
+            .meta
+            .as_mut()
+            .expect("metadata")
+            .0
+            .insert("example.test/key".into(), serde_json::json!(7));
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::DiscoverResult(result),
+                discover_request.id,
+            ))
+            .await
+            .expect("send discover response");
+
+        server
+            .send(ServerJsonRpcMessage::request(
+                rmcp::model::ServerRequest::CreateMessageRequest(
+                    rmcp::model::CreateMessageRequest::new(
+                        rmcp::model::CreateMessageRequestParams::new(
+                            vec![rmcp::model::SamplingMessage::user_text("unsolicited")],
+                            16,
+                        ),
+                    ),
+                ),
+                RequestId::Number(99),
+            ))
+            .await
+            .expect("send unsolicited server request");
+        let Some(ClientJsonRpcMessage::Error(error)) = server.receive().await else {
+            panic!("expected unsolicited server request to be rejected");
+        };
+        assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
+        rejection_observed_tx
+            .send(())
+            .expect("signal observed rejection");
+
+        let ClientJsonRpcMessage::Request(request) =
+            server.receive().await.expect("expected normal request")
+        else {
+            panic!("expected normal request");
+        };
+        assert_eq!(
+            request.request.get_meta().protocol_version(),
+            Some(ProtocolVersion::V_2026_07_28)
+        );
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(Default::default()),
+                request.id,
+            ))
+            .await
+            .expect("send list tools response");
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("missing optional server info should not fail discovery");
+    let peer_info = client.peer_info().expect("peer info should be retained");
+    assert_eq!(peer_info.protocol_version, ProtocolVersion::V_2026_07_28);
+    assert!(peer_info.capabilities.tools.is_some());
+    assert_eq!(peer_info.server_info, None);
+    assert_eq!(
+        peer_info.instructions.as_deref(),
+        Some("discovery instructions")
+    );
+    assert_eq!(
+        peer_info
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("example.test/key")),
+        Some(&serde_json::json!(7))
+    );
+    rejection_observed_rx
+        .await
+        .expect("server should observe association rejection");
+    client.list_tools(None).await.expect("list tools");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }
@@ -103,11 +209,13 @@ async fn discover_startup_omits_initialize() {
 
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 request.id,
             ))
             .await
@@ -229,6 +337,334 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
     server_task.await.expect("server task");
 }
 
+/// Drives an `Auto` client through a single `server/discover` probe and asserts
+/// the legacy fallback decision against the response the server sends back.
+///
+/// When `expect_fallback` is set, the server also accepts the subsequent
+/// `initialize` request and the client is expected to connect. Otherwise the
+/// client must surface the discover error without sending `initialize`, and the
+/// server's next receive must not be an initialize request.
+async fn run_auto_discover_response_scenario(error: ErrorData, expect_fallback: bool) {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected request");
+        };
+        assert!(matches!(
+            discover.request,
+            ClientRequest::DiscoverRequest(_)
+        ));
+        server
+            .send(ServerJsonRpcMessage::error(error, Some(discover.id)))
+            .await
+            .expect("send discover error response");
+
+        if expect_fallback {
+            let ClientJsonRpcMessage::Request(initialize) =
+                server.receive().await.expect("expected initialize request")
+            else {
+                panic!("expected request");
+            };
+            assert!(matches!(
+                initialize.request,
+                ClientRequest::InitializeRequest(_)
+            ));
+            server
+                .send(ServerJsonRpcMessage::response(
+                    ServerResult::InitializeResult(InitializeResult::new(
+                        ServerCapabilities::default(),
+                    )),
+                    initialize.id,
+                ))
+                .await
+                .expect("send initialize response");
+            assert!(matches!(
+                server.receive().await,
+                Some(ClientJsonRpcMessage::Notification(_))
+            ));
+        } else {
+            // The client must surface the error without falling back, so no
+            // initialize request should follow. The transport closes when the
+            // failed client is dropped.
+            if let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await {
+                panic!(
+                    "client fell back to {:?} but should have surfaced the modern error",
+                    request.request
+                );
+            }
+        }
+    });
+
+    let client_result = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await;
+
+    if expect_fallback {
+        let client = client_result.expect("auto client should fall back to initialize");
+        client.cancel().await.expect("cancel client");
+    } else {
+        assert!(
+            client_result.is_err(),
+            "modern error should surface without legacy fallback"
+        );
+    }
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_after_discover_invalid_request() {
+    // Legacy servers commonly reject an unknown pre-initialize request with
+    // `-32600` (e.g. a session middleware that requires `initialize` first).
+    run_auto_discover_response_scenario(
+        ErrorData::new(ErrorCode::INVALID_REQUEST, "Bad Request", None),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_after_discover_invalid_params() {
+    // `-32602` is explicitly called out by the specification as an
+    // implementation-defined response legacy servers use for unknown requests.
+    run_auto_discover_response_scenario(
+        ErrorData::new(ErrorCode::INVALID_PARAMS, "Invalid params", None),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_missing_required_capability() {
+    // A `MISSING_REQUIRED_CLIENT_CAPABILITY` response identifies a modern
+    // server; falling back to `initialize` would not address it.
+    run_auto_discover_response_scenario(
+        ErrorData::new(
+            ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            "Missing required client capability",
+            None,
+        ),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_does_not_fall_back_for_header_mismatch() {
+    // A `HEADER_MISMATCH` response identifies a modern server performing
+    // header validation; falling back to `initialize` would not address it.
+    run_auto_discover_response_scenario(
+        ErrorData::new(ErrorCode::HEADER_MISMATCH, "Header mismatch", None),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn auto_startup_preserves_both_errors_when_fallback_also_fails() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        // Discover: legacy rejection.
+        let ClientJsonRpcMessage::Request(discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected request");
+        };
+        server
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "not found", None),
+                Some(discover.id),
+            ))
+            .await
+            .expect("send discover error");
+
+        // Initialize: close the transport instead of responding.
+        let ClientJsonRpcMessage::Request(_) =
+            server.receive().await.expect("expected initialize request")
+        else {
+            panic!("expected request");
+        };
+        drop(server); // closes the transport
+    });
+
+    let result = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await;
+
+    let err = result.err().expect("both phases should fail");
+    match err {
+        rmcp::service::ClientInitializeError::LegacyFallbackFailed { discover, fallback } => {
+            assert!(
+                matches!(
+                    *discover,
+                    rmcp::service::ClientInitializeError::JsonRpcError(_)
+                ),
+                "discover phase should be a JsonRpcError, got {discover:?}"
+            );
+            assert!(
+                matches!(
+                    *fallback,
+                    rmcp::service::ClientInitializeError::ConnectionClosed(_)
+                ),
+                "fallback phase should be ConnectionClosed, got {fallback:?}"
+            );
+        }
+        other => panic!("expected LegacyFallbackFailed, got {other:?}"),
+    }
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn auto_startup_surfaces_uncorrelated_error_id() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(_) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected request");
+        };
+        // Respond with an error carrying a different id.
+        server
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "not found", None),
+                Some(RequestId::Number(999)),
+            ))
+            .await
+            .expect("send mismatched-id error");
+    });
+
+    let result = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(rmcp::service::ClientInitializeError::UncorrelatedErrorResponse { .. })
+        ),
+        "mismatched id should surface as UncorrelatedErrorResponse, got {:?}",
+        result.as_ref().err()
+    );
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn auto_startup_falls_back_for_absent_error_id() {
+    // Spec: error id is optional; a server that cannot read the request id
+    // omits it. The error is still a response to our request, so it should
+    // trigger legacy fallback.
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(_discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected request");
+        };
+        server
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "not found", None),
+                None,
+            ))
+            .await
+            .expect("send no-id error");
+
+        // Client should fall back to initialize.
+        let ClientJsonRpcMessage::Request(initialize) =
+            server.receive().await.expect("expected initialize request")
+        else {
+            panic!("expected request");
+        };
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::InitializeResult(
+                    InitializeResult::new(ServerCapabilities::default()),
+                ),
+                initialize.id,
+            ))
+            .await
+            .expect("send initialize response");
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Notification(_))
+        ));
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("absent-id error should trigger legacy fallback");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn discover_mode_surfaces_legacy_error() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(discover) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected request");
+        };
+        server
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "not found", None),
+                Some(discover.id),
+            ))
+            .await
+            .expect("send discover error");
+    });
+
+    let result = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(rmcp::service::ClientInitializeError::JsonRpcError(_))
+        ),
+        "Discover mode should surface a legacy error, not fall back, got {:?}",
+        result.as_ref().err()
+    );
+    server_task.await.expect("server task");
+}
+
 #[tokio::test]
 async fn discover_startup_retries_a_mutually_supported_version() {
     let unsupported: ProtocolVersion =
@@ -267,11 +703,13 @@ async fn discover_startup_retries_a_mutually_supported_version() {
         );
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 second.id,
             ))
             .await
@@ -326,11 +764,13 @@ async fn discover_startup_retries_current_version_once_when_server_reports_it_su
         );
         server
             .send(ServerJsonRpcMessage::response(
-                ServerResult::DiscoverResult(DiscoverResult::new(
-                    vec![ProtocolVersion::V_2026_07_28],
-                    ServerCapabilities::default(),
-                    Implementation::new("discover-server", "1.0.0"),
-                )),
+                ServerResult::DiscoverResult(
+                    DiscoverResult::new(
+                        vec![ProtocolVersion::V_2026_07_28],
+                        ServerCapabilities::default(),
+                    )
+                    .with_server_info(Implementation::new("discover-server", "1.0.0")),
+                ),
                 second.id,
             ))
             .await

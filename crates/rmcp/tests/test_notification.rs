@@ -5,8 +5,8 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
-        ClientNotification, CustomNotification, ResourceUpdatedNotificationParam,
-        ServerCapabilities, ServerInfo, ServerNotification, SubscribeRequestParams,
+        ClientNotification, CustomNotification, ProtocolVersion, ResourceUpdatedNotificationParam,
+        ServerCapabilities, ServerConfig, ServerNotification, SubscribeRequestParams,
     },
 };
 use serde_json::json;
@@ -16,8 +16,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 struct Server {}
 
 impl ServerHandler for Server {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()
@@ -55,6 +55,13 @@ pub struct Client {
 }
 
 impl ClientHandler for Client {
+    // Pinned to the handshake lifecycle: this test drives subscriptions over a
+    // session, which `LATEST` no longer establishes.
+    fn get_info(&self) -> rmcp::model::ClientInfo {
+        rmcp::model::ClientInfo::default()
+            .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+    }
+
     async fn on_resource_updated(
         &self,
         params: rmcp::model::ResourceUpdatedNotificationParam,

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     pin::Pin,
@@ -28,15 +28,12 @@ use tracing::{debug, warn};
 
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 
+#[cfg(feature = "auth-enterprise-managed")]
+pub mod enterprise;
+
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
 const MAX_OAUTH_DISCOVERY_REDIRECTS: usize = 10;
-const RESOURCE_METADATA_POST_PROBE_BODY: &str = concat!(
-    r#"{"jsonrpc":"2.0","id":"auth-discovery","method":"initialize","params":{"#,
-    r#""protocolVersion":"2024-11-05","capabilities":{},"#,
-    r#""clientInfo":{"name":"rmcp-auth-discovery","version":"0.0.0"}}"#,
-    r#"}"#
-);
 const CLOUD_METADATA_HOSTS: &[&str] = &[
     "metadata",
     "metadata.google.internal",
@@ -76,20 +73,19 @@ impl OAuthHttpRequest {
     }
 }
 
-/// Error returned by a custom OAuth HTTP client.
-#[derive(Debug, Error)]
-#[error("{message}")]
-pub struct OAuthHttpClientError {
-    message: String,
-}
+/// Type-erased error returned by an [`OAuthHttpClient`].
+pub type OAuthHttpClientError = Box<dyn std::error::Error + Send + Sync>;
 
-impl OAuthHttpClientError {
-    /// Create an error from a transport-provided message.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
+#[derive(Debug, Error)]
+enum OAuthHttpError {
+    #[error("OAuth HTTP response body exceeds {0} bytes")]
+    ResponseBodyTooLarge(usize),
+    #[error("unexpected HTTP status {0}")]
+    UnexpectedStatus(StatusCode),
+    #[error("OAuth discovery redirect to non-same-origin URL rejected: {0}")]
+    CrossOriginRedirect(Url),
+    #[error("OAuth discovery exceeded {0} redirects")]
+    TooManyRedirects(usize),
 }
 
 /// Future returned by [`OAuthHttpClient::execute`].
@@ -104,6 +100,19 @@ pub type OAuthHttpClientFuture<'a> =
 pub trait OAuthHttpClient: Send + Sync {
     /// Execute one OAuth HTTP operation.
     fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_>;
+}
+
+/// Create an OAuth HTTP client with the SDK's default reqwest configuration.
+///
+/// Honors each request's redirect policy, with a 30-second timeout and bounded
+/// response bodies. Enable a TLS feature such as `reqwest` for HTTPS requests.
+/// Implement [`OAuthHttpClient`] instead when custom network policy is required.
+pub fn default_oauth_http_client() -> Result<impl OAuthHttpClient, AuthError> {
+    let client = ReqwestClient::builder()
+        .timeout(DEFAULT_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| AuthError::InternalError(error.to_string()))?;
+    ReqwestOAuthHttpClient::new(client)
 }
 
 struct ReqwestOAuthHttpClient {
@@ -138,11 +147,11 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
                 OAuthHttpRedirectPolicy::Stop => &self.stop_redirects,
             };
             let request = reqwest::Request::try_from(request)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let response = client
                 .execute(request)
                 .await
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
 
             let mut builder = oauth2::http::Response::builder()
                 .status(response.status())
@@ -153,17 +162,17 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             let mut body = Vec::new();
             let mut body_stream = response.bytes_stream();
             while let Some(chunk) = body_stream.next().await {
-                let chunk = chunk.map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                let chunk = chunk.map_err(|error| Box::new(error) as OAuthHttpClientError)?;
                 if chunk.len() > MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES - body.len() {
-                    return Err(OAuthHttpClientError::new(format!(
-                        "OAuth HTTP response body exceeds {MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES} bytes"
-                    )));
+                    return Err(Box::new(OAuthHttpError::ResponseBodyTooLarge(
+                        MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES,
+                    )) as OAuthHttpClientError);
                 }
                 body.extend_from_slice(&chunk);
             }
             builder
                 .body(body)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)
         })
     }
 }
@@ -173,16 +182,35 @@ struct OAuth2HttpClient<'a> {
     redirect_policy: OAuthHttpRedirectPolicy,
 }
 
+#[derive(Debug)]
+struct OAuth2HttpClientError(OAuthHttpClientError);
+
+impl std::fmt::Display for OAuth2HttpClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OAuth HTTP request failed")
+    }
+}
+
+impl std::error::Error for OAuth2HttpClientError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
-    type Error = OAuthHttpClientError;
+    type Error = OAuth2HttpClientError;
 
     type Future = std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<HttpResponse, Self::Error>> + Send + 'c>,
     >;
 
     fn call(&'c self, request: HttpRequest) -> Self::Future {
-        self.client
-            .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+        Box::pin(async move {
+            self.client
+                .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+                .await
+                .map_err(OAuth2HttpClientError)
+        })
     }
 }
 
@@ -243,11 +271,32 @@ impl StoredCredentials {
     }
 }
 
+/// An owned guard held across a credential refresh and its save.
+///
+/// Stores can wrap a file lock, an owned mutex guard, or another coordination
+/// primitive. Dropping this value releases the guard.
+#[must_use = "dropping the guard releases refresh coordination"]
+pub struct CredentialRefreshGuard {
+    _guard: Box<dyn Send>,
+}
+
+impl CredentialRefreshGuard {
+    /// Wrap a guard whose lifetime coordinates access to the stored credentials.
+    pub fn new(guard: impl Send + 'static) -> Self {
+        Self {
+            _guard: Box::new(guard),
+        }
+    }
+}
+
 /// Trait for storing and retrieving OAuth2 credentials
 ///
 /// Implementations of this trait can provide custom storage backends
 /// for OAuth2 credentials, such as file-based storage, keychain integration,
 /// or database storage.
+///
+/// Return [`AuthError::CredentialStoreError`] for backend or locking failures
+/// so they remain distinct from errors requiring reauthorization.
 #[async_trait]
 pub trait CredentialStore: Send + Sync {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError>;
@@ -255,6 +304,16 @@ pub trait CredentialStore: Send + Sync {
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError>;
 
     async fn clear(&self) -> Result<(), AuthError>;
+
+    /// Optionally coordinate refreshes that share these credentials.
+    ///
+    /// The manager acquires this guard before loading credentials and retains it
+    /// through the token request and save. `load` and `save` must not reacquire
+    /// the same lock. Writers that bypass the guard are not coordinated with it.
+    /// The default does not coordinate refreshes.
+    async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
+        Ok(None)
+    }
 }
 
 /// In-memory credential store (default implementation)
@@ -503,6 +562,9 @@ pub enum AuthError {
     #[error("OAuth refresh token was rejected: {0}")]
     TokenRefreshRejected(String),
 
+    #[error("OAuth credential store failed: {0}")]
+    CredentialStoreError(String),
+
     #[error("HTTP error: {0}")]
     HttpError(#[from] reqwest::Error),
 
@@ -595,7 +657,7 @@ pub enum AuthorizationMetadataSource {
     /// [Newer MCP revisions] require metadata discovery and do not define an
     /// endpoint-synthesis fallback.
     ///
-    /// [Newer MCP revisions]: https://modelcontextprotocol.io/specification/draft/basic/authorization/authorization-server-discovery#protected-resource-metadata-discovery-requirements
+    /// [Newer MCP revisions]: https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery#protected-resource-metadata-discovery-requirements
     LegacyEndpointFallback,
 }
 
@@ -623,6 +685,19 @@ struct ResourceServerMetadata {
     scopes_supported: Option<Vec<String>>,
 }
 
+/// How a url that may hold protected resource metadata was arrived at, which
+/// decides what a document that is not metadata means there.
+#[derive(Debug, Clone, Copy)]
+enum ResourceMetadataUrlOrigin {
+    /// The resource itself named this url in the `resource_metadata` parameter
+    /// of its `WWW-Authenticate` challenge.
+    Advertised,
+    /// The url was derived from the base url on the chance that the document is
+    /// published there, or named by a challenge on such a url. Either way the
+    /// run only guessed its way here.
+    WellKnownGuess,
+}
+
 /// Parameters extracted from WWW-Authenticate header
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -634,6 +709,12 @@ pub struct WWWAuthenticateParams {
 }
 
 impl WWWAuthenticateParams {
+    /// Parse a `WWW-Authenticate` header value, resolving a relative
+    /// `resource_metadata` URL against `base_url`.
+    pub fn parse(header: &str, base_url: &Url) -> Self {
+        AuthorizationManager::extract_www_authenticate_params(header, base_url)
+    }
+
     /// check if this is an insufficient_scope error
     pub fn is_insufficient_scope(&self) -> bool {
         self.error.as_deref() == Some("insufficient_scope")
@@ -687,7 +768,7 @@ impl OAuthClientConfig {
 /// Declarative description of the client identity material available for an
 /// authorization flow.
 ///
-/// The [MCP authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration)
+/// The [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)
 /// recommends that clients obtain a client ID using the following priority
 /// order. [`OAuthState::start_authorization`] and [`AuthorizationSession::new`]
 /// apply it internally:
@@ -736,6 +817,11 @@ pub struct AuthorizationRequest {
     /// OIDC Dynamic Client Registration `application_type` (SEP-837),
     /// e.g. `"native"` or `"web"`.
     pub application_type: Option<String>,
+    /// `WWW-Authenticate` header value from a real request's 401 response.
+    /// When set, discovery is seeded from the challenge (its
+    /// `resource_metadata` URL and `scope` hint) instead of probing the
+    /// server — the reactive discovery path.
+    pub challenge: Option<String>,
 }
 
 impl AuthorizationRequest {
@@ -750,6 +836,7 @@ impl AuthorizationRequest {
             client_secret: None,
             client_metadata_url: None,
             application_type: None,
+            challenge: None,
         }
     }
 
@@ -803,6 +890,13 @@ impl AuthorizationRequest {
     /// e.g. `"native"` or `"web"`.
     pub fn with_application_type(mut self, application_type: impl Into<String>) -> Self {
         self.application_type = Some(application_type.into());
+        self
+    }
+
+    /// Seed discovery from the `WWW-Authenticate` header value of a real
+    /// request's 401 response instead of probing the server.
+    pub fn with_challenge(mut self, www_authenticate: impl Into<String>) -> Self {
+        self.challenge = Some(www_authenticate.into());
         self
     }
 }
@@ -883,7 +977,7 @@ impl JwtSigningAlgorithm {
 /// This supports two authentication methods:
 /// - `ClientSecret`: credentials sent in the request body
 /// - `PrivateKeyJwt`: RFC 7523 signed JWT assertion (requires `auth-client-credentials-jwt` feature)
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum ClientCredentialsConfig {
     /// Client secret authentication (credentials in request body)
@@ -904,6 +998,42 @@ pub enum ClientCredentialsConfig {
         scopes: Vec<String>,
         resource: Option<String>,
     },
+}
+
+impl std::fmt::Debug for ClientCredentialsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ClientSecret {
+                client_id,
+                scopes,
+                resource,
+                ..
+            } => f
+                .debug_struct("ClientSecret")
+                .field("client_id", client_id)
+                .field("client_secret", &"<redacted>")
+                .field("scopes", scopes)
+                .field("resource", resource)
+                .finish(),
+            #[cfg(feature = "auth-client-credentials-jwt")]
+            Self::PrivateKeyJwt {
+                client_id,
+                signing_algorithm,
+                token_endpoint_audience,
+                scopes,
+                resource,
+                ..
+            } => f
+                .debug_struct("PrivateKeyJwt")
+                .field("client_id", client_id)
+                .field("signing_key", &"<redacted>")
+                .field("signing_algorithm", signing_algorithm)
+                .field("token_endpoint_audience", token_endpoint_audience)
+                .field("scopes", scopes)
+                .field("resource", resource)
+                .finish(),
+        }
+    }
 }
 
 #[cfg(feature = "auth-client-credentials-jwt")]
@@ -998,8 +1128,11 @@ pub struct AuthorizationManager {
     www_auth_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
+    /// resource indicator from protected resource metadata, used for RFC 8707 `resource`
+    discovered_resource: RwLock<Option<String>>,
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
+    allow_missing_issuer: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1204,13 +1337,9 @@ impl AuthorizationManager {
 
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
-        let http_client = ReqwestClient::builder()
-            .timeout(DEFAULT_HTTP_TIMEOUT)
-            .build()
-            .map_err(|e| AuthError::InternalError(e.to_string()))?;
         Self::new_inner(
             base_url,
-            Arc::new(ReqwestOAuthHttpClient::new(http_client)?),
+            Arc::new(default_oauth_http_client()?),
             OAuthHttpRedirectPolicy::Stop,
         )
         .await
@@ -1244,7 +1373,9 @@ impl AuthorizationManager {
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
+            discovered_resource: RwLock::new(None),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
+            allow_missing_issuer: false,
         };
 
         Ok(manager)
@@ -1253,6 +1384,17 @@ impl AuthorizationManager {
     /// Set the scope upgrade configuration
     pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
         self.scope_upgrade_config = config;
+    }
+
+    /// Configure whether authorization server metadata discovery tolerates a
+    /// missing `issuer` field.
+    ///
+    /// The default is `false`, enforcing the RFC 8414/OIDC requirement that
+    /// discovered metadata include `issuer` whenever the expected issuer can be
+    /// derived from the discovery URL. Set this to `true` only for compatibility
+    /// with authorization servers that return incomplete metadata.
+    pub fn set_allow_missing_issuer(&mut self, allow: bool) {
+        self.allow_missing_issuer = allow;
     }
 
     /// Set a custom credential store
@@ -1392,7 +1534,7 @@ impl AuthorizationManager {
             });
         }
 
-        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url).await? {
+        if let Some(metadata) = self.try_discover_oauth_server(&self.base_url, None).await? {
             return Ok(AuthorizationMetadataResolution {
                 metadata,
                 source: AuthorizationMetadataSource::AuthorizationServerMetadata,
@@ -1404,6 +1546,52 @@ impl AuthorizationManager {
             metadata: Self::legacy_authorization_metadata(&self.base_url),
             source: AuthorizationMetadataSource::LegacyEndpointFallback,
         })
+    }
+
+    /// Resolve authorization server metadata starting from the
+    /// `WWW-Authenticate` challenge of a real request's 401 response — the
+    /// reactive discovery path, matching the TypeScript and Python SDKs.
+    ///
+    /// Seeds scope selection with the challenge's `scope` hint and prefers
+    /// the challenge's `resource_metadata` URL; falls back to
+    /// [`resolve_metadata`](Self::resolve_metadata) when the challenge is
+    /// `None` or carries no usable metadata pointer.
+    pub async fn resolve_metadata_from_challenge(
+        &self,
+        www_authenticate: Option<&str>,
+    ) -> Result<AuthorizationMetadataResolution, AuthError> {
+        let Some(www_authenticate) = www_authenticate else {
+            return self.resolve_metadata().await;
+        };
+        let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
+
+        self.record_challenge_scope(&params).await;
+
+        if let Some(resource_metadata_url) = &params.resource_metadata_url
+            && let Some(metadata) = self
+                .discover_oauth_server_from_resource_metadata_url(resource_metadata_url)
+                .await?
+        {
+            return Ok(AuthorizationMetadataResolution {
+                metadata,
+                source: AuthorizationMetadataSource::ProtectedResourceMetadata,
+            });
+        }
+
+        self.resolve_metadata().await
+    }
+
+    /// Store a challenge's `scope` hint for later scope selection.
+    async fn record_challenge_scope(&self, params: &WWWAuthenticateParams) {
+        let Some(scope) = &params.scope else {
+            return;
+        };
+        let scopes: Vec<String> = scope.split_whitespace().map(str::to_string).collect();
+        if scopes.is_empty() {
+            return;
+        }
+        debug!("WWW-Authenticate challenge contains scope: {scope}");
+        *self.www_auth_scopes.write().await = scopes;
     }
 
     fn legacy_authorization_metadata(base_url: &Url) -> AuthorizationMetadata {
@@ -1655,7 +1843,7 @@ impl AuthorizationManager {
         let mut auth_request = oauth_client
             .authorize_url(CsrfToken::new_random)
             .set_pkce_challenge(pkce_challenge)
-            .add_extra_param("resource", self.base_url.to_string());
+            .add_extra_param("resource", self.oauth_resource().await);
 
         // add request scopes
         for scope in scopes {
@@ -1691,6 +1879,14 @@ impl AuthorizationManager {
             .await?;
 
         Ok(auth_url.to_string())
+    }
+
+    async fn oauth_resource(&self) -> String {
+        self.discovered_resource
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| self.base_url.to_string())
     }
 
     /// get the current granted scopes
@@ -1917,10 +2113,12 @@ impl AuthorizationManager {
                 AuthError::InternalError("Authorization state not found".to_string())
             })?;
 
-        // Delete state after retrieval (one-time use)
-        self.state_store.delete(csrf_token).await?;
-
         Self::validate_authorization_response_issuer(&stored_state, received_issuer)?;
+
+        // Consume state only after the callback is bound to the expected issuer.
+        // A callback with the correct state but a forged or missing required `iss`
+        // must not discard the PKCE verifier needed by the legitimate callback.
+        self.state_store.delete(csrf_token).await?;
 
         // capture requested scopes before the state is consumed
         let requested_scopes = stored_state.requested_scopes.clone();
@@ -1934,7 +2132,7 @@ impl AuthorizationManager {
         let token_result = match oauth_client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
-            .add_extra_param("resource", self.base_url.to_string())
+            .add_extra_param("resource", self.oauth_resource().await)
             .request_async(&OAuth2HttpClient {
                 client: self.http_client.as_ref(),
                 redirect_policy: OAuthHttpRedirectPolicy::Stop,
@@ -2043,7 +2241,7 @@ impl AuthorizationManager {
     /// refresh token or the server rejected it, return `AuthorizationRequired`
     /// so the caller can re-prompt the user. Infrastructure errors (e.g. store
     /// I/O failures, misconfigured client) are propagated as-is.
-    async fn try_refresh_or_reauth(&self) -> Result<String, AuthError> {
+    pub(crate) async fn try_refresh_or_reauth(&self) -> Result<String, AuthError> {
         match self.refresh_token().await {
             Ok(new_creds) => {
                 tracing::info!("Refreshed access token.");
@@ -2064,8 +2262,21 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
+        // Held for the rest of this function so the load, the exchange, and the
+        // save stay inside one guarded section.
+        let _refresh_guard = self.credential_store.acquire_refresh_guard().await?;
         let stored = self.credential_store.load().await?;
         let stored_credentials = stored.ok_or(AuthError::AuthorizationRequired)?;
+        // Refreshing with another client's stored token would put that token on a
+        // request authenticated as this client.
+        if stored_credentials.client_id != oauth_client.client_id().as_str() {
+            tracing::warn!(
+                stored_client_id = stored_credentials.client_id.as_str(),
+                configured_client_id = oauth_client.client_id().as_str(),
+                "stored credentials belong to a different client; reauthorization required"
+            );
+            return Err(AuthError::AuthorizationRequired);
+        }
         let current_credentials = stored_credentials
             .token_response
             .ok_or(AuthError::AuthorizationRequired)?;
@@ -2079,9 +2290,10 @@ impl AuthorizationManager {
         let mut refresh_request = oauth_client
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
-            .add_extra_param("resource", self.base_url.to_string());
+            .add_extra_param("resource", self.oauth_resource().await);
         let mut refresh_scopes = stored_credentials.granted_scopes;
         self.add_offline_access_if_supported(&mut refresh_scopes);
+        let requested_scopes = refresh_scopes.clone();
         for scope in refresh_scopes {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
@@ -2107,9 +2319,12 @@ impl AuthorizationManager {
             token_result.set_refresh_token(Some(refresh_token_value));
         }
 
-        let granted_scopes: Vec<String> = match token_result.scopes() {
-            Some(scopes) => scopes.iter().map(|s| s.to_string()).collect(),
-            None => self.current_scopes.read().await.clone(),
+        let response_scopes = token_result
+            .scopes()
+            .map(|scopes| scopes.iter().map(|s| s.to_string()).collect());
+        let granted_scopes = {
+            let current = self.current_scopes.read().await;
+            Self::resolve_granted_scopes(response_scopes, &requested_scopes, &current)
         };
 
         *self.current_scopes.write().await = granted_scopes.clone();
@@ -2197,9 +2412,13 @@ impl AuthorizationManager {
     async fn try_discover_oauth_server(
         &self,
         base_url: &Url,
+        expected_issuer: Option<&str>,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         for discovery_url in Self::generate_discovery_urls(base_url) {
-            if let Some(metadata) = self.fetch_authorization_metadata(&discovery_url).await? {
+            if let Some(metadata) = self
+                .fetch_authorization_metadata(&discovery_url, expected_issuer)
+                .await?
+            {
                 return Ok(Some(metadata));
             }
         }
@@ -2209,15 +2428,13 @@ impl AuthorizationManager {
     async fn fetch_authorization_metadata(
         &self,
         discovery_url: &Url,
+        expected_issuer: Option<&str>,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         debug!("discovery url: {:?}", discovery_url);
-        let response = match self.discovery_get(discovery_url).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("discovery request failed: {}", e);
-                return Ok(None);
-            }
-        };
+        let response = self
+            .discovery_get(discovery_url)
+            .await
+            .map_err(|error| Self::discovery_failed(discovery_url, error))?;
 
         if response.status() != StatusCode::OK {
             debug!("discovery returned non-200: {}", response.status());
@@ -2226,7 +2443,11 @@ impl AuthorizationManager {
 
         match serde_json::from_slice::<AuthorizationMetadata>(response.body()) {
             Ok(metadata) => {
-                Self::validate_authorization_metadata_issuer(discovery_url, &metadata)?;
+                self.validate_authorization_metadata_issuer(
+                    discovery_url,
+                    expected_issuer,
+                    &metadata,
+                )?;
                 Ok(Some(metadata))
             }
             Err(err) => {
@@ -2288,15 +2509,21 @@ impl AuthorizationManager {
     }
 
     fn validate_authorization_metadata_issuer(
+        &self,
         discovery_url: &Url,
+        expected_issuer: Option<&str>,
         metadata: &AuthorizationMetadata,
     ) -> Result<(), AuthError> {
-        let Some(expected_issuer) =
-            Self::expected_issuer_for_authorization_metadata_url(discovery_url)
-        else {
+        let expected_issuer = expected_issuer
+            .map(str::to_owned)
+            .or_else(|| Self::expected_issuer_for_authorization_metadata_url(discovery_url));
+        let Some(expected_issuer) = expected_issuer else {
             return Ok(());
         };
         let Some(received_issuer) = metadata.issuer.as_deref() else {
+            if self.allow_missing_issuer {
+                return Ok(());
+            }
             return Err(AuthError::AuthorizationServerMissingIssuer { expected_issuer });
         };
         if !Self::issuer_identifiers_match(received_issuer, &expected_issuer) {
@@ -2311,18 +2538,54 @@ impl AuthorizationManager {
     async fn discover_oauth_server_via_resource_metadata(
         &self,
     ) -> Result<Option<AuthorizationMetadata>, AuthError> {
-        let Some(resource_metadata_url) = self.discover_resource_metadata_url().await? else {
+        let Some((resource_metadata_url, resource_metadata)) =
+            self.discover_resource_metadata().await?
+        else {
             return Ok(None);
         };
+        self.authorization_metadata_from_resource_metadata(
+            &resource_metadata_url,
+            resource_metadata,
+        )
+        .await
+    }
 
+    /// Read protected resource metadata from the url a `WWW-Authenticate`
+    /// challenge advertised.
+    async fn discover_oauth_server_from_resource_metadata_url(
+        &self,
+        resource_metadata_url: &Url,
+    ) -> Result<Option<AuthorizationMetadata>, AuthError> {
         let Some(resource_metadata) = self
-            .fetch_resource_metadata_from_url(&resource_metadata_url)
+            .fetch_resource_metadata_from_url(
+                resource_metadata_url,
+                ResourceMetadataUrlOrigin::Advertised,
+            )
             .await?
         else {
             return Ok(None);
         };
 
-        self.validate_resource_metadata_resource(&resource_metadata)?;
+        self.authorization_metadata_from_resource_metadata(resource_metadata_url, resource_metadata)
+            .await
+    }
+
+    /// Walk the authorization servers a protected resource metadata document
+    /// names, keeping the first one that answers with usable metadata. A document
+    /// that names servers and none of them answers is an error, not a reason to
+    /// go looking elsewhere; a document that names none returns `Ok(None)`.
+    ///
+    /// The document arrives here through `read_resource_metadata`, which is where
+    /// it is decided to be this resource's metadata at all.
+    async fn authorization_metadata_from_resource_metadata(
+        &self,
+        resource_metadata_url: &Url,
+        resource_metadata: ResourceServerMetadata,
+    ) -> Result<Option<AuthorizationMetadata>, AuthError> {
+        self.discovered_resource
+            .write()
+            .await
+            .replace(resource_metadata.resource.clone().unwrap_or_default());
 
         // store scopes_supported from protected resource metadata for select_scopes()
         if let Some(scopes) = resource_metadata.scopes_supported
@@ -2331,21 +2594,32 @@ impl AuthorizationManager {
             *self.resource_scopes.write().await = scopes;
         }
 
-        let mut candidates = Vec::new();
+        // A server naming the same authorization server in both the singular draft
+        // field and the list would otherwise have each of that server's well-known
+        // forms requested twice.
+        let mut candidates: Vec<String> = Vec::new();
+        let mut push_candidate = |candidate: String| {
+            let candidate = candidate.trim();
+            if !candidate.is_empty() && !candidates.iter().any(|kept| kept == candidate) {
+                candidates.push(candidate.to_string());
+            }
+        };
 
         if let Some(single) = resource_metadata.authorization_server {
-            candidates.push(single);
+            push_candidate(single);
         }
-        if let Some(list) = resource_metadata.authorization_servers {
-            candidates.extend(list);
+        for candidate in resource_metadata.authorization_servers.unwrap_or_default() {
+            push_candidate(candidate);
         }
 
-        for candidate in candidates {
-            let candidate = candidate.trim();
-            if candidate.is_empty() {
-                continue;
-            }
+        if candidates.is_empty() {
+            debug!(
+                "protected resource metadata at {resource_metadata_url} names no authorization server"
+            );
+            return Ok(None);
+        }
 
+        for candidate in &candidates {
             let candidate_url = match Url::parse(candidate) {
                 Ok(url) => url,
                 Err(_) => match resource_metadata_url.join(candidate) {
@@ -2363,18 +2637,31 @@ impl AuthorizationManager {
             }
 
             if candidate_url.path().contains("/.well-known/") {
-                if let Some(metadata) = self.fetch_authorization_metadata(&candidate_url).await? {
+                if let Some(metadata) = self
+                    .fetch_authorization_metadata(&candidate_url, None)
+                    .await?
+                {
                     return Ok(Some(metadata));
                 }
                 continue;
             }
 
-            if let Some(metadata) = self.try_discover_oauth_server(&candidate_url).await? {
+            // Discovery URL construction removes a non-root trailing slash. Keep the issuer
+            // advertised by protected resource metadata for the exact RFC 8414 comparison.
+            if let Some(metadata) = self
+                .try_discover_oauth_server(&candidate_url, Some(candidate_url.as_str()))
+                .await?
+            {
                 return Ok(Some(metadata));
             }
         }
 
-        Ok(None)
+        // Falling back to the base url would send the user somewhere the resource
+        // never named.
+        Err(AuthError::MetadataError(format!(
+            "protected resource metadata at {resource_metadata_url} names authorization servers {}, but none published usable metadata",
+            candidates.join(", ")
+        )))
     }
 
     fn validate_resource_metadata_resource(
@@ -2387,9 +2674,21 @@ impl AuthorizationManager {
             ));
         };
 
-        if !Self::resource_identifiers_match(self.base_url.as_str(), resource) {
+        let Ok(resource_url) = Url::parse(resource) else {
+            return Err(AuthError::MetadataError(
+                "Protected resource metadata resource field is not a valid URL".to_string(),
+            ));
+        };
+
+        if resource_url.fragment().is_some() {
+            return Err(AuthError::MetadataError(
+                "Protected resource metadata resource does not permit fragment in URL as specified by RFC 8707".to_string()
+            ));
+        }
+
+        if !Self::is_resource_identifier_valid(&self.base_url, &resource_url) {
             return Err(AuthError::MetadataError(format!(
-                "Protected resource metadata resource mismatch: expected '{}', got '{}'",
+                "Protected resource metadata resource mismatch: reference '{}', permitted '{}'",
                 self.base_url, resource
             )));
         }
@@ -2397,129 +2696,140 @@ impl AuthorizationManager {
         Ok(())
     }
 
-    fn resource_identifiers_match(expected: &str, actual: &str) -> bool {
-        expected == actual
-            || (Self::is_root_resource_identifier(expected)
-                && actual == expected.trim_end_matches('/'))
-            || (Self::is_root_resource_identifier(actual)
-                && expected == actual.trim_end_matches('/'))
-            || Self::root_resource_identifier_covers_path(actual, expected)
-    }
-
-    fn is_root_resource_identifier(value: &str) -> bool {
-        Url::parse(value)
-            .is_ok_and(|url| url.path() == "/" && url.query().is_none() && url.fragment().is_none())
-    }
-
-    fn root_resource_identifier_covers_path(root_resource: &str, path_resource: &str) -> bool {
-        let Ok(root_resource) = Url::parse(root_resource) else {
-            return false;
-        };
-        let Ok(path_resource) = Url::parse(path_resource) else {
-            return false;
-        };
-
-        root_resource.path() == "/"
-            && root_resource.query().is_none()
-            && root_resource.fragment().is_none()
-            && path_resource.path() != "/"
-            && Self::is_same_origin(&root_resource, &path_resource)
-    }
-
-    async fn discover_resource_metadata_url(&self) -> Result<Option<Url>, AuthError> {
-        if let Ok(Some(resource_metadata_url)) =
-            self.fetch_resource_metadata_url(&self.base_url, true).await
-        {
-            return Ok(Some(resource_metadata_url));
+    fn is_resource_identifier_valid(expected: &Url, actual: &Url) -> bool {
+        if expected == actual {
+            return true;
         }
 
-        // If the primary URL doesn't use WWW-Authenticate, try oauth-protected-resource discovery.
+        if expected.scheme() != actual.scheme()
+            || expected.host_str() != actual.host_str()
+            || expected.port_or_known_default() != actual.port_or_known_default()
+        {
+            return false;
+        }
+
+        let expected_path = expected.path();
+        let actual_path = actual.path();
+
+        // Query parameters may carry transport hints rather than resource identity.
+        if expected_path == actual_path {
+            return true;
+        }
+
+        expected_path.starts_with(actual_path)
+            && (actual_path.ends_with('/')
+                || expected_path.as_bytes().get(actual_path.len()) == Some(&b'/'))
+    }
+
+    /// Look for the protected resource metadata document, reading it where it is
+    /// found so that a candidate answering with something else only costs that
+    /// candidate.
+    async fn discover_resource_metadata(
+        &self,
+    ) -> Result<Option<(Url, ResourceServerMetadata)>, AuthError> {
+        // A url the resource points at can also be one of the candidates below.
+        let mut requested = HashSet::new();
+
+        if let Some(advertised_url) = self.probe_resource_endpoint_for_challenge().await? {
+            requested.insert(advertised_url.clone());
+            if let Some(metadata) = self
+                .fetch_resource_metadata_from_url(
+                    &advertised_url,
+                    ResourceMetadataUrlOrigin::Advertised,
+                )
+                .await?
+            {
+                return Ok(Some((advertised_url, metadata)));
+            }
+            // Nothing was published there. The candidates below are reached from the
+            // base url rather than from that pointer, so they are still worth trying.
+        }
+
+        // The other place the document can be is the well-known location.
         // https://www.rfc-editor.org/rfc/rfc9728.html#name-obtaining-protected-resourc
         for candidate_path in
             Self::well_known_paths(self.base_url.path(), "oauth-protected-resource")
         {
-            let mut discovery_url = self.base_url.clone();
-            discovery_url.set_query(None);
-            discovery_url.set_fragment(None);
-            discovery_url.set_path(&candidate_path);
-            if let Ok(Some(resource_metadata_url)) = self
-                .fetch_resource_metadata_url(&discovery_url, false)
+            let mut candidate_url = self.base_url.clone();
+            candidate_url.set_query(None);
+            candidate_url.set_fragment(None);
+            candidate_url.set_path(&candidate_path);
+
+            if !requested.insert(candidate_url.clone()) {
+                continue;
+            }
+
+            let response = self
+                .discovery_get(&candidate_url)
                 .await
-            {
-                return Ok(Some(resource_metadata_url));
+                .map_err(|error| Self::discovery_failed(&candidate_url, error))?;
+
+            match response.status() {
+                // The candidate url is the document itself, so read the body here
+                // instead of requesting the same url again.
+                StatusCode::OK => {
+                    if let Some(metadata) = self.read_resource_metadata(
+                        &candidate_url,
+                        response.body(),
+                        ResourceMetadataUrlOrigin::WellKnownGuess,
+                    )? {
+                        return Ok(Some((candidate_url, metadata)));
+                    }
+                }
+                StatusCode::UNAUTHORIZED => {
+                    let Some(pointer_url) = self
+                        .extract_resource_metadata_url_from_www_authenticate(&response)
+                        .await
+                    else {
+                        continue;
+                    };
+                    if !requested.insert(pointer_url.clone()) {
+                        continue;
+                    }
+                    // Found on a url this run guessed at, so a wrong answer only rules
+                    // out the pointer.
+                    if let Some(metadata) = self
+                        .fetch_resource_metadata_from_url(
+                            &pointer_url,
+                            ResourceMetadataUrlOrigin::WellKnownGuess,
+                        )
+                        .await?
+                    {
+                        return Ok(Some((pointer_url, metadata)));
+                    }
+                }
+                status => debug!("resource metadata probe returned unexpected status: {status}"),
             }
         }
 
         Ok(None)
     }
 
-    /// Extract the resource metadata url from the WWW-Authenticate header value.
+    /// Probe the resource itself, looking only for a `WWW-Authenticate` challenge
+    /// that carries a `resource_metadata` pointer.
+    ///
+    /// A 200 here says nothing about metadata. RFC 9728 publishes the document at
+    /// the well-known URI and advertises it through the challenge parameter, so the
+    /// resource answering its own GET is not the document and must not end
+    /// discovery before the well-known candidates are tried.
     /// https://www.rfc-editor.org/rfc/rfc9728.html#name-use-of-www-authenticate-for
-    async fn fetch_resource_metadata_url(
-        &self,
-        url: &Url,
-        allow_post_probe: bool,
-    ) -> Result<Option<Url>, AuthError> {
-        let response = match self.discovery_get(url).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("resource metadata probe failed: {}", e);
-                return Ok(None);
-            }
-        };
-
-        match response.status() {
-            StatusCode::OK => Ok(Some(url.clone())),
-            StatusCode::UNAUTHORIZED => Ok(self
-                .extract_resource_metadata_url_from_www_authenticate(&response)
-                .await),
-            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED if allow_post_probe => {
-                self.fetch_resource_metadata_url_with_post_probe(url).await
-            }
-            status => {
-                debug!("resource metadata probe returned unexpected status: {status}");
-                Ok(None)
-            }
-        }
-    }
-
-    async fn fetch_resource_metadata_url_with_post_probe(
-        &self,
-        url: &Url,
-    ) -> Result<Option<Url>, AuthError> {
-        let request = oauth2::http::Request::builder()
-            .method("POST")
-            .uri(url.as_str())
-            .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
-            .header(CONTENT_TYPE, "application/json")
-            .body(RESOURCE_METADATA_POST_PROBE_BODY.as_bytes().to_vec())
-            .map_err(|error| AuthError::InternalError(error.to_string()))?;
-        let response = match self
-            .http_client
-            .execute(OAuthHttpRequest::new(
-                request,
-                OAuthHttpRedirectPolicy::Stop,
-            ))
+    async fn probe_resource_endpoint_for_challenge(&self) -> Result<Option<Url>, AuthError> {
+        let response = self
+            .discovery_get(&self.base_url)
             .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                debug!("resource metadata POST probe failed: {}", error);
-                return Ok(None);
-            }
-        };
+            .map_err(|error| Self::discovery_failed(&self.base_url, error))?;
 
-        if response.status() != StatusCode::UNAUTHORIZED {
-            debug!(
-                "resource metadata POST probe returned unexpected status: {}",
-                response.status()
-            );
-            return Ok(None);
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Ok(self
+                .extract_resource_metadata_url_from_www_authenticate(&response)
+                .await);
         }
 
-        Ok(self
-            .extract_resource_metadata_url_from_www_authenticate(&response)
-            .await)
+        debug!(
+            "resource endpoint probe returned {}, no WWW-Authenticate pointer to follow",
+            response.status()
+        );
+        Ok(None)
     }
 
     async fn extract_resource_metadata_url_from_www_authenticate(
@@ -2532,14 +2842,9 @@ impl AuthorizationManager {
                 continue;
             };
             let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
-            if let Some(url) = params.resource_metadata_url {
-                if let Some(scope) = &params.scope {
-                    debug!("WWW-Authenticate header contains scope: {}", scope);
-                    let scopes: Vec<String> =
-                        scope.split_whitespace().map(|s| s.to_string()).collect();
-                    *self.www_auth_scopes.write().await = scopes;
-                }
-                parsed_url = Some(url);
+            if params.resource_metadata_url.is_some() {
+                self.record_challenge_scope(&params).await;
+                parsed_url = params.resource_metadata_url;
                 break;
             }
         }
@@ -2550,18 +2855,16 @@ impl AuthorizationManager {
     async fn fetch_resource_metadata_from_url(
         &self,
         resource_metadata_url: &Url,
+        origin: ResourceMetadataUrlOrigin,
     ) -> Result<Option<ResourceServerMetadata>, AuthError> {
         debug!(
             "resource metadata discovery url: {:?}",
             resource_metadata_url
         );
-        let response = match self.discovery_get(resource_metadata_url).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("resource metadata request failed: {}", e);
-                return Ok(None);
-            }
-        };
+        let response = self
+            .discovery_get(resource_metadata_url)
+            .await
+            .map_err(|error| Self::discovery_failed(resource_metadata_url, error))?;
 
         if response.status() != StatusCode::OK {
             debug!(
@@ -2571,14 +2874,94 @@ impl AuthorizationManager {
             return Ok(None);
         }
 
-        let metadata = match serde_json::from_slice::<ResourceServerMetadata>(response.body()) {
+        self.read_resource_metadata(resource_metadata_url, response.body(), origin)
+    }
+
+    /// Read a response body as this resource's protected resource metadata.
+    ///
+    /// A body that is not that document rules out the url it came from, and where
+    /// that url came from decides whether ruling it out leaves anything to try.
+    fn read_resource_metadata(
+        &self,
+        resource_metadata_url: &Url,
+        body: &[u8],
+        origin: ResourceMetadataUrlOrigin,
+    ) -> Result<Option<ResourceServerMetadata>, AuthError> {
+        let metadata = match serde_json::from_slice::<ResourceServerMetadata>(body) {
             Ok(metadata) => metadata,
             Err(e) => {
                 debug!("failed to parse resource metadata as JSON: {}", e);
                 return Ok(None);
             }
         };
+
+        // Every field of `ResourceServerMetadata` is optional, so an unrelated JSON
+        // object deserializes into an all-`None` value and then fails validation
+        // fatally. RFC 9728 requires `resource`, and MCP requires an authorization
+        // server reference, so a document carrying neither is not a protected
+        // resource metadata document.
+        if metadata.resource.is_none()
+            && metadata.authorization_server.is_none()
+            && metadata.authorization_servers.is_none()
+        {
+            return match origin {
+                // The server named this url, so there is nothing better to move on
+                // to: the alternatives all drop the resource binding the document
+                // was supposed to carry. Report it instead.
+                ResourceMetadataUrlOrigin::Advertised => Err(AuthError::MetadataError(format!(
+                    "the server advertised {resource_metadata_url} as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
+                ))),
+                // Nothing advertised this url, so its answer only rules out this
+                // candidate.
+                ResourceMetadataUrlOrigin::WellKnownGuess => {
+                    debug!(
+                        "response at {resource_metadata_url} is not a protected resource metadata document"
+                    );
+                    Ok(None)
+                }
+            };
+        }
+
+        // Carrying those fields only makes the body a metadata document; validation
+        // is what makes it this resource's. Both answers rule out the url the same
+        // way, so both are read the same way.
+        if let Err(error) = self.validate_resource_metadata_resource(&metadata) {
+            return match origin {
+                ResourceMetadataUrlOrigin::Advertised => Err(error),
+                ResourceMetadataUrlOrigin::WellKnownGuess => {
+                    debug!(
+                        "document at {resource_metadata_url} is not this resource's metadata: {error}"
+                    );
+                    Ok(None)
+                }
+            };
+        }
+
         Ok(Some(metadata))
+    }
+
+    fn discovery_failed(url: &Url, error: OAuthHttpClientError) -> AuthError {
+        AuthError::MetadataError(format!(
+            "OAuth metadata discovery failed for {url}\n  Caused by: {}",
+            crate::error::ErrorChain(error.as_ref())
+        ))
+    }
+
+    async fn discovery_request(
+        &self,
+        request: OAuthHttpRequest,
+    ) -> Result<HttpResponse, OAuthHttpClientError> {
+        let response = self.http_client.execute(request).await?;
+        let status = response.status();
+        if status.is_server_error()
+            || matches!(
+                status,
+                StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
+            )
+        {
+            return Err(Box::new(OAuthHttpError::UnexpectedStatus(status)));
+        }
+        Ok(response)
     }
 
     async fn discovery_get(&self, url: &Url) -> Result<HttpResponse, OAuthHttpClientError> {
@@ -2589,10 +2972,9 @@ impl AuthorizationManager {
                 .uri(current_url.as_str())
                 .header(HEADER_MCP_PROTOCOL_VERSION, "2024-11-05")
                 .body(Vec::new())
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let response = self
-                .http_client
-                .execute(OAuthHttpRequest::new(
+                .discovery_request(OAuthHttpRequest::new(
                     request,
                     OAuthHttpRedirectPolicy::Stop,
                 ))
@@ -2607,23 +2989,21 @@ impl AuthorizationManager {
             };
             let location = location
                 .to_str()
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
             let next_url = current_url
                 .join(location)
-                .map_err(|error| OAuthHttpClientError::new(error.to_string()))?;
+                .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
 
             if Self::is_http_url(&next_url) && Self::is_same_origin(&current_url, &next_url) {
                 current_url = next_url;
                 continue;
             }
 
-            return Err(OAuthHttpClientError::new(format!(
-                "OAuth discovery redirect to non-same-origin URL rejected: {next_url}"
-            )));
+            return Err(Box::new(OAuthHttpError::CrossOriginRedirect(next_url)));
         }
 
-        Err(OAuthHttpClientError::new(format!(
-            "OAuth discovery exceeded {MAX_OAUTH_DISCOVERY_REDIRECTS} redirects"
+        Err(Box::new(OAuthHttpError::TooManyRedirects(
+            MAX_OAUTH_DISCOVERY_REDIRECTS,
         )))
     }
 
@@ -3156,7 +3536,7 @@ pub struct AuthorizationSession {
 
 impl AuthorizationSession {
     /// Create a new authorization session, selecting a client registration
-    /// mechanism per the [MCP authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration)
+    /// mechanism per the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)
     /// priority order:
     ///
     /// 1. Pre-registered client information
@@ -3415,7 +3795,7 @@ impl OAuthState {
         )
     }
 
-    async fn placeholder(&self) -> Result<Self, AuthError> {
+    async fn placeholder_state(&self) -> Result<Self, AuthError> {
         let (http_client, refresh_redirect_policy) = self.oauth_http_client_config();
         Ok(OAuthState::Unauthorized(
             AuthorizationManager::new_inner(
@@ -3511,7 +3891,7 @@ impl OAuthState {
     /// Start authorization.
     ///
     /// Selects a client registration mechanism from the identity material in
-    /// `request`, following the [MCP authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization/client-registration)
+    /// `request`, following the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration)
     /// priority order:
     ///
     /// 1. Pre-registered client information
@@ -3531,7 +3911,7 @@ impl OAuthState {
         &mut self,
         request: AuthorizationRequest,
     ) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Unauthorized(mut manager) = old else {
             *self = old;
@@ -3540,7 +3920,10 @@ impl OAuthState {
             ));
         };
         debug!("start discovery");
-        let metadata = match manager.resolve_metadata().await {
+        let resolution = manager
+            .resolve_metadata_from_challenge(request.challenge.as_deref())
+            .await;
+        let metadata = match resolution {
             Ok(resolution) => resolution.metadata,
             Err(e) => {
                 *self = OAuthState::Unauthorized(manager);
@@ -3563,7 +3946,7 @@ impl OAuthState {
 
     /// complete authorization
     pub async fn complete_authorization(&mut self) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         if let OAuthState::Session(session) = std::mem::replace(self, placeholder) {
             *self = OAuthState::Authorized(session.auth_manager);
             Ok(())
@@ -3571,9 +3954,9 @@ impl OAuthState {
             Err(AuthError::InternalError("Not in session state".to_string()))
         }
     }
-    /// covert to authorized http client
+    /// convert to authorized http client
     pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         if let OAuthState::Authorized(manager) = std::mem::replace(self, placeholder) {
             *self = OAuthState::AuthorizedHttpClient(AuthorizedHttpClient::new(
                 Arc::new(manager),
@@ -3593,7 +3976,7 @@ impl OAuthState {
         required_scope: &str,
         redirect_uri: &str,
     ) -> Result<String, AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let old = std::mem::replace(self, placeholder);
         let OAuthState::Authorized(manager) = old else {
             *self = old;
@@ -3725,7 +4108,7 @@ impl OAuthState {
         &mut self,
         config: ClientCredentialsConfig,
     ) -> Result<(), AuthError> {
-        let placeholder = self.placeholder().await?;
+        let placeholder = self.placeholder_state().await?;
         let OAuthState::Unauthorized(mut manager) = std::mem::replace(self, placeholder) else {
             return Err(AuthError::InternalError(
                 "Client credentials flow requires Unauthorized state".to_string(),
@@ -3757,16 +4140,19 @@ mod tests {
         sync::{Arc, Mutex as StdMutex},
     };
 
-    use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier};
+    use oauth2::{AuthType, CsrfToken, HttpResponse, PkceCodeVerifier, TokenResponse};
+    use reqwest::StatusCode;
     use rstest::rstest;
+    use tokio::sync::{Mutex, OwnedMutexGuard, Semaphore};
     use url::Url;
 
     use super::{
         AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
-        AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession, CredentialStore,
-        InMemoryCredentialStore, InMemoryStateStore, OAuthClientConfig, OAuthHttpClient,
-        OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest,
-        ScopeUpgradeConfig, StateStore, StoredAuthorizationState, is_https_url,
+        AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession,
+        CredentialRefreshGuard, CredentialStore, InMemoryCredentialStore, InMemoryStateStore,
+        OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
+        OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig, StateStore,
+        StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -3806,9 +4192,7 @@ mod tests {
                 body: request.request.body().clone(),
             });
             let response = self.responses.lock().unwrap().pop_front();
-            Box::pin(async move {
-                response.ok_or_else(|| OAuthHttpClientError::new("missing fake response"))
-            })
+            Box::pin(async move { response.ok_or_else(|| "missing fake response".into()) })
         }
     }
 
@@ -3834,6 +4218,219 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn oauth_http_client_error_preserves_source_chain() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("request failed")]
+        struct RequestError(#[source] std::io::Error);
+
+        let error: OAuthHttpClientError = RequestError(std::io::Error::other(
+            "certificate signed by unknown authority",
+        ))
+        .into();
+        assert!(error.downcast_ref::<RequestError>().is_some());
+
+        let url = Url::parse("https://mcp.example.com/mcp").unwrap();
+        let error = AuthorizationManager::discovery_failed(&url, error);
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: OAuth metadata discovery failed for https://mcp.example.com/mcp\n  Caused by: request failed\n  Caused by: certificate signed by unknown authority"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_oauth_http_client_honors_redirect_policy() {
+        use axum::{Router, routing::post};
+
+        let received = Arc::new(StdMutex::new(Vec::new()));
+        let capture = Arc::clone(&received);
+        let app = Router::new()
+            .route(
+                "/redirect",
+                post(|| async { (StatusCode::TEMPORARY_REDIRECT, [("location", "/token")]) }),
+            )
+            .route(
+                "/token",
+                post(move |body: String| {
+                    let capture = Arc::clone(&capture);
+                    async move {
+                        capture.lock().unwrap().push(body);
+                        StatusCode::OK
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/redirect", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = super::default_oauth_http_client().unwrap();
+
+        for (policy, expected) in [
+            (
+                OAuthHttpRedirectPolicy::Stop,
+                StatusCode::TEMPORARY_REDIRECT,
+            ),
+            (OAuthHttpRedirectPolicy::Follow, StatusCode::OK),
+        ] {
+            let request = oauth2::http::Request::builder()
+                .method("POST")
+                .uri(&endpoint)
+                .body(b"credential-sentinel".to_vec())
+                .unwrap();
+            let response = client
+                .execute(OAuthHttpRequest::new(request, policy))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            let expected_bodies = if policy == OAuthHttpRedirectPolicy::Stop {
+                vec![]
+            } else {
+                vec!["credential-sentinel".to_owned()]
+            };
+            assert_eq!(*received.lock().unwrap(), expected_bodies);
+        }
+    }
+
+    #[tokio::test]
+    async fn default_http_client_preserves_connection_failure_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        drop(listener);
+
+        let manager = AuthorizationManager::new(&url).await.unwrap();
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains(&url)
+                        && reason.contains("\n  Caused by: error sending request for url")
+                        && reason.matches("error sending request for url").count() == 1
+                        && reason.to_ascii_lowercase().contains("connection refused")
+            ),
+            "unexpected discovery error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorization_metadata_propagates_transport_failure() {
+        let responses = preregistered_discovery_responses()
+            .into_iter()
+            .take(2)
+            .collect();
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains("https://auth.example.com/.well-known/oauth-authorization-server")
+                        && reason.contains("missing fake response")
+            ),
+            "unexpected discovery error: {error}"
+        );
+        assert_eq!(client.requests().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn discovery_propagates_server_errors() {
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(vec![
+                empty_response(503),
+            ])),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains("https://mcp.example.com/mcp") && reason.contains("503")
+            ),
+            "unexpected discovery error: {error}"
+        );
+    }
+
+    #[rstest]
+    #[case::resource_request_timeout(StatusCode::REQUEST_TIMEOUT, 0, "https://mcp.example.com/mcp")]
+    #[case::resource_too_early(StatusCode::TOO_EARLY, 0, "https://mcp.example.com/mcp")]
+    #[case::resource_too_many_requests(
+        StatusCode::TOO_MANY_REQUESTS,
+        0,
+        "https://mcp.example.com/mcp"
+    )]
+    #[case::protected_metadata_request_timeout(
+        StatusCode::REQUEST_TIMEOUT,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::protected_metadata_too_early(
+        StatusCode::TOO_EARLY,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::protected_metadata_too_many_requests(
+        StatusCode::TOO_MANY_REQUESTS,
+        1,
+        "https://mcp.example.com/.well-known/oauth-protected-resource"
+    )]
+    #[case::authorization_request_timeout(
+        StatusCode::REQUEST_TIMEOUT,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[case::authorization_too_early(
+        StatusCode::TOO_EARLY,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[case::authorization_too_many_requests(
+        StatusCode::TOO_MANY_REQUESTS,
+        2,
+        "https://auth.example.com/.well-known/oauth-authorization-server"
+    )]
+    #[tokio::test]
+    async fn discovery_propagates_transient_client_errors(
+        #[case] status: StatusCode,
+        #[case] successful_response_count: usize,
+        #[case] expected_url: &str,
+    ) {
+        let mut responses = preregistered_discovery_responses();
+        responses.insert(successful_response_count, empty_response(status.as_u16()));
+
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                AuthError::MetadataError(ref reason)
+                    if reason.contains(expected_url) && reason.contains(status.as_str())
+            ),
+            "unexpected discovery error for {status}: {error}"
+        );
+        assert_eq!(client.requests().len(), successful_response_count + 1);
+    }
+
     #[tokio::test]
     async fn custom_http_client_handles_protected_resource_discovery() {
         let challenge = oauth2::http::Response::builder()
@@ -3849,7 +4446,7 @@ mod tests {
             http_response(
                 200,
                 serde_json::json!({
-                    "resource": "https://mcp.example.com/mcp",
+                    "resource": "https://mcp.example.com",
                     "authorization_servers": ["https://auth.example.com"]
                 }),
             ),
@@ -3872,6 +4469,10 @@ mod tests {
         let metadata = manager.resolve_metadata().await.unwrap().metadata;
 
         assert_eq!(metadata.token_endpoint, "https://auth.example.com/token");
+        assert_eq!(
+            manager.discovered_resource.read().await.as_deref(),
+            Some("https://mcp.example.com")
+        );
         assert_eq!(
             client.requests(),
             vec![
@@ -3899,16 +4500,113 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protected_resource_metadata_supports_authorization_server_path_insertion() {
+    async fn refresh_token_uses_discovered_protected_resource() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(401),
+            challenge,
             http_response(
                 200,
                 serde_json::json!({
-                    "resource": "https://mcp.example.com/",
-                    "authorization_servers": ["https://auth.example.com/tenant1"]
+                    "resource": "https://mcp.example.com",
+                    "authorization_servers": ["https://auth.example.com"]
                 }),
             ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token",
+                    "response_types_supported": ["code"],
+                    "code_challenge_methods_supported": ["S256"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "access_token": "initial-access-token",
+                    "token_type": "bearer",
+                    "refresh_token": "initial-refresh-token",
+                    "expires_in": 3600
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "access_token": "refreshed-access-token",
+                    "token_type": "bearer",
+                    "refresh_token": "refreshed-refresh-token",
+                    "expires_in": 3600
+                }),
+            ),
+        ]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let authorization_url = manager.get_authorization_url(&[]).await.unwrap();
+        let authorization_params: HashMap<String, String> = Url::parse(&authorization_url)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+        let state = authorization_params.get("state").unwrap();
+
+        manager
+            .exchange_code_for_token("authorization-code", state)
+            .await
+            .unwrap();
+        manager.refresh_token().await.unwrap();
+
+        let token_requests: Vec<HashMap<String, String>> = client
+            .requests()
+            .into_iter()
+            .filter(|request| request.uri == "https://auth.example.com/token")
+            .map(|request| {
+                url::form_urlencoded::parse(&request.body)
+                    .into_owned()
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(token_requests.len(), 2);
+        assert_eq!(
+            token_requests[0].get("grant_type").map(String::as_str),
+            Some("authorization_code")
+        );
+        assert_eq!(
+            token_requests[1].get("grant_type").map(String::as_str),
+            Some("refresh_token")
+        );
+        assert_eq!(
+            [
+                authorization_params.get("resource").map(String::as_str),
+                token_requests[0].get("resource").map(String::as_str),
+                token_requests[1].get("resource").map(String::as_str),
+            ],
+            [Some("https://mcp.example.com"); 3],
+            "authorization, code exchange, and refresh must use the discovered resource audience"
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_supports_authorization_server_path_insertion() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
             http_response(
                 200,
                 serde_json::json!({
@@ -3950,9 +4648,49 @@ mod tests {
                 vec![
                     "https://mcp.example.com/",
                     "https://mcp.example.com/.well-known/oauth-protected-resource",
-                    "https://mcp.example.com/.well-known/oauth-protected-resource",
                     "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
                 ],
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_preserves_non_root_issuer_trailing_slash() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com/tenant1/"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com/tenant1/",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
+
+        assert_eq!(
+            (
+                metadata.issuer.as_deref(),
+                client.requests().last().map(|request| request.uri.as_str()),
+            ),
+            (
+                Some("https://auth.example.com/tenant1/"),
+                Some("https://auth.example.com/.well-known/oauth-authorization-server/tenant1"),
             )
         );
     }
@@ -4006,8 +4744,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn authorization_metadata_accepts_oidc_path_appended_issuer() {
+    #[tokio::test]
+    async fn authorization_metadata_accepts_oidc_path_appended_issuer() {
         let discovery_url =
             Url::parse("https://auth.example.com/tenant1/.well-known/openid-configuration")
                 .unwrap();
@@ -4017,8 +4755,12 @@ mod tests {
             token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
             ..Default::default()
         };
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
 
-        AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+        manager
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
             .unwrap();
     }
 
@@ -4034,8 +4776,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn authorization_metadata_accepts_oidc_path_inserted_issuer() {
+    #[tokio::test]
+    async fn authorization_metadata_accepts_oidc_path_inserted_issuer() {
         let discovery_url =
             Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
                 .unwrap();
@@ -4045,13 +4787,17 @@ mod tests {
             token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
             ..Default::default()
         };
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
 
-        AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
+        manager
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
             .unwrap();
     }
 
-    #[test]
-    fn authorization_metadata_rejects_missing_issuer_for_standard_discovery_url() {
+    #[tokio::test]
+    async fn authorization_metadata_allows_missing_issuer_when_configured() {
         let discovery_url =
             Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
                 .unwrap();
@@ -4062,9 +4808,34 @@ mod tests {
             ..Default::default()
         };
 
-        let error =
-            AuthorizationManager::validate_authorization_metadata_issuer(&discovery_url, &metadata)
-                .unwrap_err();
+        let mut manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
+        manager.set_allow_missing_issuer(true);
+
+        manager
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn authorization_metadata_rejects_missing_issuer_by_default() {
+        let discovery_url =
+            Url::parse("https://auth.example.com/.well-known/openid-configuration/tenant1")
+                .unwrap();
+        let metadata = AuthorizationMetadata {
+            issuer: None,
+            authorization_endpoint: "https://auth.example.com/tenant1/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/tenant1/token".to_string(),
+            ..Default::default()
+        };
+        let manager = AuthorizationManager::new("https://mcp.example.com/")
+            .await
+            .unwrap();
+
+        let error = manager
+            .validate_authorization_metadata_issuer(&discovery_url, None, &metadata)
+            .unwrap_err();
 
         assert!(
             matches!(
@@ -4087,7 +4858,6 @@ mod tests {
             .body(Vec::new())
             .unwrap();
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(404),
             challenge,
             http_response(
                 200,
@@ -4129,7 +4899,6 @@ mod tests {
                 "https://auth.example.com/tenant1/token",
                 vec![
                     "https://mcp.example.com/mcp",
-                    "https://mcp.example.com/mcp",
                     "https://mcp.example.com/custom/metadata/location.json",
                     "https://auth.example.com/.well-known/oauth-authorization-server/tenant1",
                     "https://auth.example.com/.well-known/openid-configuration/tenant1",
@@ -4137,25 +4906,27 @@ mod tests {
                 ],
             )
         );
-        assert_eq!(
+        assert!(
             client
                 .requests()
                 .iter()
-                .take(2)
-                .map(|request| request.method.as_str())
-                .collect::<Vec<_>>(),
-            vec!["GET", "POST"]
+                .all(|request| request.method == "GET"),
+            "discovery must not send non-GET requests"
         );
     }
 
+    #[rstest]
+    #[case::not_found(StatusCode::NOT_FOUND)]
+    #[case::method_not_allowed(StatusCode::METHOD_NOT_ALLOWED)]
     #[tokio::test]
-    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered() {
+    async fn resolve_metadata_reports_legacy_fallback_when_nothing_is_discovered(
+        #[case] status: StatusCode,
+    ) {
         let client = RecordingOAuthHttpClient::with_responses(vec![
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
-            empty_response(404),
+            empty_response(status.as_u16()),
+            empty_response(status.as_u16()),
+            empty_response(status.as_u16()),
+            empty_response(status.as_u16()),
         ]);
         let manager = AuthorizationManager::new_with_oauth_http_client(
             "https://legacy.example.com/",
@@ -4184,7 +4955,6 @@ mod tests {
                 "https://legacy.example.com/token",
                 Some("https://legacy.example.com/register"),
                 vec![
-                    "https://legacy.example.com/",
                     "https://legacy.example.com/",
                     "https://legacy.example.com/.well-known/oauth-protected-resource",
                     "https://legacy.example.com/.well-known/oauth-authorization-server",
@@ -4244,6 +5014,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_metadata_from_challenge_uses_challenge_pointer_and_scope() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(
+                r#"Bearer resource_metadata="https://mcp.example.com/custom/prm.json", scope="mcp:read mcp:write""#,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+                manager.select_scopes(None, &[]),
+                client.requests().first().map(|request| request.uri.clone()),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+                vec!["mcp:read".to_string(), "mcp:write".to_string()],
+                // discovery starts at the challenge's pointer: no probing
+                Some("https://mcp.example.com/custom/prm.json".to_string()),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_from_challenge_falls_back_without_metadata_pointer() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+            empty_response(404),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://legacy.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(r#"Bearer scope="mcp:basic""#))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (resolution.source, manager.select_scopes(None, &[]),),
+            (
+                AuthorizationMetadataSource::LegacyEndpointFallback,
+                vec!["mcp:basic".to_string()],
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_metadata_reports_authorization_server_metadata() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             empty_response(404),
@@ -4276,6 +5125,579 @@ mod tests {
                 AuthorizationMetadataSource::AuthorizationServerMetadata,
                 "https://mcp.example.com/oauth/token",
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_reaches_the_well_known_document_past_a_non_metadata_base_url() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the well-known candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        assert!(
+            recorder.requests().iter().any(|request| {
+                request.uri == "https://mcp.example.com/.well-known/oauth-protected-resource"
+            }),
+            "the well-known candidate was never probed: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_ignores_a_well_known_url_that_is_not_a_metadata_document() {
+        let health = || {
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            )
+        };
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            health(),
+            // so does the well-known candidate
+            health(),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://mcp.example.com",
+                    "authorization_endpoint": "https://mcp.example.com/oauth/authorize",
+                    "token_endpoint": "https://mcp.example.com/oauth/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::AuthorizationServerMetadata,
+                "https://mcp.example.com/oauth/token",
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_well_known_candidate_past_a_non_metadata_document() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // so does the first well-known candidate
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        let document_requests = recorder
+            .requests()
+            .iter()
+            .filter(|request| {
+                request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
+            })
+            .count();
+        assert_eq!(
+            document_requests,
+            1,
+            "the candidate holding the document should be requested exactly once: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_from_challenge_reports_an_advertised_url_without_metadata() {
+        let mut responses = vec![http_response(200, serde_json::json!({}))];
+        // enough responses for the fallback to reach the legacy endpoints, so that
+        // treating the document as a soft failure would resolve rather than error
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(8));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let error = manager
+            .resolve_metadata_from_challenge(Some(
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            ))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: the server advertised https://mcp.example.com/.well-known/oauth-protected-resource as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_well_known_candidate_past_an_unusable_document() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // a catch-all handler answers the first candidate with its own error
+            // shape, which carries a `resource` that only validation rejects
+            http_response(
+                200,
+                serde_json::json!({
+                    "error": "not_found",
+                    "resource": "/.well-known/oauth-protected-resource"
+                }),
+            ),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        assert!(
+            recorder.requests().iter().any(|request| {
+                request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
+            }),
+            "the candidate after the rejected one was never probed: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_probes_the_candidates_past_an_advertised_url_that_is_not_served() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/prm""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge,
+            // the advertised url is not where the document is served
+            empty_response(404),
+            // neither is the first candidate
+            empty_response(404),
+            // the second candidate carries the document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        assert!(
+            recorder.requests().iter().any(|request| {
+                request.uri == "https://mcp.example.com/mcp/.well-known/oauth-protected-resource"
+            }),
+            "the candidates were skipped after the advertised url answered 404: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_requests_an_advertised_url_that_is_also_a_candidate_once() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the first candidate points at the last candidate of the same run
+            challenge,
+        ];
+        // the document is served nowhere, so the run walks every candidate and
+        // settles on the legacy endpoints
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            resolution.source,
+            AuthorizationMetadataSource::LegacyEndpointFallback
+        );
+        let advertised_requests = recorder
+            .requests()
+            .iter()
+            .filter(|request| {
+                request.uri == "https://mcp.example.com/.well-known/oauth-protected-resource"
+            })
+            .count();
+        assert_eq!(
+            advertised_requests,
+            1,
+            "the url the challenge named was requested again as a candidate: {:?}",
+            recorder.requests()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_requests_an_authorization_server_named_twice_once() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document names the same authorization server in both the singular
+            // draft field and the list
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_server": "https://auth.example.com",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+        ];
+        // the authorization server publishes no metadata; more 404s than the walk
+        // can use, so that requesting it twice would show up in the sequence
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        manager.resolve_metadata().await.unwrap_err();
+
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/",
+                "https://mcp.example.com/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+                "https://auth.example.com/.well-known/openid-configuration",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_reports_named_authorization_servers_that_publish_no_metadata() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document names two authorization servers
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com", "https://sso.example.com"]
+                }),
+            ),
+        ];
+        // neither publishes metadata; the surplus 404s would let the run reach the
+        // resource host's own well-known urls and the legacy endpoints if it kept going
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource names authorization servers https://auth.example.com, https://sso.example.com, but none published usable metadata"
+        );
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/",
+                "https://mcp.example.com/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+                "https://auth.example.com/.well-known/openid-configuration",
+                "https://sso.example.com/.well-known/oauth-authorization-server",
+                "https://sso.example.com/.well-known/openid-configuration",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_keeps_falling_back_when_the_document_names_no_authorization_server() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document says nothing about where to authorize
+            http_response(
+                200,
+                serde_json::json!({"resource": "https://mcp.example.com/"}),
+            ),
+        ];
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            resolution.source,
+            AuthorizationMetadataSource::LegacyEndpointFallback
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_candidate_past_a_pointer_found_while_guessing() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/prm""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // auth sits in front of the first candidate and its challenge names a url
+            challenge,
+            // which serves something that is not the document
+            http_response(200, serde_json::json!({})),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/mcp",
+                "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+                "https://mcp.example.com/prm",
+                "https://mcp.example.com/mcp/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+            ]
         );
     }
 
@@ -4371,6 +5793,32 @@ mod tests {
         let query = auth_url_query(&auth_url);
         assert_eq!(query.get("client_id").unwrap(), "preregistered-client");
         assert!(matches!(state, super::OAuthState::Session(_)));
+    }
+
+    #[tokio::test]
+    async fn preregistered_client_uses_metadata_resource_when_server_url_has_query() {
+        let client = RecordingOAuthHttpClient::with_responses(preregistered_discovery_responses());
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp?oauth=initialize",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_preregistered_client("preregistered-client");
+        state.start_authorization(request).await.unwrap();
+
+        let auth_url = state.get_authorization_url().await.unwrap();
+        let query = auth_url_query(&auth_url);
+        assert_eq!(
+            query.get("resource").map(String::as_str),
+            Some("https://mcp.example.com/mcp")
+        );
+        assert_eq!(
+            client.requests()[0].uri,
+            "https://mcp.example.com/mcp?oauth=initialize"
+        );
     }
 
     #[tokio::test]
@@ -4988,35 +6436,71 @@ mod tests {
     }
 
     #[test]
-    fn resource_identifier_matching_allows_only_root_trailing_slash_difference() {
-        assert!(AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/",
-            "https://mcp.example.com"
+    fn resource_identifier_matching_allows_matching_host_or_parent_path() {
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/").unwrap(),
+            &Url::parse("https://mcp.example.com").unwrap()
         ));
-        assert!(AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com",
-            "https://mcp.example.com/"
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com").unwrap(),
+            &Url::parse("https://mcp.example.com/").unwrap()
         ));
-        assert!(AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://mcp.example.com"
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp/tools").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?query=param").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=param").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?oauth=initialize").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value2").unwrap()
+        ));
+        assert!(AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp/tools?oauth=initialize").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
         ));
 
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://mcp.example.com/mcp/"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp/").unwrap()
         ));
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://real.example.com/mcp"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp-tools").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp").unwrap()
         ));
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://real.example.com"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp-tools").unwrap()
         ));
-        assert!(!AuthorizationManager::resource_identifiers_match(
-            "https://mcp.example.com/mcp",
-            "https://mcp.example.com?resource=mcp"
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp/tools").unwrap()
+        ));
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp").unwrap(),
+            &Url::parse("https://real.example.com/mcp").unwrap()
+        ));
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp-tools?oauth=initialize").unwrap(),
+            &Url::parse("https://mcp.example.com/mcp?query=value1").unwrap()
+        ));
+        assert!(!AuthorizationManager::is_resource_identifier_valid(
+            &Url::parse("https://mcp.example.com/mcp?oauth=initialize").unwrap(),
+            &Url::parse("https://real.example.com/mcp?oauth=initialize").unwrap()
         ));
     }
 
@@ -5976,6 +7460,64 @@ mod tests {
         assert!(scope.contains("write"));
     }
 
+    #[tokio::test]
+    async fn authorization_url_uses_discovered_resource() {
+        let base_url = "https://mcp.example.com/mcp";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+        *manager.discovered_resource.write().await = Some("https://mcp.example.com".to_string());
+
+        let auth_url = manager.get_authorization_url(&["read"]).await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        assert_eq!(
+            params.get("resource").map(|v| v.as_ref()),
+            Some("https://mcp.example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn authorization_url_uses_default_resource_without_protected_resource_document() {
+        let base_url = "https://mcp.example.com/mcp";
+        let auth_endpoint = "https://auth.example.com/authorize";
+        let mut manager = AuthorizationManager::new(base_url).await.unwrap();
+
+        let metadata = AuthorizationMetadata {
+            authorization_endpoint: auth_endpoint.to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: None,
+            issuer: None,
+            jwks_uri: None,
+            scopes_supported: None,
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            additional_fields: std::collections::HashMap::new(),
+        };
+        manager.set_metadata(metadata);
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let auth_url = manager.get_authorization_url(&["read"]).await.unwrap();
+        let parsed = Url::parse(&auth_url).unwrap();
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+
+        assert_eq!(params.get("resource").map(|v| v.as_ref()), Some(base_url));
+    }
+
     #[test]
     fn authorization_callback_parses_optional_issuer() {
         let callback = AuthorizationCallback::from_redirect_url(
@@ -6144,6 +7686,75 @@ mod tests {
             stored_state.expected_issuer.as_deref(),
             Some("https://auth.example.com")
         );
+    }
+
+    #[rstest]
+    #[case::missing_required_issuer(None)]
+    #[case::mismatched_issuer(Some("https://evil.example.com"))]
+    #[tokio::test]
+    async fn invalid_issuer_does_not_consume_authorization_state(
+        #[case] invalid_issuer: Option<&str>,
+    ) {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            200,
+            serde_json::json!({
+                "access_token": "access-token",
+                "token_type": "bearer",
+                "expires_in": 3600
+            }),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            issuer: Some("https://auth.example.com".to_string()),
+            ..Default::default()
+        });
+        manager.configure_client_id("test-client-id").unwrap();
+
+        let pkce = PkceCodeVerifier::new("verifier".to_string());
+        let csrf = CsrfToken::new("csrf".to_string());
+        let state = StoredAuthorizationState::new_with_expected_issuer(
+            &pkce,
+            &csrf,
+            Some("https://auth.example.com".to_string()),
+            true,
+        );
+        manager.state_store.save("csrf", state).await.unwrap();
+
+        manager
+            .exchange_code_for_token_with_issuer("forged-code", "csrf", invalid_issuer)
+            .await
+            .unwrap_err();
+
+        assert!(
+            manager.state_store.load("csrf").await.unwrap().is_some(),
+            "issuer validation failures must leave state available for the legitimate callback"
+        );
+        assert!(
+            client.requests().is_empty(),
+            "issuer validation failures must not reach the token endpoint"
+        );
+
+        manager
+            .exchange_code_for_token_with_issuer(
+                "legitimate-code",
+                "csrf",
+                Some("https://auth.example.com"),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            manager.state_store.load("csrf").await.unwrap().is_none(),
+            "a valid callback must consume its one-time authorization state"
+        );
+        assert_eq!(client.requests().len(), 1);
     }
 
     // -- scope management --
@@ -6772,6 +8383,40 @@ mod tests {
         mgr.configure_client_credentials(&config).unwrap();
         let oauth_client = mgr.oauth_client.as_ref().unwrap();
         assert!(matches!(oauth_client.auth_type(), AuthType::RequestBody));
+    }
+
+    #[test]
+    fn client_secret_credentials_debug_redacts_secret() {
+        let config = super::ClientCredentialsConfig::ClientSecret {
+            client_id: "client-id".to_string(),
+            client_secret: "client-secret-value".to_string(),
+            scopes: vec![],
+            resource: None,
+        };
+
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains("client-secret-value"), "{rendered}");
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[test]
+    fn private_key_jwt_credentials_debug_redacts_signing_key() {
+        let config = super::ClientCredentialsConfig::PrivateKeyJwt {
+            client_id: "client-id".to_string(),
+            signing_key: b"private-signing-key-value".to_vec(),
+            signing_algorithm: super::JwtSigningAlgorithm::RS256,
+            token_endpoint_audience: None,
+            scopes: vec![],
+            resource: None,
+        };
+
+        let rendered = format!("{config:?}");
+
+        assert!(
+            !rendered.contains("private-signing-key-value"),
+            "{rendered}"
+        );
     }
 
     #[tokio::test]
@@ -7544,5 +9189,350 @@ mod tests {
             Some("rotated-refresh-token"),
             "a rotated refresh token from the response should replace the old one"
         );
+    }
+
+    #[derive(Clone)]
+    struct RefreshStore {
+        credentials: InMemoryCredentialStore,
+        lock: Arc<Mutex<()>>,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+        guard_requested: Arc<Semaphore>,
+        save_started: Arc<Semaphore>,
+        save_gate: Option<Arc<Semaphore>>,
+        fail_at: Option<&'static str>,
+    }
+
+    struct ObservedRefreshGuard {
+        _lock: OwnedMutexGuard<()>,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+    }
+
+    impl Drop for ObservedRefreshGuard {
+        fn drop(&mut self) {
+            self.events.lock().unwrap().push("release");
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CredentialStore for RefreshStore {
+        async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+            self.events.lock().unwrap().push("load");
+            if self.fail_at == Some("load") {
+                return Err(AuthError::CredentialStoreError("load failed".into()));
+            }
+            self.credentials.load().await
+        }
+
+        async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
+            self.events.lock().unwrap().push("save");
+            self.save_started.add_permits(1);
+            if let Some(gate) = &self.save_gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            if self.fail_at == Some("save") {
+                return Err(AuthError::CredentialStoreError("save failed".into()));
+            }
+            self.credentials.save(credentials).await?;
+            self.events.lock().unwrap().push("saved");
+            Ok(())
+        }
+
+        async fn clear(&self) -> Result<(), AuthError> {
+            self.credentials.clear().await
+        }
+
+        async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
+            self.events.lock().unwrap().push("acquire");
+            self.guard_requested.add_permits(1);
+            if self.fail_at == Some("guard") {
+                return Err(AuthError::CredentialStoreError("guard failed".into()));
+            }
+            let lock = self.lock.clone().lock_owned().await;
+            self.events.lock().unwrap().push("acquired");
+            Ok(Some(CredentialRefreshGuard::new(ObservedRefreshGuard {
+                _lock: lock,
+                events: self.events.clone(),
+            })))
+        }
+    }
+
+    async fn refresh_store() -> RefreshStore {
+        let credentials = StoredCredentials::new(
+            "my-client".into(),
+            Some(make_token_response_with_refresh("old-token", "old-refresh")),
+            vec!["read".into()],
+            Some(AuthorizationManager::now_epoch_secs()),
+        );
+        let credential_store = InMemoryCredentialStore::new();
+        credential_store.save(credentials).await.unwrap();
+        RefreshStore {
+            credentials: credential_store,
+            lock: Arc::new(Mutex::new(())),
+            events: Arc::new(StdMutex::new(Vec::new())),
+            guard_requested: Arc::new(Semaphore::new(0)),
+            save_started: Arc::new(Semaphore::new(0)),
+            save_gate: None,
+            fail_at: None,
+        }
+    }
+
+    struct RefreshHttpClient {
+        recording: RecordingOAuthHttpClient,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+    }
+
+    impl OAuthHttpClient for RefreshHttpClient {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            self.events.lock().unwrap().push("provider");
+            self.recording.execute(request)
+        }
+    }
+
+    fn refresh_http_client(store: &RefreshStore) -> Arc<RefreshHttpClient> {
+        Arc::new(RefreshHttpClient {
+            recording: RecordingOAuthHttpClient::with_responses(
+                [
+                    ("new-token", "new-refresh"),
+                    ("latest-token", "latest-refresh"),
+                ]
+                .into_iter()
+                .map(|(access, refresh)| {
+                    http_response(
+                        200,
+                        serde_json::json!({
+                            "access_token": access, "token_type": "Bearer",
+                            "expires_in": 3600, "refresh_token": refresh
+                        }),
+                    )
+                })
+                .collect(),
+            ),
+            events: store.events.clone(),
+        })
+    }
+
+    async fn refresh_manager(
+        store: RefreshStore,
+        http_client: Arc<RefreshHttpClient>,
+    ) -> AuthorizationManager {
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            http_client,
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: "https://auth.example.com/token".into(),
+            ..Default::default()
+        });
+        manager.configure_client(test_client_config()).unwrap();
+        manager.set_credential_store(store);
+        *manager.current_scopes.write().await = vec!["cached".into()];
+        manager
+    }
+
+    async fn wait_for_permits(semaphore: &Semaphore, count: u32) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            semaphore.acquire_many(count),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    }
+
+    #[tokio::test]
+    async fn refresh_guard_spans_load_exchange_and_completed_save() {
+        let store = refresh_store().await;
+        let manager = refresh_manager(store.clone(), refresh_http_client(&store)).await;
+
+        manager.refresh_token().await.unwrap();
+
+        assert_eq!(
+            *store.events.lock().unwrap(),
+            [
+                "acquire", "acquired", "load", "provider", "save", "saved", "release"
+            ]
+        );
+        let saved = store.credentials.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved
+                .token_response
+                .unwrap()
+                .refresh_token()
+                .unwrap()
+                .secret(),
+            "new-refresh"
+        );
+        assert_eq!(saved.granted_scopes, ["read"]);
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_wait_for_save_and_use_the_latest_token() {
+        let mut store = refresh_store().await;
+        let save_gate = Arc::new(Semaphore::new(0));
+        store.save_gate = Some(save_gate.clone());
+        let http_client = refresh_http_client(&store);
+        let first_manager = refresh_manager(store.clone(), http_client.clone()).await;
+        let second_manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        let first = tokio::spawn(async move { first_manager.refresh_token().await });
+        wait_for_permits(&store.save_started, 1).await;
+        let second = tokio::spawn(async move { second_manager.refresh_token().await });
+        wait_for_permits(&store.guard_requested, 2).await;
+        assert_eq!(http_client.recording.requests().len(), 1);
+        assert!(store.lock.try_lock().is_err());
+
+        save_gate.add_permits(2);
+        let (first, second) = tokio::join!(first, second);
+        assert_eq!(first.unwrap().unwrap().access_token().secret(), "new-token");
+        assert_eq!(
+            second.unwrap().unwrap().access_token().secret(),
+            "latest-token"
+        );
+        let refresh_tokens: Vec<String> = http_client
+            .recording
+            .requests()
+            .iter()
+            .map(|request| {
+                url::form_urlencoded::parse(&request.body)
+                    .find_map(|(key, value)| (key == "refresh_token").then(|| value.into_owned()))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(refresh_tokens, ["old-refresh", "new-refresh"]);
+        let saved = store.credentials.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved
+                .token_response
+                .unwrap()
+                .refresh_token()
+                .unwrap()
+                .secret(),
+            "latest-refresh"
+        );
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_credentials_for_another_client() {
+        let store = refresh_store().await;
+        let mut credentials = store.credentials.load().await.unwrap().unwrap();
+        credentials.client_id = "other-client".into();
+        store.credentials.save(credentials).await.unwrap();
+        let http_client = refresh_http_client(&store);
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        assert!(matches!(
+            manager.refresh_token().await,
+            Err(AuthError::AuthorizationRequired)
+        ));
+        assert!(http_client.recording.requests().is_empty());
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_credentials_for_another_client_without_a_guard() {
+        let (base_url, captured) = start_token_server().await;
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{base_url}/authorize"),
+            token_endpoint: format!("{base_url}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials::new(
+                "other-client".into(),
+                Some(make_token_response_with_refresh("old-token", "old-refresh")),
+                vec!["read".into()],
+                Some(AuthorizationManager::now_epoch_secs()),
+            ))
+            .await
+            .unwrap();
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(
+            matches!(error, AuthError::AuthorizationRequired),
+            "a client mismatch must require reauthorization, got: {error:?}"
+        );
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "a client mismatch must be caught before the refresh token leaves the process"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_without_a_guard_keeps_stored_scopes_when_response_omits_them() {
+        // start_token_server answers without a `scope`, matching a provider that
+        // grants the request in full.
+        let (base_url, _captured) = start_token_server().await;
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{base_url}/authorize"),
+            token_endpoint: format!("{base_url}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        manager
+            .credential_store
+            .save(StoredCredentials::new(
+                "my-client".into(),
+                Some(make_token_response_with_refresh("old-token", "old-refresh")),
+                vec!["read".into()],
+                Some(AuthorizationManager::now_epoch_secs()),
+            ))
+            .await
+            .unwrap();
+        *manager.current_scopes.write().await = vec!["stale".into()];
+
+        manager.refresh_token().await.unwrap();
+
+        let saved = manager.credential_store.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved.granted_scopes,
+            ["read"],
+            "the stored grant outranks the per-process scope cache"
+        );
+        assert_eq!(
+            manager.get_current_scopes().await,
+            ["read"],
+            "the refreshed grant must replace the stale scope cache"
+        );
+    }
+
+    #[rstest]
+    #[case("guard", 0)]
+    #[case("load", 0)]
+    #[case("save", 1)]
+    #[tokio::test]
+    async fn refresh_store_failures_release_the_guard(
+        #[case] phase: &'static str,
+        #[case] provider_requests: usize,
+    ) {
+        let mut store = refresh_store().await;
+        store.fail_at = Some(phase);
+        let http_client = refresh_http_client(&store);
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        assert!(matches!(manager.refresh_token().await,
+            Err(AuthError::CredentialStoreError(message)) if message == format!("{phase} failed")));
+        assert_eq!(http_client.recording.requests().len(), provider_requests);
+        let saved = store.credentials.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved
+                .token_response
+                .unwrap()
+                .refresh_token()
+                .unwrap()
+                .secret(),
+            "old-refresh"
+        );
+        assert!(store.lock.try_lock().is_ok());
     }
 }

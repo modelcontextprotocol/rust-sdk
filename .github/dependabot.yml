@@ -3,10 +3,16 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     labels:
       - T-dependencies
     open-pull-requests-limit: 3
+    groups:
+      cargo-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
     commit-message:
       prefix: "chore"
       include: "scope"
@@ -16,11 +22,18 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "monthly"
     labels:
       # Mark PRs as CI related change.
       - T-CI
     open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "chore"
       include: "scope"

@@ -6,12 +6,12 @@
 #![cfg(feature = "client")]
 
 use rmcp::{
-    ClientHandler, RoleServer, ServerHandler, ServiceError, ServiceExt,
+    ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError,
     model::{
-        ClientInfo, ErrorCode, ErrorData, ProtocolVersion, ReadResourceRequestParams,
-        ReadResourceResponse,
+        ClientConfig, ErrorCode, ErrorData, InitializeResult, ProtocolVersion,
+        ReadResourceRequestParams, ReadResourceResponse,
     },
-    service::RequestContext,
+    service::{RequestContext, serve_directly},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -33,31 +33,40 @@ struct VersionedClient {
 }
 
 impl ClientHandler for VersionedClient {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.protocol_version = self.protocol_version.clone();
         info
     }
 }
 
+/// Wires the pair up directly on `client_version`. `2026-07-28` removed the
+/// `initialize` handshake, so a peer on that revision is reached the way the
+/// discover lifecycle leaves one: with the version already agreed.
 async fn not_found_code(client_version: ProtocolVersion) -> ErrorCode {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
+    let client_handler = VersionedClient {
+        protocol_version: client_version.clone(),
+    };
+    let mut server_peer_info = InitializeResult::default();
+    server_peer_info.protocol_version = client_version;
+
+    let server = serve_directly::<RoleServer, _, _, _, _>(
+        ResourceServer,
+        server_transport,
+        Some(client_handler.get_info()),
+    );
     let server_handle = tokio::spawn(async move {
-        ResourceServer
-            .serve(server_transport)
-            .await?
-            .waiting()
-            .await?;
+        server.waiting().await?;
         anyhow::Ok(())
     });
 
-    let client = VersionedClient {
-        protocol_version: client_version,
-    }
-    .serve(client_transport)
-    .await
-    .expect("client should connect");
+    let client = serve_directly::<RoleClient, _, _, _, _>(
+        client_handler,
+        client_transport,
+        Some(server_peer_info.into()),
+    );
 
     let error = client
         .read_resource(ReadResourceRequestParams::new("missing://resource"))

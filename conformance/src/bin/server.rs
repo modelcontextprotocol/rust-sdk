@@ -52,6 +52,10 @@ fn custom_header_tool() -> Tool {
 /// Signing key for SEP-2322 `requestState` sealing. A fixed key is fine for a
 /// conformance harness; real servers must load a secret out of clients' reach.
 const REQUEST_STATE_KEY: &[u8] = b"rust-sdk-conformance-request-state-key!!";
+const _: () = assert!(
+    REQUEST_STATE_KEY.len() >= RequestStateCodec::MIN_KEY_LENGTH,
+    "REQUEST_STATE_KEY is shorter than RequestStateCodec::MIN_KEY_LENGTH",
+);
 
 #[derive(Clone)]
 struct ConformanceServer {
@@ -70,7 +74,7 @@ impl ConformanceServer {
             subscriptions: Arc::new(Mutex::new(HashMap::new())),
             next_subscription: Arc::new(AtomicU64::new(0)),
             log_level: Arc::new(Mutex::new(LoggingLevel::Debug)),
-            request_state_codec: RequestStateCodec::new(REQUEST_STATE_KEY),
+            request_state_codec: RequestStateCodec::new_unchecked(REQUEST_STATE_KEY),
             tasks: TaskManager::new(),
         }
     }
@@ -700,8 +704,8 @@ impl ServerHandler for ConformanceServer {
         (name == "test_custom_header").then(custom_header_tool)
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_prompts_list_changed()
@@ -1740,10 +1744,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting conformance server on {}", bind_addr);
 
     let server = ConformanceServer::new();
-    let stateless = std::env::var_os("STATELESS").is_some();
     let config = StreamableHttpServerConfig::default()
-        .with_legacy_session_mode(!stateless)
-        .with_json_response(stateless);
+        .with_allowed_origins([format!("http://{bind_addr}")])
+        .enforce_origin_validation();
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),

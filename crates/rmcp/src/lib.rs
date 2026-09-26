@@ -3,8 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 mod error;
-#[allow(deprecated)]
-pub use error::{Error, ErrorData, RmcpError};
+pub use error::{ErrorData, RmcpError};
 
 /// Basic data types in MCP specification
 pub mod model;

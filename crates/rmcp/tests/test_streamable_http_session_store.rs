@@ -10,6 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use rmcp::{
     ServiceExt,
+    model::{ClientConfig, ProtocolVersion},
     transport::{
         StreamableHttpClientTransport,
         streamable_http_client::StreamableHttpClientTransportConfig,
@@ -108,7 +109,10 @@ async fn test_session_state_persisted_to_store() -> anyhow::Result<()> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+        .serve(transport)
+        .await?;
 
     // Make a real request so the session is fully active.
     let _resources = client.list_all_resources().await?;
@@ -170,7 +174,10 @@ async fn test_session_state_deleted_from_store_on_delete() -> anyhow::Result<()>
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp")),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+        .serve(transport)
+        .await?;
     let _resources = client.list_all_resources().await?;
 
     assert_eq!(store.len().await, 1, "store should have one entry");
@@ -393,6 +400,60 @@ async fn test_cross_instance_session_restore() -> anyhow::Result<()> {
         ct_b.cancel();
         srv_b.await?;
     }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Test 4 — companion to Test 1: at LATEST the lifecycle lives in `_meta`, so
+// the server answers statelessly and creates no session.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_no_session_created_at_latest_protocol_version() -> anyhow::Result<()> {
+    let store = Arc::new(InMemorySessionStore::new());
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let ct = CancellationToken::new();
+    let (addr, handle) = spawn_server(Some(store.clone()), session_manager.clone(), &ct);
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .header("accept", "application/json, text/event-stream")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", ProtocolVersion::LATEST.as_str())
+        // Required by SEP-2243 from 2026-07-28 onward.
+        .header("mcp-method", "resources/list")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "resources/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": ProtocolVersion::LATEST.as_str(),
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        }))
+        .send()
+        .await?;
+
+    assert!(response.status().is_success(), "got {}", response.status());
+    assert!(
+        response.headers().get("mcp-session-id").is_none(),
+        "no session id should be assigned"
+    );
+    // Drain the body so the request is fully handled before asserting on state.
+    let _ = response.bytes().await?;
+
+    assert_eq!(store.len().await, 0, "no session should be persisted");
+    assert_eq!(
+        session_manager.sessions.read().await.len(),
+        0,
+        "no in-memory session should be created"
+    );
+
+    ct.cancel();
+    handle.await?;
 
     Ok(())
 }

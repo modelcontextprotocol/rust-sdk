@@ -1,16 +1,19 @@
 #![cfg(all(feature = "server", feature = "client", not(feature = "local")))]
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "This test verifies request association for the deprecated sampling API"
+)]
 
 use std::sync::{Arc, Mutex};
 
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ClientInfo, ContentBlock,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
         CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult, ProtocolVersion,
-        SamplingMessage, ServerCapabilities, ServerInfo, ServerRequest,
+        SamplingMessage, ServerCapabilities, ServerConfig, ServerRequest,
     },
-    service::RequestContext,
+    service::{RequestContext, RunningService, serve_directly},
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -18,14 +21,16 @@ use tokio::{
     sync::oneshot,
 };
 
+type RequestResultSender = oneshot::Sender<Result<(), ServiceError>>;
+
 #[derive(Clone)]
 struct SamplingServer {
-    outside: Arc<Mutex<Option<oneshot::Sender<Result<(), ServiceError>>>>>,
+    outside: Arc<Mutex<Option<RequestResultSender>>>,
 }
 
 impl ServerHandler for SamplingServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(
@@ -88,27 +93,50 @@ impl ClientHandler for SamplingClient {
         .with_stop_reason(CreateMessageResult::STOP_REASON_END_TURN))
     }
 
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.protocol_version = ProtocolVersion::V_2026_07_28;
         info
     }
 }
 
+/// Connects the pair on `2026-07-28`. That revision dropped the `initialize`
+/// handshake, so the version is agreed up front the way a discover-lifecycle
+/// startup leaves it.
+fn serve_modern_pair(
+    server: SamplingServer,
+) -> (
+    RunningService<RoleServer, SamplingServer>,
+    RunningService<RoleClient, SamplingClient>,
+) {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server_peer_info = server.get_info();
+    server_peer_info.protocol_version = ProtocolVersion::V_2026_07_28;
+
+    let running_server = serve_directly::<RoleServer, _, _, _, _>(
+        server,
+        server_transport,
+        Some(SamplingClient.get_info()),
+    );
+    let client = serve_directly::<RoleClient, _, _, _, _>(
+        SamplingClient,
+        client_transport,
+        Some(server_peer_info.into()),
+    );
+    (running_server, client)
+}
+
 #[tokio::test]
 async fn nested_sampling_allowed_standalone_rejected() -> anyhow::Result<()> {
-    let (server_transport, client_transport) = tokio::io::duplex(4096);
     let (tx, rx) = oneshot::channel();
     let server = SamplingServer {
         outside: Arc::new(Mutex::new(Some(tx))),
     };
+    let (running_server, client) = serve_modern_pair(server);
     let server_handle = tokio::spawn(async move {
-        let running = server.serve(server_transport).await?;
-        running.waiting().await?;
+        running_server.waiting().await?;
         anyhow::Ok(())
     });
-
-    let client = SamplingClient.serve(client_transport).await?;
 
     let result = client
         .peer()
@@ -129,18 +157,15 @@ async fn nested_sampling_allowed_standalone_rejected() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn generic_send_request_bypass_rejected() -> anyhow::Result<()> {
-    let (server_transport, client_transport) = tokio::io::duplex(4096);
     let (tx, rx) = oneshot::channel();
     let server = SamplingServer {
         outside: Arc::new(Mutex::new(Some(tx))),
     };
+    let (running_server, client) = serve_modern_pair(server);
     let server_handle = tokio::spawn(async move {
-        let running = server.serve(server_transport).await?;
-        running.waiting().await?;
+        running_server.waiting().await?;
         anyhow::Ok(())
     });
-
-    let client = SamplingClient.serve(client_transport).await?;
 
     let result = client
         .peer()

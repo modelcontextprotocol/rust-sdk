@@ -243,15 +243,6 @@ variant_extension! {
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct MetaObject(pub JsonObject);
 
-/// Deprecated alias for [`MetaObject`].
-///
-/// This is a re-export rather than a type alias so the `Meta(...)` tuple
-/// constructor keeps working. Request and notification metadata now have
-/// dedicated types; use [`RequestMetaObject`] or [`NotificationMetaObject`]
-/// where those are expected.
-#[deprecated(note = "Use MetaObject (or RequestMetaObject / NotificationMetaObject)")]
-pub use self::MetaObject as Meta;
-
 impl MetaObject {
     /// Reserved `_meta` key for the W3C Trace Context `traceparent` value (SEP-414).
     const TRACEPARENT_FIELD: &str = "traceparent";
@@ -367,7 +358,7 @@ impl schemars::JsonSchema for MetaObject {
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "See [specification/draft/basic/index#general-fields] for notes on _meta usage.",
+            "description": "See [MCP general fields](https://modelcontextprotocol.io/specification/2026-07-28/basic#general-fields) for notes on _meta usage.",
             "type": "object",
             "additionalProperties": true,
         })
@@ -383,10 +374,10 @@ impl schemars::JsonSchema for MetaObject {
 /// - `io.modelcontextprotocol/clientCapabilities` (SEP-2575)
 /// - `io.modelcontextprotocol/logLevel` (SEP-2575)
 ///
-/// The 2026-07-28 draft schema marks the protocol-version, client-info, and
-/// client-capabilities keys as required; earlier protocol versions do not know
-/// them. All keys therefore stay optional at runtime and in the generated
-/// (version-shared) JSON schema — use
+/// The 2026-07-28 draft schema requires the protocol-version and
+/// client-capabilities keys; client-info is optional. Earlier protocol versions
+/// do not know them. All keys therefore stay optional at runtime and in the
+/// generated (version-shared) JSON schema — use
 /// [`RequestMetaObject::missing_required_keys`] to validate a request against
 /// the negotiated protocol version.
 ///
@@ -406,9 +397,8 @@ impl RequestMetaObject {
     const META_KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
 
     /// Request `_meta` keys the 2026-07-28 draft schema marks as required.
-    pub const DRAFT_REQUIRED_KEYS: [&str; 3] = [
+    pub const DRAFT_REQUIRED_KEYS: [&str; 2] = [
         Self::META_KEY_PROTOCOL_VERSION,
-        Self::META_KEY_CLIENT_INFO,
         Self::META_KEY_CLIENT_CAPABILITIES,
     ];
 
@@ -519,7 +509,7 @@ impl RequestMetaObject {
     ///     meta.missing_required_keys(&ProtocolVersion::V_2025_11_25)
     ///         .is_empty()
     /// );
-    /// // The 2026-07-28 draft requires the SEP-2575 keys.
+    /// // The 2026-07-28 protocol requires per-request context.
     /// assert_eq!(
     ///     meta.missing_required_keys(&ProtocolVersion::V_2026_07_28),
     ///     RequestMetaObject::DRAFT_REQUIRED_KEYS.to_vec(),
@@ -532,9 +522,6 @@ impl RequestMetaObject {
         let mut missing = Vec::new();
         if self.protocol_version().is_none() {
             missing.push(Self::META_KEY_PROTOCOL_VERSION);
-        }
-        if self.client_info().is_none() {
-            missing.push(Self::META_KEY_CLIENT_INFO);
         }
         if self.client_capabilities().is_none() {
             missing.push(Self::META_KEY_CLIENT_CAPABILITIES);
@@ -586,9 +573,9 @@ impl schemars::JsonSchema for RequestMetaObject {
         let client_capabilities = generator.subschema_for::<ClientCapabilities>();
         let log_level = generator.subschema_for::<LoggingLevel>();
         // rmcp generates one schema shared by every supported protocol
-        // version, so the keys the 2026-07-28 draft marks as required are left
+        // version, so the keys validated for 2026-07-28 are left
         // optional here: a 2025-11-25 request whose `_meta` only carries
-        // `progressToken` is valid. Draft-strict validation is available at
+        // `progressToken` is valid. Version-specific validation is available at
         // runtime via [`RequestMetaObject::missing_required_keys`].
         schemars::json_schema!({
             "description": "Metadata reserved by MCP on requests. Extension keys are also allowed.",
@@ -848,7 +835,6 @@ mod tests {
         fn treats_malformed_values_as_missing() {
             let meta: RequestMetaObject = serde_json::from_value(serde_json::json!({
                 "io.modelcontextprotocol/protocolVersion": 123,
-                "io.modelcontextprotocol/clientInfo": "not an implementation",
                 "io.modelcontextprotocol/clientCapabilities": null,
             }))
             .unwrap();

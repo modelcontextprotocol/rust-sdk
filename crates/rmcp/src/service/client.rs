@@ -13,19 +13,19 @@ use crate::{
     model::{
         ArgumentInfo, CacheScope, CallToolRequest, CallToolRequestParams, CallToolResponse,
         CallToolResult, CancelTaskParams, CancelTaskRequest, CancelledNotification,
-        CancelledNotificationParam, ClientInfo, ClientJsonRpcMessage, ClientNotification,
+        CancelledNotificationParam, ClientConfig, ClientJsonRpcMessage, ClientNotification,
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
         CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
         DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskRequest,
-        GetTaskResult, InitializeRequest, InitializedNotification, InputRequest,
-        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
+        GetTaskResult, InitializeRequest, InitializeRequestParams, InitializedNotification,
+        InputRequest, InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
         ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
         ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
         NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
         ProtocolVersion, ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse,
         ReadResourceResult, Reference, RequestId, RequestMetaObject, RootsListChangedNotification,
-        ServerInfo, ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult,
+        ServerJsonRpcMessage, ServerNotification, ServerPeerInfo, ServerRequest, ServerResult,
         SetLevelRequest, SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams,
         SubscriptionFilter, SubscriptionsListenRequest, SubscriptionsListenRequestParams,
         SubscriptionsListenResult, UnsubscribeRequest, UnsubscribeRequestParams, UpdateTaskParams,
@@ -48,6 +48,14 @@ pub enum ClientInitializeError {
 
     #[error("conflict initialized response id: expected {0}, got {1}")]
     ConflictInitResponseId(RequestId, RequestId),
+
+    #[error(
+        "uncorrelated error response: expected id {expected}, error response carried {received}"
+    )]
+    UncorrelatedErrorResponse {
+        expected: RequestId,
+        received: RequestId,
+    },
 
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
@@ -74,6 +82,12 @@ pub enum ClientInitializeError {
 
     #[error("Cancelled")]
     Cancelled,
+
+    #[error("discover and legacy initialize both failed")]
+    LegacyFallbackFailed {
+        discover: Box<ClientInitializeError>,
+        fallback: Box<ClientInitializeError>,
+    },
 }
 
 impl ClientInitializeError {
@@ -84,6 +98,48 @@ impl ClientInitializeError {
         Self::TransportError {
             error: DynamicTransportError::new::<T, _>(error),
             context: context.into(),
+        }
+    }
+
+    /// The `WWW-Authenticate` challenge from the 401/403 the transport hit
+    /// during initialization, if that is why initialization failed.
+    ///
+    /// This is the trigger of the reactive OAuth flow: feed the challenge to
+    /// `AuthorizationRequest::with_challenge` to authorize, then reconnect.
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub fn auth_challenge(&self) -> Option<&str> {
+        use crate::transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError};
+
+        let error = match self {
+            Self::TransportError { error, .. } => error,
+            // A 401/403 in the fallback phase is still actionable.
+            Self::LegacyFallbackFailed { fallback, .. } => {
+                return fallback.auth_challenge();
+            }
+            _ => return None,
+        };
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error.error.as_ref());
+        while let Some(current) = source {
+            if let Some(auth_required) = current.downcast_ref::<AuthRequiredError>() {
+                return Some(&auth_required.www_authenticate_header);
+            }
+            if let Some(insufficient_scope) = current.downcast_ref::<InsufficientScopeError>() {
+                return Some(&insufficient_scope.www_authenticate_header);
+            }
+            source = current.source();
+        }
+        None
+    }
+
+    /// Returns whether client initialization failed because authorization is required.
+    ///
+    /// This covers both missing or expired local OAuth authorization and an HTTP
+    /// authorization challenge from the MCP server.
+    pub fn is_authorization_required(&self) -> bool {
+        match self {
+            Self::TransportError { error, .. } => error.is_authorization_required(),
+            Self::LegacyFallbackFailed { fallback, .. } => fallback.is_authorization_required(),
+            _ => false,
         }
     }
 }
@@ -102,13 +158,20 @@ where
         .ok_or_else(|| ClientInitializeError::ConnectionClosed(context.to_string()))
 }
 
-/// Helper function to expect a response from the stream
+/// Helper function to expect a response from the stream, correlated to
+/// `expected_id`.
+///
+/// Both success and error responses are checked here: a mismatched id on a
+/// success response is `ConflictInitResponseId`; on an error response (whose
+/// `id` is optional per spec) it is `UncorrelatedErrorResponse`. The caller
+/// never sees an uncorrelated response.
 async fn expect_response<T, S>(
     transport: &mut T,
     context: &str,
     service: &S,
     peer: Peer<RoleClient>,
-) -> Result<(ServerResult, RequestId), ClientInitializeError>
+    expected_id: &RequestId,
+) -> Result<ServerResult, ClientInitializeError>
 where
     T: Transport<RoleClient>,
     S: Service<RoleClient>,
@@ -116,13 +179,29 @@ where
     loop {
         let message = expect_next_message(transport, context).await?;
         match message {
-            // Expected message to complete the initialization
             ServerJsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => {
-                break Ok((result, id));
+                if !expected_id.matches_response_id(&id) {
+                    return Err(ClientInitializeError::ConflictInitResponseId(
+                        expected_id.clone(),
+                        id,
+                    ));
+                }
+                return Ok(result);
             }
-            // Handle JSON-RPC error responses
             ServerJsonRpcMessage::Error(error) => {
-                break Err(ClientInitializeError::JsonRpcError(error.error));
+                return Err(match &error.id {
+                    Some(id) if expected_id.matches_response_id(id) => {
+                        ClientInitializeError::JsonRpcError(error.error)
+                    }
+                    // Spec: error id is optional; a server that cannot read
+                    // the request id omits it. The error is still a response
+                    // to our request, so it remains available to the caller.
+                    None => ClientInitializeError::JsonRpcError(error.error),
+                    Some(id) => ClientInitializeError::UncorrelatedErrorResponse {
+                        expected: expected_id.clone(),
+                        received: id.clone(),
+                    },
+                });
             }
             // Server could send logging messages before handshake
             ServerJsonRpcMessage::Notification(mut notification) => {
@@ -187,8 +266,8 @@ impl ServiceRole for RoleClient {
     type PeerReq = ServerRequest;
     type PeerResp = ServerResult;
     type PeerNot = ServerNotification;
-    type Info = ClientInfo;
-    type PeerInfo = ServerInfo;
+    type Info = ClientConfig;
+    type PeerInfo = ServerPeerInfo;
     type InitializeError = ClientInitializeError;
     const IS_CLIENT: bool = true;
 
@@ -196,7 +275,7 @@ impl ServiceRole for RoleClient {
         let Some(server_info) = peer.peer_info() else {
             return;
         };
-        if server_info.protocol_version.as_str() < ProtocolVersion::V_2026_07_28.as_str() {
+        if server_info.protocol_version.has_initialize() {
             return;
         }
         peer.set_client_request_metadata(ClientRequestMetadata {
@@ -213,14 +292,27 @@ impl ServiceRole for RoleClient {
         }
     }
 
-    // SEP-2260: with no outbound request in flight there is nothing the
-    // server request could be associated with, so reject it. With one in
-    // flight we cannot tell which request it belongs to (no wire field), so
-    // we accept — an under-approximation of the spec's SHOULD.
+    fn peer_cancels_subscriptions(peer: &Peer<Self>) -> bool {
+        // Discovery keeps modern lifecycle semantics even with an older application version.
+        !super::uses_legacy_lifecycle(
+            peer.peer_info()
+                .as_deref()
+                .map(|info| &info.protocol_version),
+            peer.client_request_metadata.get().is_some(),
+        )
+    }
+
+    fn is_subscription_request(request: &Self::Req) -> bool {
+        matches!(request, ClientRequest::SubscriptionsListenRequest(_))
+    }
+
+    // SEP-2260: reject restricted server requests that arrived unassociated
+    // with any in-flight outbound request. Without stream separation
+    // (`Unknown`) the coarse in-flight check under-approximates the SHOULD.
     fn enforce_peer_request_association(
         peer_request: &Self::PeerReq,
         peer_info: Option<&Self::PeerInfo>,
-        has_pending_outbound_request: bool,
+        association: PeerRequestAssociation,
     ) -> Result<(), ErrorData> {
         let restricted = matches!(
             peer_request,
@@ -233,13 +325,24 @@ impl ServiceRole for RoleClient {
         }
         let strict =
             peer_info.is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
-        if strict && !has_pending_outbound_request {
-            return Err(ErrorData::invalid_params(
+        if !strict {
+            return Ok(());
+        }
+        let associated = match association {
+            PeerRequestAssociation::Associated => true,
+            PeerRequestAssociation::Unassociated => false,
+            PeerRequestAssociation::Unknown {
+                has_pending_outbound_request,
+            } => has_pending_outbound_request,
+        };
+        if associated {
+            Ok(())
+        } else {
+            Err(ErrorData::invalid_params(
                 "SEP-2260: server-to-client requests must be associated with an in-flight client request",
                 None,
-            ));
+            ))
         }
-        Ok(())
     }
 
     async fn invalidate_response_cache(peer: &Peer<Self>, notification: &Self::PeerNot) {
@@ -543,12 +646,15 @@ pub enum ClientLifecycleMode {
     Discover {
         preferred_versions: Vec<ProtocolVersion>,
     },
-    /// Probe with `server/discover`, falling back only when the peer proves it is legacy.
+    /// Probe with `server/discover`, falling back when the peer reports that it is legacy or does
+    /// not respond within 10 seconds.
     Auto {
         preferred_versions: Vec<ProtocolVersion>,
         legacy_version: Option<ProtocolVersion>,
     },
 }
+
+const DEFAULT_AUTO_DISCOVER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Client-specific lifecycle entry points.
 pub trait ClientServiceExt: Service<RoleClient> + Sized {
@@ -641,7 +747,13 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     tokio::select! {
-        result = serve_client_with_ct_inner(service, transport.into_transport(), lifecycle, ct.clone()) => { result }
+        result = serve_client_with_ct_inner(
+            service,
+            transport.into_transport(),
+            lifecycle,
+            ct.clone(),
+            DEFAULT_AUTO_DISCOVER_TIMEOUT,
+        ) => { result }
         _ = ct.cancelled() => {
             Err(ClientInitializeError::Cancelled)
         }
@@ -653,6 +765,7 @@ async fn serve_client_with_ct_inner<S, T>(
     transport: T,
     lifecycle: ClientLifecycleMode,
     ct: CancellationToken,
+    auto_discover_timeout: Duration,
 ) -> Result<RunningService<RoleClient, S>, ClientInitializeError>
 where
     S: Service<RoleClient>,
@@ -668,7 +781,7 @@ where
             legacy_startup(&service, &mut transport, &id_provider, &peer, client_info).await?;
         }
         ClientLifecycleMode::Discover { preferred_versions } => {
-            discover_startup(
+            match discover_startup(
                 &service,
                 &mut transport,
                 &id_provider,
@@ -676,26 +789,48 @@ where
                 &client_info,
                 preferred_versions,
             )
-            .await?;
+            .await?
+            {
+                DiscoverOutcome::Modern => {}
+                // Discover mode does not fall back; a legacy server is an error.
+                DiscoverOutcome::Legacy(error) => return Err(*error),
+            }
         }
         ClientLifecycleMode::Auto {
             preferred_versions,
             legacy_version,
         } => {
-            let discover_result = discover_startup(
-                &service,
-                &mut transport,
-                &id_provider,
-                &peer,
-                &client_info,
-                preferred_versions,
+            let discover_result = tokio::time::timeout(
+                auto_discover_timeout,
+                discover_startup(
+                    &service,
+                    &mut transport,
+                    &id_provider,
+                    &peer,
+                    &client_info,
+                    preferred_versions,
+                ),
             )
             .await;
             match discover_result {
-                Ok(()) => {}
-                Err(ClientInitializeError::JsonRpcError(error))
-                    if error.code == crate::model::ErrorCode::METHOD_NOT_FOUND =>
-                {
+                Ok(Ok(DiscoverOutcome::Modern)) => {}
+                Ok(Ok(DiscoverOutcome::Legacy(discover_error))) => {
+                    let mut legacy_info = client_info;
+                    if let Some(version) = legacy_version {
+                        legacy_info.protocol_version = version;
+                    }
+                    if let Err(fallback_error) =
+                        legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
+                            .await
+                    {
+                        return Err(ClientInitializeError::LegacyFallbackFailed {
+                            discover: discover_error,
+                            fallback: Box::new(fallback_error),
+                        });
+                    }
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
                     let mut legacy_info = client_info;
                     if let Some(version) = legacy_version {
                         legacy_info.protocol_version = version;
@@ -703,11 +838,52 @@ where
                     legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
                         .await?;
                 }
-                Err(error) => return Err(error),
             }
         }
     }
-    Ok(serve_inner(service, transport, peer, peer_rx, ct))
+    Ok(serve_inner(
+        service,
+        transport,
+        peer,
+        peer_rx,
+        VecDeque::new(),
+        ct,
+    ))
+}
+
+/// Modern-era JSON-RPC error codes a server can return from `server/discover`
+/// without being legacy. Version negotiation (`UNSUPPORTED_PROTOCOL_VERSION`)
+/// is handled by `discover_startup`'s own retry loop and never reaches the
+/// classification below.
+///
+/// `ErrorCode` is an open integer type, so this cannot be exhaustive: if a
+/// future revision adds another modern-era rejection code, add it here.
+fn is_modern_rejection_code(code: crate::model::ErrorCode) -> bool {
+    matches!(
+        code,
+        crate::model::ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
+            | crate::model::ErrorCode::HEADER_MISMATCH
+    )
+}
+
+/// The outcome of a `server/discover` probe, classified at the point where all
+/// the context (request id, response correlation, transport state) is still
+/// available.
+///
+/// `Legacy` is returned only when the probe produced a complete, correlated
+/// JSON-RPC error whose code is not a modern-era rejection — i.e. the
+/// transport is in a known-good state and the error identifies the peer as
+/// legacy per the 2026-07-28 backward-compatibility guidance. Every other
+/// failure (transport error, uncorrelated response, modern rejection, etc.)
+/// becomes `Err` so the caller surfaces it instead of retrying.
+enum DiscoverOutcome {
+    /// The server speaks the modern protocol; discovery succeeded.
+    Modern,
+    /// The server is legacy: discovery received a correlated, non-modern
+    /// JSON-RPC error. The transport is still usable for a legacy `initialize`
+    /// handshake. The original error is preserved so a failed fallback can
+    /// report both phases.
+    Legacy(Box<ClientInitializeError>),
 }
 
 async fn legacy_startup<S, T>(
@@ -715,13 +891,14 @@ async fn legacy_startup<S, T>(
     transport: &mut T,
     id_provider: &Arc<AtomicU32RequestIdProvider>,
     peer: &Peer<RoleClient>,
-    client_info: ClientInfo,
+    client_info: InitializeRequestParams,
 ) -> Result<(), ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: Transport<RoleClient> + 'static,
 {
     let id = id_provider.next_request_id();
+    let client_info_for_meta = client_info.clone();
     let init_request = InitializeRequest {
         method: Default::default(),
         params: client_info,
@@ -738,20 +915,24 @@ where
             context: "send initialize request".into(),
         })?;
 
-    let (response, response_id) =
-        expect_response(transport, "initialize response", service, peer.clone()).await?;
-
-    if !id.matches_response_id(&response_id) {
-        return Err(ClientInitializeError::ConflictInitResponseId(
-            id,
-            response_id,
-        ));
-    }
+    let response =
+        expect_response(transport, "initialize response", service, peer.clone(), &id).await?;
 
     let ServerResult::InitializeResult(initialize_result) = response else {
         return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
     };
-    peer.set_peer_info(initialize_result);
+    // A server may answer `initialize` with a version that has no handshake
+    // (e.g. a client pinned past `NO_INITIALIZE` talking to a server that
+    // honors it). From there the lifecycle lives in per-request `_meta`, so the
+    // metadata has to be seeded now or every later request omits it.
+    if !initialize_result.protocol_version.has_initialize() {
+        peer.set_client_request_metadata(ClientRequestMetadata {
+            protocol_version: initialize_result.protocol_version.clone(),
+            client_info: client_info_for_meta.client_info,
+            client_capabilities: client_info_for_meta.capabilities,
+        });
+    }
+    peer.set_peer_info(initialize_result.into());
 
     // send notification
     let notification = ClientJsonRpcMessage::notification(
@@ -771,9 +952,9 @@ async fn discover_startup<S, T>(
     transport: &mut T,
     id_provider: &Arc<AtomicU32RequestIdProvider>,
     peer: &Peer<RoleClient>,
-    client_info: &ClientInfo,
+    client_info: &InitializeRequestParams,
     preferred_versions: Vec<ProtocolVersion>,
-) -> Result<(), ClientInitializeError>
+) -> Result<DiscoverOutcome, ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: Transport<RoleClient> + 'static,
@@ -805,14 +986,8 @@ where
                 ClientInitializeError::transport::<T>(error, "send discover request")
             })?;
 
-        match expect_response(transport, "discover response", service, peer.clone()).await {
-            Ok((ServerResult::DiscoverResult(result), response_id)) => {
-                if !id.matches_response_id(&response_id) {
-                    return Err(ClientInitializeError::ConflictInitResponseId(
-                        id,
-                        response_id,
-                    ));
-                }
+        match expect_response(transport, "discover response", service, peer.clone(), &id).await {
+            Ok(ServerResult::DiscoverResult(result)) => {
                 let Some(selected) =
                     select_protocol_version(&preferred_versions, &result.supported_versions)
                 else {
@@ -821,21 +996,18 @@ where
                         server_supported: result.supported_versions,
                     });
                 };
-                peer.set_peer_info(ServerInfo {
-                    protocol_version: selected.clone(),
-                    capabilities: result.capabilities,
-                    server_info: result.server_info,
-                    instructions: result.instructions,
-                    meta: result.meta,
-                });
+                peer.set_peer_info(ServerPeerInfo::from_discover_result(
+                    selected.clone(),
+                    result,
+                ));
                 peer.set_client_request_metadata(ClientRequestMetadata {
                     protocol_version: selected,
                     client_info: client_info.client_info.clone(),
                     client_capabilities: client_info.capabilities.clone(),
                 });
-                return Ok(());
+                return Ok(DiscoverOutcome::Modern);
             }
-            Ok((response, _)) => {
+            Ok(response) => {
                 return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
             }
             Err(ClientInitializeError::JsonRpcError(error))
@@ -868,6 +1040,19 @@ where
                     });
                 };
                 candidate = next;
+            }
+            // A correlated JSON-RPC error that is not a modern-era rejection
+            // and not a version-negotiation signal: the server is legacy.
+            // The transport delivered a complete response, so a legacy
+            // `initialize` can follow on the same connection.
+            Err(error)
+                if matches!(
+                    &error,
+                    ClientInitializeError::JsonRpcError(data)
+                        if !is_modern_rejection_code(data.code)
+                ) =>
+            {
+                return Ok(DiscoverOutcome::Legacy(Box::new(error)));
             }
             Err(error) => return Err(error),
         }
@@ -2041,6 +2226,300 @@ where
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn server_cancellation_retires_subscription_responder() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (discover, version) in [
+                    (false, ProtocolVersion::V_2026_07_28),
+                    (true, ProtocolVersion::V_2026_07_28),
+                    (true, ProtocolVersion::V_2025_11_25),
+                ] {
+                    tokio::time::timeout(
+                        Duration::from_secs(5),
+                        check_subscription_cancellation(discover, version),
+                    )
+                    .await
+                    .expect("subscription cancellation timed out");
+                }
+            })
+            .await;
+    }
+
+    async fn check_subscription_cancellation(discover: bool, version: ProtocolVersion) {
+        use crate::model::{
+            GetMeta, PingRequest, ServerInfo, SubscriptionsAcknowledgedNotification,
+            SubscriptionsAcknowledgedNotificationParams,
+        };
+
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+        let mut server =
+            crate::transport::IntoTransport::<RoleServer, _, _>::into_transport(server_transport);
+        let info = ServerInfo {
+            protocol_version: version.clone(),
+            ..Default::default()
+        };
+        let client = if discover {
+            let (client, ()) = tokio::join!(
+                serve_client_with_lifecycle(
+                    (),
+                    client_transport,
+                    ClientLifecycleMode::Discover {
+                        preferred_versions: vec![version.clone()]
+                    }
+                ),
+                async {
+                    let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await
+                    else {
+                        panic!("expected discover request");
+                    };
+                    assert!(matches!(request.request, ClientRequest::DiscoverRequest(_)));
+                    server
+                        .send(ServerJsonRpcMessage::response(
+                            ServerResult::DiscoverResult(DiscoverResult::new(
+                                vec![version],
+                                info.capabilities,
+                            )),
+                            request.id,
+                        ))
+                        .await
+                        .unwrap();
+                }
+            );
+            client.unwrap()
+        } else {
+            super::super::serve_directly::<RoleClient, _, _, _, _>(
+                (),
+                client_transport,
+                Some(info.into()),
+            )
+        };
+        let filter = SubscriptionFilter::default();
+        let (subscription, ()) = tokio::join!(client.listen(filter.clone()), async {
+            let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await else {
+                panic!("expected listen request");
+            };
+            assert!(matches!(
+                request.request,
+                ClientRequest::SubscriptionsListenRequest(_)
+            ));
+            let mut ack: ServerNotification = SubscriptionsAcknowledgedNotification::new(
+                SubscriptionsAcknowledgedNotificationParams::new(filter),
+            )
+            .into();
+            ack.get_meta_mut().set_subscription_id(request.id);
+            server
+                .send(ServerJsonRpcMessage::notification(ack))
+                .await
+                .unwrap();
+        });
+        let mut subscription = subscription.unwrap();
+        let id = subscription.id().clone();
+        let mut ordinary = client
+            .send_cancellable_request(
+                PingRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }
+                .into(),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Request(_))
+        ));
+        for unknown in [
+            ordinary.id.clone(),
+            RequestId::String(id.to_string().into()),
+            RequestId::String("unknown".into()),
+        ] {
+            server
+                .send(ServerJsonRpcMessage::notification(
+                    CancelledNotification::new(CancelledNotificationParam::new(
+                        Some(unknown),
+                        None,
+                    ))
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        server
+            .send(ServerJsonRpcMessage::request(
+                PingRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }
+                .into(),
+                RequestId::String("before-cancellation".into()),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Response(_))
+        ));
+        assert!(matches!(
+            subscription.request.as_mut().unwrap().rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            ordinary.rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            subscription.notifications.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        server
+            .send(ServerJsonRpcMessage::notification(
+                CancelledNotification::new(CancelledNotificationParam::new(
+                    Some(id.clone()),
+                    Some("subscription ended".to_owned()),
+                ))
+                .into(),
+            ))
+            .await
+            .unwrap();
+        // Ordered input makes the ping response a barrier for cancellation handling.
+        server
+            .send(ServerJsonRpcMessage::request(
+                PingRequest {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                }
+                .into(),
+                RequestId::String("after-cancellation".into()),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Response(_))
+        ));
+        assert!(
+            matches!(
+                subscription.request.as_mut().unwrap().rx.try_recv(),
+                Ok(Err(ServiceError::Cancelled { .. }))
+            ),
+            "the outbound responder must retire without a final response or disconnect"
+        );
+        assert!(subscription.next().await.unwrap().is_none());
+        assert!(matches!(
+            subscription.end(),
+            Some(SubscriptionEnd::Cancelled)
+        ));
+        assert!(client.peer().subscription_sender(&id).is_none());
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::empty(()),
+                ordinary.id.clone(),
+            ))
+            .await
+            .unwrap();
+        assert!(ordinary.await_response().await.is_ok());
+
+        // Raw listen requests also retire, even without a registered notification channel.
+        let raw = client
+            .send_cancellable_request(
+                ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
+                    SubscriptionsListenRequestParams::new(SubscriptionFilter::default()),
+                )),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Request(_))
+        ));
+        server
+            .send(ServerJsonRpcMessage::notification(
+                CancelledNotification::new(CancelledNotificationParam::new(
+                    Some(raw.id.clone()),
+                    None,
+                ))
+                .into(),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            raw.await_response().await,
+            Err(ServiceError::Cancelled { .. })
+        ));
+        client.cancel().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_startup_falls_back_when_discover_is_ignored() {
+        use crate::model::{InitializeResult, ServerCapabilities};
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let (server_transport, client_transport) = tokio::io::duplex(4096);
+                let mut server =
+                    crate::transport::IntoTransport::<RoleServer, _, _>::into_transport(
+                        server_transport,
+                    );
+                let server_task = tokio::task::spawn_local(async move {
+                    let ClientJsonRpcMessage::Request(discover) =
+                        server.receive().await.expect("expected discover request")
+                    else {
+                        panic!("expected discover request");
+                    };
+                    assert!(matches!(
+                        discover.request,
+                        ClientRequest::DiscoverRequest(_)
+                    ));
+
+                    let ClientJsonRpcMessage::Request(initialize) =
+                        server.receive().await.expect("expected initialize request")
+                    else {
+                        panic!("expected initialize request");
+                    };
+                    assert!(matches!(
+                        initialize.request,
+                        ClientRequest::InitializeRequest(_)
+                    ));
+                    server
+                        .send(ServerJsonRpcMessage::response(
+                            ServerResult::InitializeResult(InitializeResult::new(
+                                ServerCapabilities::default(),
+                            )),
+                            initialize.id,
+                        ))
+                        .await
+                        .expect("send initialize response");
+                    assert!(matches!(
+                        server.receive().await,
+                        Some(ClientJsonRpcMessage::Notification(_))
+                    ));
+                });
+
+                let client_transport =
+                    crate::transport::IntoTransport::<RoleClient, _, _>::into_transport(
+                        client_transport,
+                    );
+                let client = serve_client_with_ct_inner(
+                    (),
+                    client_transport,
+                    ClientLifecycleMode::Auto {
+                        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+                    },
+                    CancellationToken::new(),
+                    Duration::from_millis(25),
+                )
+                .await
+                .expect("auto client should fall back after discover timeout");
+                client.cancel().await.expect("cancel client");
+                server_task.await.expect("server task");
+            })
+            .await;
+    }
+
     fn disconnected_peer() -> Peer<RoleClient> {
         let (peer, receiver) =
             Peer::<RoleClient>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
@@ -2172,13 +2651,10 @@ mod tests {
         let peer = disconnected_peer();
         let meta = RequestMetaObject::default();
         let key = discover_cache_key();
-        let expected = DiscoverResult::new(
-            vec![ProtocolVersion::default()],
-            Default::default(),
-            crate::model::Implementation::from_build_env(),
-        )
-        .with_ttl_ms(5_000)
-        .with_cache_scope(CacheScope::Public);
+        let expected = DiscoverResult::new(vec![ProtocolVersion::default()], Default::default())
+            .with_server_info(crate::model::Implementation::from_build_env())
+            .with_ttl_ms(5_000)
+            .with_cache_scope(CacheScope::Public);
         peer.cache_response(
             key,
             ServerResult::DiscoverResult(expected.clone()),
@@ -2188,5 +2664,75 @@ mod tests {
         .await;
 
         assert_eq!(peer.discover(meta).await.unwrap(), expected);
+    }
+}
+
+#[cfg(test)]
+mod sep2260_association_tests {
+    use super::*;
+    use crate::{
+        model::{
+            CreateMessageRequest, CreateMessageRequestParams, SamplingMessage, ServerCapabilities,
+        },
+        service::PeerRequestAssociation,
+    };
+
+    fn sampling_request() -> ServerRequest {
+        ServerRequest::CreateMessageRequest(CreateMessageRequest::new(
+            CreateMessageRequestParams::new(vec![SamplingMessage::user_text("hi")], 16),
+        ))
+    }
+
+    fn server_info(version: ProtocolVersion) -> ServerPeerInfo {
+        ServerPeerInfo::new(version, ServerCapabilities::default())
+    }
+
+    fn enforce(
+        info: &ServerPeerInfo,
+        association: PeerRequestAssociation,
+    ) -> Result<(), ErrorData> {
+        RoleClient::enforce_peer_request_association(&sampling_request(), Some(info), association)
+    }
+
+    #[test]
+    fn strict_rejects_unassociated() {
+        let info = server_info(ProtocolVersion::V_2026_07_28);
+        let err = enforce(&info, PeerRequestAssociation::Unassociated).unwrap_err();
+        assert_eq!(err.code, crate::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn strict_accepts_associated() {
+        let info = server_info(ProtocolVersion::V_2026_07_28);
+        assert!(enforce(&info, PeerRequestAssociation::Associated).is_ok());
+    }
+
+    #[test]
+    fn strict_unknown_falls_back_to_coarse_check() {
+        let info = server_info(ProtocolVersion::V_2026_07_28);
+        assert!(
+            enforce(
+                &info,
+                PeerRequestAssociation::Unknown {
+                    has_pending_outbound_request: true
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            enforce(
+                &info,
+                PeerRequestAssociation::Unknown {
+                    has_pending_outbound_request: false
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_protocol_accepts_even_unassociated() {
+        let info = server_info(ProtocolVersion::V_2025_11_25);
+        assert!(enforce(&info, PeerRequestAssociation::Unassociated).is_ok());
     }
 }

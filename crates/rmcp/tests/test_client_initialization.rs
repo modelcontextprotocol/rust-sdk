@@ -51,6 +51,14 @@ async fn client_initialization_accepts_stringified_numeric_response_id() {
         .serve(client_transport)
         .await
         .expect("client should accept stringified initialize response ID");
+    assert!(
+        client
+            .peer_info()
+            .expect("peer info should be retained")
+            .server_info
+            .is_some(),
+        "initialize always provides a server implementation identity"
+    );
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }
@@ -117,11 +125,18 @@ async fn test_client_init_handles_jsonrpc_error() {
     });
 
     tokio::spawn(async move {
-        let _init_request = server.receive().await;
+        let request = server.receive().await;
+        // Echo the request's own id back on the error so it correlates: an
+        // uncorrelated id would surface as `UncorrelatedErrorResponse`
+        // instead of the `JsonRpcError` this test exercises.
+        let request_id = request
+            .and_then(|message| message.into_request())
+            .map(|(_, id)| id)
+            .expect("client sent an initialize request");
 
         let error_msg = ServerJsonRpcMessage::Error(JsonRpcError {
             jsonrpc: JsonRpcVersion2_0,
-            id: Some(RequestId::Number(1)),
+            id: Some(request_id),
             error: ErrorData {
                 code: ErrorCode(-32600),
                 message: Cow::Borrowed("Invalid Request"),

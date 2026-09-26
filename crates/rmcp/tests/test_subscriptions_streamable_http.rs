@@ -18,8 +18,9 @@ use std::{
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
     model::{
-        ClientInfo, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject,
-        ServerCapabilities, ServerInfo, ServerNotification, SubscriptionFilter,
+        ClientConfig, ClientRequest, Implementation, ListToolsRequest, ProtocolVersion,
+        RequestMetaObject, ServerCapabilities, ServerConfig, ServerNotification,
+        SubscriptionFilter,
     },
     service::{PeerRequestOptions, SubscriptionContext, SubscriptionEnd},
     transport::{
@@ -52,13 +53,14 @@ impl ServerHandler for HttpSubscriptionServer {
         Cow::Borrowed(&[ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25])
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
                 .build(),
         )
+        .with_server_info(Implementation::new("http-subscription-server", "1.0.0"))
     }
 
     fn accepted_subscription_filter(
@@ -158,7 +160,7 @@ async fn modern_http_listen_uses_post_stream_and_cancels_by_closing_it() -> anyh
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url.clone()),
     );
-    let client = ClientInfo::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -203,7 +205,7 @@ async fn modern_http_graceful_close_returns_final_listen_result() -> anyhow::Res
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url),
     );
-    let client = ClientInfo::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -217,10 +219,16 @@ async fn modern_http_graceful_close_returns_final_listen_result() -> anyhow::Res
 
     assert!(subscription.next().await?.is_some());
     assert!(subscription.next().await?.is_none());
-    assert!(matches!(
-        subscription.end(),
-        Some(SubscriptionEnd::Graceful(_))
-    ));
+    let Some(SubscriptionEnd::Graceful(result)) = subscription.end() else {
+        panic!("expected graceful final result");
+    };
+    assert_eq!(
+        result
+            .meta
+            .server_info()
+            .expect("graceful result should contain valid server info"),
+        Implementation::new("http-subscription-server", "1.0.0")
+    );
 
     client.cancel().await?;
     server_ct.cancel();
@@ -233,7 +241,7 @@ async fn modern_http_stream_close_without_result_is_abrupt() -> anyhow::Result<(
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url),
     );
-    let client = ClientInfo::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -266,7 +274,7 @@ async fn modern_http_lifecycle_stays_sessionless_for_older_application_version()
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url),
     );
-    let client = ClientInfo::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {

@@ -13,9 +13,12 @@ use http::{HeaderName, HeaderValue};
 use hyper_util::rt::TokioIo;
 use rmcp::{
     ServiceExt,
+    model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
     transport::{
         StreamableHttpClientTransport, UnixSocketHttpClient,
-        streamable_http_client::StreamableHttpClientTransportConfig,
+        streamable_http_client::{
+            StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
+        },
     },
 };
 use serde_json::json;
@@ -35,10 +38,10 @@ async fn mcp_handler(
     let mut headers_map = HashMap::new();
     for (name, value) in headers.iter() {
         let name_str = name.as_str();
-        if name_str.starts_with("x-") || name_str == "host" {
-            if let Ok(v) = value.to_str() {
-                headers_map.insert(name_str.to_string(), v.to_string());
-            }
+        if (name_str.starts_with("x-") || name_str == "host")
+            && let Ok(v) = value.to_str()
+        {
+            headers_map.insert(name_str.to_string(), v.to_string());
         }
     }
 
@@ -46,46 +49,46 @@ async fn mcp_handler(
     stored.extend(headers_map);
     drop(stored);
 
-    if let Ok(json_body) = serde_json::from_slice::<serde_json::Value>(&body) {
-        if let Some(method) = json_body.get("method").and_then(|m| m.as_str()) {
-            if method == "initialize" {
-                state.initialize_called.notify_one();
-                let response = json!({
-                    "jsonrpc": "2.0",
-                    "id": json_body.get("id"),
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "serverInfo": {
-                            "name": "test-unix-server",
-                            "version": "1.0.0"
-                        }
+    if let Ok(json_body) = serde_json::from_slice::<serde_json::Value>(&body)
+        && let Some(method) = json_body.get("method").and_then(|m| m.as_str())
+    {
+        if method == "initialize" {
+            state.initialize_called.notify_one();
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": json_body.get("id"),
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "serverInfo": {
+                        "name": "test-unix-server",
+                        "version": "1.0.0"
                     }
-                });
-                return (
-                    StatusCode::OK,
-                    [
-                        (http::header::CONTENT_TYPE, "application/json"),
-                        (
-                            http::HeaderName::from_static("mcp-session-id"),
-                            "unix-test-session",
-                        ),
-                    ],
-                    response.to_string(),
-                );
-            } else if method == "notifications/initialized" {
-                return (
-                    StatusCode::ACCEPTED,
-                    [
-                        (http::header::CONTENT_TYPE, "application/json"),
-                        (
-                            http::HeaderName::from_static("mcp-session-id"),
-                            "unix-test-session",
-                        ),
-                    ],
-                    String::new(),
-                );
-            }
+                }
+            });
+            return (
+                StatusCode::OK,
+                [
+                    (http::header::CONTENT_TYPE, "application/json"),
+                    (
+                        http::HeaderName::from_static("mcp-session-id"),
+                        "unix-test-session",
+                    ),
+                ],
+                response.to_string(),
+            );
+        } else if method == "notifications/initialized" {
+            return (
+                StatusCode::ACCEPTED,
+                [
+                    (http::header::CONTENT_TYPE, "application/json"),
+                    (
+                        http::HeaderName::from_static("mcp-session-id"),
+                        "unix-test-session",
+                    ),
+                ],
+                String::new(),
+            );
         }
     }
 
@@ -294,5 +297,58 @@ async fn test_unix_socket_convenience_constructor() -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&socket_path);
     let _ = std::fs::remove_dir(&dir);
 
+    Ok(())
+}
+
+/// A request POST that gets 200 + `application/json` + `{}` must error.
+/// Mapping that body to Accepted would hang the caller waiting on SSE.
+#[tokio::test]
+async fn test_unix_socket_request_malformed_json_is_unexpected() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-bad-json-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn bad_json_handler() -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            [(http::header::CONTENT_TYPE, "application/json")],
+            "{}",
+        )
+    }
+
+    let app = Router::new().route("/mcp", post(bad_json_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::request(
+                ClientRequest::PingRequest(PingRequest::default()),
+                RequestId::Number(1),
+            ),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Err(StreamableHttpError::UnexpectedServerResponse(ref msg)) => {
+            assert!(
+                msg.contains("{}"),
+                "expected body preview in error, got: {msg}"
+            );
+        }
+        other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+    }
     Ok(())
 }

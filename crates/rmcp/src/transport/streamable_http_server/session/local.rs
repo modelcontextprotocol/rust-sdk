@@ -1032,9 +1032,6 @@ pub enum LocalSessionWorkerError {
     FailToSendInitializeRequest(SessionError),
     #[error("fail to handle message: {0}")]
     FailToHandleMessage(SessionError),
-    #[deprecated(note = "idle timeout now surfaces as WorkerQuitReason::IdleTimeout")]
-    #[error("keep alive timeout after {}ms", _0.as_millis())]
-    KeepAliveTimeout(Duration),
     #[error("init timeout after {}ms", _0.as_millis())]
     InitTimeout(Duration),
     #[error("Transport closed")]
@@ -1130,7 +1127,9 @@ impl Worker for LocalSessionWorker {
                 }
             };
             match event {
-                InnerEvent::FromHandler(WorkerSendRequest { message, responder }) => {
+                InnerEvent::FromHandler(WorkerSendRequest {
+                    message, responder, ..
+                }) => {
                     // catch response
                     let to_unregister = match &message {
                         crate::model::JsonRpcMessage::Response(json_rpc_response) => {

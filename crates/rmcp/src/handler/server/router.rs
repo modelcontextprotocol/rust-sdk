@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use prompt::{IntoPromptRoute, PromptRoute};
 use tool::{IntoToolRoute, ToolRoute};
@@ -6,7 +6,10 @@ use tool::{IntoToolRoute, ToolRoute};
 use super::ServerHandler;
 use crate::{
     RoleServer, Service,
-    model::{ClientNotification, ClientRequest, ListPromptsResult, ListToolsResult, ServerResult},
+    model::{
+        ClientNotification, ClientRequest, ListPromptsResult, ListToolsResult, ProtocolVersion,
+        ServerResult,
+    },
     service::NotificationContext,
 };
 
@@ -154,6 +157,10 @@ where
             .get_or_insert_with(Default::default)
             .list_changed = Some(true);
         info
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        ServerHandler::supported_protocol_versions(&self.service)
     }
 }
 

@@ -6,20 +6,20 @@
 
 An official Rust Model Context Protocol SDK implementation with tokio async runtime.
 
-> **Migrating to 1.x?** See the [migration guide](https://github.com/modelcontextprotocol/rust-sdk/discussions/716) for breaking changes and upgrade instructions.
+> **Migrating to 3.x?** See the [migration guide](https://github.com/modelcontextprotocol/rust-sdk/discussions/969) for breaking changes and upgrade instructions.
 
 This repository contains the following crates:
 
 - [rmcp](crates/rmcp): The core crate providing the RMCP protocol implementation - see [rmcp](crates/rmcp/README.md)
 - [rmcp-macros](crates/rmcp-macros): A procedural macro crate for generating RMCP tool implementations - see [rmcp-macros](crates/rmcp-macros/README.md)
 
-This SDK tracks the MCP **`2026-07-28`** draft (the current development spec)
-while remaining fully compatible with the stable **`2025-11-25`** release and
-earlier versions. New `2026-07-28` features — server discovery & negotiation,
+This SDK implements the stable MCP **`2026-07-28`** specification while
+remaining fully compatible with the **`2025-11-25`** release and earlier
+versions. Features introduced in `2026-07-28` — server discovery & negotiation,
 transport-neutral subscriptions, long-running tasks, response caching,
 multi-round-trip requests, and standard HTTP routing headers — are documented
-below alongside the stable feature set. For the full MCP specification, see
-[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/draft).
+below. For the full MCP specification, see
+[modelcontextprotocol.io](https://modelcontextprotocol.io/specification/2026-07-28).
 
 ## Table of Contents
 
@@ -28,6 +28,7 @@ below alongside the stable feature set. For the full MCP specification, see
 - [Resources](#resources)
 - [Prompts](#prompts)
 - [Sampling](#sampling)
+- [Elicitation](#elicitation)
 - [Roots](#roots)
 - [Logging](#logging)
 - [Completions](#completions)
@@ -38,6 +39,10 @@ below alongside the stable feature set. For the full MCP specification, see
 - [Caching](#caching)
 - [Standard HTTP Headers](#standard-http-headers)
 - [Stateless Streamable HTTP](#stateless-streamable-http)
+- [Transports](#transports)
+- [Pagination](#pagination)
+- [Capability & Protocol Version Negotiation](#capability--protocol-version-negotiation)
+- [JSON Schema 2020-12](#json-schema-2020-12)
 - [Examples](#examples)
 - [OAuth Support](#oauth-support)
 - [Related Resources](#related-resources)
@@ -94,10 +99,10 @@ Use [`ClientServiceExt::serve_with_lifecycle`](crates/rmcp/src/service/client.rs
 select another lifecycle explicitly:
 
 ```rust, ignore
-use rmcp::{ClientInfo, ClientLifecycleMode, ClientServiceExt, ProtocolVersion};
+use rmcp::{ClientLifecycleMode, ClientServiceExt, ProtocolVersion, model::ClientConfig};
 
 // Start directly with server/discover and include client metadata on every request.
-let client = ClientInfo::default()
+let client = ClientConfig::default()
     .serve_with_lifecycle(
         transport,
         ClientLifecycleMode::Discover {
@@ -107,8 +112,8 @@ let client = ClientInfo::default()
     .await?;
 
 // Or probe the discover lifecycle and fall back when a legacy server reports
-// that server/discover is not implemented.
-let client = ClientInfo::default()
+// that server/discover is not implemented or does not respond within 10 seconds.
+let client = ClientConfig::default()
     .serve_with_lifecycle(
         transport,
         ClientLifecycleMode::Auto {
@@ -185,7 +190,7 @@ let quit_reason = server.cancel().await?;
 
 Tools let servers expose callable functions to clients. Each tool has a name, description, and a JSON Schema for its parameters. Clients discover tools via `list_tools` and invoke them via `call_tool`.
 
-**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/draft/server/tools)
+**MCP Spec:** [Tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 
 ### Server-side
 
@@ -254,6 +259,77 @@ impl ServerHandler for Calculator {}
 
 See [`crates/rmcp-macros`](crates/rmcp-macros/README.md) for full macro documentation.
 
+#### Tool result content types
+
+Beyond a plain `String`, tools can return images, audio, embedded resources, and
+mixed content. Build a `CallToolResult` from a `Vec<ContentBlock>`:
+
+```rust,ignore
+use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
+
+#[tool(description = "Render a chart")]
+async fn chart(&self) -> Result<CallToolResult, McpError> {
+    let png_base64 = render_png(); // base64-encoded image bytes
+    let wav_base64 = render_wav(); // base64-encoded audio bytes
+
+    Ok(CallToolResult::success(vec![
+        // Text
+        ContentBlock::text("Here is your chart:"),
+        // Image — base64 data + MIME type
+        ContentBlock::image(png_base64, "image/png"),
+        // Audio — base64 data + MIME type
+        ContentBlock::audio(wav_base64, "audio/wav"),
+        // Embedded resource — inline text (or ResourceContents::blob for binary)
+        ContentBlock::resource(ResourceContents::text(
+            "chart source data",
+            "chart://last/data.csv",
+        )),
+    ]))
+}
+# fn render_png() -> String { String::new() }
+# fn render_wav() -> String { String::new() }
+```
+
+Image and audio data are base64 strings with a MIME type. For embedded
+resources, `ResourceContents::text(..)` inlines text and
+`ResourceContents::blob(base64, uri)` inlines binary.
+
+#### Error handling
+
+Two failure modes, chosen by **whose problem it is**:
+
+- **Tool-level error** — `Ok(CallToolResult::error(vec![...]))`. The tool ran but
+  failed in a way the caller should see (no rows matched, upstream 500). The
+  client renders your `content`, so the message reaches the user. Use this for
+  almost every "the tool ran and didn't work" case.
+- **Protocol error** — `Err(McpError)` with a JSON-RPC code (e.g.
+  `McpError::invalid_params(..)`). Use this when the server can't route or process
+  the request at all; clients render these opaquely, so the caller does **not**
+  see your message.
+
+```rust,ignore
+use rmcp::model::{CallToolResult, ContentBlock};
+use rmcp::ErrorData as McpError;
+
+#[tool(description = "Look up a record")]
+async fn lookup(&self, Parameters(args): Parameters<LookupArgs>) -> Result<CallToolResult, McpError> {
+    // Malformed request — the server can't run anything → protocol error.
+    if args.query.is_empty() {
+        return Err(McpError::invalid_params("query must be non-empty", None));
+    }
+
+    // Tool ran, no result → tool-level error the user should see.
+    let rows = self.run_query(&args.query).await;
+    if rows.is_empty() {
+        return Ok(CallToolResult::error(vec![ContentBlock::text(
+            format!("no rows matched '{}'", args.query),
+        )]));
+    }
+
+    Ok(CallToolResult::success(vec![ContentBlock::text(format_rows(&rows))]))
+}
+```
+
 ### Client-side
 
 ```rust,ignore
@@ -274,7 +350,7 @@ let result = client.call_tool(CallToolRequestParams::new("add")).await?;
 
 Resources let servers expose data (files, database records, API responses) that clients can read. Each resource is identified by a URI and returns content as text or binary (base64-encoded) data. Resource templates allow servers to declare URI patterns with dynamic parameters.
 
-**MCP Spec:** [Resources](https://modelcontextprotocol.io/specification/draft/server/resources)
+**MCP Spec:** [Resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources)
 
 ### Server-side
 
@@ -293,8 +369,8 @@ use serde_json::json;
 struct MyServer;
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_resources()
                 .build(),
@@ -328,6 +404,28 @@ impl ServerHandler for MyServer {
             "memo://insights" => Ok(ReadResourceResult::new(vec![
                 ResourceContents::text("Analysis results...", &request.uri),
             ])),
+            // Binary resource — base64-encode the bytes and return a blob.
+            "file:///logo.png" => {
+                use base64::{Engine, prelude::BASE64_STANDARD};
+                let bytes = std::fs::read("logo.png").unwrap_or_default();
+                let blob = BASE64_STANDARD.encode(bytes);
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::blob(blob, &request.uri)
+                        .with_mime_type("image/png"),
+                ]))
+            }
+            // Template-expanded URI — the client fills in `{user_id}` from the
+            // `users://{user_id}/profile` template declared in
+            // `list_resource_templates`, and the server reads the concrete URI.
+            uri if uri.starts_with("users://") && uri.ends_with("/profile") => {
+                let user_id = uri
+                    .trim_start_matches("users://")
+                    .trim_end_matches("/profile");
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                    format!(r#"{{"id": "{user_id}", "name": "User {user_id}"}}"#),
+                    uri,
+                )]))
+            }
             _ => Err(McpError::resource_not_found(
                 "resource_not_found",
                 Some(json!({ "uri": request.uri })),
@@ -340,8 +438,12 @@ impl ServerHandler for MyServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
+        // Declare a URI template with a `{user_id}` parameter. Clients expand it
+        // (e.g. `users://42/profile`) and pass the concrete URI to `read_resource`.
         Ok(ListResourceTemplatesResult {
-            resource_templates: vec![],
+            resource_templates: vec![
+                ResourceTemplate::new("users://{user_id}/profile", "user-profile"),
+            ],
             next_cursor: None,
             meta: None,
         })
@@ -362,8 +464,12 @@ let result = client.read_resource(
     ReadResourceRequestParams::new("file:///config.json"),
 ).await?;
 
-// List resource templates
+// List resource templates, then read a resource through one by expanding its
+// parameters into a concrete URI (`users://{user_id}/profile` → `users://42/profile`).
 let templates = client.list_all_resource_templates().await?;
+let profile = client.read_resource(
+    ReadResourceRequestParams::new("users://42/profile"),
+).await?;
 ```
 
 ### Notifications
@@ -409,7 +515,7 @@ impl ClientHandler for MyClient {
 
 Prompts are reusable message templates that servers expose to clients. They accept typed arguments and return conversation messages. The `#[prompt]` macro handles argument validation and routing automatically.
 
-**MCP Spec:** [Prompts](https://modelcontextprotocol.io/specification/draft/server/prompts)
+**MCP Spec:** [Prompts](https://modelcontextprotocol.io/specification/2026-07-28/server/prompts)
 
 ### Server-side
 
@@ -476,8 +582,8 @@ impl MyServer {
 
 #[prompt_handler]
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_prompts().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().build())
     }
 }
 ```
@@ -486,6 +592,30 @@ Prompt functions support several return types:
 - `Vec<PromptMessage>` -- simple message list
 - `GetPromptResult` -- messages with an optional description
 - `Result<T, McpError>` -- either of the above, with error handling
+
+#### Image and embedded-resource content
+
+A `PromptMessage` can also carry an image or embedded resource. Use the
+dedicated constructors (image/audio require the `base64` feature):
+
+```rust,ignore
+use rmcp::model::{PromptMessage, Role};
+
+// Image content — raw bytes are base64-encoded for you.
+let screenshot: &[u8] = load_png();
+let msg = PromptMessage::new_image(Role::User, screenshot, "image/png", None, None);
+
+// Embedded resource — inline a text resource by URI. Pass `Some(text)` for a
+// text resource, or `None` for a blob resource.
+let msg = PromptMessage::new_resource(
+    Role::User,
+    "file:///spec.md".to_string(),
+    Some("text/markdown".to_string()),
+    Some("# Specification\n...".to_string()),
+    None, None, None,
+);
+# fn load_png() -> &'static [u8] { &[] }
+```
 
 ### Client-side
 
@@ -523,7 +653,7 @@ context.peer.notify_prompt_list_changed().await?;
 
 Sampling flips the usual direction: the server asks the client to run an LLM completion. The server sends a `create_message` request, the client processes it through its LLM, and returns the result.
 
-**MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/draft/client/sampling)
+**MCP Spec:** [Sampling](https://modelcontextprotocol.io/specification/2026-07-28/client/sampling)
 
 ### Server-side (requesting sampling)
 
@@ -589,13 +719,147 @@ impl ClientHandler for MyClient {
 
 ---
 
+## Elicitation
+
+Elicitation lets a server pause mid-operation to ask the user for input, in one
+of two modes: **form mode** (structured fields with a JSON Schema) or **URL
+mode** (send the user to a web page and wait for completion).
+
+**MCP Spec:** [Elicitation](https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation)
+
+### Server-side (form mode)
+
+Define a struct deriving `JsonSchema`, mark it `elicit_safe!`, and call
+`elicit::<T>()` on the peer. Schema validation, defaults, and enum choices all
+come from the type.
+
+```rust,ignore
+use rmcp::{elicit_safe, model::*, service::{RequestContext, RoleServer}};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[schemars(description = "User information")]
+pub struct UserInfo {
+    #[schemars(description = "User's name")]
+    pub name: String,
+    // Optional field; omitted if the user doesn't provide it.
+    #[serde(default)]
+    #[schemars(description = "Preferred greeting")]
+    pub greeting: Option<String>,
+}
+
+// Whitelist the type for elicitation (schema-validated on both ends).
+elicit_safe!(UserInfo);
+
+#[tool(description = "Greet the user")]
+async fn greet(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
+    // Returns Ok(Some(UserInfo)) if the user accepts.
+    // Decline and cancel are returned as ElicitationError variants.
+    match ctx.peer.elicit::<UserInfo>("Please provide your name").await {
+        Ok(Some(info)) => Ok(CallToolResult::success(vec![ContentBlock::text(
+            format!("Hello, {}!", info.name),
+        )])),
+        Ok(None) => Ok(CallToolResult::success(vec![ContentBlock::text(
+            "No name provided.",
+        )])),
+        Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
+            format!("Elicitation failed: {e}"),
+        )])),
+    }
+}
+```
+
+#### Enum values
+
+Enum fields become a choice list. `schemars` needs two hints to inline and type
+the enum correctly:
+
+```rust,ignore
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[schemars(inline)]                     // inline the enum into the parent schema
+#[schemars(extend("type" = "string"))]  // schemars omits `type` for enums; add it
+enum Priority {
+    #[schemars(title = "Low priority")]
+    #[default]
+    Low,
+    #[schemars(title = "High priority")]
+    High,
+}
+```
+
+See [`examples/servers/src/elicitation_enum_inference.rs`](examples/servers/src/elicitation_enum_inference.rs)
+for single-select, multi-select, titled, and defaulted enum forms.
+
+### Server-side (URL mode)
+
+For flows a form can't capture (OAuth consent, a payment page), send the user to
+a URL. `elicit_url` returns the user's `ElicitationAction` rather than typed data:
+
+```rust,ignore
+use rmcp::model::ElicitationAction;
+use url::Url;
+
+let action = ctx.peer.elicit_url(
+    "Please complete setup in your browser",
+    Url::parse("https://example.com/setup").unwrap(),
+    "setup-123", // a unique elicitation id
+).await?;
+
+match action {
+    ElicitationAction::Accept  => { /* user consented */ }
+    ElicitationAction::Decline => { /* user declined */ }
+    ElicitationAction::Cancel  => { /* user aborted */ }
+}
+```
+
+### Client-side
+
+Implement `ClientHandler::create_elicitation()`, matching on the request variant
+to handle form vs. URL mode:
+
+```rust,ignore
+use rmcp::{ClientHandler, model::*, service::{RequestContext, RoleClient}};
+
+impl ClientHandler for MyClient {
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, ErrorData> {
+        match request {
+            ElicitRequestParams::FormElicitationParams { message, .. } => {
+                // Show `message` + the requested schema, collect input, then:
+                Ok(ElicitResult {
+                    action: ElicitationAction::Accept,
+                    content: Some(rmcp::object!({ "name": "Ada" })),
+                    meta: None,
+                })
+            }
+            ElicitRequestParams::UrlElicitationParams { url, .. } => {
+                // Open `url`, wait for the user, then report the action.
+                let _ = url;
+                Ok(ElicitResult { action: ElicitationAction::Accept, content: None, meta: None })
+            }
+        }
+    }
+}
+```
+
+On completion the client sends a `notifications/elicitation/response`
+notification to release the waiting server-side `elicit_url` call.
+
+**Example:** [`examples/servers/src/elicitation_stdio.rs`](examples/servers/src/elicitation_stdio.rs) (form + URL), [`examples/servers/src/elicitation_enum_inference.rs`](examples/servers/src/elicitation_enum_inference.rs) (enum forms)
+
+---
+
 ## Roots
 
 > **Deprecated (SEP-2577):** Roots is deprecated and will be removed in a future release. It remains fully functional for now. See [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577).
 
 Roots tell servers which directories or projects the client is working in. A root is a URI (typically `file://`) pointing to a workspace or repository. Servers can query roots to know where to look for files and how to scope their work.
 
-**MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/draft/client/roots)
+**MCP Spec:** [Roots](https://modelcontextprotocol.io/specification/2026-07-28/client/roots)
 
 ### Server-side
 
@@ -660,7 +924,7 @@ client.notify_roots_list_changed().await?;
 
 Servers can send structured log messages to clients. The client sets a minimum severity level, and the server sends messages through the peer notification interface.
 
-**MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/draft/server/utilities/logging)
+**MCP Spec:** [Logging](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/logging)
 
 ### Server-side
 
@@ -670,8 +934,8 @@ Enable the logging capability, handle level changes from the client, and send lo
 use rmcp::{ServerHandler, model::*, service::RequestContext};
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_logging()
                 .build(),
@@ -733,7 +997,7 @@ client.set_level(SetLevelRequestParams::new(LoggingLevel::Warning)).await?;
 
 Completions give auto-completion suggestions for prompt or resource template arguments. As a user fills in arguments, the client can ask the server for suggestions based on what's already been entered.
 
-**MCP Spec:** [Completions](https://modelcontextprotocol.io/specification/draft/server/utilities/completion)
+**MCP Spec:** [Completions](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/completion)
 
 ### Server-side
 
@@ -743,8 +1007,8 @@ Enable the completions capability and implement the `complete()` handler. Use `r
 use rmcp::{ErrorData as McpError, ServerHandler, model::*, service::RequestContext, RoleServer};
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_completions()
                 .enable_prompts()
@@ -758,6 +1022,7 @@ impl ServerHandler for MyServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, McpError> {
         let values = match &request.r#ref {
+            // Completion for a prompt argument (`ref/prompt`).
             Reference::Prompt(prompt_ref) if prompt_ref.name == "sql_query" => {
                 match request.argument.name.as_str() {
                     "operation" => vec!["SELECT", "INSERT", "UPDATE", "DELETE"],
@@ -775,6 +1040,17 @@ impl ServerHandler for MyServer {
                             } else { vec![] }
                         } else { vec![] }
                     }
+                    _ => vec![],
+                }
+            }
+            // Completion for a resource-template argument (`ref/resource`). The
+            // `uri` identifies the template (e.g. `users://{user_id}/profile`)
+            // and `argument.name` is the template variable being completed.
+            Reference::Resource(resource_ref)
+                if resource_ref.uri == "users://{user_id}/profile" =>
+            {
+                match request.argument.name.as_str() {
+                    "user_id" => vec!["1", "2", "42"],
                     _ => vec![],
                 }
             }
@@ -799,12 +1075,22 @@ impl ServerHandler for MyServer {
 ```rust
 use rmcp::model::*;
 
+// Completion for a prompt argument.
 let result = client.complete(CompleteRequestParams::new(
     Reference::for_prompt("sql_query"),
     ArgumentInfo::new("operation", "SEL"),
 )).await?;
 
 // result.completion.values contains suggestions like ["SELECT"]
+
+// Completion for a resource-template argument: reference the template by URI
+// and complete one of its variables (`user_id`).
+let resource_completion = client.complete(CompleteRequestParams::new(
+    Reference::for_resource("users://{user_id}/profile"),
+    ArgumentInfo::new("user_id", "4"),
+)).await?;
+
+// resource_completion.completion.values contains suggestions like ["42"]
 ```
 
 **Example:** [`examples/servers/src/completion_stdio.rs`](examples/servers/src/completion_stdio.rs)
@@ -815,7 +1101,7 @@ let result = client.complete(CompleteRequestParams::new(
 
 Notifications are fire-and-forget messages -- no response is expected. They cover progress updates, cancellation, and lifecycle events. Both sides can send and receive them.
 
-**MCP Spec:** [Notifications](https://modelcontextprotocol.io/specification/draft/basic#notifications)
+**MCP Spec:** [Notifications](https://modelcontextprotocol.io/specification/2026-07-28/basic#notifications)
 
 ### Progress notifications
 
@@ -865,6 +1151,55 @@ impl ServerHandler for MyServer {
 }
 ```
 
+### Ping
+
+Either side can send a `ping` request to check that its counterpart is still
+responsive and the connection is alive. A ping carries no parameters and the
+receiver replies with an empty result. Because pings can flow in both
+directions, `rmcp` handles them symmetrically:
+
+- **Sending a ping** — construct a `PingRequest` and send it over the peer.
+  A client pings the server with `ClientRequest::PingRequest`; a server pings
+  the client with `ServerRequest::PingRequest`. `send_request` resolves once the
+  empty response arrives, so a returned `Ok` confirms the peer is reachable:
+
+```rust
+use rmcp::model::{PingRequest, ServerRequest};
+
+// From a server, ping the connected client to verify it is still alive.
+context.peer
+    .send_request(ServerRequest::PingRequest(PingRequest::default()))
+    .await?;
+```
+
+```rust
+use rmcp::model::{ClientRequest, PingRequest};
+
+// From a client, ping the server. `running` is the value returned by serve().
+running
+    .send_request(ClientRequest::PingRequest(PingRequest::default()))
+    .await?;
+```
+
+- **Responding to a ping** — `rmcp` answers incoming pings automatically. The
+  default `ping` method on `ServerHandler` and `ClientHandler` returns an empty
+  result, so no code is required. Override it only if you want to run custom
+  logic (for example, health checks) when a ping arrives:
+
+```rust
+impl ServerHandler for MyServer {
+    async fn ping(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), McpError> {
+        // Custom liveness logic here, if any.
+        Ok(())
+    }
+}
+```
+
+**MCP Spec:** [Ping](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping)
+
 ### Initialized notification
 
 Legacy clients send `initialized` after the `initialize` handshake completes.
@@ -903,7 +1238,7 @@ Protocol `2026-07-28` replaces `resources/subscribe`, `resources/unsubscribe`, a
 the standalone HTTP GET stream with the transport-neutral, long-lived
 `subscriptions/listen` request. Each requested notification category is opt-in.
 
-**MCP Spec:** [Subscriptions](https://modelcontextprotocol.io/specification/draft/basic/patterns/subscriptions)
+**MCP Spec:** [Subscriptions](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions)
 
 ### Server-side
 
@@ -918,8 +1253,8 @@ use rmcp::{
 };
 
 impl ServerHandler for MyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -995,7 +1330,7 @@ one or more embedded server requests (elicitation, sampling, or roots) and then
 retry. The exchange is stateless — the server carries its progress in an opaque
 `requestState` that the client echoes back verbatim.
 
-**MCP Spec:** [Multiple Round-Trip Requests](https://modelcontextprotocol.io/specification/draft/server/tools#multiple-round-trip-requests)
+**MCP Spec:** [Multiple Round-Trip Requests](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#multiple-round-trip-requests)
 
 ### Server-side
 
@@ -1028,11 +1363,21 @@ async fn call_tool(&self, request: CallToolRequestParams, _ctx: RequestContext<R
 }
 ```
 
-> **`requestState` is untrusted.** The client echoes it back verbatim, so a
-> stateless server that stores meaningful data in it MUST verify integrity
-> first. Enable the `request-state` feature and use `RequestStateCodec` to seal
-> and open it (HMAC-tagged), or keep state server-side and use `requestState`
-> only as an opaque handle.
+> **`requestState` is untrusted.** [SEP-2322 requires servers to validate
+> it](https://modelcontextprotocol.io/seps/2322-MRTR#protocol-requirements-for-ephemeral-workflow)
+> because the client echoes it back verbatim. A stateless server that stores
+> meaningful data in it MUST verify integrity first. Enable the `request-state`
+> feature and use `RequestStateCodec` to seal and open it (HMAC-tagged), or keep
+> state server-side and use `requestState` only as an opaque handle.
+
+For multi-replica deployments, use `RequestStateCodec::new_with_keyring` to
+rotate signing keys without invalidating in-flight requests:
+
+1. Deploy the old and new keys everywhere, continuing to emit `rs1` with the
+   old key via `with_rs1_signing("old")`.
+2. Start emitting `rs2` with the new key while retaining the old key via
+   `with_rs1_fallback("old")`.
+3. After the maximum `requestState` lifetime has elapsed, remove the old key.
 
 ### Client-side
 
@@ -1098,7 +1443,7 @@ See [`servers_task_stdio`](examples/servers/src/task_stdio.rs) and the matching
 ## Caching
 
 `rmcp` clients transparently cache responses that carry the
-[SEP-2549](https://modelcontextprotocol.io/specification/draft/server/utilities/caching)
+[SEP-2549](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching)
 caching hints (`ttlMs` / `cacheScope`) for `server/discover`, `tools/list`,
 `prompts/list`, `resources/list`, `resources/templates/list`, and `resources/read`.
 
@@ -1150,7 +1495,7 @@ validates these automatically once a connection negotiates `2026-07-28` or
 newer — no call-site changes are required, and older negotiated versions are
 untouched.
 
-**MCP Spec:** [Header standardization](https://modelcontextprotocol.io/specification/draft/basic/transports#header)
+**MCP Spec:** [Header standardization](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports#header)
 
 - `Mcp-Method` — the JSON-RPC method (e.g. `tools/call`).
 - `Mcp-Name` — the target name, sourced from `params.name` (`tools/call`,
@@ -1186,7 +1531,7 @@ no `Mcp-Session-Id`, no standalone GET/DELETE stream, and no `Last-Event-ID`
 resumption. The `legacy_session_mode` flag below only controls behavior for
 *legacy* protocol versions (`< 2026-07-28`).
 
-**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/draft/basic/transports)
+**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
 
 ### Server-side
 
@@ -1220,6 +1565,13 @@ let router = axum::Router::new().nest_service("/mcp", service);
 > Because there is no per-session state, the `service_factory` runs per request.
 > Keep shared state (DB pools, caches) in a `Clone` handle captured by the
 > closure; don't rely on in-memory state surviving between requests.
+>
+> Modern-only servers can additionally call
+> `with_stateless_protocol_metadata_required(true)` to reject the compatibility
+> fallback for requests missing their per-request protocol signals. rmcp clients
+> negotiated below `2026-07-28` do not attach that body metadata and will be
+> rejected, so pair this option with a `supported_protocol_versions`
+> implementation that advertises only `2026-07-28` and later.
 
 ### Client-side
 
@@ -1232,10 +1584,228 @@ use rmcp::transport::StreamableHttpClientTransport;
 
 // Defaults are stateless-friendly.
 let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
-let client = ClientInfo::default().serve(transport).await?;
+let client = ClientConfig::default().serve(transport).await?;
 ```
 
 **Example:** [`examples/servers/src/counter_streamhttp.rs`](examples/servers/src/counter_streamhttp.rs) (server), [`examples/clients/src/streamable_http.rs`](examples/clients/src/streamable_http.rs) (client)
+
+---
+
+## Transports
+
+A transport moves JSON-RPC messages between client and server. Any `Transport`
+impl can be passed to `.serve(..)`; `rmcp` ships the common ones behind Cargo
+features.
+
+**MCP Spec:** [Transports](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
+
+| Transport                    | Feature(s)                                   | Notes |
+| ---------------------------- | -------------------------------------------- | ----- |
+| **stdio**                    | `transport-io` (client + server)             | Communicate over `stdin`/`stdout`; the standard way to launch local MCP servers as child processes. |
+| **Child process** (client)   | `transport-child-process`                    | Spawn a server binary and talk to it over its stdio. |
+| **Streamable HTTP** (server) | `transport-streamable-http-server`           | The current HTTP transport. Exposes a Tower service you can mount on any router. |
+| **Streamable HTTP** (client) | `transport-streamable-http-client-reqwest`   | HTTP client transport built on `reqwest`. |
+| **Worker / in-process**      | `transport-worker`                           | For embedding or testing without real I/O. |
+
+### stdio
+
+```rust,ignore
+use rmcp::{ServiceExt, transport::stdio};
+
+// Server: serve over stdin/stdout.
+let server = MyServer.serve(stdio()).await?;
+server.waiting().await?;
+```
+
+```rust,ignore
+use rmcp::{ServiceExt, transport::{TokioChildProcess, ConfigureCommandExt}};
+use tokio::process::Command;
+
+// Client: launch a server binary and talk to it over its stdio.
+let transport = TokioChildProcess::new(Command::new("uvx").configure(|cmd| {
+    cmd.arg("mcp-server-git");
+}))?;
+let client = ().serve(transport).await?;
+```
+
+### Streamable HTTP
+
+`StreamableHttpService` is a Tower service — mount it on any `axum`/`hyper`
+router (see [Stateless Streamable HTTP](#stateless-streamable-http) for the full
+server example). The client transport connects with a single URI:
+
+```rust,ignore
+use rmcp::transport::StreamableHttpClientTransport;
+
+let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
+let client = ClientConfig::default().serve(transport).await?;
+```
+
+The client allows up to 16 ordinary http POSTs at once. Configure this with
+`StreamableHttpClientTransportConfig::with_uri(url).max_concurrent_requests(n)`;
+`1` keeps ordinary POSTs serial, and `0` is treated as `1`. An open sse response
+stream does not count against this limit. Cancellation and replies use a
+separate queue with one extra POST slot. Configure their timeout with
+`control_request_timeout` (default: five seconds). The timeout starts when the
+POST starts, excluding time in the queue. Cancellation stops a queued or active
+POST immediately.
+For an open legacy response stream, the client stops reading but keeps the stream
+alive until the cancellation send finishes or is dropped. This lets custom http
+adapters handle cancellation before their stream state is removed.
+
+Session recovery waits up to five seconds for old POSTs, then stops any that
+remain. Those POSTs are not retried because the server may have processed them.
+Configure this wait and the separate
+reinitialization timeout with `session_recovery_timeout`. Callers still decide
+which tools may run at the same time and which need approval.
+
+#### Server-Sent Events (SSE)
+
+Streamable HTTP responses arrive as either a single `application/json` body or a
+`text/event-stream` (Server-Sent Events) stream when the server pushes
+notifications or requests before the result. `rmcp` handles both automatically
+(SSE parsing lives behind the `client-side-sse` feature). There is no separate
+"SSE transport" to configure — it's an implementation detail of Streamable HTTP.
+
+#### Legacy HTTP+SSE transport (`2024-11-05`) — intentionally not provided
+
+The standalone two-endpoint **HTTP+SSE transport** defined in protocol revision
+`2024-11-05` (a separate `GET` SSE channel plus a `POST` message endpoint) is a
+**deliberate non-goal** for `rmcp`. It was [replaced by Streamable HTTP in the
+`2025-03-26` revision](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports),
+and `rmcp` targets current spec revisions (`2025-11-25` and `2026-07-28`), so it
+ships **no legacy HTTP+SSE client or server transport**.
+
+What to use instead:
+
+- **New client/server code** — use [Streamable HTTP](#streamable-http). It carries
+  the same SSE streaming semantics over a single endpoint and is the transport all
+  supported spec revisions expect.
+- **Server-to-client streaming** (push notifications, resource updates) — this is
+  built into Streamable HTTP; see [Subscriptions](#subscriptions).
+- **Talking to a legacy `2024-11-05`-only server** — front it with a proxy that
+  speaks Streamable HTTP, or pin a dependency to a release that predates the
+  transport's removal. `rmcp` will not add the legacy transport back.
+
+This is a supported-surface decision, not a missing feature: every transport
+`rmcp` implements is listed in the [Transports](#transports) table above.
+
+---
+
+## Pagination
+
+List operations (`tools/list`, `prompts/list`, `resources/list`,
+`resources/templates/list`) are paginated via a `next_cursor`. The `list_all_*`
+helpers walk every page for you:
+
+```rust,ignore
+// Fetches all pages transparently.
+let tools     = client.list_all_tools().await?;
+let prompts   = client.list_all_prompts().await?;
+let resources = client.list_all_resources().await?;
+```
+
+To page manually, call the single-page method and follow `next_cursor` until
+it's `None`:
+
+```rust,ignore
+use rmcp::model::PaginatedRequestParams;
+
+let mut cursor = None;
+loop {
+    let page = client
+        .list_tools(Some(PaginatedRequestParams { meta: None, cursor }))
+        .await?;
+    for tool in &page.tools {
+        // handle each tool
+    }
+    cursor = page.next_cursor;
+    if cursor.is_none() {
+        break;
+    }
+}
+```
+
+On the server, return a `next_cursor` from your `list_*` handler when more pages
+remain (`None` when complete).
+
+**MCP Spec:** [Pagination](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/pagination)
+
+---
+
+## Capability & Protocol Version Negotiation
+
+### Capabilities
+
+At initialization, client and server exchange **capabilities** so each side
+knows what the other supports. Declare yours with the `ServerCapabilities`
+builder in `get_info()`:
+
+```rust,ignore
+use rmcp::model::{ServerCapabilities, ServerConfig};
+
+fn get_info(&self) -> ServerConfig {
+    ServerConfig::new(
+        ServerCapabilities::builder()
+            .enable_tools()
+            .enable_prompts()
+            .enable_resources()
+            .enable_resources_subscribe()
+            .enable_tool_list_changed()
+            .enable_logging()
+            .build(),
+    )
+}
+```
+
+Clients do the same via `ClientCapabilities::builder()`. Macros like
+`#[tool_handler]` / `#[prompt_handler]` set the relevant flags automatically.
+After connecting, read the peer's capabilities via `peer.peer_info()`.
+
+### Protocol version
+
+MCP is versioned by date. `rmcp` negotiates automatically on connect — the
+client offers a preferred `ProtocolVersion` and falls back to one the server
+supports:
+
+```rust,ignore
+use rmcp::model::ProtocolVersion;
+
+ProtocolVersion::LATEST;        // newest stable version this SDK defaults to
+ProtocolVersion::V_2026_07_28;  // a specific version constant
+ProtocolVersion::KNOWN_VERSIONS; // every version this SDK understands
+```
+
+Version-specific behavior (SEP-2243 headers, SEP-2567 stateless serving, the
+SEP-2575 subscription model) is gated on the negotiated version, so older clients
+keep working while newer ones opt in.
+
+**MCP Spec:** [Versioning and Compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
+
+---
+
+## JSON Schema 2020-12
+
+Deriving `schemars::JsonSchema` on your parameter and result types generates
+[JSON Schema draft 2020-12](https://json-schema.org/) — the dialect the MCP spec
+requires — for the tool's `inputSchema` and `outputSchema`.
+
+```rust,ignore
+use rmcp::schemars;
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SearchParams {
+    /// Full-text query.
+    query: String,
+    /// Maximum number of results.
+    #[serde(default)]
+    limit: Option<u32>,
+}
+```
+
+Field names, types, and doc comments flow into the schema — no manual authoring
+needed. As of `2026-07-28` (SEP-2106), `outputSchema` may be any JSON Schema type
+(not only `object`) and `structuredContent` may be any JSON value.
 
 ---
 
@@ -1249,8 +1819,8 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 ## Related Resources
 
-- [MCP Specification](https://modelcontextprotocol.io/specification/draft)
-- [Schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/draft/schema.ts)
+- [MCP Specification](https://modelcontextprotocol.io/specification/2026-07-28)
+- [Schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
 
 ## Related Projects
 

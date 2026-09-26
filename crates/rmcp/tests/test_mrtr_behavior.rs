@@ -13,9 +13,16 @@ use std::sync::{
 
 use rmcp::{
     ClientHandler, ServerHandler,
+    handler::server::{
+        tool::{InputResponses as ToolInputResponses, RequestState},
+        wrapper::Parameters,
+    },
     model::*,
-    service::{RequestContext, RoleClient, RoleServer, ServiceError, serve_directly},
+    service::{RequestContext, RoleClient, RoleServer, Service, ServiceError, serve_directly},
+    tool, tool_handler, tool_router,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
 use serde_json::json;
 
 /// A `requestState` value with characters that must survive a byte-exact echo:
@@ -64,6 +71,54 @@ fn single_elicitation(state: &str) -> InputRequiredResult {
     let mut requests = InputRequests::new();
     requests.insert("answer".to_string(), elicitation_request("Name?"));
     InputRequiredResult::new(Some(requests), Some(state.into()))
+}
+
+#[derive(Clone)]
+struct MacroMrtrServer;
+
+#[derive(Deserialize, JsonSchema)]
+struct MacroMrtrArguments {
+    greeting: String,
+}
+
+#[tool_router]
+impl MacroMrtrServer {
+    #[tool(description = "Greet a user after collecting their name")]
+    async fn greet(
+        &self,
+        Parameters(arguments): Parameters<MacroMrtrArguments>,
+        RequestState(request_state): RequestState,
+        ToolInputResponses(input_responses): ToolInputResponses,
+    ) -> Result<CallToolResponse, ErrorData> {
+        match request_state.as_deref() {
+            None => Ok(single_elicitation("macro-state").into()),
+            Some("macro-state") => {
+                let name = input_responses
+                    .as_ref()
+                    .and_then(|responses| responses.get("answer"))
+                    .and_then(|response| response["content"]["name"].as_str())
+                    .ok_or_else(|| ErrorData::invalid_params("missing name response", None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                    "{}, {name}",
+                    arguments.greeting
+                ))])
+                .into())
+            }
+            Some(other) => Err(ErrorData::invalid_params(
+                format!("unexpected request state {other:?}"),
+                None,
+            )),
+        }
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for MacroMrtrServer {
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
+        info.protocol_version = ProtocolVersion::V_2026_07_28;
+        info
+    }
 }
 
 impl MrtrServer {
@@ -166,8 +221,8 @@ impl MrtrServer {
 }
 
 impl ServerHandler for MrtrServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -273,28 +328,29 @@ impl ClientHandler for MrtrClient {
 // Harness
 // =============================================================================
 
-fn client_info(protocol_version: ProtocolVersion) -> ClientInfo {
-    ClientInfo::new(
+fn client_info(protocol_version: ProtocolVersion) -> InitializeRequestParams {
+    InitializeRequestParams::new(
         ClientCapabilities::builder().enable_elicitation().build(),
         Implementation::new("mrtr-test-client", "0.0.0"),
     )
     .with_protocol_version(protocol_version)
 }
 
-fn server_info(protocol_version: ProtocolVersion) -> ServerInfo {
-    let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+fn server_info(protocol_version: ProtocolVersion) -> InitializeResult {
+    let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
     info.protocol_version = protocol_version;
     info
 }
 
 /// Runs `body` inside a `LocalSet` so `spawn_local` (used when the `local`
 /// feature is active) is available, wiring up a connected client/server pair.
-async fn with_pair<F, Fut>(
-    server: MrtrServer,
+async fn with_pair<S, F, Fut>(
+    server: S,
     client_protocol: ProtocolVersion,
     body: F,
 ) -> anyhow::Result<()>
 where
+    S: Service<RoleServer>,
     F: FnOnce(rmcp::service::RunningService<RoleClient, MrtrClient>) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>>,
 {
@@ -316,7 +372,7 @@ where
             let client = serve_directly::<RoleClient, _, _, _, _>(
                 MrtrClient,
                 client_transport,
-                Some(client_peer_info),
+                Some(client_peer_info.into()),
             );
 
             let result = body(client).await;
@@ -343,6 +399,23 @@ async fn client_auto_fulfills_input_required_tool_call() -> anyhow::Result<()> {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         Ok(())
     })
+    .await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tool_macro_receives_mrtr_retry_fields() -> anyhow::Result<()> {
+    with_pair(
+        MacroMrtrServer,
+        ProtocolVersion::V_2026_07_28,
+        |client| async move {
+            let arguments = serde_json::from_value(json!({ "greeting": "hello" })).unwrap();
+            let result = client
+                .call_tool(CallToolRequestParams::new("greet").with_arguments(arguments))
+                .await?;
+            assert_eq!(result.content[0].as_text().unwrap().text, "hello, Ferris");
+            Ok(())
+        },
+    )
     .await
 }
 
@@ -521,19 +594,23 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
     use rmcp::model::RequestStateCodec;
 
     // A shared per-process signing key, mirroring how a real server would derive one.
-    static KEY: &[u8] = b"integration-signing-key-32-bytes!";
+    const KEY: &[u8] = b"integration-signing-key-32-bytes!";
+    const _: () = assert!(
+        KEY.len() >= RequestStateCodec::MIN_KEY_LENGTH,
+        "KEY is shorter than RequestStateCodec::MIN_KEY_LENGTH",
+    );
 
     fn codec() -> &'static RequestStateCodec {
         static CODEC: OnceLock<RequestStateCodec> = OnceLock::new();
-        CODEC.get_or_init(|| RequestStateCodec::new(KEY))
+        CODEC.get_or_init(|| RequestStateCodec::new_unchecked(KEY))
     }
 
     #[derive(Clone, Default)]
     struct SealingServer;
 
     impl ServerHandler for SealingServer {
-        fn get_info(&self) -> ServerInfo {
-            let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        fn get_info(&self) -> ServerConfig {
+            let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
             info.protocol_version = ProtocolVersion::V_2026_07_28;
             info
         }
@@ -580,7 +657,7 @@ async fn request_state_codec_seals_and_verifies_through_the_loop() -> anyhow::Re
             let client = serve_directly::<RoleClient, _, _, _, _>(
                 MrtrClient,
                 client_transport,
-                Some(server_info(ProtocolVersion::V_2026_07_28)),
+                Some(server_info(ProtocolVersion::V_2026_07_28).into()),
             );
 
             let result = client

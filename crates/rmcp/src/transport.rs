@@ -100,7 +100,7 @@ pub use auth::JwtSigningAlgorithm;
 #[cfg(feature = "auth")]
 pub use auth::{
     AuthClient, AuthError, AuthorizationManager, AuthorizationRequest, AuthorizationSession,
-    AuthorizedHttpClient, ClientCredentialsConfig, CredentialStore,
+    AuthorizedHttpClient, ClientCredentialsConfig, CredentialRefreshGuard, CredentialStore,
     EXTENSION_OAUTH_CLIENT_CREDENTIALS, InMemoryCredentialStore, InMemoryStateStore,
     OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy,
     OAuthHttpRequest, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, StoredCredentials,
@@ -270,6 +270,27 @@ impl DynamicTransportError {
             transport_type_id,
             error,
         }
+    }
+
+    pub(crate) fn is_authorization_required(&self) -> bool {
+        let mut error = Some(self.error.as_ref() as &(dyn std::error::Error + 'static));
+        while let Some(current) = error {
+            #[cfg(feature = "auth")]
+            if matches!(
+                current.downcast_ref::<auth::AuthError>(),
+                Some(auth::AuthError::AuthorizationRequired)
+            ) {
+                return true;
+            }
+
+            #[cfg(feature = "transport-streamable-http-client")]
+            if current.is::<streamable_http_client::AuthRequiredError>() {
+                return true;
+            }
+
+            error = current.source();
+        }
+        false
     }
 
     pub fn downcast<T: Transport<R> + 'static, R: ServiceRole>(self) -> Result<T::Error, Self> {

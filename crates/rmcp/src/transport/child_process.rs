@@ -2,10 +2,7 @@ use std::process::Stdio;
 
 use futures::future::Future;
 use process_wrap::tokio::{ChildWrapper, CommandWrap};
-use tokio::{
-    io::AsyncRead,
-    process::{ChildStderr, ChildStdin, ChildStdout},
-};
+use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 
 use super::{RxJsonRpcMessage, Transport, TxJsonRpcMessage, async_rw::AsyncRwTransport};
 use crate::RoleClient;
@@ -56,32 +53,6 @@ impl Drop for ChildWithCleanup {
                 }
             });
         }
-    }
-}
-
-// we hold the child process with stdout, for it's easier to implement AsyncRead
-pin_project_lite::pin_project! {
-    pub struct TokioChildProcessOut {
-        child: ChildWithCleanup,
-        #[pin]
-        child_stdout: ChildStdout,
-    }
-}
-
-impl TokioChildProcessOut {
-    /// Get the process ID of the child process.
-    pub fn id(&self) -> Option<u32> {
-        self.child.inner.as_ref()?.id()
-    }
-}
-
-impl AsyncRead for TokioChildProcessOut {
-    fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        self.project().child_stdout.poll_read(cx, buf)
     }
 }
 
@@ -138,15 +109,6 @@ impl TokioChildProcess {
     /// Take ownership of the inner child process
     pub fn into_inner(mut self) -> Option<Box<dyn ChildWrapper>> {
         self.child.inner.take()
-    }
-
-    /// Split this helper into a reader (stdout) and writer (stdin).
-    #[deprecated(
-        since = "0.5.0",
-        note = "use the Transport trait implementation instead"
-    )]
-    pub fn split(self) -> (TokioChildProcessOut, ChildStdin) {
-        unimplemented!("This method is deprecated, use the Transport trait implementation instead");
     }
 }
 

@@ -151,16 +151,16 @@ async fn fetch_and_validate_client_metadata(client_id_url: &str) -> Result<Value
     }
 
     // token_endpoint_auth_method MUST NOT be any shared secret based method
-    if let Some(method) = json.get("token_endpoint_auth_method") {
-        if let Some(method_str) = method.as_str() {
-            let forbidden = [
-                "client_secret_post",
-                "client_secret_basic",
-                "client_secret_jwt",
-            ];
-            if forbidden.contains(&method_str) || method_str.starts_with("client_secret_") {
-                return Err("invalid_client: token_endpoint_auth_method MUST NOT be a shared secret based method".to_string());
-            }
+    if let Some(method) = json.get("token_endpoint_auth_method")
+        && let Some(method_str) = method.as_str()
+    {
+        let forbidden = [
+            "client_secret_post",
+            "client_secret_basic",
+            "client_secret_jwt",
+        ];
+        if forbidden.contains(&method_str) || method_str.starts_with("client_secret_") {
+            return Err("invalid_client: token_endpoint_auth_method MUST NOT be a shared secret based method".to_string());
         }
     }
 

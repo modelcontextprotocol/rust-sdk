@@ -19,6 +19,7 @@ rmcp = { path = "../crates/rmcp", features = [
     "elicitation",
     "auth",
     "auth-client-credentials-jwt",
+    "auth-enterprise-managed",
     "request-state",
     "transport-streamable-http-server",
     "transport-streamable-http-client-reqwest",
@@ -31,6 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = { version = "0.8", features = ["macros"] }
 anyhow = "1"
+oauth2 = { version = "5.0", default-features = false }
 reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2"
 url = "2"

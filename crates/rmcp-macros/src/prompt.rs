@@ -1,5 +1,5 @@
 use darling::{FromMeta, ast::NestedMeta};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Expr, Ident, ImplItemFn, ReturnType};
 
@@ -13,7 +13,7 @@ pub struct PromptAttribute {
     /// Human readable title of prompt
     pub title: Option<String>,
     /// Optional description of what the prompt does
-    pub description: Option<String>,
+    pub description: Option<darling::util::PreservedStrExpr>,
     /// Arguments that can be passed to the prompt
     pub arguments: Option<Expr>,
     /// Optional icons for the prompt
@@ -104,11 +104,8 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
     };
 
     let name = attribute.name.unwrap_or_else(|| fn_ident.to_string());
-    let description = if let Some(s) = attribute.description {
-        Some(Expr::Lit(syn::ExprLit {
-            attrs: Vec::new(),
-            lit: syn::Lit::Str(syn::LitStr::new(&s, Span::call_site())),
-        }))
+    let description = if let Some(description) = attribute.description {
+        Some(description.into())
     } else {
         fn_item.attrs.iter().try_fold(None, extract_doc_line)?
     };
@@ -133,7 +130,7 @@ pub fn prompt(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream>
         let new_output = syn::parse2::<ReturnType>({
             let mut lt = quote! { 'static };
             if let Some(receiver) = fn_item.sig.receiver()
-                && let Some((_, receiver_lt)) = receiver.reference.as_ref()
+                && let syn::ReceiverKind::Reference(_, receiver_lt, _) = &receiver.kind
             {
                 if let Some(receiver_lt) = receiver_lt {
                     lt = quote! { #receiver_lt };
@@ -256,6 +253,20 @@ mod test {
         } else {
             assert!(result_str.contains("+ Send +"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_async_prompt_preserves_receiver_lifetime() -> syn::Result<()> {
+        let attr = quote! {};
+        let input = quote! {
+            async fn test_prompt_with_lifetime<'a>(&'a self) -> String {
+                "ok".to_string()
+            }
+        };
+        let result = prompt(attr, input)?;
+
+        assert!(result.to_string().contains("+ 'a"));
         Ok(())
     }
 

@@ -19,7 +19,7 @@ use rmcp::{
     model::{
         ClientNotification, ClientRequest, DiscoverResult, GetMeta, Implementation,
         NotificationMetaObject, PromptListChangedNotification, ProtocolVersion, ServerCapabilities,
-        ServerInfo, ServerNotification, ServerResult, SubscriptionFilter,
+        ServerConfig, ServerNotification, ServerResult, SubscriptionFilter,
         SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
         SubscriptionsListenResult,
     },
@@ -44,13 +44,14 @@ impl ClientHandler for CountingClient {
 }
 
 impl ServerHandler for ToolsOnlyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
                 .build(),
         )
+        .with_server_info(Implementation::new("tools-only-server", "1.0.0"))
     }
 
     fn accepted_subscription_filter(
@@ -79,8 +80,8 @@ impl ServerHandler for ToolsOnlyServer {
 struct ToolsAndPromptsServer;
 
 impl ServerHandler for ToolsAndPromptsServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -119,8 +120,8 @@ impl ServerHandler for ToolsAndPromptsServer {
 struct ResourceSubscriptionServer;
 
 impl ServerHandler for ResourceSubscriptionServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_resources()
                 .enable_resources_subscribe()
@@ -181,8 +182,8 @@ impl ServerHandler for RemoteCancellationServer {
 struct FloodServer;
 
 impl ServerHandler for FloodServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -216,8 +217,8 @@ struct ClosedSinkServer {
 struct LeakyServer;
 
 impl ServerHandler for LeakyServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -262,8 +263,8 @@ impl rmcp::service::Service<RoleServer> for MalformedAcknowledgmentServer {
         context: RequestContext<RoleServer>,
     ) -> Result<ServerResult, rmcp::ErrorData> {
         match request {
-            ClientRequest::DiscoverRequest(_) => {
-                Ok(ServerResult::DiscoverResult(DiscoverResult::new(
+            ClientRequest::DiscoverRequest(_) => Ok(ServerResult::DiscoverResult(
+                DiscoverResult::new(
                     vec![ProtocolVersion::V_2026_07_28],
                     ServerCapabilities::builder()
                         .enable_tools()
@@ -271,9 +272,9 @@ impl rmcp::service::Service<RoleServer> for MalformedAcknowledgmentServer {
                         .enable_prompts()
                         .enable_prompts_list_changed()
                         .build(),
-                    Implementation::new("malformed-ack-server", "1.0.0"),
-                )))
-            }
+                )
+                .with_server_info(Implementation::new("malformed-ack-server", "1.0.0")),
+            )),
             ClientRequest::SubscriptionsListenRequest(_) => {
                 let mut acknowledgment = SubscriptionsAcknowledgedNotification::new(
                     SubscriptionsAcknowledgedNotificationParams::new(
@@ -313,14 +314,14 @@ impl rmcp::service::Service<RoleServer> for MalformedAcknowledgmentServer {
         Ok(())
     }
 
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        ServerInfo::default()
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        ServerConfig::default()
     }
 }
 
 impl ServerHandler for ClosedSinkServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -439,6 +440,13 @@ async fn listen_exposes_acknowledged_filter_and_graceful_result() -> anyhow::Res
     assert_eq!(
         result.meta.subscription_id().as_ref(),
         Some(subscription.id())
+    );
+    assert_eq!(
+        result
+            .meta
+            .server_info()
+            .expect("graceful result should contain valid server info"),
+        Implementation::new("tools-only-server", "1.0.0")
     );
 
     client.cancel().await?;

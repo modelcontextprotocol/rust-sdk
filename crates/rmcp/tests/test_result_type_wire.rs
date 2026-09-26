@@ -87,6 +87,68 @@ fn legacy_call_tool_result_round_trips_without_result_type() {
 }
 
 #[test]
+fn call_tool_result_should_reject_non_complete_result_type() {
+    let input_required = json!({
+        "resultType": "input_required",
+        "_meta": {
+            "example.com/replica": "r1",
+        },
+    });
+
+    assert!(serde_json::from_value::<CallToolResult>(input_required).is_err());
+}
+
+#[test]
+fn server_result_should_preserve_input_required_result_when_meta_present() {
+    let input_required = json!({
+        "resultType": "input_required",
+        "requestState": "sealed",
+        "_meta": {
+            "example.com/replica": "r1",
+        },
+    });
+
+    let result =
+        serde_json::from_value::<ServerResult>(input_required).expect("deserialize ServerResult");
+
+    match result {
+        ServerResult::InputRequiredResult(result) => {
+            assert_eq!(
+                (result.request_state.as_deref(), result.meta.is_some()),
+                (Some("sealed"), true)
+            );
+        }
+        _ => panic!("expected InputRequiredResult"),
+    }
+}
+
+#[test]
+fn server_result_should_accept_legacy_call_tool_result_when_only_meta_present() {
+    let legacy = json!({
+        "_meta": {
+            "example.com/replica": "r1",
+        },
+    });
+
+    let result =
+        serde_json::from_value::<ServerResult>(legacy).expect("deserialize legacy CallToolResult");
+
+    match result {
+        ServerResult::CallToolResult(result) => {
+            assert_eq!(
+                (
+                    result.result_type,
+                    result.content.is_empty(),
+                    result.meta.is_some()
+                ),
+                (None, true, true)
+            );
+        }
+        _ => panic!("expected CallToolResult"),
+    }
+}
+
+#[test]
 fn strip_removes_complete_result_type() {
     let mut result =
         ServerResult::CallToolResult(CallToolResult::success(vec![ContentBlock::text("ok")]));

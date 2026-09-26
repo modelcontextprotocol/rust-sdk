@@ -4,7 +4,7 @@ use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     model::{
         ClientCapabilities, Implementation, ProtocolVersion, RequestMetaObject, ServerCapabilities,
-        ServerInfo,
+        ServerConfig,
     },
     select_protocol_version,
 };
@@ -13,8 +13,8 @@ use rmcp::{
 struct DiscoveryServer;
 
 impl ServerHandler for DiscoveryServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("discovery-server", "1.0.0"))
     }
 }
@@ -70,8 +70,8 @@ async fn client_discover_helper_returns_typed_result() {
         .expect("discover should succeed");
 
     assert_eq!(
-        result.server_info,
-        Implementation::new("discovery-server", "1.0.0")
+        result.server_info(),
+        Some(Implementation::new("discovery-server", "1.0.0"))
     );
     client.cancel().await.expect("client should cancel");
 }

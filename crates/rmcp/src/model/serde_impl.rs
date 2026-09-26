@@ -86,9 +86,8 @@ struct ProxyNoParam<M> {
 }
 
 /// Combine the message-specific `_meta` map with a legacy [`MetaObject`]
-/// extension (inserted through the deprecated `Meta` name), so pre-3.x code
-/// does not silently lose metadata on the wire. On key conflicts the
-/// message-specific map wins.
+/// extension so metadata stored in [`Extensions`] is not lost on the wire.
+/// On key conflicts the message-specific map wins.
 fn merge_legacy_meta<'a>(
     typed: Option<&'a JsonObject>,
     extensions: &'a Extensions,
@@ -99,7 +98,11 @@ fn merge_legacy_meta<'a>(
         (None, Some(legacy)) => Some(Cow::Borrowed(legacy)),
         (Some(typed), Some(legacy)) => {
             let mut merged = legacy.clone();
-            merged.extend(typed.clone());
+            merged.extend(
+                typed
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
             Some(Cow::Owned(merged))
         }
         (None, None) => None,
@@ -778,8 +781,6 @@ mod test {
 
     #[test]
     fn test_legacy_meta_extension_still_serializes() {
-        // Pre-3.x code inserts `MetaObject` into extensions through the
-        // deprecated `Meta` name; its metadata must not be silently dropped.
         let mut extensions = Extensions::new();
         let mut legacy = crate::model::MetaObject::new();
         legacy.insert("traceId".to_string(), json!("legacy"));

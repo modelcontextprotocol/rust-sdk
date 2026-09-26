@@ -154,7 +154,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                             McpError::method_not_found::<SubscriptionsListenRequestMethod>(),
                         );
                     };
-                    let advertised = requested.supported_by(&self.get_info().capabilities);
+                    let server_info = self.get_info();
+                    let advertised = requested.supported_by(&server_info.capabilities);
                     let handler_accepted = requested.intersection(&candidate);
                     let accepted = handler_accepted.intersection(&advertised);
                     if accepted != handler_accepted {
@@ -168,15 +169,16 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                             "subscription filter reduced to advertised server capabilities"
                         );
                     }
+                    let server_implementation = server_info.server_info;
                     let subscription_id = context.id.clone();
                     let subscription =
                         SubscriptionContext::establish(context, requested, accepted).await?;
-                    // The integrated draft schema defines a final result for graceful
+                    // The 2026-07-28 schema defines a final result for graceful
                     // server teardown; explicit stdio cancellation remains a notification.
                     self.listen(subscription).await.map(|()| {
-                        ServerResult::SubscriptionsListenResult(
-                            SubscriptionsListenResult::complete(subscription_id),
-                        )
+                        let mut result = SubscriptionsListenResult::complete(subscription_id);
+                        result.meta.set_server_info(server_implementation);
+                        ServerResult::SubscriptionsListenResult(result)
                     })
                 }
             }
@@ -298,6 +300,10 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     fn get_info(&self) -> <RoleServer as ServiceRole>::Info {
         self.get_info()
     }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        ServerHandler::supported_protocol_versions(self)
+    }
 }
 
 macro_rules! server_handler_methods {
@@ -315,14 +321,71 @@ macro_rules! server_handler_methods {
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
             context.peer.set_peer_info(request.clone());
+            std::future::ready(self.negotiate_initialize(&request))
+        }
+        /// Build the `initialize` response for `request`, negotiating the
+        /// protocol version against [`Self::supported_protocol_versions`].
+        ///
+        /// This is the whole body of the default [`Self::initialize`] minus its
+        /// `set_peer_info` side effect, so a server that overrides `initialize`
+        /// to add its own can call this instead of restating the negotiation
+        /// rule:
+        ///
+        /// ```
+        /// use rmcp::{
+        ///     ErrorData as McpError, RoleServer, ServerHandler,
+        ///     model::{InitializeRequestParams, InitializeResult, ServerConfig},
+        ///     service::RequestContext,
+        /// };
+        ///
+        /// struct MyServer;
+        ///
+        /// impl ServerHandler for MyServer {
+        ///     fn get_info(&self) -> ServerConfig {
+        ///         ServerConfig::default()
+        ///     }
+        ///
+        ///     async fn initialize(
+        ///         &self,
+        ///         request: InitializeRequestParams,
+        ///         context: RequestContext<RoleServer>,
+        ///     ) -> Result<InitializeResult, McpError> {
+        ///         // ... record telemetry, register the peer, etc.
+        ///         context.peer.set_peer_info(request.clone());
+        ///         self.negotiate_initialize(&request)
+        ///     }
+        /// }
+        /// ```
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`] when this server
+        /// supports no version that still has an `initialize` handshake.
+        ///
+        /// [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`]: crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+        fn negotiate_initialize(
+            &self,
+            request: &InitializeRequestParams,
+        ) -> Result<InitializeResult, McpError> {
             let mut info = self.get_info();
             info.protocol_version = negotiate_protocol_version(
                 &request.protocol_version,
-                info.protocol_version,
-            );
-            std::future::ready(Ok(info))
+                std::mem::take(&mut info.protocol_version),
+                &self.supported_protocol_versions(),
+            )?;
+            Ok(info)
         }
         /// Return the protocol versions supported by this server.
+        ///
+        /// Defaults to every version this SDK knows. Override it to narrow the
+        /// set to the revisions the server actually implements: the returned
+        /// list is advertised by [`Self::discover`], bounds what `initialize`
+        /// negotiation may agree to, and is what per-request versions are
+        /// validated against.
+        ///
+        /// To support everything up to some ceiling, use
+        /// [`ProtocolVersion::known_up_to`] rather than filtering
+        /// [`ProtocolVersion::KNOWN_VERSIONS`] by hand.
         fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
             Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
         }
@@ -405,7 +468,7 @@ macro_rules! server_handler_methods {
         ///
         /// The SDK sends the acknowledgment before invoking this method. Returning
         /// `Ok(())` sends the final [`SubscriptionsListenResult`] defined by the
-        /// integrated draft schema, marking graceful server teardown. Explicit
+        /// 2026-07-28 schema, marking graceful server teardown. Explicit
         /// stdio cancellation uses `notifications/cancelled` instead.
         fn listen(
             &self,
@@ -537,8 +600,8 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::default()
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::default()
         }
 
         /// SEP-2663 `tasks/get`: return the current [`DetailedTask`] state.
@@ -603,6 +666,13 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).initialize(request, context)
+            }
+
+            fn negotiate_initialize(
+                &self,
+                request: &InitializeRequestParams,
+            ) -> Result<InitializeResult, McpError> {
+                (**self).negotiate_initialize(request)
             }
 
             fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -769,7 +839,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_custom_notification(notification, context)
             }
 
-            fn get_info(&self) -> ServerInfo {
+            fn get_info(&self) -> ServerConfig {
                 (**self).get_info()
             }
 

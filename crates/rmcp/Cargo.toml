@@ -18,6 +18,7 @@ exhaustive_enums = "warn"
 features = [
   "auth",
   "auth-client-credentials-jwt",
+  "auth-enterprise-managed",
   "base64",
   "client",
   "client-side-sse",
@@ -45,12 +46,13 @@ features = [
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-async-trait = "0.1.89"
+async-trait = { version = "0.1.89", optional = true }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 futures = "0.3"
+indexmap = { version = "2", features = ["serde"] }
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
@@ -58,17 +60,18 @@ pastey = { version = "0.2.0", optional = true }
 # oauth2 support
 oauth2 = { version = "5.0", optional = true, default-features = false }
 # JWT signing for client credentials (private_key_jwt)
-jsonwebtoken = { version = "10", optional = true, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11", optional = true, features = ["aws_lc_rs"] }
 
 # for auto generate schema
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
 
 # for image encoding
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
 sha2 = { version = "0.11", optional = true }
+zeroize = { version = "1", optional = true }
 
 # for HTTP client
 reqwest = { version = "0.13.2", default-features = false, features = [
@@ -85,7 +88,7 @@ url = { version = "2.4", optional = true }
 tower-service = { version = "0.3", optional = true }
 
 # for child process transport
-process-wrap = { version = "9.0", features = ["tokio1"], optional = true }
+process-wrap = { version = "10.0", features = ["tokio1"], optional = true }
 
 # for cross-platform executable path resolution
 which = { version = "8", optional = true }
@@ -127,7 +130,7 @@ macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
-request-state = ["dep:hmac", "dep:sha2", "base64"]
+request-state = ["dep:hmac", "dep:sha2", "dep:zeroize", "base64"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -187,16 +190,18 @@ transport-streamable-http-server = [
 ]
 transport-streamable-http-server-session = [
   "transport-async-rw",
+  "dep:async-trait",
   "dep:tokio-stream",
 ]
 # transport-ws = ["transport-io", "dep:tokio-tungstenite"]
 tower = ["dep:tower-service"]
-auth = ["dep:oauth2", "__reqwest", "dep:url"]
+auth = ["dep:async-trait", "dep:oauth2", "__reqwest", "dep:url"]
 auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
+auth-enterprise-managed = ["auth", "base64"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 schemars = { version = "1.1.0", features = ["chrono04"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 hyper = { version = "1", features = ["server", "http1"] }
@@ -210,7 +215,7 @@ tracing-subscriber = { version = "0.3", features = [
   "fmt",
 ] }
 async-trait = "0.1"
-rstest = "0.26.1"
+rstest = "0.27.0"
 [[test]]
 name = "test_tool_macros"
 required-features = ["server", "client"]
@@ -237,6 +242,11 @@ required-features = [
   "__reqwest",
 ]
 path = "tests/test_with_js.rs"
+
+[[test]]
+name = "test_local_client_handler"
+required-features = ["client", "local"]
+path = "tests/test_local_client_handler.rs"
 
 [[test]]
 name = "test_notification"
@@ -289,6 +299,11 @@ required-features = ["server", "client", "transport-streamable-http-server", "re
 path = "tests/test_streamable_http_json_response.rs"
 
 [[test]]
+name = "test_streamable_http_client_concurrency"
+required-features = ["client", "transport-streamable-http-client"]
+path = "tests/test_streamable_http_client_concurrency.rs"
+
+[[test]]
 name = "test_streamable_http_protocol_version"
 required-features = ["server", "client", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_streamable_http_protocol_version.rs"
@@ -332,6 +347,15 @@ path = "tests/test_streamable_http_standard_headers.rs"
 name = "test_streamable_http_4xx_error_body"
 required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]
 path = "tests/test_streamable_http_4xx_error_body.rs"
+
+[[test]]
+name = "test_streamable_http_malformed_json_request"
+required-features = [
+  "client",
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+]
+path = "tests/test_streamable_http_malformed_json_request.rs"
 
 
 [[test]]
@@ -384,6 +408,11 @@ path = "tests/test_sse_concurrent_streams.rs"
 name = "test_client_credentials"
 required-features = ["auth"]
 path = "tests/test_client_credentials.rs"
+
+[[test]]
+name = "test_auth_error_classification"
+required-features = ["auth", "client", "transport-streamable-http-client"]
+path = "tests/test_auth_error_classification.rs"
 
 [[test]]
 name = "test_unix_socket_transport"
