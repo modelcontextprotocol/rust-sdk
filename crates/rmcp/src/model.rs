@@ -1592,9 +1592,14 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
+    #[serde(deserialize_with = "serde_impl::json_float::f64")]
     pub progress: f64,
     /// Total number of items to process (or total progress required), if known
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub total: Option<f64>,
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2995,7 +3000,11 @@ pub struct CreateMessageRequestParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_context: Option<ContextInclusion>,
     /// Temperature for controlling randomness (0.0 to 1.0)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub temperature: Option<f32>,
     /// Maximum number of tokens to generate
     pub max_tokens: u32,
@@ -3184,13 +3193,25 @@ pub struct ModelPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hints: Option<Vec<ModelHint>>,
     /// Priority for cost optimization (0.0 to 1.0, higher = prefer cheaper models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cost_priority: Option<f32>,
     /// Priority for speed/latency (0.0 to 1.0, higher = prefer faster models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub speed_priority: Option<f32>,
     /// Priority for intelligence/capability (0.0 to 1.0, higher = prefer more capable models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub intelligence_priority: Option<f32>,
 }
 
