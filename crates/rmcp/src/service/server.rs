@@ -467,9 +467,15 @@ where
 ///
 /// `server_supported` comes from [`Service::supported_protocol_versions`], so a
 /// server that narrows that list is never made to answer `initialize` with a
-/// version it cannot serve. `2026-07-28` replaced the handshake with
-/// per-request metadata, so a client naming that revision or later is answered
-/// with the server's newest legacy version instead.
+/// version it cannot serve. [`ProtocolVersion::NO_INITIALIZE`] replaced the
+/// handshake with per-request metadata, so a client naming that revision or
+/// later is answered with the server's newest handshake version instead.
+///
+/// `preferred_fallback` is a *preference*, not a guarantee: it is honored only
+/// when it has an `initialize` handshake of its own. A server that pins itself
+/// past [`ProtocolVersion::NO_INITIALIZE`] still has to answer the handshake
+/// with something, so the newest handshake version in `server_supported` is
+/// substituted.
 ///
 /// # Errors
 ///
@@ -479,18 +485,18 @@ where
 /// [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`]: crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
 pub(crate) fn negotiate_protocol_version(
     client_requested: &ProtocolVersion,
-    server_fallback: ProtocolVersion,
+    preferred_fallback: ProtocolVersion,
     server_supported: &[ProtocolVersion],
 ) -> Result<ProtocolVersion, ErrorData> {
-    if is_legacy_version(client_requested) && server_supported.contains(client_requested) {
+    if client_requested.has_initialize() && server_supported.contains(client_requested) {
         return Ok(client_requested.clone());
     }
-    let legacy_fallback = if is_legacy_version(&server_fallback) {
-        Some(server_fallback)
+    let fallback = if preferred_fallback.has_initialize() {
+        Some(preferred_fallback)
     } else {
-        newest_legacy_version(server_supported)
+        newest_version_with_initialize(server_supported)
     };
-    let Some(legacy_fallback) = legacy_fallback else {
+    let Some(negotiated) = fallback else {
         tracing::warn!(
             client_requested = %client_requested,
             "server supports no protocol version with an initialize handshake; rejecting"
@@ -504,17 +510,17 @@ pub(crate) fn negotiate_protocol_version(
     // HTTP re-runs it on every request, so this is not a warning.
     tracing::debug!(
         client_requested = %client_requested,
-        server_fallback = %legacy_fallback,
-        "client requested a protocol version unavailable over initialize; falling back to server default"
+        negotiated = %negotiated,
+        "client requested a protocol version unavailable over initialize; falling back to a supported version"
     );
-    Ok(legacy_fallback)
+    Ok(negotiated)
 }
 
 /// The newest of `versions` that still has an `initialize` handshake.
-fn newest_legacy_version(versions: &[ProtocolVersion]) -> Option<ProtocolVersion> {
+fn newest_version_with_initialize(versions: &[ProtocolVersion]) -> Option<ProtocolVersion> {
     versions
         .iter()
-        .filter(|version| is_legacy_version(version))
+        .filter(|version| version.has_initialize())
         .max_by(|left, right| left.as_str().cmp(right.as_str()))
         .cloned()
 }

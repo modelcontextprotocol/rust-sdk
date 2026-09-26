@@ -275,7 +275,7 @@ impl ServiceRole for RoleClient {
         let Some(server_info) = peer.peer_info() else {
             return;
         };
-        if server_info.protocol_version.as_str() < ProtocolVersion::V_2026_07_28.as_str() {
+        if server_info.protocol_version.has_initialize() {
             return;
         }
         peer.set_client_request_metadata(ClientRequestMetadata {
@@ -898,6 +898,7 @@ where
     T: Transport<RoleClient> + 'static,
 {
     let id = id_provider.next_request_id();
+    let client_info_for_meta = client_info.clone();
     let init_request = InitializeRequest {
         method: Default::default(),
         params: client_info,
@@ -920,6 +921,17 @@ where
     let ServerResult::InitializeResult(initialize_result) = response else {
         return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
     };
+    // A server may answer `initialize` with a version that has no handshake
+    // (e.g. a client pinned past `NO_INITIALIZE` talking to a server that
+    // honors it). From there the lifecycle lives in per-request `_meta`, so the
+    // metadata has to be seeded now or every later request omits it.
+    if !initialize_result.protocol_version.has_initialize() {
+        peer.set_client_request_metadata(ClientRequestMetadata {
+            protocol_version: initialize_result.protocol_version.clone(),
+            client_info: client_info_for_meta.client_info,
+            client_capabilities: client_info_for_meta.capabilities,
+        });
+    }
     peer.set_peer_info(initialize_result.into());
 
     // send notification

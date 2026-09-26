@@ -172,10 +172,34 @@ impl ProtocolVersion {
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const LATEST: Self = Self::V_2025_11_25;
+
+    /// The newest protocol version known to this SDK.
+    pub const LATEST: Self = Self::V_2026_07_28;
 
     /// First protocol version that requires SEP-2243 standard HTTP headers.
     pub const STANDARD_HEADERS: Self = Self::V_2026_07_28;
+
+    /// First protocol version that replaced the `initialize` handshake with
+    /// per-request `_meta` (SEP-2567).
+    pub const NO_INITIALIZE: Self = Self::V_2026_07_28;
+
+    /// The newest protocol version that still has an `initialize` handshake.
+    ///
+    /// From [`Self::NO_INITIALIZE`] onward the lifecycle moved into per-request
+    /// `_meta`, so there is no handshake left to answer. A server replying to
+    /// `initialize` can therefore never name [`Self::LATEST`] once `LATEST`
+    /// reaches that revision — it has to name this one instead.
+    ///
+    /// Use this, not `LATEST`, whenever the subject is the handshake itself:
+    /// the version a server can echo from `initialize`, or the version a test
+    /// needs in order to exercise session-based behavior.
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert!(ProtocolVersion::LATEST_WITH_INITIALIZE.has_initialize());
+    /// assert!(!ProtocolVersion::LATEST.has_initialize());
+    /// ```
+    pub const LATEST_WITH_INITIALIZE: Self = Self::V_2025_11_25;
 
     /// All protocol versions known to this SDK, oldest first.
     pub const KNOWN_VERSIONS: &[Self] = &[
@@ -189,6 +213,23 @@ impl ProtocolVersion {
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether this revision negotiates its lifecycle over the `initialize`
+    /// handshake.
+    ///
+    /// `false` from [`Self::NO_INITIALIZE`] onward, where SEP-2567 moved the
+    /// lifecycle into per-request `_meta`. Unknown versions are compared
+    /// lexically, which orders correctly because every revision is dated
+    /// `YYYY-MM-DD`.
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert!(ProtocolVersion::V_2025_11_25.has_initialize());
+    /// assert!(!ProtocolVersion::V_2026_07_28.has_initialize());
+    /// ```
+    pub fn has_initialize(&self) -> bool {
+        self.as_str() < Self::NO_INITIALIZE.as_str()
     }
 
     /// The known versions up to and including `max`, oldest first.
@@ -4782,6 +4823,34 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].as_str() < pair[1].as_str())
         );
+    }
+
+    // Guards the pair of constants this SDK's negotiation rests on. `LATEST`
+    // and `LATEST_WITH_INITIALIZE` were the same value until `LATEST` reached
+    // `NO_INITIALIZE`; conflating them is what made bumping `LATEST` expensive.
+    #[test]
+    fn latest_with_initialize_is_the_newest_known_version_that_has_one() {
+        let derived = ProtocolVersion::KNOWN_VERSIONS
+            .iter()
+            .filter(|version| version.has_initialize())
+            .max_by(|left, right| left.as_str().cmp(right.as_str()))
+            .expect("some known version should have an initialize handshake");
+        assert_eq!(
+            derived,
+            &ProtocolVersion::LATEST_WITH_INITIALIZE,
+            "LATEST_WITH_INITIALIZE must track KNOWN_VERSIONS"
+        );
+    }
+
+    #[test]
+    fn has_initialize_splits_known_versions_at_no_initialize() {
+        for version in ProtocolVersion::KNOWN_VERSIONS {
+            assert_eq!(
+                version.has_initialize(),
+                version.as_str() < ProtocolVersion::NO_INITIALIZE.as_str(),
+                "{version} classified inconsistently"
+            );
+        }
     }
 
     #[test]
