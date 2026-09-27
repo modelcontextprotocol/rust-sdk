@@ -17,7 +17,11 @@ use super::Role;
 pub struct Annotations {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<Role>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "super::serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub priority: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "lastModified")]
     pub last_modified: Option<String>,

@@ -216,6 +216,9 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 async-trait = "0.1"
 rstest = "0.27.0"
+# Cargo unifies this feature into rmcp whenever any crate in a build enables it,
+# so the tests run with it on (see tests/test_deserialization.rs).
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 [[test]]
 name = "test_tool_macros"
 required-features = ["server", "client"]

@@ -271,3 +271,129 @@ mod untagged_server_result {
         assert!(matches!(result, ServerResult::CallToolResult(_)));
     }
 }
+
+/// Regression tests for decimal float fields under serde_json's
+/// `arbitrary_precision` feature, which rmcp's dev-dependencies enable.
+///
+/// With the feature, serde replays a decimal it buffered for an untagged enum
+/// as serde_json's private number map. A plain `f32`/`f64` field rejected that
+/// map, so each of these messages fell through to a `Custom*` variant. They are
+/// decoded from text, which is where the map comes from.
+mod arbitrary_precision {
+    use rmcp::model::{
+        ClientJsonRpcMessage, ClientNotification, ElicitRequestParams, JsonRpcMessage,
+        JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PrimitiveSchemaDefinition,
+        ServerJsonRpcMessage, ServerNotification, ServerRequest, ServerResult,
+    };
+
+    /// Decodes a server message the way a client does (`RxJsonRpcMessage<RoleClient>`).
+    fn from_server(text: &str) -> ServerJsonRpcMessage {
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn feature_is_enabled() {
+        // Only the feature keeps the number as written; without it this reads `0.6`.
+        let value: serde_json::Value = serde_json::from_str("0.60").unwrap();
+        assert_eq!(value.to_string(), "0.60");
+    }
+
+    #[test]
+    fn call_tool_result_with_fractional_priority() {
+        let message = from_server(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"content":[
+                {"type":"text","text":"ok","annotations":{"priority":0.6}}]}}"#,
+        );
+        let JsonRpcMessage::Response(JsonRpcResponse {
+            result: ServerResult::CallToolResult(result),
+            ..
+        }) = message
+        else {
+            panic!("expected CallToolResult, got {message:?}");
+        };
+        let annotations = result.content[0].as_text().unwrap().annotations.as_ref();
+        assert_eq!(annotations.unwrap().priority, Some(0.6));
+    }
+
+    #[test]
+    fn progress_notification_with_fractional_progress() {
+        let text = r#"{"jsonrpc":"2.0","method":"notifications/progress",
+            "params":{"progressToken":"t","progress":0.5,"total":2.5}}"#;
+
+        let message = from_server(text);
+        let JsonRpcMessage::Notification(JsonRpcNotification {
+            notification: ServerNotification::ProgressNotification(notification),
+            ..
+        }) = message
+        else {
+            panic!("expected ProgressNotification, got {message:?}");
+        };
+        assert_eq!(notification.params.progress, 0.5);
+        assert_eq!(notification.params.total, Some(2.5));
+
+        let message: ClientJsonRpcMessage = serde_json::from_str(text).unwrap();
+        assert!(
+            matches!(
+                message,
+                JsonRpcMessage::Notification(JsonRpcNotification {
+                    notification: ClientNotification::ProgressNotification(_),
+                    ..
+                })
+            ),
+            "expected ProgressNotification, got {message:?}"
+        );
+    }
+
+    #[test]
+    #[expect(deprecated, reason = "sampling is deprecated by SEP-2577")]
+    fn create_message_request_with_fractional_parameters() {
+        let message = from_server(
+            r#"{"jsonrpc":"2.0","id":2,"method":"sampling/createMessage","params":{
+                "messages":[],"maxTokens":10,"temperature":0.7,"modelPreferences":{
+                "costPriority":0.2,"speedPriority":0.5,"intelligencePriority":0.9}}}"#,
+        );
+        let JsonRpcMessage::Request(JsonRpcRequest {
+            request: ServerRequest::CreateMessageRequest(request),
+            ..
+        }) = message
+        else {
+            panic!("expected CreateMessageRequest, got {message:?}");
+        };
+        assert_eq!(request.params.temperature, Some(0.7));
+        let preferences = request.params.model_preferences.unwrap();
+        assert_eq!(preferences.cost_priority, Some(0.2));
+        assert_eq!(preferences.speed_priority, Some(0.5));
+        assert_eq!(preferences.intelligence_priority, Some(0.9));
+    }
+
+    #[test]
+    fn elicit_request_with_fractional_number_schema() {
+        let message = from_server(
+            r#"{"jsonrpc":"2.0","id":3,"method":"elicitation/create","params":{
+                "mode":"form","message":"How much?","requestedSchema":{"type":"object",
+                "properties":{"amount":{"type":"number",
+                "minimum":0.5,"maximum":9.5,"default":1.5}}}}}"#,
+        );
+        let JsonRpcMessage::Request(JsonRpcRequest {
+            request: ServerRequest::ElicitRequest(request),
+            ..
+        }) = message
+        else {
+            panic!("expected ElicitRequest, got {message:?}");
+        };
+        let ElicitRequestParams::FormElicitationParams {
+            requested_schema, ..
+        } = request.params
+        else {
+            panic!("expected a form elicitation");
+        };
+        let Some(PrimitiveSchemaDefinition::Number(amount)) =
+            requested_schema.properties.get("amount")
+        else {
+            panic!("expected a number schema");
+        };
+        assert_eq!(amount.minimum, Some(0.5));
+        assert_eq!(amount.maximum, Some(9.5));
+        assert_eq!(amount.default, Some(1.5));
+    }
+}
