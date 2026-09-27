@@ -862,8 +862,11 @@ where
     }
 }
 
+type JsonRpcMessageVisitorMarker<Req, Resp, Noti> =
+    std::marker::PhantomData<fn() -> (Req, Resp, Noti)>;
+
 struct JsonRpcMessageVisitor<Req, Resp, Noti> {
-    _marker: std::marker::PhantomData<fn() -> (Req, Resp, Noti)>,
+    _marker: JsonRpcMessageVisitorMarker<Req, Resp, Noti>,
 }
 
 impl<'de, Req, Resp, Noti> serde::de::Visitor<'de> for JsonRpcMessageVisitor<Req, Resp, Noti>
