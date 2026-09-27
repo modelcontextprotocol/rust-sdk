@@ -173,7 +173,7 @@ transport-streamable-http-client-unix-socket = [
 ]
 
 transport-async-rw = ["tokio/io-util", "tokio-util/codec"]
-transport-io = ["transport-async-rw", "tokio/io-std"]
+transport-io = ["transport-async-rw", "tokio/io-std", "tokio/net"]
 transport-child-process = [
   "transport-async-rw",
   "tokio/process",
