@@ -1855,6 +1855,13 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 
 See [docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD) to get some tips for contributing.
 
+### Triage
+
+New issues and pull requests are labeled by an automated pass and then assigned to
+the maintainer on weekly rotation, who owns the final call. See
+[docs/CONTRIBUTE.MD](docs/CONTRIBUTE.MD#triage) for the rotation and the response-time
+expectations.
+
 ### Using Dev Container
 
 If you want to use dev container, see [docs/DEVCONTAINER.md](docs/DEVCONTAINER.md) for instructions on using Dev Container for development.
