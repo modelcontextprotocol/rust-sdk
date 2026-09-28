@@ -251,8 +251,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 ))
             } else {
                 // Peers on protocol versions older than 2026-07-28 keep the
-                // legacy wire shape without `resultType: "complete"`.
-                if !sep_2322_supported {
+                // legacy wire shape without `resultType: "complete"`; newer
+                // peers require caching hints (SEP-2549) on cacheable results.
+                if sep_2322_supported {
+                    result.fill_missing_cache_hints();
+                } else {
                     result.strip_result_type_for_legacy_peer();
                 }
                 Ok(result)
