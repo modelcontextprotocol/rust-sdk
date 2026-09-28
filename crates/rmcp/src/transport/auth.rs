@@ -1279,6 +1279,10 @@ impl AuthorizationManager {
             return false;
         }
 
+        if base_url.scheme() == "https" && url.scheme() != "https" {
+            return false;
+        }
+
         let Some(host) = url.host_str() else {
             return false;
         };
@@ -6912,6 +6916,39 @@ mod tests {
         assert_eq!(
             (params.resource_metadata_url, params.scope.as_deref()),
             (None, Some("read"))
+        );
+    }
+
+    #[test]
+    fn rejects_http_resource_metadata_parameter_for_https_resource() {
+        let header = r#"Bearer resource_metadata="http://prm.example.net/.well-known/oauth-protected-resource""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+
+        assert!(params.resource_metadata_url.is_none());
+    }
+
+    #[rstest]
+    #[case::https_to_https("https://mcp.example.com/mcp", "https://auth.example.net", true)]
+    #[case::https_to_http("https://mcp.example.com/mcp", "http://auth.example.net", false)]
+    #[case::http_to_http("http://mcp.example.com/mcp", "http://auth.example.net", true)]
+    #[case::http_to_https("http://mcp.example.com/mcp", "https://auth.example.net", true)]
+    #[case::https_loopback_to_http_loopback(
+        "https://localhost/mcp",
+        "http://127.0.0.1:8080",
+        false
+    )]
+    fn is_allowed_metadata_url_rejects_https_downgrade(
+        #[case] base_url: &str,
+        #[case] metadata_url: &str,
+        #[case] expected: bool,
+    ) {
+        let base_url = Url::parse(base_url).unwrap();
+        let metadata_url = Url::parse(metadata_url).unwrap();
+
+        assert_eq!(
+            AuthorizationManager::is_allowed_metadata_url(&base_url, &metadata_url),
+            expected
         );
     }
 
