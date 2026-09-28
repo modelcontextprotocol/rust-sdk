@@ -103,8 +103,8 @@ pub use auth::{
     AuthorizedHttpClient, ClientCredentialsConfig, CredentialRefreshGuard, CredentialStore,
     EXTENSION_OAUTH_CLIENT_CREDENTIALS, InMemoryCredentialStore, InMemoryStateStore,
     OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy,
-    OAuthHttpRequest, ScopeUpgradeConfig, StateStore, StoredAuthorizationState, StoredCredentials,
-    WWWAuthenticateParams,
+    OAuthHttpRequest, ProtectedResourceMetadataInvalidReason, ScopeUpgradeConfig, StateStore,
+    StoredAuthorizationState, StoredCredentials, WWWAuthenticateParams,
 };
 
 // #[cfg(feature = "transport-ws")]
