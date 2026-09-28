@@ -89,6 +89,12 @@ jobs:
             exit 1
           fi
 
+          # GitHub masks each line of a multi-line secret, and a masked `{` drops every JSON job output.
+          if [[ "${CODEX_AUTH_JSON%$'\n'}" == *$'\n'* ]]; then
+            echo "::error::CODEX_AUTH_JSON spans multiple lines. Store it with 'jq -c . auth.json | gh secret set CODEX_AUTH_JSON'."
+            exit 1
+          fi
+
           jq -c . "$HOME/.codex/auth.json" > "$RUNNER_TEMP/auth-before.json"
 
       - name: Collect issue
