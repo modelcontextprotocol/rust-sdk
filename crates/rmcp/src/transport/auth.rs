@@ -588,11 +588,14 @@ pub enum AuthError {
     /// A protected resource metadata document was invalid or did not describe this resource.
     #[error(
         "Metadata error: {reason}",
-        reason = ProtectedResourceMetadataInvalidDisplay { url, reason }
+        reason = ProtectedResourceMetadataInvalidDisplay {
+            url,
+            reason: reason.as_ref()
+        }
     )]
     ProtectedResourceMetadataInvalid {
         url: Url,
-        reason: ProtectedResourceMetadataInvalidReason,
+        reason: Box<ProtectedResourceMetadataInvalidReason>,
     },
 
     /// Every authorization server advertised by protected resource metadata was unusable.
@@ -2989,7 +2992,9 @@ impl AuthorizationManager {
                 ResourceMetadataUrlOrigin::Advertised => {
                     Err(AuthError::ProtectedResourceMetadataInvalid {
                         url: resource_metadata_url.clone(),
-                        reason: ProtectedResourceMetadataInvalidReason::NotAMetadataDocument,
+                        reason: Box::new(
+                            ProtectedResourceMetadataInvalidReason::NotAMetadataDocument,
+                        ),
                     })
                 }
                 // Nothing advertised this url, so its answer only rules out this
@@ -3011,7 +3016,7 @@ impl AuthorizationManager {
                 ResourceMetadataUrlOrigin::Advertised => {
                     Err(AuthError::ProtectedResourceMetadataInvalid {
                         url: resource_metadata_url.clone(),
-                        reason,
+                        reason: Box::new(reason),
                     })
                 }
                 ResourceMetadataUrlOrigin::WellKnownGuess => {
@@ -5438,11 +5443,12 @@ mod tests {
             "Metadata error: the server advertised https://mcp.example.com/.well-known/oauth-protected-resource as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
         );
         assert!(matches!(
-            error,
+            &error,
             AuthError::ProtectedResourceMetadataInvalid {
                 url,
-                reason: ProtectedResourceMetadataInvalidReason::NotAMetadataDocument
+                reason
             } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
+                && matches!(reason.as_ref(), ProtectedResourceMetadataInvalidReason::NotAMetadataDocument)
         ));
     }
 
@@ -6537,13 +6543,16 @@ mod tests {
                 &error,
                 AuthError::ProtectedResourceMetadataInvalid {
                     url,
-                    reason: ProtectedResourceMetadataInvalidReason::ResourceMismatch {
-                        reference,
-                        permitted
-                    }
+                    reason
                 } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
-                    && reference.as_str() == "https://mcp.example.com/mcp"
-                    && permitted == "https://real.example.com/mcp"
+                    && matches!(
+                        reason.as_ref(),
+                        ProtectedResourceMetadataInvalidReason::ResourceMismatch {
+                            reference,
+                            permitted
+                        } if reference.as_str() == "https://mcp.example.com/mcp"
+                            && permitted == "https://real.example.com/mcp"
+                    )
             ),
             "expected structured resource mismatch metadata error, got: {error:?}"
         );
@@ -6583,8 +6592,9 @@ mod tests {
                 &error,
                 AuthError::ProtectedResourceMetadataInvalid {
                     url,
-                    reason: ProtectedResourceMetadataInvalidReason::MissingResource
+                    reason
                 } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
+                    && matches!(reason.as_ref(), ProtectedResourceMetadataInvalidReason::MissingResource)
             ),
             "expected structured missing resource metadata error, got: {error:?}"
         );
@@ -6612,11 +6622,15 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(
-            error,
+            &error,
             AuthError::ProtectedResourceMetadataInvalid {
                 url,
-                reason: ProtectedResourceMetadataInvalidReason::ResourceNotAUrl { resource }
-            } if url == metadata_url && resource == "not a URL"
+                reason
+            } if url == &metadata_url && matches!(
+                reason.as_ref(),
+                ProtectedResourceMetadataInvalidReason::ResourceNotAUrl { resource }
+                    if resource == "not a URL"
+            )
         ));
     }
 
@@ -6642,11 +6656,15 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(
-            error,
+            &error,
             AuthError::ProtectedResourceMetadataInvalid {
                 url,
-                reason: ProtectedResourceMetadataInvalidReason::ResourceHasFragment { resource: actual }
-            } if url == metadata_url && actual.as_str() == resource
+                reason
+            } if url == &metadata_url && matches!(
+                reason.as_ref(),
+                ProtectedResourceMetadataInvalidReason::ResourceHasFragment { resource: actual }
+                    if actual.as_str() == resource
+            )
         ));
     }
 

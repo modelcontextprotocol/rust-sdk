@@ -176,11 +176,12 @@ async fn protected_resource_invalid_metadata_has_a_structured_error() {
     .await;
 
     assert!(matches!(
-        error,
+        &error,
         AuthError::ProtectedResourceMetadataInvalid {
             url,
-            reason: ProtectedResourceMetadataInvalidReason::MissingResource
+            reason
         } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
+            && matches!(reason.as_ref(), ProtectedResourceMetadataInvalidReason::MissingResource)
     ));
 }
 
