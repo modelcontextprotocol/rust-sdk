@@ -42,6 +42,25 @@ impl From<UnixSocketError> for StreamableHttpError<UnixSocketError> {
     }
 }
 
+/// Collects a response body frame by frame, failing as soon as it would exceed `max_size`
+/// bytes. See `max_sse_event_size`: a JSON response is one message, like one SSE event.
+async fn collect_body_limited(
+    mut body: hyper::body::Incoming,
+    max_size: usize,
+) -> Result<Vec<u8>, StreamableHttpError<UnixSocketError>> {
+    let mut collected = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| StreamableHttpError::Client(UnixSocketError::Hyper(e)))?;
+        if let Ok(data) = frame.into_data() {
+            if collected.len() + data.len() > max_size {
+                return Err(StreamableHttpError::ResponseBodyTooLarge { max_size });
+            }
+            collected.extend_from_slice(&data);
+        }
+    }
+    Ok(collected)
+}
+
 /// HTTP client that routes requests through a Unix domain socket.
 ///
 /// Implements [`StreamableHttpClient`] using `hyper` over `tokio::net::UnixStream`,
@@ -268,12 +287,13 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         }
 
         if !status.is_success() {
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            let body = match collect_body_limited(response.into_body(), max_sse_event_size).await {
+                Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+                Err(StreamableHttpError::ResponseBodyTooLarge { max_size }) => {
+                    format!("<response body exceeded {max_size} bytes>")
+                }
+                Err(_) => "<failed to read response body>".to_owned(),
+            };
             if let Some(response) =
                 legacy_discover_response(&message, session_was_attached, status, &body)
             {
@@ -315,12 +335,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 Ok(StreamableHttpPostResponse::Sse(sse_stream, session_id))
             }
             Some(ref ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-                let body = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| StreamableHttpError::Client(UnixSocketError::Hyper(e)))?
-                    .to_bytes();
+                let body = collect_body_limited(response.into_body(), max_sse_event_size).await?;
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
                     Err(e)

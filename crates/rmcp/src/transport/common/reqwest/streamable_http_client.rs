@@ -25,6 +25,30 @@ impl From<reqwest::Error> for StreamableHttpError<reqwest::Error> {
     }
 }
 
+/// Reads a whole response body, failing as soon as it would exceed `max_size` bytes.
+///
+/// JSON responses carry a single JSON-RPC message, the same unit that `max_sse_event_size`
+/// already bounds for SSE, so the same limit applies here.
+async fn read_body_limited(
+    mut response: reqwest::Response,
+    max_size: usize,
+) -> Result<Vec<u8>, StreamableHttpError<reqwest::Error>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_size as u64)
+    {
+        return Err(StreamableHttpError::ResponseBodyTooLarge { max_size });
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > max_size {
+            return Err(StreamableHttpError::ResponseBodyTooLarge { max_size });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Applies custom headers to a request builder, rejecting reserved headers.
 fn apply_custom_headers(
     mut builder: reqwest::RequestBuilder,
@@ -276,10 +300,13 @@ impl StreamableHttpClient for reqwest::Client {
         // Non-success responses may carry valid JSON-RPC error payloads that
         // should be surfaced as McpError rather than lost in TransportSend.
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            let body = match read_body_limited(response, max_sse_event_size).await {
+                Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+                Err(StreamableHttpError::ResponseBodyTooLarge { max_size }) => {
+                    format!("<response body exceeded {max_size} bytes>")
+                }
+                Err(_) => "<failed to read response body>".to_owned(),
+            };
             // Must precede the JSON-RPC branch below, which would forward a
             // discover rejection with an id the lifecycle cannot correlate.
             if let Some(response) =
@@ -314,7 +341,7 @@ impl StreamableHttpClient for reqwest::Client {
                 // reply. Treat an unusable JSON body as Accepted. A request
                 // still needs a reply; the same body is an error so the worker
                 // does not wait on SSE forever.
-                let body = response.bytes().await?;
+                let body = read_body_limited(response, max_sse_event_size).await?;
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
                     Err(e)
@@ -457,6 +484,95 @@ mod tests {
     #[case::truncated_json(r#"{"broken":"#)]
     fn parse_json_rpc_error_rejects_non_error_bodies(#[case] body: &str) {
         assert!(parse_json_rpc_error(body).is_none());
+    }
+
+    async fn post_to_server_returning(
+        status: http::StatusCode,
+        content_type: &'static str,
+        body: String,
+        limit: usize,
+    ) -> anyhow::Result<
+        Result<
+            crate::transport::streamable_http_client::StreamableHttpPostResponse,
+            crate::transport::streamable_http_client::StreamableHttpError<reqwest::Error>,
+        >,
+    > {
+        use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+
+        use axum::{Router, routing::post};
+
+        use crate::transport::streamable_http_client::StreamableHttpClient;
+
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/mcp",
+                post(move || {
+                    let body = body.clone();
+                    async move { (status, [(http::header::CONTENT_TYPE, content_type)], body) }
+                }),
+            );
+            axum::serve(listener, app).await
+        });
+        let message = ClientJsonRpcMessage::request(
+            ClientRequest::PingRequest(PingRequest::default()),
+            RequestId::Number(1),
+        );
+        let result = reqwest::Client::new()
+            .post_message_with_max_sse_event_size(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                message,
+                None,
+                None,
+                HashMap::new(),
+                limit,
+            )
+            .await;
+        server.abort();
+        Ok(result)
+    }
+
+    #[tokio::test]
+    async fn post_json_response_honors_configured_message_limit() -> anyhow::Result<()> {
+        use crate::transport::streamable_http_client::StreamableHttpError;
+
+        let oversized = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"padding":"{}"}}}}"#,
+            "x".repeat(256)
+        );
+        let result =
+            post_to_server_returning(http::StatusCode::OK, "application/json", oversized, 64)
+                .await?;
+        assert!(matches!(
+            result,
+            Err(StreamableHttpError::ResponseBodyTooLarge { max_size: 64 })
+        ));
+
+        let within = r#"{"jsonrpc":"2.0","id":1,"result":{}}"#.to_owned();
+        let result =
+            post_to_server_returning(http::StatusCode::OK, "application/json", within, 64).await?;
+        assert!(result.is_ok(), "a response within the limit is accepted");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn error_response_body_is_bounded() -> anyhow::Result<()> {
+        use crate::transport::streamable_http_client::StreamableHttpError;
+
+        let result = post_to_server_returning(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "text/plain",
+            "e".repeat(1024),
+            64,
+        )
+        .await?;
+        let Err(StreamableHttpError::UnexpectedServerResponse(message)) = result else {
+            anyhow::bail!("expected an unexpected-server-response error");
+        };
+        assert!(message.contains("exceeded 64 bytes"), "{message}");
+        assert!(!message.contains(&"e".repeat(65)));
+        Ok(())
     }
 
     #[tokio::test]

@@ -189,6 +189,10 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     UnexpectedEndOfStream,
     #[error("unexpected server response: {0}")]
     UnexpectedServerResponse(Cow<'static, str>),
+    /// A non-streaming HTTP response body exceeded the configured per-message limit
+    /// (`max_sse_event_size`), so it was not buffered in full.
+    #[error("HTTP response body exceeded the maximum size of {max_size} bytes")]
+    ResponseBodyTooLarge { max_size: usize },
     #[error("Unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     #[error("Server does not support SSE")]
@@ -2055,7 +2059,8 @@ pub struct StreamableHttpClientTransportConfig {
     pub auth_header: Option<String>,
     /// Custom HTTP headers to include with every request
     pub custom_headers: HashMap<HeaderName, HeaderValue>,
-    /// Maximum raw size of one SSE event accepted from the server.
+    /// Maximum raw size of one server message: an SSE event, or a non-streaming HTTP response
+    /// body (a JSON response or an error body) to a POST.
     ///
     /// The built-in reqwest and Unix socket clients enforce this value. Custom
     /// [`StreamableHttpClient`] implementations must override the corresponding
@@ -2139,7 +2144,8 @@ impl StreamableHttpClientTransportConfig {
         self
     }
 
-    /// Set the maximum raw size of one SSE event accepted from the server.
+    /// Set the maximum raw size of one server message (an SSE event or a non-streaming response
+    /// body) accepted from the server.
     pub fn max_sse_event_size(mut self, bytes: usize) -> Self {
         self.max_sse_event_size = bytes;
         self
