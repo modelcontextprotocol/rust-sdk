@@ -121,6 +121,10 @@ chrono = { version = "0.4.38", default-features = false, features = [
   "oldtime",
 ] }
 
+# the stdio pipe transport reopens `/proc/self/fd` with `O_NONBLOCK`
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["base64", "macros", "server"]
 local = ["rmcp-macros?/local"]
