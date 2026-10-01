@@ -5,9 +5,9 @@ use rmcp::{
     ClientHandler, ErrorData, RoleClient, RoleServer, ServerHandler,
     handler::server::router::{prompt::PromptRouter, tool::ToolRouter},
     model::{
-        CacheScope, ClientConfig, InitializeResult, ListResourcesResult, PaginatedRequestParams,
-        ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-        ResourceContents,
+        CacheScope, ClientConfig, InitializeResult, ListPromptsResult, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, ResourceContents,
     },
     prompt_handler,
     service::{RequestContext, RunningService, serve_directly},
@@ -34,12 +34,28 @@ impl CacheHintServer {
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for CacheHintServer {}
 
-/// Implements the resource methods by hand, leaving the caching hints unset
-/// the way `Default::default()` does.
+/// Implements its handlers by hand instead of through the macros, leaving the
+/// caching hints unset.
 #[derive(Debug, Clone)]
-struct ResourceServer;
+struct ManualServer;
 
-impl ServerHandler for ResourceServer {
+impl ServerHandler for ManualServer {
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(vec![]))
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Ok(ListPromptsResult::with_all_items(vec![]))
+    }
+
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
@@ -162,8 +178,32 @@ async fn handler_macros_should_omit_cache_hints_for_legacy_versions() {
 }
 
 #[tokio::test]
+async fn manual_list_tools_and_prompts_should_get_default_cache_hints_for_2026_07_28() {
+    let (client, server_task) = connect(ManualServer, ProtocolVersion::V_2026_07_28);
+
+    let tools = client.list_tools(None).await.expect("tools/list");
+    let prompts = client.list_prompts(None).await.expect("prompts/list");
+    disconnect(client, server_task).await;
+
+    assert_eq!(
+        (
+            tools.ttl_ms,
+            tools.cache_scope,
+            prompts.ttl_ms,
+            prompts.cache_scope,
+        ),
+        (
+            Some(0),
+            Some(CacheScope::Private),
+            Some(0),
+            Some(CacheScope::Private),
+        )
+    );
+}
+
+#[tokio::test]
 async fn list_resources_should_get_default_cache_hints_for_2026_07_28() {
-    let (client, server_task) = connect(ResourceServer, ProtocolVersion::V_2026_07_28);
+    let (client, server_task) = connect(ManualServer, ProtocolVersion::V_2026_07_28);
 
     let resources = client.list_resources(None).await.expect("resources/list");
     disconnect(client, server_task).await;
@@ -176,7 +216,7 @@ async fn list_resources_should_get_default_cache_hints_for_2026_07_28() {
 
 #[tokio::test]
 async fn list_resource_templates_should_get_default_cache_hints_for_2026_07_28() {
-    let (client, server_task) = connect(ResourceServer, ProtocolVersion::V_2026_07_28);
+    let (client, server_task) = connect(ManualServer, ProtocolVersion::V_2026_07_28);
 
     let templates = client
         .list_resource_templates(None)
@@ -192,7 +232,7 @@ async fn list_resource_templates_should_get_default_cache_hints_for_2026_07_28()
 
 #[tokio::test]
 async fn read_resource_should_get_default_cache_hints_for_2026_07_28() {
-    let (client, server_task) = connect(ResourceServer, ProtocolVersion::V_2026_07_28);
+    let (client, server_task) = connect(ManualServer, ProtocolVersion::V_2026_07_28);
 
     let resource = client
         .read_resource(ReadResourceRequestParams::new("memo://hello"))
@@ -207,9 +247,11 @@ async fn read_resource_should_get_default_cache_hints_for_2026_07_28() {
 }
 
 #[tokio::test]
-async fn resource_results_should_omit_cache_hints_for_legacy_versions() {
-    let (client, server_task) = connect(ResourceServer, ProtocolVersion::V_2025_11_25);
+async fn manual_results_should_omit_cache_hints_for_legacy_versions() {
+    let (client, server_task) = connect(ManualServer, ProtocolVersion::V_2025_11_25);
 
+    let tools = client.list_tools(None).await.expect("tools/list");
+    let prompts = client.list_prompts(None).await.expect("prompts/list");
     let resources = client.list_resources(None).await.expect("resources/list");
     let resource = client
         .read_resource(ReadResourceRequestParams::new("memo://hello"))
@@ -219,12 +261,16 @@ async fn resource_results_should_omit_cache_hints_for_legacy_versions() {
 
     assert_eq!(
         (
+            tools.ttl_ms,
+            tools.cache_scope,
+            prompts.ttl_ms,
+            prompts.cache_scope,
             resources.ttl_ms,
             resources.cache_scope,
             resource.ttl_ms,
             resource.cache_scope,
         ),
-        (None, None, None, None)
+        (None, None, None, None, None, None, None, None)
     );
 }
 
