@@ -2,13 +2,16 @@
 #![cfg(all(feature = "client", not(feature = "local")))]
 mod common;
 
+use std::time::Duration;
+
 use common::handlers::TestServer;
 use rmcp::{
-    ServerHandler, ServiceExt,
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
-        ClientJsonRpcMessage, ProtocolVersion, ServerCapabilities, ServerConfig,
+        ClientJsonRpcMessage, DiscoverResult, ProtocolVersion, ServerCapabilities, ServerConfig,
         ServerJsonRpcMessage, ServerResult,
     },
+    service::RequestContext,
     transport::{IntoTransport, Transport},
 };
 
@@ -233,6 +236,78 @@ async fn unsupported_inline_request_does_not_prevent_classic_initialize() {
         client.receive().await.unwrap(),
         ServerJsonRpcMessage::Error(_)
     ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn bare_request_does_not_prevent_classic_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client.send(list_tools_request(1)).await.unwrap();
+    assert!(matches!(
+        client.receive().await.unwrap(),
+        ServerJsonRpcMessage::Error(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+struct NotifyingDiscoverServer;
+
+impl ServerHandler for NotifyingDiscoverServer {
+    async fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        let _ = context.peer.notify_resource_list_changed().await;
+        Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn discover_handler_sending_notification_does_not_hang() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { NotifyingDiscoverServer.serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", true))
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(5), expect_response(&mut client))
+        .await
+        .expect("discover response timed out");
+    assert!(matches!(response, ServerResult::DiscoverResult(_)));
     client.send(init_request()).await.unwrap();
     assert!(matches!(
         expect_response(&mut client).await,

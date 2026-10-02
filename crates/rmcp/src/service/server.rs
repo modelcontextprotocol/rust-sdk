@@ -568,7 +568,7 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    let (peer, peer_rx) = Peer::new(id_provider, None);
+    let (peer, peer_rx) = Peer::new(id_provider.clone(), None);
 
     // Select the lifecycle only after an initialize request or the first valid
     // non-discover request with complete inline metadata. A discover request is
@@ -603,33 +603,35 @@ where
                 let missing_metadata = request
                     .get_meta()
                     .missing_required_keys(&ProtocolVersion::V_2026_07_28);
-                if !missing_metadata.is_empty() {
-                    transport
-                        .send(ServerJsonRpcMessage::error(
-                            missing_request_metadata_error(&missing_metadata),
-                            Some(id),
-                        ))
-                        .await
-                        .map_err(|error| {
-                            ServerInitializeError::transport::<T>(
-                                error,
-                                "sending pre-init metadata error response",
-                            )
-                        })?;
-                    continue;
-                }
-                let requested_version = request
-                    .get_meta()
-                    .protocol_version()
-                    .expect("complete inline metadata has a protocol version");
+                let requested_version = match request.get_meta().protocol_version() {
+                    Some(version) if missing_metadata.is_empty() => version,
+                    _ => {
+                        transport
+                            .send(ServerJsonRpcMessage::error(
+                                missing_request_metadata_error(&missing_metadata),
+                                Some(id),
+                            ))
+                            .await
+                            .map_err(|error| {
+                                ServerInitializeError::transport::<T>(
+                                    error,
+                                    "sending pre-init metadata error response",
+                                )
+                            })?;
+                        continue;
+                    }
+                };
 
                 if matches!(request, ClientRequest::DiscoverRequest(_)) {
+                    // No lifecycle exists yet, so the handler gets a peer that
+                    // cannot reach the client.
+                    let (bootstrap_peer, _) = Peer::new(id_provider.clone(), None);
                     let context = RequestContext {
                         ct: ct.child_token(),
                         id: id.clone(),
                         meta: std::mem::take(request.get_meta_mut()),
                         extensions: std::mem::take(request.extensions_mut()),
-                        peer: peer.clone(),
+                        peer: bootstrap_peer,
                     };
                     let response = match service.handle_request(request, context).await {
                         Ok(result) => ServerJsonRpcMessage::response(result, id),
