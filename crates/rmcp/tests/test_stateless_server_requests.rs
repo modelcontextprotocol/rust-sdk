@@ -1,18 +1,22 @@
 #![cfg(all(feature = "server", not(feature = "local")))]
 
 use std::{
-    sync::{Arc, Mutex},
+    borrow::Cow,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 use rmcp::{
-    ServerHandler, ServiceExt,
+    ClientLifecycleMode, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
         ClientCapabilities, ClientJsonRpcMessage, ClientRequest, DiscoverRequest,
-        DiscoverRequestParams, ErrorCode, ErrorData, Implementation, ListToolsRequest,
-        ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotificationParam,
-        ProgressToken, ProtocolVersion, RequestId, RequestMetaObject, ServerJsonRpcMessage,
-        ServerNotification,
+        DiscoverRequestMethod, DiscoverRequestParams, DiscoverResult, ErrorCode, ErrorData,
+        Implementation, ListToolsRequest, ListToolsResult, NumberOrString, PaginatedRequestParams,
+        ProgressNotificationParam, ProgressToken, ProtocolVersion, RequestId, RequestMetaObject,
+        ServerJsonRpcMessage, ServerNotification,
     },
     service::{MaybeSendFuture, RequestContext, RoleServer, ServerInitializeError},
     transport::{IntoTransport, Transport},
@@ -22,6 +26,37 @@ use rmcp::{
 struct StatelessServer;
 
 impl ServerHandler for StatelessServer {}
+
+#[derive(Clone)]
+struct LegacyServer {
+    discover_called: Arc<AtomicBool>,
+}
+
+impl ServerHandler for LegacyServer {
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_11_25))
+    }
+
+    async fn discover(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        self.discover_called.store(true, Ordering::Relaxed);
+        Err(ErrorData::method_not_found::<DiscoverRequestMethod>())
+    }
+}
+
+#[derive(Clone, Default)]
+struct RejectingDiscoveryServer;
+
+impl ServerHandler for RejectingDiscoveryServer {
+    async fn discover(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        Err(ErrorData::method_not_found::<DiscoverRequestMethod>())
+    }
+}
 
 fn complete_meta() -> RequestMetaObject {
     complete_meta_for("stateless-client")
@@ -89,6 +124,77 @@ async fn stateless_server_rejects_missing_metadata_on_every_request() {
     };
     assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
 
+    server_task
+        .await
+        .expect("server task")
+        .cancel()
+        .await
+        .expect("cancel server");
+}
+
+#[tokio::test]
+async fn legacy_only_server_rejects_discovery_before_dispatch() {
+    let discover_called = Arc::new(AtomicBool::new(false));
+    let server = LegacyServer {
+        discover_called: Arc::clone(&discover_called),
+    };
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(server_transport)
+            .await
+            .expect("server should start")
+    });
+
+    let client = ()
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("client should fall back to initialize");
+
+    assert!(!discover_called.load(Ordering::Relaxed));
+
+    client.cancel().await.expect("cancel client");
+    server_task
+        .await
+        .expect("server task")
+        .cancel()
+        .await
+        .expect("cancel server");
+}
+
+#[tokio::test]
+async fn server_allows_legacy_fallback_after_rejected_discovery() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        RejectingDiscoveryServer
+            .serve(server_transport)
+            .await
+            .expect("server should start")
+    });
+
+    let client = ()
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        )
+        .await
+        .expect("client should fall back to initialize");
+
+    client
+        .list_all_tools()
+        .await
+        .expect("legacy tools/list should not require per-request metadata");
+
+    client.cancel().await.expect("cancel client");
     server_task
         .await
         .expect("server task")

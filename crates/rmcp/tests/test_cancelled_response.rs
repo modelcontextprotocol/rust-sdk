@@ -13,8 +13,8 @@ use rmcp::{
     model::{
         CancelledNotification, CancelledNotificationParam, ClientJsonRpcMessage, ClientRequest,
         ClientResult, ElicitRequest, ElicitRequestParams, ElicitResult, ElicitationAction,
-        ElicitationSchema, PingRequest, RequestId, ServerJsonRpcMessage, ServerNotification,
-        ServerRequest, ServerResult,
+        ElicitationSchema, InitializeResult, PingRequest, RequestId, ServerJsonRpcMessage,
+        ServerNotification, ServerRequest, ServerResult,
     },
     service::{PeerRequestOptions, QuitReason, serve_directly},
     transport::{IntoTransport, Transport},

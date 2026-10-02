@@ -7,7 +7,7 @@ use crate::{
     model::*,
     service::{
         MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service, ServiceRole,
-        SubscriptionContext, negotiate_protocol_version, uses_legacy_lifecycle,
+        SubscriptionContext, is_legacy_version, negotiate_protocol_version, uses_legacy_lifecycle,
     },
 };
 
@@ -61,6 +61,16 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             .is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
         let requested_version = context.meta.protocol_version();
         let uses_inline_negotiation = !matches!(&request, ClientRequest::InitializeRequest(_));
+        // Legacy-only servers do not implement discovery. MethodNotFound tells
+        // dual-lifecycle clients to fall back to initialize.
+        if matches!(&request, ClientRequest::DiscoverRequest(_))
+            && self
+                .supported_protocol_versions()
+                .iter()
+                .all(is_legacy_version)
+        {
+            return Err(McpError::method_not_found::<DiscoverRequestMethod>());
+        }
         if uses_inline_negotiation && let Some(requested_version) = requested_version.as_ref() {
             let supported_versions = self.supported_protocol_versions();
             if !supported_versions.contains(requested_version) {
