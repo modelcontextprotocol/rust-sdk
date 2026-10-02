@@ -4800,6 +4800,59 @@ impl ServerResult {
         };
         result_type.take_if(|result_type| result_type.is_complete());
     }
+
+    /// Fill in the SEP-2549 caching hints a cacheable result is missing.
+    ///
+    /// Protocol version `2026-07-28` requires `ttlMs` and `cacheScope` on every
+    /// complete `tools/list`, `prompts/list`, `resources/list`,
+    /// `resources/templates/list`, and `resources/read` result. The server
+    /// handler calls this before responding to a peer on that version, so a
+    /// handler that builds its result with `Default::default()` still sends a
+    /// conformant result.
+    ///
+    /// Missing hints get the most conservative values, `ttlMs: 0` (immediately
+    /// stale) and `cacheScope: "private"`, the same values
+    /// [`DiscoverResult::new`] uses. Hints the handler set are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CacheScope, ListResourcesResult, ServerResult};
+    ///
+    /// let mut result = ServerResult::ListResourcesResult(ListResourcesResult::default());
+    /// result.fill_missing_cache_hints();
+    ///
+    /// let ServerResult::ListResourcesResult(result) = result else {
+    ///     unreachable!()
+    /// };
+    /// assert_eq!(result.ttl_ms, Some(0));
+    /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
+    /// ```
+    pub fn fill_missing_cache_hints(&mut self) {
+        let (result_type, ttl_ms, cache_scope) = match self {
+            ServerResult::ListToolsResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListPromptsResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ListResourcesResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ListResourceTemplatesResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ReadResourceResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            _ => return,
+        };
+        // Only complete results are cacheable; the spec treats an absent
+        // `resultType` as complete.
+        if result_type.as_ref().is_some_and(|t| !t.is_complete()) {
+            return;
+        }
+        ttl_ms.get_or_insert(0);
+        cache_scope.get_or_insert(CacheScope::Private);
+    }
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;
