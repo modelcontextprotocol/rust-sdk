@@ -1,10 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, PoisonError, RwLock},
+};
 
 use futures::{Stream, StreamExt};
-use tokio::sync::RwLock;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::model::{ProgressNotificationParam, ProgressToken};
+// A synchronous lock: it is never held across an `.await`, so a subscriber that is not
+// keeping up only back-pressures its own token, and `ProgressSubscriber::drop` can
+// unregister without spawning onto a runtime.
 type Dispatcher =
     Arc<RwLock<HashMap<ProgressToken, tokio::sync::mpsc::Sender<ProgressNotificationParam>>>>;
 
@@ -22,8 +27,13 @@ impl ProgressDispatcher {
 
     /// Handle a progress notification by sending it to the appropriate subscriber
     pub async fn handle_notification(&self, notification: ProgressNotificationParam) {
-        let token = &notification.progress_token;
-        if let Some(sender) = self.dispatcher.read().await.get(token).cloned() {
+        let sender = self
+            .dispatcher
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&notification.progress_token)
+            .cloned();
+        if let Some(sender) = sender {
             let send_result = sender.send(notification).await;
             if let Err(e) = send_result {
                 tracing::warn!("Failed to send progress notification: {e}");
@@ -38,7 +48,7 @@ impl ProgressDispatcher {
         let (sender, receiver) = tokio::sync::mpsc::channel(Self::CHANNEL_SIZE);
         self.dispatcher
             .write()
-            .await
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(progress_token.clone(), sender);
         let receiver = ReceiverStream::new(receiver);
         ProgressSubscriber {
@@ -50,13 +60,18 @@ impl ProgressDispatcher {
 
     /// Unsubscribe from progress notifications for a specific token.
     pub async fn unsubscribe(&self, token: &ProgressToken) {
-        self.dispatcher.write().await.remove(token);
+        self.dispatcher
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(token);
     }
 
     /// Clear all dispatcher.
     pub async fn clear(&self) {
-        let mut dispatcher = self.dispatcher.write().await;
-        dispatcher.clear();
+        self.dispatcher
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 }
 
@@ -89,12 +104,39 @@ impl Stream for ProgressSubscriber {
 
 impl Drop for ProgressSubscriber {
     fn drop(&mut self) {
-        let token = self.progress_token.clone();
         self.receiver.close();
-        let dispatcher = self.dispatcher.clone();
-        tokio::spawn(async move {
-            let mut dispatcher = dispatcher.write_owned().await;
-            dispatcher.remove(&token);
-        });
+        // Only remove the entry if it still belongs to this subscriber: the token may
+        // have been subscribed again since, and that subscription must stay registered.
+        let mut dispatcher = self
+            .dispatcher
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        if dispatcher
+            .get(&self.progress_token)
+            .is_some_and(|sender| sender.is_closed())
+        {
+            dispatcher.remove(&self.progress_token);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::NumberOrString;
+
+    #[test]
+    fn dropping_a_subscriber_unregisters_it_without_a_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build runtime");
+        let dispatcher = ProgressDispatcher::new();
+        let token = ProgressToken(NumberOrString::Number(1));
+        let subscriber = runtime.block_on(dispatcher.subscribe(token.clone()));
+        assert!(dispatcher.dispatcher.read().unwrap().contains_key(&token));
+
+        // Dropped outside of any Tokio runtime context.
+        drop(subscriber);
+        assert!(dispatcher.dispatcher.read().unwrap().is_empty());
     }
 }
