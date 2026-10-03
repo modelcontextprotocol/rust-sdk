@@ -25,7 +25,7 @@ use axum::{
 };
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt,
-    model::{ClientInfo, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject},
+    model::{ClientConfig, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject},
     service::PeerRequestOptions,
     transport::{
         StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
@@ -274,11 +274,11 @@ async fn serve(recorder: &Recorder) -> (String, CancellationToken, tokio::task::
 async fn start_client(
     uri: String,
     startup: ClientLifecycleMode,
-) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientConfig> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(uri),
     );
-    ClientInfo::default()
+    ClientConfig::default()
         .serve_with_lifecycle(transport, startup)
         .await
         .expect("client should start against a legacy handshake")
