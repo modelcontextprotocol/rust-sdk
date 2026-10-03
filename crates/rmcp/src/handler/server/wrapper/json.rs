@@ -13,7 +13,10 @@ use crate::{
 /// When used with tools, this wrapper indicates that the value should be
 /// serialized as structured JSON content with an associated schema.
 /// The framework will place the JSON in the `structured_content` field
-/// of the tool result rather than the regular `content` field.
+/// of the tool result, and also mirror it into the regular `content` field
+/// as serialized text for clients that do not read `structured_content`.
+/// For object-shaped results, use [`StructuredOnly`](crate::StructuredOnly)
+/// to skip the optional text mirror.
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Json<T>(pub T);
 
