@@ -15,6 +15,7 @@ pub mod common;
 pub mod prompt;
 mod resource;
 pub mod router;
+pub mod skill;
 pub mod tool;
 pub mod tool_name_validation;
 pub mod wrapper;
@@ -144,6 +145,18 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .read_resource(request.params, context)
                 .await
                 .map(ServerResult::from),
+            ClientRequest::ResourcesDirectoryReadRequest(request) => self
+                .resources_directory_read(request.params, context)
+                .await
+                .map(ServerResult::ResourcesDirectoryReadResult),
+            ClientRequest::SkillsListRequest(request) => self
+                .skills_list(request.params, context)
+                .await
+                .map(ServerResult::SkillsListResult),
+            ClientRequest::SkillsGetRequest(request) => self
+                .skills_get(request.params, context)
+                .await
+                .map(ServerResult::SkillsGetResult),
             ClientRequest::SubscriptionsListenRequest(request) => {
                 if legacy_request {
                     Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>())
@@ -451,6 +464,29 @@ macro_rules! server_handler_methods {
             std::future::ready(Err(
                 McpError::method_not_found::<ReadResourceRequestMethod>(),
             ))
+        }
+        fn skills_list(
+            &self,
+            request: Option<PaginatedRequestParams>,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<SkillsListResult, McpError>> + MaybeSendFuture + '_ {
+            std::future::ready(Ok(SkillsListResult::default()))
+        }
+        fn skills_get(
+            &self,
+            request: SkillsGetRequestParams,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<SkillsGetResult, McpError>> + MaybeSendFuture + '_ {
+            std::future::ready(Err(McpError::method_not_found::<SkillsGetRequestMethod>()))
+        }
+        fn resources_directory_read(
+            &self,
+            request: ResourcesDirectoryReadRequestParams,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<ResourcesDirectoryReadResult, McpError>>
+               + MaybeSendFuture
+               + '_ {
+            std::future::ready(Err(McpError::method_not_found::<ResourcesDirectoryReadRequestMethod>()))
         }
         /// Return the subset of a requested notification filter this server accepts.
         ///
@@ -841,6 +877,31 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_info(&self) -> ServerConfig {
                 (**self).get_info()
+            }
+
+            fn skills_list(
+                &self,
+                request: Option<PaginatedRequestParams>,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<SkillsListResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).skills_list(request, context)
+            }
+
+            fn skills_get(
+                &self,
+                request: SkillsGetRequestParams,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<SkillsGetResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).skills_get(request, context)
+            }
+
+            fn resources_directory_read(
+                &self,
+                request: ResourcesDirectoryReadRequestParams,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<ResourcesDirectoryReadResult, McpError>>
+            {
+                (**self).resources_directory_read(request, context)
             }
 
             fn get_task(
