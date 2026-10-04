@@ -2543,12 +2543,13 @@ impl<S: Stream> Stream for CancelOnDisconnect<S> {
 
 #[cfg(test)]
 mod tool_schema_cache_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::{
         ServerHandler,
         model::{ServerCapabilities, Tool},
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Clone)]
     struct CacheTestHandler;
