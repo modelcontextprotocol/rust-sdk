@@ -267,6 +267,9 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+      - name: Run lib tests without default features
+        run: cargo test -p rmcp --lib --no-default-features
+
   test-no-local:
     name: Run Tests (no local feature)
     runs-on: ubuntu-latest
