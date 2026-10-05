@@ -57,7 +57,9 @@ pub fn object(value: serde_json::Value) -> JsonObject {
 }
 
 /// Use this macro just like [`serde_json::json!`]
-#[cfg(feature = "macros")]
+///
+/// Available in every feature set: it expands to `serde_json::json!` around [`object`], and neither
+/// of those is gated by `macros` (which enables the derive and router macros).
 #[macro_export]
 macro_rules! object {
     ({$($tt:tt)*}) => {
