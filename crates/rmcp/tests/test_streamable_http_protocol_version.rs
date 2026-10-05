@@ -33,9 +33,17 @@ async fn spawn_server_with_manager(
     config: StreamableHttpServerConfig,
     session_manager: Arc<LocalSessionManager>,
 ) -> (reqwest::Client, String, CancellationToken) {
+    spawn_handler(Calculator::new(), config, session_manager).await
+}
+
+async fn spawn_handler<S: ServerHandler + Clone>(
+    handler: S,
+    config: StreamableHttpServerConfig,
+    session_manager: Arc<LocalSessionManager>,
+) -> (reqwest::Client, String, CancellationToken) {
     let ct = config.cancellation_token.clone();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(Calculator::new()), session_manager, config);
+    let service: StreamableHttpService<S, LocalSessionManager> =
+        StreamableHttpService::new(move || Ok(handler.clone()), session_manager, config);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -447,6 +455,49 @@ async fn stateless_request_accepts_missing_optional_meta_client_info() {
     .await;
 
     assert_eq!(response.status(), 200);
+    ct.cancel();
+}
+
+#[derive(Clone)]
+struct MissingResourceServer;
+
+impl ServerHandler for MissingResourceServer {
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        Err(rmcp::ErrorData::resource_not_found(request.uri, None))
+    }
+}
+
+#[tokio::test]
+async fn stateless_handler_invalid_params_stays_in_band() {
+    let (client, url, ct) = spawn_handler(
+        MissingResourceServer,
+        stateless_json_config(),
+        Arc::new(LocalSessionManager::default()),
+    )
+    .await;
+
+    let response = post_modern_request(
+        &client,
+        &url,
+        "resources/read",
+        Some("ui://widget/nope"),
+        json!({
+            "uri": "ui://widget/nope",
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["error"]["code"], -32602);
     ct.cancel();
 }
 
