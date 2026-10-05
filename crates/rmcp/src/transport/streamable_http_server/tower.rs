@@ -643,7 +643,12 @@ fn validate_required_protocol_meta(
     .into())
 }
 
-fn jsonrpc_http_status(message: &ServerJsonRpcMessage) -> http::StatusCode {
+/// `request_meta_malformed` marks a request missing required `_meta` fields;
+/// only then is `-32602` a malformed-request 400 rather than an in-band error.
+fn jsonrpc_http_status(
+    message: &ServerJsonRpcMessage,
+    request_meta_malformed: bool,
+) -> http::StatusCode {
     let ServerJsonRpcMessage::Error(error) = message else {
         return http::StatusCode::OK;
     };
@@ -652,6 +657,7 @@ fn jsonrpc_http_status(message: &ServerJsonRpcMessage) -> http::StatusCode {
         ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
         | ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
         | ErrorCode::HEADER_MISMATCH => http::StatusCode::BAD_REQUEST,
+        ErrorCode::INVALID_PARAMS if request_meta_malformed => http::StatusCode::BAD_REQUEST,
         ErrorCode::METHOD_NOT_FOUND => http::StatusCode::NOT_FOUND,
         _ => http::StatusCode::OK,
     }
@@ -674,7 +680,7 @@ mod jsonrpc_http_status_tests {
     #[test]
     fn header_mismatch_maps_to_bad_request() {
         assert_eq!(
-            jsonrpc_http_status(&error_message(ErrorCode::HEADER_MISMATCH)),
+            jsonrpc_http_status(&error_message(ErrorCode::HEADER_MISMATCH), false),
             http::StatusCode::BAD_REQUEST
         );
     }
@@ -682,15 +688,23 @@ mod jsonrpc_http_status_tests {
     #[test]
     fn method_not_found_maps_to_not_found() {
         assert_eq!(
-            jsonrpc_http_status(&error_message(ErrorCode::METHOD_NOT_FOUND)),
+            jsonrpc_http_status(&error_message(ErrorCode::METHOD_NOT_FOUND), false),
             http::StatusCode::NOT_FOUND
         );
     }
 
     #[test]
-    fn invalid_params_maps_to_ok() {
+    fn invalid_params_for_malformed_request_meta_maps_to_bad_request() {
         assert_eq!(
-            jsonrpc_http_status(&error_message(ErrorCode::INVALID_PARAMS)),
+            jsonrpc_http_status(&error_message(ErrorCode::INVALID_PARAMS), true),
+            http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn invalid_params_for_well_formed_request_meta_maps_to_ok() {
+        assert_eq!(
+            jsonrpc_http_status(&error_message(ErrorCode::INVALID_PARAMS), false),
             http::StatusCode::OK
         );
     }
@@ -698,7 +712,7 @@ mod jsonrpc_http_status_tests {
     #[test]
     fn unmapped_error_defaults_to_ok() {
         assert_eq!(
-            jsonrpc_http_status(&error_message(ErrorCode::INTERNAL_ERROR)),
+            jsonrpc_http_status(&error_message(ErrorCode::INTERNAL_ERROR), false),
             http::StatusCode::OK
         );
     }
@@ -799,13 +813,8 @@ mod standard_header_init_tests {
 
 fn jsonrpc_message_response(
     message: ServerJsonRpcMessage,
-    map_protocol_status: bool,
+    status: http::StatusCode,
 ) -> HttpResult<BoxResponse> {
-    let status = if map_protocol_status {
-        jsonrpc_http_status(&message)
-    } else {
-        http::StatusCode::OK
-    };
     let body =
         serde_json::to_vec(&message).map_err(internal_error_response("serialize json response"))?;
     Ok(Response::builder()
@@ -1526,6 +1535,11 @@ where
         mut request: crate::model::JsonRpcRequest<ClientRequest>,
         parts: http::request::Parts,
     ) -> HttpResult<BoxResponse> {
+        let request_meta_malformed = !request
+            .request
+            .get_meta()
+            .missing_required_keys(&ProtocolVersion::V_2026_07_28)
+            .is_empty();
         let peer_info = Self::peer_info_for_stateless_request(&request, &parts.headers);
         request.request.extensions_mut().insert(parts);
         let (transport, mut receiver) =
@@ -1570,9 +1584,8 @@ where
             &first,
             ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
         );
-        if terminal
-            && (self.config.json_response || jsonrpc_http_status(&first) != http::StatusCode::OK)
-        {
+        let status = jsonrpc_http_status(&first, request_meta_malformed);
+        if terminal && (self.config.json_response || status != http::StatusCode::OK) {
             // This message is the whole reply, so `receiver` is dropped here and
             // anything the handler emits afterwards is undeliverable. Cancel it so
             // a still-running handler stops instead of running on unobserved: its
@@ -1580,7 +1593,7 @@ where
             // permit, leaving the serve loop parked forever. A no-op when the
             // handler already completed.
             request_ct.cancel();
-            return jsonrpc_message_response(first, true);
+            return jsonrpc_message_response(first, status);
         }
 
         Ok(self.stateless_sse_response(Some(first), receiver, request_ct))

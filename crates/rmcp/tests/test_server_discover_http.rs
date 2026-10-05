@@ -322,7 +322,7 @@ async fn discover_rejects_missing_client_capabilities() {
         .await
         .expect("request should send");
 
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await.expect("response should be JSON");
     assert_eq!(body["error"]["code"], -32602);
 

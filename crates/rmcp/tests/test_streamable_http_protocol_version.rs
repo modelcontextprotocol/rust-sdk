@@ -424,7 +424,7 @@ async fn stateless_request_rejects_missing_meta_client_capabilities() {
     )
     .await;
 
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 400);
     let body: Value = response.json().await.expect("response should be JSON");
     assert_eq!(body["error"]["code"], -32602);
     assert!(
@@ -791,7 +791,7 @@ async fn seam_opt_in_rejects_missing_client_capabilities_before_dispatch() -> an
         &[("Mcp-Method", "tools/list")],
     )
     .await;
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 400);
     let payload: serde_json::Value = response.json().await?;
     assert_eq!(payload["error"]["code"], -32602);
     assert_eq!(
