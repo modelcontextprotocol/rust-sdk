@@ -1,7 +1,8 @@
 [workspace]
 members = ["crates/rmcp", "crates/rmcp-macros", "examples/*", "conformance"]
 default-members = ["crates/rmcp", "crates/rmcp-macros"]
-resolver = "2"
+# Virtual workspaces default to resolver 1 regardless of members' edition.
+resolver = "3"
 
 [workspace.dependencies]
 rmcp = { version = "3.5.0", path = "./crates/rmcp" }
