@@ -647,12 +647,10 @@ fn jsonrpc_http_status(message: &ServerJsonRpcMessage) -> http::StatusCode {
     let ServerJsonRpcMessage::Error(error) = message else {
         return http::StatusCode::OK;
     };
-    // Modern per-request HTTP treats invalid params as a malformed request.
     // Legacy requests bypass this mapper and retain HTTP 200 JSON-RPC errors.
     match error.error.code {
         ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
         | ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY
-        | ErrorCode::INVALID_PARAMS
         | ErrorCode::HEADER_MISMATCH => http::StatusCode::BAD_REQUEST,
         ErrorCode::METHOD_NOT_FOUND => http::StatusCode::NOT_FOUND,
         _ => http::StatusCode::OK,
@@ -686,6 +684,14 @@ mod jsonrpc_http_status_tests {
         assert_eq!(
             jsonrpc_http_status(&error_message(ErrorCode::METHOD_NOT_FOUND)),
             http::StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn invalid_params_maps_to_ok() {
+        assert_eq!(
+            jsonrpc_http_status(&error_message(ErrorCode::INVALID_PARAMS)),
+            http::StatusCode::OK
         );
     }
 
