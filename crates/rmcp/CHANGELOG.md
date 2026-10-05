@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.5.0...rmcp-v3.5.1) - 2026-10-05
+
+### Fixed
+
+- *(server)* keep discover lifecycle bootstrap-neutral ([#1248](https://github.com/modelcontextprotocol/rust-sdk/pull/1248))
+- keep handler-generated invalid params errors in-band ([#1322](https://github.com/modelcontextprotocol/rust-sdk/pull/1322))
+- *(model)* export object! macro without macros feature ([#1318](https://github.com/modelcontextprotocol/rust-sdk/pull/1318))
+- *(server)* default missing cache hints for 2026-07-28 peers ([#1308](https://github.com/modelcontextprotocol/rust-sdk/pull/1308))
+
+### Other
+
+- [rmcp] Notify credential stores when a refresh token is rejected ([#1285](https://github.com/modelcontextprotocol/rust-sdk/pull/1285))
+
 ## [3.5.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.4.1...rmcp-v3.5.0) - 2026-09-27
 
 ### Added
