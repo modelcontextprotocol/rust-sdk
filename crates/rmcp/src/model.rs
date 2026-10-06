@@ -3,10 +3,8 @@
 #![expect(deprecated)]
 use std::{
     borrow::Cow,
-    collections::hash_map::RandomState,
-    hash::{BuildHasher, Hasher},
     ops::{Deref, DerefMut},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 mod annotated;
 mod capabilities;
@@ -318,6 +316,7 @@ impl NumberOrString {
         }
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     pub(crate) fn numeric_string_value(&self) -> Option<i64> {
         match self {
             Self::String(id) => id.parse().ok(),
@@ -325,6 +324,7 @@ impl NumberOrString {
         }
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn matches_response_id(&self, response_id: &Self) -> bool {
         self == response_id
             || matches!(
@@ -653,6 +653,7 @@ pub struct ErrorData {
 }
 
 impl ErrorData {
+    #[cfg(any(feature = "client", feature = "server"))]
     const TRANSPORT_CLOSED_MARKER: &str = "io.modelcontextprotocol/transportClosed";
 
     pub fn new(
@@ -714,7 +715,10 @@ impl ErrorData {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
+    #[cfg(all(
+        feature = "transport-streamable-http-client",
+        any(feature = "client", feature = "server")
+    ))]
     pub(crate) fn transport_closed(message: impl Into<Cow<'static, str>>) -> Self {
         let mut data = JsonObject::new();
         data.insert(
@@ -724,6 +728,7 @@ impl ErrorData {
         Self::internal_error(message, Some(Value::Object(data)))
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     pub(crate) fn is_transport_closed(&self) -> bool {
         self.data
             .as_ref()
@@ -732,7 +737,14 @@ impl ErrorData {
             == Some(Self::transport_closed_token())
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     fn transport_closed_token() -> u64 {
+        use std::{
+            collections::hash_map::RandomState,
+            hash::{BuildHasher, Hasher},
+            sync::OnceLock,
+        };
+
         static TOKEN: OnceLock<u64> = OnceLock::new();
         *TOKEN.get_or_init(|| {
             let mut hasher = RandomState::new().build_hasher();
@@ -4961,7 +4973,10 @@ mod tests {
         assert!(ProtocolVersion::known_up_to(&ancient).is_empty());
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
+    #[cfg(all(
+        feature = "transport-streamable-http-client",
+        any(feature = "client", feature = "server")
+    ))]
     #[test]
     fn transport_closed_marker_accepts_only_the_process_local_token() {
         let local = ErrorData::transport_closed("closed");

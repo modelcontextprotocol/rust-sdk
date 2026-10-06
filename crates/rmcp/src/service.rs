@@ -1035,16 +1035,19 @@ impl<R: ServiceRole> Peer<R> {
         *self.info.write().expect("peer info lock poisoned") = Some(Arc::new(info));
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn set_client_request_metadata(&self, metadata: ClientRequestMetadata) {
         let result = self.client_request_metadata.set(metadata);
         debug_assert!(result.is_ok(), "client request metadata set more than once");
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn require_request_metadata(&self) {
         self.request_metadata_required
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn request_metadata_required(&self) -> bool {
         self.request_metadata_required
             .load(std::sync::atomic::Ordering::Acquire)
