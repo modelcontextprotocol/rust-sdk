@@ -158,16 +158,13 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
         async {}
     }
 
+    /// Rejects outbound requests when the negotiated protocol forbids this role
+    /// from sending any.
     #[doc(hidden)]
-    fn enforce_request_association(
-        _request: &Self::Req,
-        _peer_info: Option<&Self::PeerInfo>,
-        _in_request_handler_scope: bool,
-    ) -> Result<(), ServiceError> {
+    fn enforce_outbound_request(_peer_info: Option<&Self::PeerInfo>) -> Result<(), ServiceError> {
         Ok(())
     }
 
-    /// Receive-side counterpart of [`Self::enforce_request_association`]:
     /// SEP-2260 says clients receiving a server-to-client request with no
     /// associated outbound request should reject it with invalid params. An
     /// error return is sent back to the peer instead of dispatching to the
@@ -231,10 +228,6 @@ tokio::task_local! {
     pub(crate) static ORIGINATING_REQUEST: RequestId;
 }
 
-pub(crate) fn in_request_handler_scope() -> bool {
-    ORIGINATING_REQUEST.try_with(|_| ()).is_ok()
-}
-
 /// Marker in an outbound request's non-serialized [`Extensions`] identifying
 /// the in-flight peer request it was issued from (SEP-2260). Attached for both
 /// roles whenever a request is sent from within a request handler; the
@@ -242,14 +235,8 @@ pub(crate) fn in_request_handler_scope() -> bool {
 /// originating request's SSE stream. Never on the wire (SEP-2260 defines no
 /// wire field), so session managers that serialize messages between processes
 /// lose it and such requests fall back to the standalone stream with a warning.
-///
-/// # Caller requirements
-///
-/// From protocol version `2026-07-28`, server-to-client sampling, roots, and
-/// elicitation requests must be issued while handling a client request;
-/// outside a handler they return an `invalid_request` error. The association
-/// is task-local and does not cross `tokio::spawn`, so use the task manager
-/// for long-running work.
+/// The association is task-local and does not cross `tokio::spawn`, so use the
+/// task manager for long-running work.
 ///
 /// The client receive-side mirror is [`InboundStreamOrigin`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -873,11 +860,7 @@ impl<R: ServiceRole> Peer<R> {
         options: PeerRequestOptions,
         subscription_sender: Option<SubscriptionChannel<R::PeerNot>>,
     ) -> Result<RequestHandle<R>, ServiceError> {
-        R::enforce_request_association(
-            &request,
-            self.peer_info().as_deref(),
-            in_request_handler_scope(),
-        )?;
+        R::enforce_outbound_request(self.peer_info().as_deref())?;
         if let Ok(originating) = ORIGINATING_REQUEST.try_with(|id| id.clone()) {
             request
                 .extensions_mut()
