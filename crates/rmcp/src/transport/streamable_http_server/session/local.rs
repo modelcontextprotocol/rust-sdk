@@ -1,11 +1,14 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     num::ParseIntError,
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use futures::{Stream, StreamExt};
+use pin_project_lite::pin_project;
 use thiserror::Error;
 use tokio::sync::{
     mpsc::{Receiver, Sender},
@@ -17,9 +20,10 @@ use tracing::instrument;
 use crate::{
     RoleServer,
     model::{
-        CancelledNotificationParam, ClientJsonRpcMessage, ClientNotification, ClientRequest,
-        JsonRpcNotification, JsonRpcRequest, Notification, ProgressNotificationParam,
-        ProgressToken, RequestId, ServerJsonRpcMessage, ServerNotification,
+        CancelledNotification, CancelledNotificationParam, ClientJsonRpcMessage,
+        ClientNotification, ClientRequest, JsonRpcNotification, JsonRpcRequest, Notification,
+        ProgressNotificationParam, ProgressToken, RequestId, ServerJsonRpcMessage,
+        ServerNotification,
     },
     transport::{
         WorkerTransport,
@@ -109,7 +113,11 @@ impl SessionManager for LocalSessionManager {
         let receiver = handle.establish_request_wise_channel().await?;
         let http_request_id = receiver.http_request_id;
         handle.push_message(message, http_request_id).await?;
-        Ok(ReceiverStream::new(receiver.inner))
+        Ok(RequestWiseResponseStream::new(
+            ReceiverStream::new(receiver.inner),
+            handle.clone(),
+            http_request_id,
+        ))
     }
 
     async fn create_standalone_stream(
@@ -426,6 +434,53 @@ pub struct StreamableHttpMessageReceiver {
     pub inner: Receiver<ServerSseMessage>,
 }
 
+pin_project! {
+    /// Cancels the in-flight session request when the request-wise response
+    /// stream is dropped before it reaches natural completion.
+    struct RequestWiseResponseStream {
+        #[pin]
+        inner: ReceiverStream<ServerSseMessage>,
+        handle: LocalSessionHandle,
+        http_request_id: Option<HttpRequestId>,
+    }
+
+    impl PinnedDrop for RequestWiseResponseStream {
+        fn drop(this: Pin<&mut Self>) {
+            let this = this.project();
+            if let Some(id) = this.http_request_id.take() {
+                this.handle.cancel_request_wise_channel_on_disconnect(id);
+            }
+        }
+    }
+}
+
+impl RequestWiseResponseStream {
+    fn new(
+        inner: ReceiverStream<ServerSseMessage>,
+        handle: LocalSessionHandle,
+        http_request_id: Option<HttpRequestId>,
+    ) -> Self {
+        Self {
+            inner,
+            handle,
+            http_request_id,
+        }
+    }
+}
+
+impl Stream for RequestWiseResponseStream {
+    type Item = ServerSseMessage;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let polled = this.inner.poll_next(cx);
+        if let Poll::Ready(None) = &polled {
+            *this.http_request_id = None;
+        }
+        polled
+    }
+}
+
 impl LocalSessionWorker {
     fn unregister_resource(&mut self, resource: &ResourceKey) {
         let Some(http_request_id) = self.resource_router.remove(resource) else {
@@ -485,6 +540,22 @@ impl LocalSessionWorker {
             let resource = ResourceKey::McpRequestId(request_id);
             self.unregister_resource(&resource);
         }
+    }
+    fn remove_request_wise_channel(&mut self, id: HttpRequestId) -> Vec<RequestId> {
+        let Some(channel) = self.tx_router.remove(&id) else {
+            return Vec::new();
+        };
+        channel
+            .resources
+            .into_iter()
+            .filter_map(|resource| {
+                self.resource_router.remove(&resource);
+                match resource {
+                    ResourceKey::McpRequestId(request_id) => Some(request_id),
+                    ResourceKey::ProgressToken(_) => None,
+                }
+            })
+            .collect()
     }
     fn evict_expired_channels(&mut self) {
         let ttl = self.session_config.completed_cache_ttl;
@@ -813,6 +884,9 @@ pub enum SessionEvent {
         id: HttpRequestId,
         responder: oneshot::Sender<Result<(), SessionError>>,
     },
+    CancelRequestWiseChannel {
+        id: HttpRequestId,
+    },
     Resume {
         last_event_id: EventId,
         responder: oneshot::Sender<Result<StreamableHttpMessageReceiver, SessionError>>,
@@ -912,6 +986,19 @@ impl LocalSessionHandle {
             .map_err(|_| SessionError::SessionServiceTerminated)?;
         rx.await
             .map_err(|_| SessionError::SessionServiceTerminated)?
+    }
+
+    fn cancel_request_wise_channel_on_disconnect(&self, request_id: HttpRequestId) {
+        let event = SessionEvent::CancelRequestWiseChannel { id: request_id };
+        match self.event_tx.try_send(event) {
+            Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => {
+                let event_tx = self.event_tx.clone();
+                tokio::spawn(async move {
+                    let _ = event_tx.send(event).await;
+                });
+            }
+        }
     }
 
     /// Establish a common channel for general purpose messages.
@@ -1186,8 +1273,23 @@ impl Worker for LocalSessionWorker {
                     id,
                     responder,
                 }) => {
-                    let _handle_result = self.tx_router.remove(&id);
+                    self.remove_request_wise_channel(id);
                     let _ = responder.send(Ok(()));
+                }
+                InnerEvent::FromHttpService(SessionEvent::CancelRequestWiseChannel { id }) => {
+                    let request_ids = self.remove_request_wise_channel(id);
+                    for request_id in request_ids {
+                        context
+                            .send_to_handler(ClientJsonRpcMessage::notification(
+                                ClientNotification::CancelledNotification(
+                                    CancelledNotification::new(CancelledNotificationParam::new(
+                                        Some(request_id),
+                                        Some("client disconnected".to_owned()),
+                                    )),
+                                ),
+                            ))
+                            .await?;
+                    }
                 }
                 InnerEvent::FromHttpService(SessionEvent::Resume {
                     last_event_id,
