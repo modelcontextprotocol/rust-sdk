@@ -54,7 +54,7 @@ impl LocalSessionManager {
             .await
             .get(id)
             .cloned()
-            .ok_or(LocalSessionManagerError::SessionNotFound(id.clone()))
+            .ok_or_else(|| LocalSessionManagerError::SessionNotFound(id.clone()))
     }
 }
 
