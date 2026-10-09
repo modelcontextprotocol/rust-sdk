@@ -1802,6 +1802,10 @@ where
             }
         }
 
+        // Preserve the response drain above, then cancel any handlers still running.
+        // EOF does not cancel the externally supplied service token.
+        serve_loop_ct.cancel();
+
         let sink_close_result = transport.close().await;
         if let Err(e) = sink_close_result {
             tracing::error!(%e, "fail to close sink");
