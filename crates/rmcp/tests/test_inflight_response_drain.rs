@@ -12,13 +12,17 @@ use std::{
 };
 
 use rmcp::{
-    ServerHandler, ServiceExt,
+    ClientHandler, ErrorData, RoleClient, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolRequestParams, ClientConfig, ServerCapabilities, ServerConfig},
-    service::QuitReason,
+    service::{QuitReason, RequestContext, serve_directly_with_ct},
     tool, tool_handler, tool_router,
 };
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf},
+    sync::mpsc,
+};
+use tokio_util::sync::CancellationToken;
 
 // A slow tool server that sleeps before returning a response.
 #[derive(Debug, Clone)]
@@ -155,5 +159,75 @@ async fn test_inflight_response_drain_on_eof() -> anyhow::Result<()> {
     assert_eq!(text, "done after 200ms");
 
     server_handle.await??;
+    Ok(())
+}
+
+struct PendingPingClient {
+    started: mpsc::UnboundedSender<CancellationToken>,
+    finished: mpsc::UnboundedSender<()>,
+}
+
+impl ClientHandler for PendingPingClient {
+    async fn ping(&self, context: RequestContext<RoleClient>) -> Result<(), ErrorData> {
+        self.started.send(context.ct.clone()).unwrap();
+        context.ct.cancelled().await;
+        self.finished.send(()).unwrap();
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_eof_cancels_pending_requests_after_drain() -> anyhow::Result<()> {
+    let (mut remote_write, client_read) = tokio::io::duplex(4096);
+    let (client_write, mut remote_read) = tokio::io::duplex(4096);
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (finished_tx, mut finished_rx) = mpsc::unbounded_channel();
+    let service_token = CancellationToken::new();
+    let sibling_token = service_token.child_token();
+    let client = serve_directly_with_ct::<RoleClient, _, _, _, _>(
+        PendingPingClient {
+            started: started_tx,
+            finished: finished_tx,
+        },
+        (client_read, client_write),
+        None,
+        service_token.clone(),
+    );
+    let peer = client.peer().clone();
+
+    remote_write
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n\
+              {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n",
+        )
+        .await?;
+    let first = started_rx.recv().await.expect("first handler started");
+    let second = started_rx.recv().await.expect("second handler started");
+    assert!(!first.is_cancelled());
+    assert!(!second.is_cancelled());
+
+    // EOF closes only the input side. Pending handlers keep the response drain
+    // open until its deadline, which passes instantly with paused Tokio time.
+    drop(remote_write);
+    let mut responses = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(6),
+        remote_read.read_to_end(&mut responses),
+    )
+    .await??;
+
+    // Keep RunningService and Peer alive through these assertions: dropping the
+    // service would cancel its token and hide missing cancellation on EOF.
+    assert!(peer.is_transport_closed());
+    assert!(first.is_cancelled());
+    assert!(second.is_cancelled());
+    assert!(!service_token.is_cancelled());
+    assert!(!sibling_token.is_cancelled());
+    for _ in 0..2 {
+        tokio::time::timeout(Duration::from_secs(1), finished_rx.recv())
+            .await?
+            .expect("handler finished after cancellation");
+    }
+    assert!(matches!(client.waiting().await?, QuitReason::Closed));
     Ok(())
 }
