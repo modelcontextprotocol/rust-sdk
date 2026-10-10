@@ -3400,6 +3400,17 @@
             }
           ]
         },
+        "skills": {
+          "description": "Capability for the SEP-2640 Skills extension.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillsCapability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tools": {
           "anyOf": [
             {
@@ -3576,6 +3587,18 @@
           "const": "Dynamic"
         }
       ]
+    },
+    "SkillsCapability": {
+      "description": "Capability for the SEP-2640 Skills extension.\n\nAdvertises support for `skills/list`, `skills/get`, and\n`resources/directory/read` RPC methods.",
+      "type": "object",
+      "properties": {
+        "listChanged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
     },
     "SkillsGetRequestMethod": {
       "type": "string",

@@ -60,6 +60,19 @@ pub struct ToolsCapability {
     pub list_changed: Option<bool>,
 }
 
+/// Capability for the SEP-2640 Skills extension.
+///
+/// Advertises support for `skills/list`, `skills/get`, and
+/// `resources/directory/read` RPC methods.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct SkillsCapability {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_changed: Option<bool>,
+}
+
 /// Roots capability. Deprecated by SEP-2577; remains functional and will be
 /// removed in a future release.
 /// See <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.
@@ -240,6 +253,9 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
+    /// Capability for the SEP-2640 Skills extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills: Option<SkillsCapability>,
 }
 
 impl ServerCapabilities {
@@ -376,6 +392,7 @@ builder! {
         prompts: PromptsCapability,
         resources: ResourcesCapability,
         tools: ToolsCapability,
+        skills: SkillsCapability,
     }
 }
 

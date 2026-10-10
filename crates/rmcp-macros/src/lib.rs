@@ -334,3 +334,39 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
+
+/// # skill
+///
+/// Marks a function as a skill handler for the SEP-2640 Skills extension.
+/// Generates a companion `*_skill_attr()` function returning the skill's
+/// [`SkillEntry`] metadata, and wraps the async body in `Pin<Box<Future>>`.
+#[proc_macro_attribute]
+pub fn skill(attr: TokenStream, input: TokenStream) -> TokenStream {
+    skill::skill(attr.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// # skill_router
+///
+/// Walks an impl block for `#[skill]`-annotated functions and builds a
+/// [`SkillRouter`] mapping each skill's `skill://` URI to its handler.
+#[proc_macro_attribute]
+pub fn skill_router(attr: TokenStream, input: TokenStream) -> TokenStream {
+    skill_router::skill_router(attr.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// # skill_handler
+///
+/// Implements the `ServerHandler` skills trait methods (`skills_list`,
+/// `skills_get`, `resources_directory_read`) for a struct, wiring them
+/// through a `SkillRouter`. Also generates `get_info()` with
+/// `.enable_skills()` if no sibling `tool_handler` is present.
+#[proc_macro_attribute]
+pub fn skill_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
+    skill_handler::skill_handler(attr.into(), input.into())
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}

@@ -9,7 +9,7 @@
 use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use syn::{Expr, Ident, ImplItemFn, LitStr, ReturnType, parse_quote};
+use syn::{Expr, Ident, ImplItemFn, LitStr, parse_quote};
 
 use crate::common::extract_doc_line;
 
@@ -60,12 +60,9 @@ impl ResolvedSkillAttribute {
         let tokens = quote! {
             #doc_attr
             pub fn #fn_ident() -> rmcp::model::skills::SkillEntry {
-                rmcp::model::skills::SkillEntry {
-                    uri: #uri.into(),
-                    frontmatter: #frontmatter,
-                    resources: #resources,
-                    meta: None,
-                }
+                let mut entry = rmcp::model::skills::SkillEntry::new(#uri, #frontmatter);
+                entry.resources = #resources;
+                entry
             }
         };
         syn::parse2::<ImplItemFn>(tokens)
@@ -79,7 +76,7 @@ pub fn skill(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> 
         let attr_args = NestedMeta::parse_meta_list(attr)?;
         SkillAttribute::from_list(&attr_args)?
     };
-    let mut fn_item = syn::parse2::<ImplItemFn>(input.clone())?;
+    let fn_item = syn::parse2::<ImplItemFn>(input.clone())?;
     let fn_ident = &fn_item.sig.ident;
 
     let skill_attr_fn_ident = format_ident!("{}_skill_attr", fn_ident);
@@ -142,50 +139,50 @@ pub fn skill(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> 
         description: description_expr,
         dynamic: attribute.dynamic,
     };
-    let skill_attr_fn = resolved.into_fn(skill_attr_fn_ident)?;
+    let skill_attr_fn = resolved.into_fn(skill_attr_fn_ident.clone())?;
 
-    // Wrap async body (same as tool/prompt macros)
-    if fn_item.sig.asyncness.is_some() {
-        let omit_send = cfg!(feature = "local") || attribute.local;
-        let new_output = syn::parse2::<ReturnType>({
-            let mut lt = quote! { 'static };
-            if let Some(receiver) = fn_item.sig.receiver()
-                && let syn::ReceiverKind::Reference(_, receiver_lt, _) = &receiver.kind
-            {
-                if let Some(receiver_lt) = receiver_lt {
-                    lt = quote! { #receiver_lt };
-                } else {
-                    lt = quote! { '_ };
-                }
+    // Generate the CallSkillHandler wrapper.
+    // The user's function is the "body" — it takes &self and returns Result<(), ErrorData>.
+    // The router needs a fn that takes &self + SkillCallContext<S> and returns Result<SkillEntry, ErrorData>.
+    // We generate a wrapper that calls the user's fn, then returns the SkillEntry from *_skill_attr().
+    // The original function is kept so the wrapper can call it.
+    let handler_fn_ident = format_ident!("{}_handler", fn_ident);
+    let skill_attr_fn_ident_clone = skill_attr_fn_ident.clone();
+
+    let handler_fn = if fn_item.sig.asyncness.is_some() {
+        quote! {
+            #[allow(clippy::too_many_arguments)]
+            fn #handler_fn_ident(
+                &self,
+                ctx: rmcp::handler::server::skill::SkillCallContext<'_, Self>,
+            ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<rmcp::model::skills::SkillEntry, rmcp::ErrorData>> + Send + 'static>> {
+                let this = self.clone();
+                Box::pin(async move {
+                    let _ = ctx.service;
+                    this.#fn_ident().await?;
+                    Ok(Self::#skill_attr_fn_ident_clone())
+                })
             }
-            match &fn_item.sig.output {
-                syn::ReturnType::Default => {
-                    if omit_send {
-                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + #lt>> }
-                    } else {
-                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send + #lt>> }
-                    }
-                }
-                syn::ReturnType::Type(_, ty) => {
-                    if omit_send {
-                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + #lt>> }
-                    } else {
-                        quote! { -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = #ty> + Send + #lt>> }
-                    }
-                }
+        }
+    } else {
+        quote! {
+            #[allow(clippy::too_many_arguments)]
+            fn #handler_fn_ident(
+                &self,
+                _ctx: rmcp::handler::server::skill::SkillCallContext<'_, Self>,
+            ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<rmcp::model::skills::SkillEntry, rmcp::ErrorData>> + Send + 'static>> {
+                let this = self.clone();
+                Box::pin(async move {
+                    this.#fn_ident()?;
+                    Ok(Self::#skill_attr_fn_ident_clone())
+                })
             }
-        })?;
-        let prev_block = &fn_item.block;
-        let new_block = syn::parse2::<syn::Block>(quote! {
-           { Box::pin(async move #prev_block ) }
-        })?;
-        fn_item.sig.asyncness = None;
-        fn_item.sig.output = new_output;
-        fn_item.block = new_block;
-    }
+        }
+    };
 
     Ok(quote! {
         #skill_attr_fn
         #fn_item
+        #handler_fn
     })
 }

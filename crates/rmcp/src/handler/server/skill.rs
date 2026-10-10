@@ -49,6 +49,38 @@ pub trait CallSkillHandler<S, A>: Send + Sync + Clone + 'static {
     >;
 }
 
+impl<S, F> CallSkillHandler<S, ()> for F
+where
+    F: for<'a> Fn(
+            &'a S,
+            SkillCallContext<'a, S>,
+        ) -> ::std::pin::Pin<
+            Box<
+                dyn ::std::future::Future<Output = Result<SkillEntry, crate::ErrorData>>
+                    + Send
+                    + 'static,
+            >,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    S: crate::service::MaybeSend + 'static,
+{
+    fn call(
+        &self,
+        service: &S,
+        context: SkillCallContext<S>,
+    ) -> ::std::pin::Pin<
+        Box<
+            dyn ::std::future::Future<Output = Result<SkillEntry, crate::ErrorData>>
+                + Send
+                + 'static,
+        >,
+    > {
+        self(service, context)
+    }
+}
+
 /// Type-erased skill call handler for storage in SkillRouter.
 pub type DynCallSkillHandler<S> = dyn for<'a> Fn(SkillCallContext<'a, S>) -> MaybeBoxFuture<'a, Result<SkillEntry, crate::ErrorData>>
     + Send

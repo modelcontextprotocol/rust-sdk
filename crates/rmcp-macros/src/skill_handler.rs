@@ -99,15 +99,11 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                 let supports_cache_hints = context.protocol_version().is_some_and(|version| {
                     version >= rmcp::model::ProtocolVersion::V_2026_07_28
                 });
-                Ok(rmcp::model::skills::SkillsListResult {
-                    result_type: Some(rmcp::model::ResultType::COMPLETE),
-                    skills: #router.list_all(),
-                    meta: None,
-                    next_cursor: None,
-                    ttl_ms: supports_cache_hints.then_some(0),
-                    cache_scope: supports_cache_hints
-                        .then_some(rmcp::model::CacheScope::Public),
-                })
+                let mut result = rmcp::model::skills::SkillsListResult::new(#router.list_all());
+                result.result_type = Some(rmcp::model::ResultType::COMPLETE);
+                result.ttl_ms = supports_cache_hints.then_some(0);
+                result.cache_scope = supports_cache_hints.then_some("public".to_string());
+                Ok(result)
             }
         })?;
         item_impl.items.push(skill_list_fn);
@@ -132,12 +128,7 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                 );
                 (route.call)(skill_context).await?;
                 Ok(rmcp::model::skills::SkillsGetResult::new(
-                    rmcp::model::skills::SkillEntry {
-                        uri: request.uri,
-                        frontmatter: serde_json::json!({}),
-                        resources: None,
-                        meta: None,
-                    }
+                    rmcp::model::skills::SkillEntry::new(request.uri, serde_json::json!({}))
                 ))
             }
         })?;
@@ -160,27 +151,21 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                         Some(rmcp::model::skills::SkillResources::FileList(files)) => {
                             files.iter().map(|file| {
                                 let name = file.uri.rsplit('/').next().unwrap_or("").to_string();
-                                rmcp::model::skills::DirectoryEntry {
-                                    uri: file.uri.clone(),
-                                    is_directory: false,
-                                    name,
-                                }
+                                rmcp::model::skills::DirectoryEntry::file(file.uri.clone(), name)
                             }).collect()
                         }
                         Some(rmcp::model::skills::SkillResources::Dynamic) => vec![],
+                        Some(_) => vec![],
                         None => vec![],
                     }
                 } else {
                     vec![]
                 };
-                Ok(rmcp::model::skills::ResourcesDirectoryReadResult {
-                    result_type: Some(rmcp::model::ResultType::COMPLETE),
-                    children,
-                    next_cursor: None,
-                    ttl_ms: supports_cache_hints.then_some(0),
-                    cache_scope: supports_cache_hints
-                        .then_some(rmcp::model::CacheScope::Public),
-                })
+                let mut result = rmcp::model::skills::ResourcesDirectoryReadResult::new(children);
+                result.result_type = Some(rmcp::model::ResultType::COMPLETE);
+                result.ttl_ms = supports_cache_hints.then_some(0);
+                result.cache_scope = supports_cache_hints.then_some("public".to_string());
+                Ok(result)
             }
         })?;
         item_impl.items.push(directory_read_fn);

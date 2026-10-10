@@ -69,7 +69,7 @@ pub trait IntoSkillRoute<S, A> {
 
 impl<S, C, A, T> IntoSkillRoute<S, A> for (T, C)
 where
-    S: MaybeSend + 'static,
+    S: MaybeSend + Clone + 'static,
     C: CallSkillHandler<S, A> + MaybeSend + Clone + 'static,
     T: Into<SkillEntry>,
 {

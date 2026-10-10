@@ -76,8 +76,9 @@ pub fn skill_router(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
     let mut routers = Vec::with_capacity(skill_attr_fns.len());
     for handler in skill_attr_fns {
         let skill_attr_fn_ident = format_ident!("{}_skill_attr", handler);
+        let handler_fn_ident = format_ident!("{}_handler", handler);
         routers.push(quote! {
-            .with_route((Self::#skill_attr_fn_ident(), Self::#handler))
+            .with_route((Self::#skill_attr_fn_ident(), Self::#handler_fn_ident))
         });
     }
 
