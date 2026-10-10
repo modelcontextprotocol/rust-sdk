@@ -1692,15 +1692,6 @@
         },
         {
           "$ref": "#/definitions/CustomRequest"
-        },
-        {
-          "$ref": "#/definitions/Request3"
-        },
-        {
-          "$ref": "#/definitions/Request4"
-        },
-        {
-          "$ref": "#/definitions/RequestOptionalParam"
         }
       ],
       "required": [
@@ -2365,28 +2356,6 @@
       "format": "const",
       "const": "object"
     },
-    "PaginatedRequestParams": {
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "description": "Protocol-level metadata for this request (SEP-1319)",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RequestMetaObject"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
     "PingRequestMethod": {
       "type": "string",
       "format": "const",
@@ -2699,38 +2668,6 @@
         "params"
       ]
     },
-    "Request3": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ResourcesDirectoryReadRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/ResourcesDirectoryReadRequestParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    "Request4": {
-      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/SkillsGetRequestMethod"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillsGetRequestParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
     "RequestMetaObject": {
       "description": "Metadata reserved by MCP on requests. Extension keys are also allowed.",
       "type": "object",
@@ -2769,27 +2706,6 @@
       "properties": {
         "method": {
           "$ref": "#/definitions/ListRootsRequestMethod"
-        }
-      },
-      "required": [
-        "method"
-      ]
-    },
-    "RequestOptionalParam": {
-      "type": "object",
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/SkillsListRequestMethod"
-        },
-        "params": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PaginatedRequestParams"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -3063,39 +2979,6 @@
           ]
         }
       }
-    },
-    "ResourcesDirectoryReadRequestMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "resources/directory/read"
-    },
-    "ResourcesDirectoryReadRequestParams": {
-      "description": "Parameters for reading a directory resource.\n\nThe request carries the directory URI and an optional pagination cursor.",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RequestMetaObject"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "cursor": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "uri"
-      ]
     },
     "ResourcesDirectoryReadResult": {
       "description": "Response listing the children of a directory.\n\nCarries the `resultType` discriminator (SEP-2322) so it can be stripped for\nlegacy peers the same way as other resource list results.",
@@ -3600,33 +3483,6 @@
         }
       }
     },
-    "SkillsGetRequestMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "skills/get"
-    },
-    "SkillsGetRequestParams": {
-      "description": "Parameters for retrieving a single skill by URI.",
-      "type": "object",
-      "properties": {
-        "_meta": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RequestMetaObject"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "uri"
-      ]
-    },
     "SkillsGetResult": {
       "description": "Response to `skills/get`.\n\nCarries a single skill entry. No pagination cursor (a single entry is not\na list). The caching fields (`ttlMs`/`cacheScope`) are left open — the\nspec does not settle whether `skills/get` results carry them.",
       "type": "object",
@@ -3648,11 +3504,6 @@
       "required": [
         "skill"
       ]
-    },
-    "SkillsListRequestMethod": {
-      "type": "string",
-      "format": "const",
-      "const": "skills/list"
     },
     "SkillsListResult": {
       "description": "Response to `skills/list`.\n\nCarries the skill entries for this page plus (for protocol 2026-07-28+)\nthe SEP-2549 caching fields (`ttlMs`/`cacheScope`).",

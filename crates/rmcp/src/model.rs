@@ -4558,9 +4558,6 @@ impl ServerRequest {
             ServerRequest::ListRootsRequest(r) => r.method.as_str(),
             ServerRequest::ElicitRequest(r) => r.method.as_str(),
             ServerRequest::CustomRequest(r) => r.method.as_str(),
-            ServerRequest::ResourcesDirectoryReadRequest(r) => r.method.as_str(),
-            ServerRequest::SkillsGetRequest(r) => r.method.as_str(),
-            ServerRequest::SkillsListRequest(r) => r.method.as_str(),
         }
     }
 }
@@ -4597,10 +4594,7 @@ ts_union!(
     | CreateMessageRequest
     | ListRootsRequest
     | ElicitRequest
-    | CustomRequest
-    | ResourcesDirectoryReadRequest
-    | SkillsGetRequest
-    | SkillsListRequest;
+    | CustomRequest;
 );
 
 ts_union!(

@@ -204,9 +204,6 @@ variant_extension! {
         ListRootsRequest
         ElicitRequest
         CustomRequest
-        ResourcesDirectoryReadRequest
-        SkillsGetRequest
-        SkillsListRequest
     }
 }
 
