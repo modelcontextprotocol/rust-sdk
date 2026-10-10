@@ -272,6 +272,7 @@ impl DynamicTransportError {
         }
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn is_authorization_required(&self) -> bool {
         let mut error = Some(self.error.as_ref() as &(dyn std::error::Error + 'static));
         while let Some(current) = error {

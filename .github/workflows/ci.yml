@@ -70,6 +70,14 @@ jobs:
                       | select(. != "local")] | join(",")')
           cargo clippy --package rmcp --all-targets --no-default-features --features "$FEATURES" -- -D warnings
 
+      # Only --lib: some tests don't build in reduced feature sets.
+      - name: Run clippy (reduced feature sets)
+        run: |
+          cargo clippy --package rmcp --lib -- -D warnings
+          cargo clippy --package rmcp --lib --no-default-features -- -D warnings
+          cargo clippy --package rmcp --lib --no-default-features --features client -- -D warnings
+          cargo clippy --package rmcp --lib --no-default-features --features server -- -D warnings
+
   semver:
     name: SemVer Check
     runs-on: ubuntu-latest
