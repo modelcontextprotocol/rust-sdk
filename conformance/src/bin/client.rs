@@ -1011,9 +1011,15 @@ async fn run_json_schema_preservation_client(server_url: &str) -> anyhow::Result
         "schema".to_string(),
         Value::Object(tool.input_schema.as_ref().clone()),
     );
-    client
+    let result = client
         .call_tool(call_tool_params("json_schema_echo".into(), Some(args)))
         .await?;
+    if result.is_error == Some(true) {
+        anyhow::bail!(
+            "json_schema_echo returned a tool error: {:?}",
+            result.content
+        );
+    }
     client.cancel().await?;
     Ok(())
 }
