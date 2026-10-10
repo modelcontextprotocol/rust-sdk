@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.5.1...rmcp-v3.5.2) - 2026-10-10
+
+### Fixed
+
+- cancel pending request tokens after transport EOF ([#1333](https://github.com/modelcontextprotocol/rust-sdk/pull/1333))
+- *(rmcp)* import base64-only prompt content types under the feature ([#1314](https://github.com/modelcontextprotocol/rust-sdk/pull/1314))
+
 ## [3.5.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.5.0...rmcp-v3.5.1) - 2026-10-05
 
 ### Fixed
