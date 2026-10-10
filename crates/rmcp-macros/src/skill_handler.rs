@@ -48,7 +48,10 @@ pub(crate) fn build_get_info(
 
     let mut capability_calls = Vec::new();
     if has_skills {
-        capability_calls.push(quote! { .enable_skills() });
+        capability_calls
+            .push(quote! { .enable_skills_with(rmcp::model::SkillsCapability::new(true)) });
+        capability_calls.push(quote! { .enable_skills_extension() });
+        capability_calls.push(quote! { .enable_resources() });
     }
     let server_info_expr = match (name, version) {
         (Some(n), Some(v)) => quote! { rmcp::model::Implementation::new(#n, #v) },

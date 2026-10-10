@@ -477,7 +477,10 @@ macro_rules! server_handler_methods {
             request: SkillsGetRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<SkillsGetResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Err(McpError::method_not_found::<SkillsGetRequestMethod>()))
+            std::future::ready(Err(McpError::invalid_params(
+                format!("skill not found: {}", request.uri),
+                None,
+            )))
         }
         fn resources_directory_read(
             &self,
