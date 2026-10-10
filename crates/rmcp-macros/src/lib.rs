@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![allow(dead_code)]
 
 #[allow(unused_imports)]
 use proc_macro::TokenStream;
@@ -7,6 +8,9 @@ mod common;
 mod prompt;
 mod prompt_handler;
 mod prompt_router;
+mod skill;
+mod skill_handler;
+mod skill_router;
 mod tool;
 mod tool_handler;
 mod tool_router;
