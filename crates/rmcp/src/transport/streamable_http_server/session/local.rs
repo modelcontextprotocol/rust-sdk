@@ -884,9 +884,6 @@ pub enum SessionEvent {
         id: HttpRequestId,
         responder: oneshot::Sender<Result<(), SessionError>>,
     },
-    CancelRequestWiseChannel {
-        id: HttpRequestId,
-    },
     Resume {
         last_event_id: EventId,
         responder: oneshot::Sender<Result<StreamableHttpMessageReceiver, SessionError>>,
@@ -905,6 +902,9 @@ pub enum SessionEvent {
     },
     EstablishCommonChannel {
         responder: oneshot::Sender<Result<StreamableHttpMessageReceiver, SessionError>>,
+    },
+    CancelRequestWiseChannel {
+        id: HttpRequestId,
     },
 }
 
