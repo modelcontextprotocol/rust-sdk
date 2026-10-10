@@ -190,21 +190,30 @@ impl FileSystemSkillServer {
         self.skills.get(uri)
     }
 
-    /// List the sibling files of a skill file URI.
+    /// List the contents of a skill directory or the siblings of a skill file.
+    ///
+    /// If the URI names a directory (no trailing slash, last segment is not a
+    /// file), list its children. If it names a file, list its siblings.
     pub fn list_skill_directory(&self, uri: &str) -> Option<Vec<Resource>> {
         let path = uri.strip_prefix("skill://")?;
         let file_path = self.root.join(path);
-        let parent = file_path.parent()?;
 
         // Canonicalize and verify the path stays within root
         let canonical_root = self.root.canonicalize().ok()?;
-        let canonical_parent = parent.canonicalize().ok()?;
-        if !canonical_parent.starts_with(&canonical_root) {
+        let canonical_target = file_path.canonicalize().ok()?;
+        if !canonical_target.starts_with(&canonical_root) {
             return None;
         }
 
+        // If the target is a directory, read it directly; otherwise read its parent
+        let dir_to_read = if canonical_target.is_dir() {
+            canonical_target
+        } else {
+            canonical_target.parent()?.to_path_buf()
+        };
+
         let mut entries = Vec::new();
-        for entry in fs::read_dir(&canonical_parent).ok()?.flatten() {
+        for entry in fs::read_dir(&dir_to_read).ok()?.flatten() {
             let path = entry.path();
             let name = path.file_name()?.to_str()?;
             if name == SKILL_FILE {

@@ -84,3 +84,75 @@ fn skill_router_get_by_unknown_uri_returns_none() {
     let route = router.get_by_uri("skill://unknown/SKILL.md");
     assert!(route.is_none());
 }
+
+// ─── Longest-prefix matching for nested skill URIs ────────────────────────────
+
+#[derive(Clone)]
+struct NestedServer;
+
+#[rmcp::skill_router(server_handler = true)]
+impl NestedServer {
+    #[rmcp::skill(uri = "skill://acme/billing/refunds/SKILL.md", frontmatter = serde_json::json!({
+        "name": "refunds",
+        "description": "A nested skill"
+    }))]
+    async fn refunds(&self) -> Result<(), rmcp::ErrorData> {
+        Ok(())
+    }
+
+    #[rmcp::skill(uri = "skill://alpha/SKILL.md", frontmatter = serde_json::json!({
+        "name": "alpha",
+        "description": "A single-segment skill"
+    }))]
+    async fn alpha(&self) -> Result<(), rmcp::ErrorData> {
+        Ok(())
+    }
+}
+
+#[test]
+fn skill_router_exact_match() {
+    let router = NestedServer::skill_router();
+    let route = router.get_by_uri("skill://alpha/SKILL.md");
+    assert!(route.is_some());
+    assert_eq!(route.unwrap().attr.uri, "skill://alpha/SKILL.md");
+}
+
+#[test]
+fn skill_router_nested_exact_match() {
+    let router = NestedServer::skill_router();
+    let route = router.get_by_uri("skill://acme/billing/refunds/SKILL.md");
+    assert!(route.is_some());
+    assert_eq!(
+        route.unwrap().attr.uri,
+        "skill://acme/billing/refunds/SKILL.md"
+    );
+}
+
+#[test]
+fn skill_router_nested_file_prefix_match() {
+    // Defect 2 fix: a file URI under a nested skill root must match
+    let router = NestedServer::skill_router();
+    let route = router.get_by_uri("skill://acme/billing/refunds/templates/x.md");
+    assert!(route.is_some());
+    assert_eq!(
+        route.unwrap().attr.uri,
+        "skill://acme/billing/refunds/SKILL.md"
+    );
+}
+
+#[test]
+fn skill_router_single_segment_file_prefix_match() {
+    // Defect 2 fix: a file URI under a single-segment skill root must match
+    let router = NestedServer::skill_router();
+    let route = router.get_by_uri("skill://alpha/references/guide.md");
+    assert!(route.is_some());
+    assert_eq!(route.unwrap().attr.uri, "skill://alpha/SKILL.md");
+}
+
+#[test]
+fn skill_router_no_match_for_unrelated_prefix() {
+    // skill://acme/billing/other/... should NOT match skill://acme/billing/refunds/SKILL.md
+    let router = NestedServer::skill_router();
+    let route = router.get_by_uri("skill://acme/billing/other/file.md");
+    assert!(route.is_none());
+}

@@ -150,10 +150,34 @@ where
         }
     }
 
-    /// Match a request URI to its route, parsing out the skill path first.
+    /// Match a request URI to its route using longest-prefix matching.
+    ///
+    /// Skill roots can be multi-segment (`acme/billing/refunds`) and file paths
+    /// can nest arbitrarily deep (`templates/x.md`). There is no in-URI delimiter
+    /// between skill-path and file-path, so we cannot parse the URI alone.
+    /// Instead, we find the registered route whose skill root is the longest
+    /// prefix of the request URI's skill root.
     pub fn get_by_uri(&self, uri: &str) -> Option<&SkillRoute<S>> {
-        let path = crate::model::skills::skill_path_from_uri(uri)?;
-        self.map.get(path.as_str())
+        let stripped = uri.strip_prefix("skill://")?;
+        if stripped.is_empty() {
+            return None;
+        }
+        // For each registered route, extract its skill path (e.g. `acme/billing/refunds`)
+        // and check if the request URI starts with `skill://<skill_path>/`.
+        // This handles both exact SKILL.md matches and nested file URIs.
+        let mut best: Option<(&Cow<'static, str>, &SkillRoute<S>)> = None;
+        for (key, route) in &self.map {
+            if let Some(route_skill_path) = route.skill_path() {
+                let prefix = format!("skill://{}/", route_skill_path);
+                if uri.starts_with(&prefix) {
+                    match best {
+                        Some((best_key, _)) if best_key.len() >= key.len() => {}
+                        _ => best = Some((key, route)),
+                    }
+                }
+            }
+        }
+        best.map(|(_, route)| route)
     }
 
     pub fn list_all(&self) -> Vec<SkillEntry> {
