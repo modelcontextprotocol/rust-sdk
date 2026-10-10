@@ -129,10 +129,8 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                     request.uri.clone(),
                     context,
                 );
-                (route.call)(skill_context).await?;
-                Ok(rmcp::model::skills::SkillsGetResult::new(
-                    rmcp::model::skills::SkillEntry::new(request.uri, serde_json::json!({}))
-                ))
+                let skill_entry = (route.call)(skill_context).await?;
+                Ok(rmcp::model::skills::SkillsGetResult::new(skill_entry))
             }
         })?;
         item_impl.items.push(skill_get_fn);
