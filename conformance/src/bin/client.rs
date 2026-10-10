@@ -993,6 +993,37 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
     Ok(())
 }
 
+/// SEP-1613/SEP-2106: send the focal tool's `inputSchema` back through the
+/// echo tool, so the scenario can diff it against what the server listed.
+async fn run_json_schema_preservation_client(server_url: &str) -> anyhow::Result<()> {
+    let transport = StreamableHttpClientTransport::from_uri(server_url);
+    let client = FullClientHandler
+        .serve_with_lifecycle(transport, conformance_lifecycle())
+        .await?;
+    let tools = client.list_tools(Default::default()).await?;
+    let tool = tools
+        .tools
+        .iter()
+        .find(|t| t.name.as_ref() == "json_schema_2020_12_tool")
+        .ok_or_else(|| anyhow::anyhow!("json_schema_2020_12_tool was not listed"))?;
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "schema".to_string(),
+        Value::Object(tool.input_schema.as_ref().clone()),
+    );
+    let result = client
+        .call_tool(call_tool_params("json_schema_echo".into(), Some(args)))
+        .await?;
+    if result.is_error == Some(true) {
+        anyhow::bail!(
+            "json_schema_echo returned a tool error: {:?}",
+            result.content
+        );
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 fn conformance_protocol_version() -> ProtocolVersion {
     std::env::var("MCP_CONFORMANCE_PROTOCOL_VERSION")
         .ok()
@@ -1115,6 +1146,9 @@ async fn run_scenario(
         // close is sufficient; the scenario's mock server does not implement
         // the discover lifecycle, so `run_discover_client` hangs against it.
         "json-schema-ref-no-deref" => run_basic_client(server_url).await?,
+        "json-schema-2020-12-preservation" => {
+            run_json_schema_preservation_client(server_url).await?
+        }
         "tools_call" => run_tools_call_client(server_url, ctx).await?,
         "elicitation-sep1034-client-defaults" => {
             run_elicitation_defaults_client(server_url).await?
