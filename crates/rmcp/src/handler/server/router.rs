@@ -190,7 +190,7 @@ where
             ClientRequest::ResourcesDirectoryReadRequest(_request) => {
                 let result = crate::model::skills::ResourcesDirectoryReadResult {
                     result_type: Some(crate::model::ResultType::COMPLETE),
-                    children: vec![],
+                    resources: vec![],
                     next_cursor: None,
                     ttl_ms: None,
                     cache_scope: None,

@@ -147,12 +147,12 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                     version >= rmcp::model::ProtocolVersion::V_2026_07_28
                 });
                 // Enumerate files for multi-file skills
-                let children: Vec<rmcp::model::skills::DirectoryEntry> = if let Some(route) = #router.get_by_uri(&request.uri) {
+                let resources: Vec<rmcp::model::Resource> = if let Some(route) = #router.get_by_uri(&request.uri) {
                     match &route.attr.resources {
                         Some(rmcp::model::skills::SkillResources::FileList(files)) => {
                             files.iter().map(|file| {
                                 let name = file.uri.rsplit('/').next().unwrap_or("").to_string();
-                                rmcp::model::skills::DirectoryEntry::file(file.uri.clone(), name)
+                                rmcp::model::Resource::new(file.uri.clone(), name)
                             }).collect()
                         }
                         Some(rmcp::model::skills::SkillResources::Dynamic) => vec![],
@@ -162,7 +162,7 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                 } else {
                     vec![]
                 };
-                let mut result = rmcp::model::skills::ResourcesDirectoryReadResult::new(children);
+                let mut result = rmcp::model::skills::ResourcesDirectoryReadResult::new(resources);
                 result.result_type = Some(rmcp::model::ResultType::COMPLETE);
                 result.ttl_ms = supports_cache_hints.then_some(0);
                 result.cache_scope = supports_cache_hints.then_some("public".to_string());

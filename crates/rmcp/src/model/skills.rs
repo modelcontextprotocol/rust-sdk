@@ -14,7 +14,7 @@ use super::{
     ConstString, MetaObject, PaginatedRequestParams, Request, RequestMetaObject,
     RequestOptionalParam, ResultType,
 };
-use crate::const_string;
+use crate::{const_string, model::Resource};
 
 // =============================================================================
 // Skill entry
@@ -314,6 +314,9 @@ pub type ResourcesDirectoryReadRequest =
 ///
 /// Carries the `resultType` discriminator (SEP-2322) so it can be stripped for
 /// legacy peers the same way as other resource list results.
+///
+/// Per the SEP-2640 spec, the result is `resources: [<Resource>]` where
+/// subdirectories carry `mimeType: "inode/directory"`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -321,7 +324,7 @@ pub type ResourcesDirectoryReadRequest =
 pub struct ResourcesDirectoryReadResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<ResultType>,
-    pub children: Vec<DirectoryEntry>,
+    pub resources: Vec<Resource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,48 +334,13 @@ pub struct ResourcesDirectoryReadResult {
 }
 
 impl ResourcesDirectoryReadResult {
-    pub fn new(children: Vec<DirectoryEntry>) -> Self {
+    pub fn new(resources: Vec<Resource>) -> Self {
         Self {
             result_type: Some(ResultType::COMPLETE),
-            children,
+            resources,
             next_cursor: None,
             ttl_ms: None,
             cache_scope: None,
-        }
-    }
-}
-
-/// A single entry in a directory listing.
-///
-/// The spec's `resources/directory/read` result carries the same `Resource`-shaped
-/// objects as `resources/list`, but in practice skill directory listings only need
-/// URI, name, and a directory flag. We model the minimal shape here.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct DirectoryEntry {
-    pub uri: String,
-    /// Whether this entry is a directory (`inode/directory`).
-    pub is_directory: bool,
-    /// The entry's name — the final segment of its URI.
-    pub name: String,
-}
-
-impl DirectoryEntry {
-    pub fn file(uri: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            is_directory: false,
-            name: name.into(),
-        }
-    }
-
-    pub fn dir(uri: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            is_directory: true,
-            name: name.into(),
         }
     }
 }

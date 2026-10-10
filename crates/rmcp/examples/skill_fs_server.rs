@@ -17,9 +17,12 @@ use std::{
 
 use rmcp::{
     ServerHandler, ServiceExt,
-    model::skills::{
-        self, DirectoryEntry, SkillEntry, SkillResource, SkillResources, SkillsGetRequestParams,
-        SkillsGetResult, SkillsListResult,
+    model::{
+        Resource,
+        skills::{
+            self, SkillEntry, SkillResource, SkillResources, SkillsGetRequestParams,
+            SkillsGetResult, SkillsListResult,
+        },
     },
     service::{RequestContext, RoleServer},
 };
@@ -64,7 +67,7 @@ impl FileSystemSkillServer {
     fn parse_skill_file(root: &Path, path: &Path) -> Option<SkillEntry> {
         let content = fs::read_to_string(path).ok()?;
         let (frontmatter, _) = Self::split_frontmatter(&content)?;
-        let frontmatter: serde_json::Value = Self::parse_simple_yaml(&frontmatter)?;
+        let frontmatter: serde_json::Value = Self::parse_yaml_frontmatter(&frontmatter)?;
 
         // Canonicalize and verify the path stays within root
         let canonical_root = root.canonicalize().ok()?;
@@ -78,6 +81,13 @@ impl FileSystemSkillServer {
 
         let parent_dir = canonical_path.parent()?;
         let mut resources = Vec::new();
+
+        // Include SKILL.md itself in the resources list (spec: resources MUST be complete)
+        let skill_size = fs::metadata(&canonical_path).map(|m| m.len()).unwrap_or(0);
+        let skill_digest = Self::compute_sha256(&canonical_path);
+        resources.push(SkillResource::new(uri.clone(), skill_digest, skill_size));
+
+        // Include sibling files (not subdirs — those are separate skills)
         if let Ok(entries) = fs::read_dir(parent_dir) {
             for entry in entries.flatten() {
                 let sibling = entry.path();
@@ -88,7 +98,6 @@ impl FileSystemSkillServer {
                 if name == SKILL_FILE || sibling.is_dir() {
                     continue;
                 }
-                // Canonicalize sibling and verify it stays within root
                 let canonical_sibling = sibling.canonicalize().ok()?;
                 if !canonical_sibling.starts_with(&canonical_root) {
                     continue;
@@ -161,36 +170,12 @@ impl FileSystemSkillServer {
         Some((fm.join("\n"), body.join("\n")))
     }
 
-    /// Parse simple flat YAML frontmatter into a JSON object.
+    /// Parse YAML frontmatter into a JSON object using serde_yaml.
     ///
-    /// **Limitation**: Only flat string fields are supported. Values containing
-    /// colons are handled correctly (split on first `:` only). Quoted values
-    /// have their outer quotes stripped. Lines without a colon are rejected
-    /// (returns `None`). Empty lines and comments (`#`) are skipped.
-    fn parse_simple_yaml(yaml: &str) -> Option<serde_json::Value> {
-        let mut map = serde_json::Map::new();
-        for line in yaml.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let (key, value) = line.split_once(':')?;
-            let key = key.trim().to_string();
-            if key.is_empty() {
-                return None;
-            }
-            let value = value.trim();
-            // Strip one layer of matching quotes (double or single)
-            let value = if (value.starts_with('"') && value.ends_with('"') && value.len() >= 2)
-                || (value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2)
-            {
-                &value[1..value.len() - 1]
-            } else {
-                value
-            };
-            map.insert(key, serde_json::Value::String(value.to_string()));
-        }
-        Some(serde_json::Value::Object(map))
+    /// Supports nested fields, arrays, numbers, booleans, and all YAML types.
+    fn parse_yaml_frontmatter(yaml: &str) -> Option<serde_json::Value> {
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+        serde_json::to_value(value).ok()
     }
 
     /// List all discovered skills, sorted by URI.
@@ -206,7 +191,7 @@ impl FileSystemSkillServer {
     }
 
     /// List the sibling files of a skill file URI.
-    pub fn list_skill_directory(&self, uri: &str) -> Option<Vec<DirectoryEntry>> {
+    pub fn list_skill_directory(&self, uri: &str) -> Option<Vec<Resource>> {
         let path = uri.strip_prefix("skill://")?;
         let file_path = self.root.join(path);
         let parent = file_path.parent()?;
@@ -233,9 +218,9 @@ impl FileSystemSkillServer {
             let relative = canonical_entry.strip_prefix(&canonical_root).ok()?;
             let entry_uri = format!("skill://{}", relative.to_string_lossy());
             entries.push(if canonical_entry.is_dir() {
-                DirectoryEntry::dir(entry_uri, name.to_string())
+                Resource::new(entry_uri, name.to_string()).with_mime_type("inode/directory")
             } else {
-                DirectoryEntry::file(entry_uri, name.to_string())
+                Resource::new(entry_uri, name.to_string())
             });
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -273,17 +258,60 @@ impl ServerHandler for FileSystemSkillServer {
         request: skills::ResourcesDirectoryReadRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<skills::ResourcesDirectoryReadResult, rmcp::ErrorData> {
-        let children = self.list_skill_directory(&request.uri).unwrap_or_default();
+        let resources = self.list_skill_directory(&request.uri).ok_or_else(|| {
+            rmcp::ErrorData::invalid_params(format!("directory not found: {}", request.uri), None)
+        })?;
         let supports_cache_hints = context
             .protocol_version()
             .as_ref()
             .is_some_and(|v| v.as_str() >= rmcp::model::ProtocolVersion::V_2026_07_28.as_str());
-        let mut result = skills::ResourcesDirectoryReadResult::new(children);
+        let mut result = skills::ResourcesDirectoryReadResult::new(resources);
         if supports_cache_hints {
             result.ttl_ms = Some(DEFAULT_CACHE_TTL_MS);
             result.cache_scope = Some("public".to_string());
         }
         Ok(result)
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        let path = request.uri.strip_prefix("skill://").ok_or_else(|| {
+            rmcp::ErrorData::invalid_params(format!("not a skill URI: {}", request.uri), None)
+        })?;
+        let file_path = self.root.join(path);
+        let canonical_root = self.root.canonicalize().map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("failed to canonicalize root: {}", e), None)
+        })?;
+        let canonical_path = file_path.canonicalize().map_err(|_| {
+            rmcp::ErrorData::invalid_params(format!("resource not found: {}", request.uri), None)
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("resource outside root: {}", request.uri),
+                None,
+            ));
+        }
+        let content = fs::read_to_string(&canonical_path).map_err(|_| {
+            rmcp::ErrorData::invalid_params(format!("resource not found: {}", request.uri), None)
+        })?;
+        let mime_type = if canonical_path.is_dir() {
+            "inode/directory"
+        } else {
+            "text/markdown"
+        };
+        Ok(rmcp::model::ReadResourceResponse::Complete(
+            rmcp::model::ReadResourceResult::new(vec![
+                rmcp::model::ResourceContents::TextResourceContents {
+                    uri: request.uri,
+                    mime_type: Some(mime_type.to_string()),
+                    text: content,
+                    meta: None,
+                },
+            ]),
+        ))
     }
 }
 
