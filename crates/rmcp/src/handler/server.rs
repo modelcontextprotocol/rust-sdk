@@ -56,8 +56,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
         // `context` is moved into the dispatch below, so read the negotiated version first.
         let protocol_version = context.protocol_version();
-        // SEP-2322 (`resultType` discriminator, MRTR) exists from 2026-07-28.
-        let sep_2322_supported = protocol_version
+        // ISO `YYYY-MM-DD` versions compare lexically the same as chronologically.
+        let is_2026_07_28_or_later = protocol_version
             .as_ref()
             .is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
         let requested_version = context.meta.protocol_version();
@@ -257,28 +257,27 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             }
         };
         let result = result.and_then(|mut result| {
-            if matches!(result, ServerResult::InputRequiredResult(_)) && !sep_2322_supported {
+            if matches!(result, ServerResult::InputRequiredResult(_)) && !is_2026_07_28_or_later {
                 Err(McpError::invalid_request(
                     "InputRequiredResult requires negotiated protocol version 2026-07-28 or newer",
                     None,
                 ))
             } else {
-                // Peers on protocol versions older than 2026-07-28 keep the
-                // legacy wire shape without `resultType: "complete"`.
-                if !sep_2322_supported {
+                // 2026-07-28 requires caching hints on cacheable results; older
+                // peers keep the legacy shape without `resultType: "complete"`.
+                if is_2026_07_28_or_later {
+                    result.fill_missing_cache_hints();
+                } else {
                     result.strip_result_type_for_legacy_peer();
                 }
                 Ok(result)
             }
         });
 
-        // SEP-2164: peers negotiating 2026-07-28+ get the standard INVALID_PARAMS code for
-        // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
-        // compare lexically the same as chronologically.
-        let use_invalid_params =
-            protocol_version.is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        // Peers on 2026-07-28+ get the standard INVALID_PARAMS code for
+        // resource-not-found; older peers keep RESOURCE_NOT_FOUND.
         result.map_err(|mut error| {
-            if use_invalid_params && error.code == ErrorCode::RESOURCE_NOT_FOUND {
+            if is_2026_07_28_or_later && error.code == ErrorCode::RESOURCE_NOT_FOUND {
                 error.code = ErrorCode::INVALID_PARAMS;
             }
             error
@@ -347,15 +346,15 @@ macro_rules! server_handler_methods {
         /// ```
         /// use rmcp::{
         ///     ErrorData as McpError, RoleServer, ServerHandler,
-        ///     model::{InitializeRequestParams, InitializeResult, ServerInfo},
+        ///     model::{InitializeRequestParams, InitializeResult, ServerConfig},
         ///     service::RequestContext,
         /// };
         ///
         /// struct MyServer;
         ///
         /// impl ServerHandler for MyServer {
-        ///     fn get_info(&self) -> ServerInfo {
-        ///         ServerInfo::default()
+        ///     fn get_info(&self) -> ServerConfig {
+        ///         ServerConfig::default()
         ///     }
         ///
         ///     async fn initialize(
@@ -639,8 +638,8 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
-        fn get_info(&self) -> ServerInfo {
-            InitializeResult::default()
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::default()
         }
 
         /// SEP-2663 `tasks/get`: return the current [`DetailedTask`] state.
@@ -878,7 +877,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_custom_notification(notification, context)
             }
 
-            fn get_info(&self) -> ServerInfo {
+            fn get_info(&self) -> ServerConfig {
                 (**self).get_info()
             }
 

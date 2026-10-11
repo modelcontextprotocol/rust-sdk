@@ -6,11 +6,12 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Form, Query, State},
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
+use base64::{Engine, prelude::BASE64_STANDARD};
 use rand::{RngExt, distr::Alphanumeric};
 use rmcp::transport::{
     StreamableHttpServerConfig,
@@ -18,7 +19,6 @@ use rmcp::transport::{
     streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info, warn};
@@ -29,6 +29,8 @@ mod common;
 use common::counter::Counter;
 
 const BIND_ADDRESS: &str = "127.0.0.1:3000";
+// RFC 9728 path-suffixed location for the protected resource at `/mcp`.
+const RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
 const INDEX_HTML: &str = include_str!("html/mcp_oauth_index.html");
 
 // Local registration request - only uses fields needed for this demo
@@ -347,6 +349,7 @@ async fn oauth_token(
 ) -> impl IntoResponse {
     info!("Received token request");
 
+    let basic_client_id = basic_auth_client_id(request.headers());
     let bytes = match axum::body::to_bytes(request.into_body(), usize::MAX).await {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -418,9 +421,10 @@ async fn oauth_token(
             .into_response();
     }
 
-    // handle empty client_id
+    // Confidential clients may authenticate with HTTP Basic instead of sending
+    // `client_id` in the body (RFC 6749 §2.3.1).
     let client_id = if token_req.client_id.is_empty() {
-        "mcp-client".to_string()
+        basic_client_id.unwrap_or_else(|| "mcp-client".to_string())
     } else {
         token_req.client_id.clone()
     };
@@ -480,6 +484,18 @@ async fn oauth_token(
     }
 }
 
+/// The client id from an HTTP Basic `Authorization` header, if present.
+fn basic_auth_client_id(headers: &HeaderMap) -> Option<String> {
+    let encoded = headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Basic ")?;
+    let credentials = String::from_utf8(BASE64_STANDARD.decode(encoded).ok()?).ok()?;
+    let (client_id, _client_secret) = credentials.split_once(':')?;
+    Some(client_id.to_string())
+}
+
 // Auth middleware for MCP connections
 async fn validate_token_middleware(
     State(token_store): State<Arc<McpOAuthStore>>,
@@ -495,28 +511,47 @@ async fn validate_token_middleware(
             if let Some(stripped) = header_str.strip_prefix("Bearer ") {
                 stripped.to_string()
             } else {
-                return StatusCode::UNAUTHORIZED.into_response();
+                return unauthorized();
             }
         }
         None => {
-            return StatusCode::UNAUTHORIZED.into_response();
+            return unauthorized();
         }
     };
 
     // Validate the token
     match token_store.validate_token(&token).await {
         Some(_) => next.run(request).await,
-        None => StatusCode::UNAUTHORIZED.into_response(),
+        None => unauthorized(),
     }
+}
+
+/// A 401 whose `WWW-Authenticate` challenge points clients at the protected
+/// resource metadata, so they can discover the authorization server (RFC 9728).
+fn unauthorized() -> Response {
+    let challenge = format!(
+        r#"Bearer resource_metadata="http://{}{}""#,
+        BIND_ADDRESS, RESOURCE_METADATA_PATH
+    );
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, challenge)],
+    )
+        .into_response()
+}
+
+// handle protected resource metadata request (RFC 9728)
+async fn oauth_protected_resource() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "resource": format!("http://{}/mcp", BIND_ADDRESS),
+        "authorization_servers": [format!("http://{}", BIND_ADDRESS)],
+        "scopes_supported": ["profile", "email"],
+        "bearer_methods_supported": ["header"],
+    }))
 }
 
 // handle oauth server metadata request
 async fn oauth_authorization_server() -> impl IntoResponse {
-    let mut additional_fields = HashMap::new();
-    additional_fields.insert(
-        "response_types_supported".into(),
-        Value::Array(vec![Value::String("code".into())]),
-    );
     let mut metadata = AuthorizationMetadata::default();
     metadata.authorization_endpoint = format!("http://{}/oauth/authorize", BIND_ADDRESS);
     metadata.token_endpoint = format!("http://{}/oauth/token", BIND_ADDRESS);
@@ -524,9 +559,8 @@ async fn oauth_authorization_server() -> impl IntoResponse {
     metadata.registration_endpoint = Some(format!("http://{}/oauth/register", BIND_ADDRESS));
     metadata.response_types_supported = Some(vec!["code".to_string()]);
     metadata.code_challenge_methods_supported = Some(vec!["S256".to_string()]);
-    metadata.issuer = Some(BIND_ADDRESS.to_string());
+    metadata.issuer = Some(format!("http://{}", BIND_ADDRESS));
     metadata.jwks_uri = Some(format!("http://{}/oauth/jwks", BIND_ADDRESS));
-    metadata.additional_fields = additional_fields;
     debug!("metadata: {:?}", metadata);
     (StatusCode::OK, Json(metadata))
 }
@@ -637,14 +671,11 @@ async fn main() -> Result<()> {
             StreamableHttpServerConfig::default(),
         );
 
-    // Create protected MCP routes (require authorization)
-    let protected_mcp_router =
-        Router::new()
-            .nest_service("/mcp", mcp_service)
-            .layer(middleware::from_fn_with_state(
-                oauth_store.clone(),
-                validate_token_middleware,
-            ));
+    // Create protected MCP routes (require authorization). `route_layer` keeps
+    // the check off unmatched paths, which should 404 instead of 401.
+    let protected_mcp_router = Router::new().nest_service("/mcp", mcp_service).route_layer(
+        middleware::from_fn_with_state(oauth_store.clone(), validate_token_middleware),
+    );
 
     // Create CORS layer for the oauth authorization server endpoint
     let cors_layer = CorsLayer::new()
@@ -654,6 +685,10 @@ async fn main() -> Result<()> {
 
     // Create a sub-router for the oauth authorization server endpoint with CORS
     let oauth_server_router = Router::new()
+        .route(
+            RESOURCE_METADATA_PATH,
+            get(oauth_protected_resource).options(oauth_protected_resource),
+        )
         .route(
             "/.well-known/oauth-authorization-server",
             get(oauth_authorization_server).options(oauth_authorization_server),

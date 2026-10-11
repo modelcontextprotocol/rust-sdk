@@ -3,10 +3,8 @@
 #![expect(deprecated)]
 use std::{
     borrow::Cow,
-    collections::hash_map::RandomState,
-    hash::{BuildHasher, Hasher},
     ops::{Deref, DerefMut},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 mod annotated;
 mod capabilities;
@@ -59,7 +57,6 @@ pub fn object(value: serde_json::Value) -> JsonObject {
 }
 
 /// Use this macro just like [`serde_json::json!`]
-#[cfg(feature = "macros")]
 #[macro_export]
 macro_rules! object {
     ({$($tt:tt)*}) => {
@@ -174,10 +171,34 @@ impl ProtocolVersion {
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const LATEST: Self = Self::V_2025_11_25;
+
+    /// The newest protocol version known to this SDK.
+    pub const LATEST: Self = Self::V_2026_07_28;
 
     /// First protocol version that requires SEP-2243 standard HTTP headers.
     pub const STANDARD_HEADERS: Self = Self::V_2026_07_28;
+
+    /// First protocol version that replaced the `initialize` handshake with
+    /// per-request `_meta` (SEP-2567).
+    pub const NO_INITIALIZE: Self = Self::V_2026_07_28;
+
+    /// The newest protocol version that still has an `initialize` handshake.
+    ///
+    /// From [`Self::NO_INITIALIZE`] onward the lifecycle moved into per-request
+    /// `_meta`, so there is no handshake left to answer. A server replying to
+    /// `initialize` can therefore never name [`Self::LATEST`] once `LATEST`
+    /// reaches that revision — it has to name this one instead.
+    ///
+    /// Use this, not `LATEST`, whenever the subject is the handshake itself:
+    /// the version a server can echo from `initialize`, or the version a test
+    /// needs in order to exercise session-based behavior.
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert!(ProtocolVersion::LATEST_WITH_INITIALIZE.has_initialize());
+    /// assert!(!ProtocolVersion::LATEST.has_initialize());
+    /// ```
+    pub const LATEST_WITH_INITIALIZE: Self = Self::V_2025_11_25;
 
     /// All protocol versions known to this SDK, oldest first.
     pub const KNOWN_VERSIONS: &[Self] = &[
@@ -191,6 +212,23 @@ impl ProtocolVersion {
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether this revision negotiates its lifecycle over the `initialize`
+    /// handshake.
+    ///
+    /// `false` from [`Self::NO_INITIALIZE`] onward, where SEP-2567 moved the
+    /// lifecycle into per-request `_meta`. Unknown versions are compared
+    /// lexically, which orders correctly because every revision is dated
+    /// `YYYY-MM-DD`.
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert!(ProtocolVersion::V_2025_11_25.has_initialize());
+    /// assert!(!ProtocolVersion::V_2026_07_28.has_initialize());
+    /// ```
+    pub fn has_initialize(&self) -> bool {
+        self.as_str() < Self::NO_INITIALIZE.as_str()
     }
 
     /// The known versions up to and including `max`, oldest first.
@@ -280,6 +318,7 @@ impl NumberOrString {
         }
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     pub(crate) fn numeric_string_value(&self) -> Option<i64> {
         match self {
             Self::String(id) => id.parse().ok(),
@@ -287,6 +326,7 @@ impl NumberOrString {
         }
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn matches_response_id(&self, response_id: &Self) -> bool {
         self == response_id
             || matches!(
@@ -615,6 +655,7 @@ pub struct ErrorData {
 }
 
 impl ErrorData {
+    #[cfg(any(feature = "client", feature = "server"))]
     const TRANSPORT_CLOSED_MARKER: &str = "io.modelcontextprotocol/transportClosed";
 
     pub fn new(
@@ -676,7 +717,7 @@ impl ErrorData {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
+    #[cfg(all(feature = "transport-streamable-http-client", feature = "client"))]
     pub(crate) fn transport_closed(message: impl Into<Cow<'static, str>>) -> Self {
         let mut data = JsonObject::new();
         data.insert(
@@ -686,6 +727,7 @@ impl ErrorData {
         Self::internal_error(message, Some(Value::Object(data)))
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     pub(crate) fn is_transport_closed(&self) -> bool {
         self.data
             .as_ref()
@@ -694,7 +736,14 @@ impl ErrorData {
             == Some(Self::transport_closed_token())
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     fn transport_closed_token() -> u64 {
+        use std::{
+            collections::hash_map::RandomState,
+            hash::{BuildHasher, Hasher},
+            sync::OnceLock,
+        };
+
         static TOKEN: OnceLock<u64> = OnceLock::new();
         *TOKEN.get_or_init(|| {
             let mut hasher = RandomState::new().build_hasher();
@@ -1121,26 +1170,58 @@ impl InitializeResult {
     }
 }
 
-/// Full server initialize payload (`InitializeResult`).
+/// A server's own configuration: the protocol version, capabilities,
+/// implementation identity, and instructions it advertises to clients.
 ///
-/// Prefer [`InitializeResult`]. The name collides with the protocol's
-/// `serverInfo` field, which is only the [`Implementation`] identity (#1082).
-//
-// The signatures this crate publishes (`ServerHandler::get_info`,
-// `DiscoverResult::from_server_info`, and the `ClientInfo` equivalents below)
-// keep spelling the alias. It resolves to the same type, so the spelling makes
-// no difference to callers, but rustdoc records the name as written and the
-// public API check treats a respelling as a changed item. Moving those
-// signatures onto the canonical names is a documented API change and belongs in
-// the next major release.
-#[deprecated(note = "use `InitializeResult` instead")]
+/// This is what `ServerHandler::get_info` returns. It is an alias for
+/// [`InitializeResult`] because the same value is sent as the `initialize`
+/// response on the wire.
+///
+/// # Examples
+///
+/// ```
+/// use rmcp::model::{ServerCapabilities, ServerConfig};
+///
+/// let config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+///     .with_instructions("Call `add` to sum two numbers.");
+/// assert!(config.capabilities.tools.is_some());
+/// ```
+pub type ServerConfig = InitializeResult;
+
+/// A client's own configuration: the protocol version, capabilities, and
+/// implementation identity it advertises to servers.
+///
+/// This is what `ClientHandler::get_info` returns. It is an alias for
+/// [`InitializeRequestParams`] because the same value is sent as the
+/// `initialize` request on the wire.
+///
+/// # Examples
+///
+/// ```
+/// use rmcp::model::{ClientCapabilities, ClientConfig, Implementation};
+///
+/// let config = ClientConfig::new(
+///     ClientCapabilities::builder().enable_elicitation().build(),
+///     Implementation::new("my-client", "1.0.0"),
+/// );
+/// assert!(config.capabilities.elicitation.is_some());
+/// ```
+pub type ClientConfig = InitializeRequestParams;
+
+/// Deprecated alias for [`ServerConfig`].
+///
+/// The name collides with the protocol's `serverInfo` field, which is only the
+/// [`Implementation`] identity, so `server_info.server_info` was easy to
+/// misread (#1082).
+#[deprecated(note = "use `ServerConfig` instead")]
 pub type ServerInfo = InitializeResult;
 
-/// Full client initialize params (`InitializeRequestParams`).
+/// Deprecated alias for [`ClientConfig`].
 ///
-/// Prefer [`InitializeRequestParams`]. The name collides with the protocol's
-/// `clientInfo` field, which is only the [`Implementation`] identity (#1082).
-#[deprecated(note = "use `InitializeRequestParams` instead")]
+/// The name collides with the protocol's `clientInfo` field, which is only the
+/// [`Implementation`] identity, so `client_info.client_info` was easy to
+/// misread (#1082).
+#[deprecated(note = "use `ClientConfig` instead")]
 pub type ClientInfo = InitializeRequestParams;
 
 /// Information negotiated about a server peer.
@@ -1300,18 +1381,18 @@ impl DiscoverResult {
         self
     }
 
-    /// Create a discovery result from the server's initialization information.
+    /// Create a discovery result from the server's configuration.
     pub fn from_server_info(
         supported_versions: Vec<ProtocolVersion>,
-        server_info: ServerInfo,
+        server_config: ServerConfig,
     ) -> Self {
-        let InitializeResult {
+        let ServerConfig {
             capabilities,
             server_info,
             instructions,
             meta,
             ..
-        } = server_info;
+        } = server_config;
         let mut result = Self {
             result_type: ResultType::COMPLETE,
             supported_versions,
@@ -1562,9 +1643,14 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
+    #[serde(deserialize_with = "serde_impl::json_float::f64")]
     pub progress: f64,
     /// Total number of items to process (or total progress required), if known
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub total: Option<f64>,
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1630,6 +1716,27 @@ where
     Ok(value.map(|ttl_ms| ttl_ms.max(0) as u64))
 }
 
+/// Normalize a `cacheScope` value during deserialization.
+///
+/// Per SEP-2549, `cacheScope` MUST be `"public"`, `"private"`, or absent; some
+/// servers instead send `""`. Because `ServerResult` is `#[serde(untagged)]`,
+/// letting that value hard-error here would silently fall through to
+/// `CustomResult` and drop the entire (otherwise valid) result. Treat an empty
+/// string the same as an absent field rather than erroring.
+fn deserialize_cache_scope<'de, D>(deserializer: D) -> Result<Option<CacheScope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(value) => CacheScope::deserialize(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
@@ -1667,7 +1774,11 @@ macro_rules! paginated_result {
             /// Scope describing who may cache this result (SEP-2549).
             /// Required by spec version 2026-07-28, but optional here to maintain compatibility
             /// with older spec versions.
-            #[serde(default, skip_serializing_if = "Option::is_none")]
+            #[serde(
+                default,
+                deserialize_with = "deserialize_cache_scope",
+                skip_serializing_if = "Option::is_none"
+            )]
             pub cache_scope: Option<CacheScope>,
             pub $i_item: $t_item,
         }
@@ -1817,7 +1928,11 @@ pub struct ReadResourceResult {
     /// Scope describing who may cache this result (SEP-2549).
     /// Required by spec version 2026-07-28, but optional here to maintain compatibility
     /// with older spec versions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_cache_scope",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cache_scope: Option<CacheScope>,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
@@ -2936,7 +3051,11 @@ pub struct CreateMessageRequestParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_context: Option<ContextInclusion>,
     /// Temperature for controlling randomness (0.0 to 1.0)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub temperature: Option<f32>,
     /// Maximum number of tokens to generate
     pub max_tokens: u32,
@@ -3125,13 +3244,25 @@ pub struct ModelPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hints: Option<Vec<ModelHint>>,
     /// Priority for cost optimization (0.0 to 1.0, higher = prefer cheaper models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cost_priority: Option<f32>,
     /// Priority for speed/latency (0.0 to 1.0, higher = prefer faster models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub speed_priority: Option<f32>,
     /// Priority for intelligence/capability (0.0 to 1.0, higher = prefer more capable models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub intelligence_priority: Option<f32>,
 }
 
@@ -3832,6 +3963,15 @@ pub type ElicitRequest = Request<ElicitationCreateRequestMethod, ElicitRequestPa
 // TOOL EXECUTION RESULTS
 // =============================================================================
 
+/// Deserialize a field that is present on the wire as `Some`, even when its
+/// value is `null`. Combined with `#[serde(default)]`, an absent field stays `None`.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// The result of a tool call operation.
 ///
 /// Contains the content returned by the tool execution and an optional
@@ -3856,7 +3996,9 @@ pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
     pub content: Vec<ContentBlock>,
-    /// An optional JSON object that represents the structured result of the tool call
+    /// An optional JSON value that represents the structured result of the tool call.
+    /// It can be any JSON value, including `null`; an explicit `null` is kept
+    /// distinct from an absent field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
     /// Whether this result represents an error condition
@@ -3873,6 +4015,8 @@ pub struct CallToolResult {
 //    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
 //    (e.g. `ServerResult`), which would shadow `CustomResult`.
 // 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
+// 4. Keeps a present `"structuredContent": null` as `Some(Value::Null)`, distinct
+//    from an absent field, since structured content can be any JSON value.
 impl<'de> Deserialize<'de> for CallToolResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -3884,6 +4028,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
             #[serde(default)]
             result_type: Option<ResultType>,
             content: Option<Vec<ContentBlock>>,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
             structured_content: Option<Value>,
             is_error: Option<bool>,
             #[serde(rename = "_meta")]
@@ -4687,6 +4832,59 @@ impl ServerResult {
         };
         result_type.take_if(|rt| rt.is_complete());
     }
+
+    /// Fill in the SEP-2549 caching hints a cacheable result is missing.
+    ///
+    /// Protocol version `2026-07-28` requires `ttlMs` and `cacheScope` on every
+    /// complete `tools/list`, `prompts/list`, `resources/list`,
+    /// `resources/templates/list`, and `resources/read` result. The server
+    /// handler calls this before responding to a peer on that version, so a
+    /// handler that builds its result with `Default::default()` still sends a
+    /// conformant result.
+    ///
+    /// Missing hints get the most conservative values, `ttlMs: 0` (immediately
+    /// stale) and `cacheScope: "private"`, the same values
+    /// [`DiscoverResult::new`] uses. Hints the handler set are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CacheScope, ListResourcesResult, ServerResult};
+    ///
+    /// let mut result = ServerResult::ListResourcesResult(ListResourcesResult::default());
+    /// result.fill_missing_cache_hints();
+    ///
+    /// let ServerResult::ListResourcesResult(result) = result else {
+    ///     unreachable!()
+    /// };
+    /// assert_eq!(result.ttl_ms, Some(0));
+    /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
+    /// ```
+    pub fn fill_missing_cache_hints(&mut self) {
+        let (result_type, ttl_ms, cache_scope) = match self {
+            ServerResult::ListToolsResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListPromptsResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ListResourcesResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ListResourceTemplatesResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ReadResourceResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            _ => return,
+        };
+        // Only complete results are cacheable; the spec treats an absent
+        // `resultType` as complete.
+        if result_type.as_ref().is_some_and(|t| !t.is_complete()) {
+            return;
+        }
+        ttl_ms.get_or_insert(0);
+        cache_scope.get_or_insert(CacheScope::Private);
+    }
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;
@@ -4733,6 +4931,34 @@ mod tests {
         );
     }
 
+    // Guards the pair of constants this SDK's negotiation rests on. `LATEST`
+    // and `LATEST_WITH_INITIALIZE` were the same value until `LATEST` reached
+    // `NO_INITIALIZE`; conflating them is what made bumping `LATEST` expensive.
+    #[test]
+    fn latest_with_initialize_is_the_newest_known_version_that_has_one() {
+        let derived = ProtocolVersion::KNOWN_VERSIONS
+            .iter()
+            .filter(|version| version.has_initialize())
+            .max_by(|left, right| left.as_str().cmp(right.as_str()))
+            .expect("some known version should have an initialize handshake");
+        assert_eq!(
+            derived,
+            &ProtocolVersion::LATEST_WITH_INITIALIZE,
+            "LATEST_WITH_INITIALIZE must track KNOWN_VERSIONS"
+        );
+    }
+
+    #[test]
+    fn has_initialize_splits_known_versions_at_no_initialize() {
+        for version in ProtocolVersion::KNOWN_VERSIONS {
+            assert_eq!(
+                version.has_initialize(),
+                version.as_str() < ProtocolVersion::NO_INITIALIZE.as_str(),
+                "{version} classified inconsistently"
+            );
+        }
+    }
+
     #[test]
     fn known_up_to_includes_the_ceiling_itself() {
         assert_eq!(
@@ -4768,7 +4994,7 @@ mod tests {
         assert!(ProtocolVersion::known_up_to(&ancient).is_empty());
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
+    #[cfg(all(feature = "transport-streamable-http-client", feature = "client"))]
     #[test]
     fn transport_closed_marker_accepts_only_the_process_local_token() {
         let local = ErrorData::transport_closed("closed");

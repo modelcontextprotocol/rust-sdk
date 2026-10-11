@@ -268,8 +268,7 @@ pub(crate) fn validate_request_headers(
     };
     let params = request.get("params");
 
-    let header_method = header_str(headers, HEADER_MCP_METHOD);
-    match header_method {
+    match header_str(headers, HEADER_MCP_METHOD)? {
         None => return Err("missing required Mcp-Method header".to_owned()),
         Some(value) if value != method => {
             return Err(format!(
@@ -280,7 +279,7 @@ pub(crate) fn validate_request_headers(
     }
 
     if let Some(expected) = extract_name(method, params) {
-        match header_str(headers, HEADER_MCP_NAME) {
+        match header_str(headers, HEADER_MCP_NAME)? {
             None => return Err(format!("missing required Mcp-Name header for `{method}`")),
             Some(raw) => {
                 let decoded = decode_header_value(raw)
@@ -300,7 +299,7 @@ pub(crate) fn validate_request_headers(
         let arguments = params.and_then(|p| p.get("arguments"));
         for (prop, header) in param_header_annotations(schema) {
             let full = format!("{HEADER_MCP_PARAM_PREFIX}{header}");
-            let header_value = header_str(headers, &full);
+            let header_value = header_str(headers, &full)?;
             let arg = arguments.and_then(|a| a.get(&prop));
             let body_value = arg.filter(|v| !v.is_null()).and_then(primitive_to_string);
 
@@ -329,10 +328,21 @@ pub(crate) fn validate_request_headers(
     Ok(())
 }
 
-/// Case-insensitive header lookup returning the value as `&str`, if present and valid UTF-8.
+/// The sole value for `name` as `&str`, if present and valid UTF-8.
+///
+/// Errors when `name` appears more than once: these headers are singletons, and
+/// letting one through would let an intermediary that resolves duplicates
+/// differently route on a value this request never dispatches.
 #[cfg(feature = "server-side-http")]
-fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok())
+fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Result<Option<&'a str>, String> {
+    let mut values = headers.get_all(name).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(format!("duplicate {name} header"));
+    }
+    Ok(value.to_str().ok())
 }
 
 #[cfg(all(test, feature = "client-side-sse", feature = "server-side-http"))]
@@ -354,7 +364,8 @@ mod tests {
     fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();
         for (name, value) in pairs {
-            map.insert(
+            // Append, not insert, so repeated names survive as duplicates.
+            map.append(
                 HeaderName::from_bytes(name.as_bytes()).unwrap(),
                 HeaderValue::from_str(value).unwrap(),
             );
@@ -622,6 +633,26 @@ mod tests {
         }
 
         #[test]
+        fn rejects_duplicate_method() {
+            let headers = header_map(&[
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Method", "tools/list"),
+                ("Mcp-Name", "deploy"),
+            ]);
+            assert!(validate_request_headers(&headers, &tools_call_request(), None).is_err());
+        }
+
+        #[test]
+        fn rejects_duplicate_name() {
+            let headers = header_map(&[
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", "deploy"),
+                ("Mcp-Name", "other"),
+            ]);
+            assert!(validate_request_headers(&headers, &tools_call_request(), None).is_err());
+        }
+
+        #[test]
         fn accepts_matching_param() {
             let schema = schema_with(json!({
                 "region": { "type": "string", "x-mcp-header": "Region" },
@@ -653,6 +684,41 @@ mod tests {
                 ("Mcp-Param-Region", "eu-central1"),
             ]);
             assert!(validate_request_headers(&headers, &request, Some(&schema)).is_err());
+        }
+
+        #[test]
+        fn rejects_duplicate_param() {
+            let schema = schema_with(json!({
+                "region": { "type": "string", "x-mcp-header": "Region" },
+            }));
+            let request = json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "deploy", "arguments": { "region": "us-west1" } }
+            });
+            let headers = header_map(&[
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", "deploy"),
+                ("Mcp-Param-Region", "us-west1"),
+                ("Mcp-Param-Region", "eu-central1"),
+            ]);
+            assert!(validate_request_headers(&headers, &request, Some(&schema)).is_err());
+        }
+
+        #[test]
+        fn rejects_duplicate_param_for_absent_argument() {
+            let schema = schema_with(json!({
+                "region": { "type": "string", "x-mcp-header": "Region" },
+            }));
+            let headers = header_map(&[
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", "deploy"),
+                ("Mcp-Param-Region", "us-west1"),
+                ("Mcp-Param-Region", "eu-central1"),
+            ]);
+            assert_eq!(
+                validate_request_headers(&headers, &tools_call_request(), Some(&schema)),
+                Err("duplicate Mcp-Param-Region header".to_owned())
+            );
         }
     }
 }

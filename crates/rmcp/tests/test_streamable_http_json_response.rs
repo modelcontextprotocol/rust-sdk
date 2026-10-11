@@ -2,8 +2,8 @@
 use rmcp::{
     ErrorData, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, InitializeResult,
-        ProgressNotificationParam, ServerCapabilities,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        ProgressNotificationParam, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -57,8 +57,8 @@ const NEGOTIATED_CALL_WITH_PROGRESS_BODY: &str = r#"{
 struct ProgressServer;
 
 impl ServerHandler for ProgressServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(

@@ -1,16 +1,20 @@
 #![cfg(all(feature = "server", not(feature = "local")))]
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use rmcp::{
     ServerHandler, ServiceExt,
     model::{
         ClientCapabilities, ClientJsonRpcMessage, ClientRequest, DiscoverRequest,
         DiscoverRequestParams, ErrorCode, ErrorData, Implementation, ListToolsRequest,
-        ListToolsResult, PaginatedRequestParams, ProtocolVersion, RequestId, RequestMetaObject,
-        ServerJsonRpcMessage,
+        ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotificationParam,
+        ProgressToken, ProtocolVersion, RequestId, RequestMetaObject, ServerJsonRpcMessage,
+        ServerNotification,
     },
-    service::{MaybeSendFuture, RequestContext, RoleServer, ServerInitializeError},
+    service::{MaybeSendFuture, RequestContext, RoleServer},
     transport::{IntoTransport, Transport},
 };
 
@@ -85,12 +89,38 @@ async fn stateless_server_rejects_missing_metadata_on_every_request() {
     };
     assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
 
-    server_task
+    let mut valid_request = list_tools_request(complete_meta());
+    if let ClientJsonRpcMessage::Request(request) = &mut valid_request {
+        request.id = RequestId::Number(3);
+    }
+    client
+        .send(valid_request)
         .await
-        .expect("server task")
-        .cancel()
+        .expect("send valid list tools");
+    assert!(matches!(
+        client.receive().await,
+        Some(ServerJsonRpcMessage::Response(_))
+    ));
+
+    let running = server_task.await.expect("server task");
+
+    client
+        .send(ClientJsonRpcMessage::request(
+            ClientRequest::ListToolsRequest(ListToolsRequest {
+                method: Default::default(),
+                params: None,
+                extensions: Default::default(),
+            }),
+            RequestId::Number(4),
+        ))
         .await
-        .expect("cancel server");
+        .expect("send list tools without metadata after inline selection");
+    let Some(ServerJsonRpcMessage::Error(error)) = client.receive().await else {
+        panic!("expected invalid params");
+    };
+    assert_eq!(error.error.code, ErrorCode::INVALID_PARAMS);
+
+    running.cancel().await.expect("cancel server");
 }
 
 #[derive(Clone)]
@@ -162,7 +192,7 @@ async fn stateless_server_uses_each_requests_client_context() {
 }
 
 #[tokio::test]
-async fn stateless_server_rejects_malformed_metadata_opener_with_error_response() {
+async fn stateless_server_rejects_malformed_metadata_without_selecting_lifecycle() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let server_task = tokio::spawn(async move { StatelessServer.serve(server_transport).await });
     let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
@@ -204,11 +234,94 @@ async fn stateless_server_rejects_malformed_metadata_opener_with_error_response(
             .contains("io.modelcontextprotocol/clientCapabilities")
     );
 
-    let Err(error) = server_task.await.expect("server task") else {
-        panic!("malformed opener should not start a session");
-    };
+    let mut valid_request = list_tools_request(complete_meta());
+    if let ClientJsonRpcMessage::Request(request) = &mut valid_request {
+        request.id = RequestId::Number(2);
+    }
+    client
+        .send(valid_request)
+        .await
+        .expect("send valid list tools after malformed request");
     assert!(matches!(
-        error,
-        ServerInitializeError::ExpectedInitializeRequest(Some(_))
+        client.receive().await,
+        Some(ServerJsonRpcMessage::Response(_))
     ));
+
+    server_task
+        .await
+        .expect("server task")
+        .expect("valid inline request should start the server")
+        .cancel()
+        .await
+        .expect("cancel server");
+}
+
+#[derive(Clone)]
+struct ProgressServer;
+
+impl ServerHandler for ProgressServer {
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let progress_token = context
+            .meta
+            .get_progress_token()
+            .expect("progress token in request meta");
+        context
+            .peer
+            .notify_progress(ProgressNotificationParam::new(progress_token, 1.0))
+            .await
+            .expect("send progress notification");
+        Ok(ListToolsResult::default())
+    }
+}
+
+/// Regression test for issue #1261: the first request of an `initialize`-less
+/// session used to be handled outside the service loop, so a handler that sent
+/// a notification before returning waited forever for the loop to flush it.
+#[tokio::test]
+async fn stateless_server_first_request_handler_can_send_notifications() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        ProgressServer
+            .serve(server_transport)
+            .await
+            .expect("server should start")
+    });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    let mut meta = complete_meta();
+    meta.set_progress_token(ProgressToken(NumberOrString::Number(7)));
+    client
+        .send(list_tools_request(meta))
+        .await
+        .expect("send first request");
+
+    let exchange = async {
+        let notification = match client.receive().await {
+            Some(ServerJsonRpcMessage::Notification(notification)) => notification.notification,
+            other => panic!("expected progress notification before the response, got {other:?}"),
+        };
+        assert!(
+            matches!(notification, ServerNotification::ProgressNotification(_)),
+            "expected progress notification, got {notification:?}"
+        );
+        let response = match client.receive().await {
+            Some(ServerJsonRpcMessage::Response(response)) => response,
+            other => panic!("expected list tools response, got {other:?}"),
+        };
+        assert_eq!(response.id, RequestId::Number(1));
+    };
+    tokio::time::timeout(Duration::from_secs(5), exchange)
+        .await
+        .expect("first request must not deadlock the server");
+
+    server_task
+        .await
+        .expect("server task")
+        .cancel()
+        .await
+        .expect("cancel server");
 }

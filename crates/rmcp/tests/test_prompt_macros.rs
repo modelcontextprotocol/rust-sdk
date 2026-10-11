@@ -7,8 +7,7 @@ use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::prompt::PromptRouter, wrapper::Parameters},
     model::{
-        ContentBlock, GetPromptRequestParams, GetPromptResult, InitializeRequestParams,
-        PromptMessage, Role,
+        ClientConfig, ContentBlock, GetPromptRequestParams, GetPromptResult, PromptMessage, Role,
     },
     prompt, prompt_handler, prompt_router,
 };
@@ -72,7 +71,14 @@ impl Server {
             "This is a prompt with no parameters.".to_string(),
         )]
     }
+
+    #[prompt(description = CONST_PROMPT_DESCRIPTION)]
+    async fn const_description_prompt(&self) -> Vec<PromptMessage> {
+        vec![]
+    }
 }
+
+const CONST_PROMPT_DESCRIPTION: &str = "Prompt description from a const";
 
 // define generic service trait
 pub trait DataService: Send + Sync + 'static {
@@ -151,6 +157,15 @@ async fn test_prompt_macros_with_empty_param() {
     assert!(
         _attr.arguments.is_none(),
         "Empty param prompt should have no arguments"
+    );
+}
+
+#[test]
+fn test_prompt_description_accepts_const_expr() {
+    let prompt = Server::const_description_prompt_prompt_attr();
+    assert_eq!(
+        prompt.description.as_deref(),
+        Some(CONST_PROMPT_DESCRIPTION)
     );
 }
 
@@ -298,8 +313,8 @@ fn test_optional_field_schema_generation_via_macro() {
 struct DummyClientHandler {}
 
 impl ClientHandler for DummyClientHandler {
-    fn get_info(&self) -> InitializeRequestParams {
-        InitializeRequestParams::default()
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::default()
     }
 }
 

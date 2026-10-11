@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Annotations, ContentBlock, Icon, MetaObject, Role,
-    content::{AudioContent, EmbeddedResource, ImageContent, TextContent},
+    content::{EmbeddedResource, TextContent},
     resource::ResourceContents,
 };
 
@@ -149,6 +149,8 @@ impl PromptMessage {
     ) -> Self {
         use base64::{Engine, prelude::BASE64_STANDARD};
 
+        use super::content::ImageContent;
+
         let base64 = BASE64_STANDARD.encode(data);
         Self {
             role,
@@ -170,6 +172,8 @@ impl PromptMessage {
         annotations: Option<Annotations>,
     ) -> Self {
         use base64::{Engine, prelude::BASE64_STANDARD};
+
+        use super::content::AudioContent;
 
         let base64 = BASE64_STANDARD.encode(data);
         Self {
@@ -244,6 +248,7 @@ mod tests {
     use serde_json;
 
     use super::*;
+    use crate::model::content::{AudioContent, ImageContent};
 
     #[test]
     fn test_prompt_message_image_serialization() {

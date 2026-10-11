@@ -18,8 +18,8 @@ use std::{
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
     model::{
-        ClientRequest, Implementation, InitializeRequestParams, InitializeResult, ListToolsRequest,
-        ProtocolVersion, RequestMetaObject, ServerCapabilities, ServerNotification,
+        ClientConfig, ClientRequest, Implementation, ListToolsRequest, ProtocolVersion,
+        RequestMetaObject, ServerCapabilities, ServerConfig, ServerNotification,
         SubscriptionFilter,
     },
     service::{PeerRequestOptions, SubscriptionContext, SubscriptionEnd},
@@ -53,8 +53,8 @@ impl ServerHandler for HttpSubscriptionServer {
         Cow::Borrowed(&[ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25])
     }
 
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
@@ -160,7 +160,7 @@ async fn modern_http_listen_uses_post_stream_and_cancels_by_closing_it() -> anyh
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url.clone()),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -205,7 +205,7 @@ async fn modern_http_graceful_close_returns_final_listen_result() -> anyhow::Res
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -241,7 +241,7 @@ async fn modern_http_stream_close_without_result_is_abrupt() -> anyhow::Result<(
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {
@@ -274,7 +274,7 @@ async fn modern_http_lifecycle_stays_sessionless_for_older_application_version()
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(url),
     );
-    let client = InitializeRequestParams::default()
+    let client = ClientConfig::default()
         .serve_with_lifecycle(
             transport,
             ClientLifecycleMode::Discover {

@@ -8,7 +8,7 @@ use clap::{Parser, ValueEnum};
 use rmcp::{
     ClientHandler, ServiceExt,
     model::{
-        CallToolRequestParams, ClientCapabilities, Implementation, InitializeRequestParams,
+        CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation,
         ProgressNotificationParam,
     },
     service::{NotificationContext, RoleClient},
@@ -121,8 +121,8 @@ impl ClientHandler for ProgressAwareClient {
         }
     }
 
-    fn get_info(&self) -> InitializeRequestParams {
-        InitializeRequestParams::new(
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::new(
             ClientCapabilities::default(),
             Implementation::new("progress-test-client", "1.0.0"),
         )

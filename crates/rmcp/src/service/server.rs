@@ -16,13 +16,13 @@ use crate::{
         CancelledNotification, CancelledNotificationParam, ClientJsonRpcMessage,
         ClientNotification, ClientRequest, ClientResult, CreateMessageRequest,
         CreateMessageRequestParams, CreateMessageResult, EmptyResult, ErrorData,
-        InitializeRequestParams, InitializeResult, ListRootsRequest, ListRootsResult,
-        LoggingMessageNotification, LoggingMessageNotificationParam, ProgressNotification,
-        ProgressNotificationParam, PromptListChangedNotification, ProtocolVersion,
-        ResourceListChangedNotification, ResourceUpdatedNotification,
-        ResourceUpdatedNotificationParam, ServerNotification, ServerRequest, ServerResult,
-        SubscriptionFilter, SubscriptionsAcknowledgedNotification,
-        SubscriptionsAcknowledgedNotificationParams, ToolListChangedNotification,
+        InitializeRequestParams, ListRootsRequest, ListRootsResult, LoggingMessageNotification,
+        LoggingMessageNotificationParam, ProgressNotification, ProgressNotificationParam,
+        PromptListChangedNotification, ProtocolVersion, ResourceListChangedNotification,
+        ResourceUpdatedNotification, ResourceUpdatedNotificationParam, ServerConfig,
+        ServerNotification, ServerRequest, ServerResult, SubscriptionFilter,
+        SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
+        ToolListChangedNotification,
     },
     transport::DynamicTransportError,
 };
@@ -38,7 +38,7 @@ impl ServiceRole for RoleServer {
     type PeerReq = ClientRequest;
     type PeerResp = ClientResult;
     type PeerNot = ClientNotification;
-    type Info = InitializeResult;
+    type Info = ServerConfig;
     type PeerInfo = InitializeRequestParams;
 
     type InitializeError = ServerInitializeError;
@@ -467,9 +467,15 @@ where
 ///
 /// `server_supported` comes from [`Service::supported_protocol_versions`], so a
 /// server that narrows that list is never made to answer `initialize` with a
-/// version it cannot serve. `2026-07-28` replaced the handshake with
-/// per-request metadata, so a client naming that revision or later is answered
-/// with the server's newest legacy version instead.
+/// version it cannot serve. [`ProtocolVersion::NO_INITIALIZE`] replaced the
+/// handshake with per-request metadata, so a client naming that revision or
+/// later is answered with the server's newest handshake version instead.
+///
+/// `preferred_fallback` is a *preference*, not a guarantee: it is honored only
+/// when it has an `initialize` handshake of its own. A server that pins itself
+/// past [`ProtocolVersion::NO_INITIALIZE`] still has to answer the handshake
+/// with something, so the newest handshake version in `server_supported` is
+/// substituted.
 ///
 /// # Errors
 ///
@@ -479,18 +485,18 @@ where
 /// [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`]: crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
 pub(crate) fn negotiate_protocol_version(
     client_requested: &ProtocolVersion,
-    server_fallback: ProtocolVersion,
+    preferred_fallback: ProtocolVersion,
     server_supported: &[ProtocolVersion],
 ) -> Result<ProtocolVersion, ErrorData> {
-    if is_legacy_version(client_requested) && server_supported.contains(client_requested) {
+    if client_requested.has_initialize() && server_supported.contains(client_requested) {
         return Ok(client_requested.clone());
     }
-    let legacy_fallback = if is_legacy_version(&server_fallback) {
-        Some(server_fallback)
+    let fallback = if preferred_fallback.has_initialize() {
+        Some(preferred_fallback)
     } else {
-        newest_legacy_version(server_supported)
+        newest_version_with_initialize(server_supported)
     };
-    let Some(legacy_fallback) = legacy_fallback else {
+    let Some(negotiated) = fallback else {
         tracing::warn!(
             client_requested = %client_requested,
             "server supports no protocol version with an initialize handshake; rejecting"
@@ -504,17 +510,17 @@ pub(crate) fn negotiate_protocol_version(
     // HTTP re-runs it on every request, so this is not a warning.
     tracing::debug!(
         client_requested = %client_requested,
-        server_fallback = %legacy_fallback,
-        "client requested a protocol version unavailable over initialize; falling back to server default"
+        negotiated = %negotiated,
+        "client requested a protocol version unavailable over initialize; falling back to a supported version"
     );
-    Ok(legacy_fallback)
+    Ok(negotiated)
 }
 
 /// The newest of `versions` that still has an `initialize` handshake.
-fn newest_legacy_version(versions: &[ProtocolVersion]) -> Option<ProtocolVersion> {
+fn newest_version_with_initialize(versions: &[ProtocolVersion]) -> Option<ProtocolVersion> {
     versions
         .iter()
-        .filter(|version| is_legacy_version(version))
+        .filter(|version| version.has_initialize())
         .max_by(|left, right| left.as_str().cmp(right.as_str()))
         .cloned()
 }
@@ -562,9 +568,14 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    // Get initialize request; the MCP spec permits ping before initialize.
+    let (peer, peer_rx) = Peer::new(id_provider.clone(), None);
+
+    // Select the lifecycle only after an initialize request or the first valid
+    // non-discover request with complete inline metadata. A discover request is
+    // a bootstrap probe: respond to it, but remain open to either lifecycle.
+    // The MCP spec also permits ping before initialize.
     // See: https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization
-    let (request, id) = loop {
+    let (initialize_request, id) = loop {
         let msg = expect_next_message(&mut transport, "initialize request").await?;
         match msg {
             ClientJsonRpcMessage::Request(req)
@@ -583,7 +594,90 @@ where
                         )
                     })?;
             }
-            ClientJsonRpcMessage::Request(req) => break (req.request, req.id),
+            ClientJsonRpcMessage::Request(req) => {
+                let id = req.id;
+                let mut request = match req.request {
+                    ClientRequest::InitializeRequest(request) => break (request, id),
+                    request => request,
+                };
+                let missing_metadata = request
+                    .get_meta()
+                    .missing_required_keys(&ProtocolVersion::V_2026_07_28);
+                let requested_version = match request.get_meta().protocol_version() {
+                    Some(version) if missing_metadata.is_empty() => version,
+                    _ => {
+                        transport
+                            .send(ServerJsonRpcMessage::error(
+                                missing_request_metadata_error(&missing_metadata),
+                                Some(id),
+                            ))
+                            .await
+                            .map_err(|error| {
+                                ServerInitializeError::transport::<T>(
+                                    error,
+                                    "sending pre-init metadata error response",
+                                )
+                            })?;
+                        continue;
+                    }
+                };
+
+                if matches!(request, ClientRequest::DiscoverRequest(_)) {
+                    // No lifecycle exists yet, so the handler gets a peer that
+                    // cannot reach the client.
+                    let (bootstrap_peer, _) = Peer::new(id_provider.clone(), None);
+                    let context = RequestContext {
+                        ct: ct.child_token(),
+                        id: id.clone(),
+                        meta: std::mem::take(request.get_meta_mut()),
+                        extensions: std::mem::take(request.extensions_mut()),
+                        peer: bootstrap_peer,
+                    };
+                    let response = match service.handle_request(request, context).await {
+                        Ok(result) => ServerJsonRpcMessage::response(result, id),
+                        Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
+                    };
+                    transport.send(response).await.map_err(|error| {
+                        ServerInitializeError::transport::<T>(
+                            error,
+                            "sending bootstrap request response",
+                        )
+                    })?;
+                    continue;
+                }
+
+                let supported_versions = service.supported_protocol_versions();
+                if !supported_versions.contains(&requested_version) {
+                    transport
+                        .send(ServerJsonRpcMessage::error(
+                            ErrorData::unsupported_protocol_version(
+                                requested_version,
+                                &supported_versions,
+                            ),
+                            Some(id),
+                        ))
+                        .await
+                        .map_err(|error| {
+                            ServerInitializeError::transport::<T>(
+                                error,
+                                "sending unsupported inline version response",
+                            )
+                        })?;
+                    continue;
+                }
+                peer.require_request_metadata();
+                // Dispatch the request from inside the service loop rather than
+                // inline: its handler may send notifications through `peer`, which
+                // only complete once the loop drains `peer_rx`.
+                return Ok(serve_inner(
+                    service,
+                    transport,
+                    peer,
+                    peer_rx,
+                    VecDeque::from([ClientJsonRpcMessage::request(request, id)]),
+                    ct,
+                ));
+            }
             other => {
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     other,
@@ -591,52 +685,9 @@ where
             }
         }
     };
-
-    let initialize_request = match request {
-        ClientRequest::InitializeRequest(request) => request,
-        mut request => {
-            let missing_metadata = request
-                .get_meta()
-                .missing_required_keys(&ProtocolVersion::V_2026_07_28);
-            if !missing_metadata.is_empty() {
-                transport
-                    .send(ServerJsonRpcMessage::error(
-                        missing_request_metadata_error(&missing_metadata),
-                        Some(id.clone()),
-                    ))
-                    .await
-                    .map_err(|error| {
-                        ServerInitializeError::transport::<T>(
-                            error,
-                            "sending pre-init metadata error response",
-                        )
-                    })?;
-                return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
-                    ClientJsonRpcMessage::request(request, id),
-                )));
-            }
-            let (peer, peer_rx) = Peer::new(id_provider, None);
-            peer.require_request_metadata();
-            let context = RequestContext {
-                ct: ct.child_token(),
-                id: id.clone(),
-                meta: std::mem::take(request.get_meta_mut()),
-                extensions: std::mem::take(request.extensions_mut()),
-                peer: peer.clone(),
-            };
-            let response = match service.handle_request(request, context).await {
-                Ok(result) => ServerJsonRpcMessage::response(result, id),
-                Err(error) => ServerJsonRpcMessage::error(error, Some(id)),
-            };
-            transport.send(response).await.map_err(|error| {
-                ServerInitializeError::transport::<T>(error, "sending negotiated request response")
-            })?;
-            return Ok(serve_inner(service, transport, peer, peer_rx, ct));
-        }
-    };
     let requested_protocol_version = initialize_request.params.protocol_version.clone();
     let mut negotiated_peer_info = initialize_request.params.clone();
-    let (peer, peer_rx) = Peer::new(id_provider, Some(negotiated_peer_info.clone()));
+    peer.set_peer_info(negotiated_peer_info.clone());
     let request = ClientRequest::InitializeRequest(initialize_request);
     let context = RequestContext {
         ct: ct.child_token(),
@@ -681,7 +732,14 @@ where
     // Streamable HTTP has no ordering guarantee between POSTs, and the MCP spec uses
     // SHOULD NOT (not MUST NOT) for pre-initialized messages, so any request arriving
     // before initialized is processed normally.
-    Ok(serve_inner(service, transport, peer, peer_rx, ct))
+    Ok(serve_inner(
+        service,
+        transport,
+        peer,
+        peer_rx,
+        VecDeque::new(),
+        ct,
+    ))
 }
 
 macro_rules! method {

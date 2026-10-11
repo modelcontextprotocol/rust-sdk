@@ -9,7 +9,7 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ElicitRequestParams,
-        ElicitationSchema, InitializeResult, ServerCapabilities,
+        ElicitationSchema, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 struct ElicitingServer;
 
 impl ServerHandler for ElicitingServer {
-    fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(

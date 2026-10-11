@@ -305,6 +305,20 @@ pub trait CredentialStore: Send + Sync {
 
     async fn clear(&self) -> Result<(), AuthError>;
 
+    /// Optionally handle the provider's definitive rejection of a refresh token.
+    ///
+    /// Called only for a definitive `invalid_grant` response, with the credentials used
+    /// for that exchange, before its refresh guard (if any) is released. Implementations
+    /// must not reacquire that guard or change credentials that have since been replaced.
+    /// The default leaves credentials unchanged. Callback errors are logged, and the
+    /// manager still returns [`AuthError::TokenRefreshRejected`] so callers can reauthorize.
+    async fn on_refresh_token_rejected(
+        &self,
+        _credentials: &StoredCredentials,
+    ) -> Result<(), AuthError> {
+        Ok(())
+    }
+
     /// Optionally coordinate refreshes that share these credentials.
     ///
     /// The manager acquires this guard before loading credentials and retains it
@@ -689,11 +703,12 @@ struct ResourceServerMetadata {
 /// decides what a document that is not metadata means there.
 #[derive(Debug, Clone, Copy)]
 enum ResourceMetadataUrlOrigin {
-    /// The server named this url in the `resource_metadata` parameter of a
-    /// `WWW-Authenticate` challenge.
+    /// The resource itself named this url in the `resource_metadata` parameter
+    /// of its `WWW-Authenticate` challenge.
     Advertised,
-    /// The url was derived from the base url, on the chance that the document is
-    /// published there.
+    /// The url was derived from the base url on the chance that the document is
+    /// published there, or named by a challenge on such a url. Either way the
+    /// run only guessed its way here.
     WellKnownGuess,
 }
 
@@ -2278,6 +2293,7 @@ impl AuthorizationManager {
         }
         let current_credentials = stored_credentials
             .token_response
+            .as_ref()
             .ok_or(AuthError::AuthorizationRequired)?;
 
         let refresh_token = current_credentials
@@ -2290,26 +2306,39 @@ impl AuthorizationManager {
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
             .add_extra_param("resource", self.oauth_resource().await);
-        let mut refresh_scopes = stored_credentials.granted_scopes;
+        let mut refresh_scopes = stored_credentials.granted_scopes.clone();
         self.add_offline_access_if_supported(&mut refresh_scopes);
         let requested_scopes = refresh_scopes.clone();
         for scope in refresh_scopes {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
-        let mut token_result = refresh_request
+        let mut token_result = match refresh_request
             .request_async(&OAuth2HttpClient {
                 client: self.http_client.as_ref(),
                 redirect_policy: self.refresh_redirect_policy,
             })
             .await
-            .map_err(|error| match &error {
+        {
+            Ok(token_result) => token_result,
+            Err(error) => match &error {
                 RequestTokenError::ServerResponse(response)
                     if response.error() == &BasicErrorResponseType::InvalidGrant =>
                 {
-                    AuthError::TokenRefreshRejected(error.to_string())
+                    if let Err(store_error) = self
+                        .credential_store
+                        .on_refresh_token_rejected(&stored_credentials)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %store_error,
+                            "Failed to handle rejected refresh token"
+                        );
+                    }
+                    return Err(AuthError::TokenRefreshRejected(error.to_string()));
                 }
-                _ => AuthError::TokenRefreshFailed(error.to_string()),
-            })?;
+                _ => return Err(AuthError::TokenRefreshFailed(error.to_string())),
+            },
+        };
 
         // RFC 6749 section 6: issuing a new refresh token on refresh is optional.
         // When the response omits one, keep the existing refresh token rather than
@@ -2570,7 +2599,9 @@ impl AuthorizationManager {
     }
 
     /// Walk the authorization servers a protected resource metadata document
-    /// names, keeping the first one that answers with usable metadata.
+    /// names, keeping the first one that answers with usable metadata. A document
+    /// that names servers and none of them answers is an error, not a reason to
+    /// go looking elsewhere; a document that names none returns `Ok(None)`.
     ///
     /// The document arrives here through `read_resource_metadata`, which is where
     /// it is decided to be this resource's metadata at all.
@@ -2609,10 +2640,17 @@ impl AuthorizationManager {
             push_candidate(candidate);
         }
 
-        for candidate in candidates {
-            let candidate_url = match Url::parse(&candidate) {
+        if candidates.is_empty() {
+            debug!(
+                "protected resource metadata at {resource_metadata_url} names no authorization server"
+            );
+            return Ok(None);
+        }
+
+        for candidate in &candidates {
+            let candidate_url = match Url::parse(candidate) {
                 Ok(url) => url,
-                Err(_) => match resource_metadata_url.join(&candidate) {
+                Err(_) => match resource_metadata_url.join(candidate) {
                     Ok(url) => url,
                     Err(e) => {
                         debug!("Failed to resolve authorization server URL `{candidate}`: {e}");
@@ -2646,7 +2684,12 @@ impl AuthorizationManager {
             }
         }
 
-        Ok(None)
+        // Falling back to the base url would send the user somewhere the resource
+        // never named.
+        Err(AuthError::MetadataError(format!(
+            "protected resource metadata at {resource_metadata_url} names authorization servers {}, but none published usable metadata",
+            candidates.join(", ")
+        )))
     }
 
     fn validate_resource_metadata_resource(
@@ -2762,23 +2805,25 @@ impl AuthorizationManager {
                     }
                 }
                 StatusCode::UNAUTHORIZED => {
-                    let Some(advertised_url) = self
+                    let Some(pointer_url) = self
                         .extract_resource_metadata_url_from_www_authenticate(&response)
                         .await
                     else {
                         continue;
                     };
-                    if !requested.insert(advertised_url.clone()) {
+                    if !requested.insert(pointer_url.clone()) {
                         continue;
                     }
+                    // Found on a url this run guessed at, so a wrong answer only rules
+                    // out the pointer.
                     if let Some(metadata) = self
                         .fetch_resource_metadata_from_url(
-                            &advertised_url,
-                            ResourceMetadataUrlOrigin::Advertised,
+                            &pointer_url,
+                            ResourceMetadataUrlOrigin::WellKnownGuess,
                         )
                         .await?
                     {
-                        return Ok(Some((advertised_url, metadata)));
+                        return Ok(Some((pointer_url, metadata)));
                     }
                 }
                 status => debug!("resource metadata probe returned unexpected status: {status}"),
@@ -5496,11 +5541,105 @@ mod tests {
                 }),
             ),
         ];
-        // the authorization server publishes no metadata, so every form of its
-        // discovery url is tried before the run settles on the legacy endpoints
+        // the authorization server publishes no metadata; more 404s than the walk
+        // can use, so that requesting it twice would show up in the sequence
         responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
         let client = RecordingOAuthHttpClient::with_responses(responses);
         let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        manager.resolve_metadata().await.unwrap_err();
+
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/",
+                "https://mcp.example.com/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+                "https://auth.example.com/.well-known/openid-configuration",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_reports_named_authorization_servers_that_publish_no_metadata() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document names two authorization servers
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com", "https://sso.example.com"]
+                }),
+            ),
+        ];
+        // neither publishes metadata; the surplus 404s would let the run reach the
+        // resource host's own well-known urls and the legacy endpoints if it kept going
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let error = manager.resolve_metadata().await.unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Metadata error: protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource names authorization servers https://auth.example.com, https://sso.example.com, but none published usable metadata"
+        );
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/",
+                "https://mcp.example.com/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+                "https://auth.example.com/.well-known/openid-configuration",
+                "https://sso.example.com/.well-known/oauth-authorization-server",
+                "https://sso.example.com/.well-known/openid-configuration",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_keeps_falling_back_when_the_document_names_no_authorization_server() {
+        let mut responses = vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // the document says nothing about where to authorize
+            http_response(
+                200,
+                serde_json::json!({"resource": "https://mcp.example.com/"}),
+            ),
+        ];
+        responses.extend(std::iter::repeat_with(|| empty_response(404)).take(10));
+        let client = RecordingOAuthHttpClient::with_responses(responses);
         let manager = AuthorizationManager::new_with_oauth_http_client(
             "https://mcp.example.com/",
             Arc::new(client),
@@ -5514,18 +5653,79 @@ mod tests {
             resolution.source,
             AuthorizationMetadataSource::LegacyEndpointFallback
         );
-        let discovery_requests = recorder
-            .requests()
-            .iter()
-            .filter(|request| {
-                request.uri == "https://auth.example.com/.well-known/oauth-authorization-server"
-            })
-            .count();
+    }
+
+    #[tokio::test]
+    async fn resolve_metadata_tries_the_next_candidate_past_a_pointer_found_while_guessing() {
+        let challenge = oauth2::http::Response::builder()
+            .status(401)
+            .header(
+                "www-authenticate",
+                r#"Bearer resource_metadata="https://mcp.example.com/prm""#,
+            )
+            .body(Vec::new())
+            .unwrap();
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            // the MCP endpoint answers GET with a health payload, not metadata
+            http_response(
+                200,
+                serde_json::json!({"status": "healthy", "message": "MCP server is running"}),
+            ),
+            // auth sits in front of the first candidate and its challenge names a url
+            challenge,
+            // which serves something that is not the document
+            http_response(200, serde_json::json!({})),
+            // the second candidate carries the real document
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let recorder = client.clone();
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+
         assert_eq!(
-            discovery_requests,
-            1,
-            "the authorization server was walked once per field naming it: {:?}",
-            recorder.requests()
+            (
+                resolution.source,
+                resolution.metadata.token_endpoint.as_str(),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                "https://auth.example.com/token",
+            )
+        );
+        let requests = recorder.requests();
+        let requested: Vec<_> = requests
+            .iter()
+            .map(|request| request.uri.as_str())
+            .collect();
+        assert_eq!(
+            requested,
+            [
+                "https://mcp.example.com/mcp",
+                "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+                "https://mcp.example.com/prm",
+                "https://mcp.example.com/mcp/.well-known/oauth-protected-resource",
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+            ]
         );
     }
 
@@ -8507,12 +8707,18 @@ mod tests {
     #[tokio::test]
     async fn invalid_grant_refresh_requires_reauthorization() {
         let manager = manager_with_refresh_error("invalid_grant").await;
+        let before = manager.credential_store.load().await.unwrap();
 
         let err = manager.try_refresh_or_reauth().await.unwrap_err();
 
         assert!(
             matches!(err, AuthError::AuthorizationRequired),
             "expected AuthorizationRequired when the refresh token is rejected, got: {err:?}"
+        );
+        assert_eq!(
+            serde_json::to_value(manager.credential_store.load().await.unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap(),
+            "the default rejection callback must leave credentials unchanged"
         );
     }
 
@@ -9024,6 +9230,7 @@ mod tests {
         credentials: InMemoryCredentialStore,
         lock: Arc<Mutex<()>>,
         events: Arc<StdMutex<Vec<&'static str>>>,
+        rejected_credentials: Arc<StdMutex<Option<StoredCredentials>>>,
         guard_requested: Arc<Semaphore>,
         save_started: Arc<Semaphore>,
         save_gate: Option<Arc<Semaphore>>,
@@ -9069,6 +9276,19 @@ mod tests {
             self.credentials.clear().await
         }
 
+        async fn on_refresh_token_rejected(
+            &self,
+            credentials: &StoredCredentials,
+        ) -> Result<(), AuthError> {
+            assert!(self.lock.try_lock().is_err());
+            self.events.lock().unwrap().push("rejected");
+            *self.rejected_credentials.lock().unwrap() = Some(credentials.clone());
+            if self.fail_at == Some("rejected") {
+                return Err(AuthError::CredentialStoreError("rejection failed".into()));
+            }
+            Ok(())
+        }
+
         async fn acquire_refresh_guard(&self) -> Result<Option<CredentialRefreshGuard>, AuthError> {
             self.events.lock().unwrap().push("acquire");
             self.guard_requested.add_permits(1);
@@ -9097,6 +9317,7 @@ mod tests {
             credentials: credential_store,
             lock: Arc::new(Mutex::new(())),
             events: Arc::new(StdMutex::new(Vec::new())),
+            rejected_credentials: Arc::new(StdMutex::new(None)),
             guard_requested: Arc::new(Semaphore::new(0)),
             save_started: Arc::new(Semaphore::new(0)),
             save_gate: None,
@@ -9135,6 +9356,16 @@ mod tests {
                 })
                 .collect(),
             ),
+            events: store.events.clone(),
+        })
+    }
+
+    fn refresh_error_http_client(store: &RefreshStore, error: &str) -> Arc<RefreshHttpClient> {
+        Arc::new(RefreshHttpClient {
+            recording: RecordingOAuthHttpClient::with_responses(vec![http_response(
+                400,
+                serde_json::json!({"error": error}),
+            )]),
             events: store.events.clone(),
         })
     }
@@ -9195,6 +9426,84 @@ mod tests {
             "new-refresh"
         );
         assert_eq!(saved.granted_scopes, ["read"]);
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[rstest]
+    #[case(None)]
+    #[case(Some("rejected"))]
+    #[tokio::test]
+    async fn rejected_refresh_notifies_store_with_attempted_credentials_under_guard(
+        #[case] fail_at: Option<&'static str>,
+    ) {
+        let mut store = refresh_store().await;
+        store.fail_at = fail_at;
+        let attempted = store.credentials.load().await.unwrap();
+        let http_client = refresh_error_http_client(&store, "invalid_grant");
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        let error = manager.refresh_token().await.unwrap_err();
+
+        assert!(matches!(error, AuthError::TokenRefreshRejected(_)));
+        assert_eq!(
+            serde_json::to_value(&*store.rejected_credentials.lock().unwrap()).unwrap(),
+            serde_json::to_value(attempted).unwrap()
+        );
+        assert_eq!(
+            *store.events.lock().unwrap(),
+            [
+                "acquire", "acquired", "load", "provider", "rejected", "release"
+            ]
+        );
+        assert_eq!(http_client.recording.requests().len(), 1);
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn get_access_token_requires_reauth_when_rejection_callback_fails() {
+        let mut store = refresh_store().await;
+        store.fail_at = Some("rejected");
+        let mut credentials = store.credentials.load().await.unwrap().unwrap();
+        credentials
+            .token_response
+            .as_mut()
+            .unwrap()
+            .set_expires_in(Some(&std::time::Duration::ZERO));
+        store.credentials.save(credentials).await.unwrap();
+        let http_client = refresh_error_http_client(&store, "invalid_grant");
+        let manager = refresh_manager(store.clone(), http_client.clone()).await;
+
+        assert!(matches!(
+            manager.get_access_token().await,
+            Err(AuthError::AuthorizationRequired)
+        ));
+
+        assert_eq!(
+            *store.events.lock().unwrap(),
+            [
+                "load", "acquire", "acquired", "load", "provider", "rejected", "release"
+            ]
+        );
+        assert_eq!(http_client.recording.requests().len(), 1);
+        assert!(store.lock.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn transient_refresh_failure_does_not_notify_store_of_rejection() {
+        let store = refresh_store().await;
+        let http_client = refresh_error_http_client(&store, "temporarily_unavailable");
+        let manager = refresh_manager(store.clone(), http_client).await;
+
+        assert!(matches!(
+            manager.refresh_token().await,
+            Err(AuthError::TokenRefreshFailed(_))
+        ));
+
+        assert!(store.rejected_credentials.lock().unwrap().is_none());
+        assert_eq!(
+            *store.events.lock().unwrap(),
+            ["acquire", "acquired", "load", "provider", "release"]
+        );
         assert!(store.lock.try_lock().is_ok());
     }
 

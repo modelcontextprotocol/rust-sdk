@@ -256,15 +256,27 @@ pub struct NumberSchema {
     pub description: Option<Cow<'static, str>>,
 
     /// Minimum value (inclusive)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "super::serde_impl::json_float::option_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub minimum: Option<f64>,
 
     /// Maximum value (inclusive)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "super::serde_impl::json_float::option_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub maximum: Option<f64>,
 
     /// Default value
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "super::serde_impl::json_float::option_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default: Option<f64>,
 }
 
