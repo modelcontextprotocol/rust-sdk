@@ -3261,17 +3261,6 @@
             }
           ]
         },
-        "skills": {
-          "description": "Capability for the SEP-2640 Skills extension.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SkillsCapability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "tools": {
           "anyOf": [
             {
@@ -3448,18 +3437,6 @@
           "const": "Dynamic"
         }
       ]
-    },
-    "SkillsCapability": {
-      "description": "Capability for the SEP-2640 Skills extension.\n\nAdvertises support for `skills/list`, `skills/get`, and\n`resources/directory/read` RPC methods.\n\nThe only spec-defined setting is `directoryRead`. A server that supports\n`resources/directory/read` MUST set it to `true`.",
-      "type": "object",
-      "properties": {
-        "directoryRead": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
     },
     "SkillsGetResult": {
       "description": "Response to `skills/get`.\n\nCarries a single skill entry. No pagination cursor (a single entry is not\na list). The caching fields (`ttlMs`/`cacheScope`) are left open — the\nspec does not settle whether `skills/get` results carry them.",

@@ -63,31 +63,6 @@ pub struct ToolsCapability {
 /// Extension identifier for the SEP-2640 Skills extension.
 pub const SKILLS_EXTENSION_ID: &str = "io.modelcontextprotocol/skills";
 
-/// Capability for the SEP-2640 Skills extension.
-///
-/// Advertises support for `skills/list`, `skills/get`, and
-/// `resources/directory/read` RPC methods.
-///
-/// The only spec-defined setting is `directoryRead`. A server that supports
-/// `resources/directory/read` MUST set it to `true`.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub struct SkillsCapability {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub directory_read: Option<bool>,
-}
-
-impl SkillsCapability {
-    /// Create a new `SkillsCapability` with `directoryRead` set.
-    pub fn new(directory_read: bool) -> Self {
-        Self {
-            directory_read: Some(directory_read),
-        }
-    }
-}
-
 /// Roots capability. Deprecated by SEP-2577; remains functional and will be
 /// removed in a future release.
 /// See <https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577>.
@@ -268,9 +243,6 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
-    /// Capability for the SEP-2640 Skills extension.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skills: Option<SkillsCapability>,
 }
 
 impl ServerCapabilities {
@@ -407,7 +379,6 @@ builder! {
         prompts: PromptsCapability,
         resources: ResourcesCapability,
         tools: ToolsCapability,
-        skills: SkillsCapability,
     }
 }
 
