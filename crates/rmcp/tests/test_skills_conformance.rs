@@ -422,3 +422,89 @@ fn multi_file_skill_has_resources_field() {
         "should have 3 file entries (SKILL.md + 2 siblings)"
     );
 }
+
+/// `resources/directory/read` is the request that actually lists a skill's
+/// sibling files. The header comment has always claimed this coverage, but no
+/// test called it — `skills/get` returning a `resources` field is a different
+/// code path. This exercises the real method.
+#[test]
+fn resources_directory_read_lists_siblings() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        build_request(
+            2,
+            "resources/directory/read",
+            serde_json::json!({"uri": "skill://billing/refunds"}),
+        ),
+    ];
+
+    let responses = run_server_request(&requests);
+    let resources = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .and_then(|r| r["result"]["resources"].as_array())
+        .expect("resources/directory/read should return a resources array");
+
+    // SKILL.md is excluded from the directory listing; only the 2 siblings remain.
+    assert_eq!(
+        resources.len(),
+        2,
+        "refunds directory should list 2 sibling files (SKILL.md excluded)"
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["uri"].as_str().unwrap_or("").ends_with("/FORMS.md")),
+        "listing should contain FORMS.md"
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["uri"].as_str().unwrap_or("").ends_with("/APPENDIX.md")),
+        "listing should contain APPENDIX.md"
+    );
+}
+
+/// `resources/read` returns the bytes of one skill file. Also claimed by the
+/// header, also never actually called before this test.
+#[test]
+fn resources_read_returns_file_contents() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        build_request(
+            2,
+            "resources/read",
+            serde_json::json!({"uri": "skill://billing/refunds/FORMS.md"}),
+        ),
+    ];
+
+    let responses = run_server_request(&requests);
+    let contents = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .and_then(|r| r["result"]["contents"].as_array())
+        .expect("resources/read should return a contents array");
+
+    assert_eq!(contents.len(), 1, "should return exactly one content block");
+    let text = contents[0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("Form 101"),
+        "file contents should be returned verbatim"
+    );
+}
