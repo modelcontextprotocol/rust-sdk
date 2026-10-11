@@ -44,6 +44,10 @@ impl MacroServer {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = MacroServer;
     let transport = rmcp::transport::stdio();
-    server.serve(transport).await?;
+    // Hold the `RunningService` for the life of the process. Dropping it
+    // immediately (as `server.serve(transport).await?;` alone would) cancels
+    // the serve loop via its DropGuard and the server exits before answering.
+    let service = server.serve(transport).await?;
+    service.waiting().await?;
     Ok(())
 }
