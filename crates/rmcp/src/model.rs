@@ -715,10 +715,7 @@ impl ErrorData {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
     }
 
-    #[cfg(all(
-        feature = "transport-streamable-http-client",
-        any(feature = "client", feature = "server")
-    ))]
+    #[cfg(all(feature = "transport-streamable-http-client", feature = "client"))]
     pub(crate) fn transport_closed(message: impl Into<Cow<'static, str>>) -> Self {
         let mut data = JsonObject::new();
         data.insert(
@@ -4973,10 +4970,7 @@ mod tests {
         assert!(ProtocolVersion::known_up_to(&ancient).is_empty());
     }
 
-    #[cfg(all(
-        feature = "transport-streamable-http-client",
-        any(feature = "client", feature = "server")
-    ))]
+    #[cfg(all(feature = "transport-streamable-http-client", feature = "client"))]
     #[test]
     fn transport_closed_marker_accepts_only_the_process_local_token() {
         let local = ErrorData::transport_closed("closed");

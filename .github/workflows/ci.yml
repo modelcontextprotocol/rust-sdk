@@ -70,13 +70,15 @@ jobs:
                       | select(. != "local")] | join(",")')
           cargo clippy --package rmcp --all-targets --no-default-features --features "$FEATURES" -- -D warnings
 
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-hack
+
       # Only --lib: some tests don't build in reduced feature sets.
       - name: Run clippy (reduced feature sets)
         run: |
-          cargo clippy --package rmcp --lib -- -D warnings
-          cargo clippy --package rmcp --lib --no-default-features -- -D warnings
-          cargo clippy --package rmcp --lib --no-default-features --features client -- -D warnings
-          cargo clippy --package rmcp --lib --no-default-features --features server -- -D warnings
+          cargo hack clippy --package rmcp --lib --each-feature --exclude-features local -- -D warnings
 
   semver:
     name: SemVer Check
