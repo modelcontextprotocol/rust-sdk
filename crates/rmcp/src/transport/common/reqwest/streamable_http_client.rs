@@ -287,9 +287,17 @@ impl StreamableHttpClient for reqwest::Client {
             {
                 return Ok(response);
             }
-            if content_type
-                .as_deref()
-                .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
+            // A 401/403 without a challenge (those with one returned above)
+            // must keep its status rather than pass as an ordinary JSON-RPC
+            // error, matching `legacy_discover_response`.
+            let is_auth_failure = matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            );
+            if !is_auth_failure
+                && content_type
+                    .as_deref()
+                    .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
             {
                 match parse_json_rpc_error(&body) {
                     Some(message) => {
