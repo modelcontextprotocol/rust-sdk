@@ -713,28 +713,6 @@
     "CustomResult": {
       "description": "A catch-all response either side can use for custom requests."
     },
-    "DirectoryEntry": {
-      "description": "A single entry in a directory listing.\n\nThe spec's `resources/directory/read` result carries the same `Resource`-shaped\nobjects as `resources/list`, but in practice skill directory listings only need\nURI, name, and a directory flag. We model the minimal shape here.",
-      "type": "object",
-      "properties": {
-        "isDirectory": {
-          "description": "Whether this entry is a directory (`inode/directory`).",
-          "type": "boolean"
-        },
-        "name": {
-          "description": "The entry's name — the final segment of its URI.",
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "uri",
-        "isDirectory",
-        "name"
-      ]
-    },
     "DiscoverResult": {
       "description": "The server's response to a [`DiscoverRequest`].",
       "type": "object",
@@ -2981,7 +2959,7 @@
       }
     },
     "ResourcesDirectoryReadResult": {
-      "description": "Response listing the children of a directory.\n\nCarries the `resultType` discriminator (SEP-2322) so it can be stripped for\nlegacy peers the same way as other resource list results.",
+      "description": "Response listing the children of a directory.\n\nCarries the `resultType` discriminator (SEP-2322) so it can be stripped for\nlegacy peers the same way as other resource list results.\n\nPer the SEP-2640 spec, the result is `resources: [<Resource>]` where\nsubdirectories carry `mimeType: \"inode/directory\"`.",
       "type": "object",
       "properties": {
         "cacheScope": {
@@ -2990,17 +2968,17 @@
             "null"
           ]
         },
-        "children": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/DirectoryEntry"
-          }
-        },
         "nextCursor": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Resource"
+          }
         },
         "resultType": {
           "anyOf": [
@@ -3022,7 +3000,7 @@
         }
       },
       "required": [
-        "children"
+        "resources"
       ]
     },
     "ResultType": {
@@ -3472,10 +3450,10 @@
       ]
     },
     "SkillsCapability": {
-      "description": "Capability for the SEP-2640 Skills extension.\n\nAdvertises support for `skills/list`, `skills/get`, and\n`resources/directory/read` RPC methods.",
+      "description": "Capability for the SEP-2640 Skills extension.\n\nAdvertises support for `skills/list`, `skills/get`, and\n`resources/directory/read` RPC methods.\n\nThe only spec-defined setting is `directoryRead`. A server that supports\n`resources/directory/read` MUST set it to `true`.",
       "type": "object",
       "properties": {
-        "listChanged": {
+        "directoryRead": {
           "type": [
             "boolean",
             "null"

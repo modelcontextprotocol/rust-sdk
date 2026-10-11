@@ -119,7 +119,8 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                 request: rmcp::model::skills::SkillsGetRequestParams,
                 context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::skills::SkillsGetResult, rmcp::ErrorData> {
-                let route = #router.get_by_uri(&request.uri)
+                let router = #router;
+                let route = router.get_by_uri(&request.uri)
                     .ok_or_else(|| rmcp::ErrorData::invalid_params(
                         format!("skill not found: {}", request.uri),
                         None,
@@ -147,7 +148,8 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                     version >= rmcp::model::ProtocolVersion::V_2026_07_28
                 });
                 // Enumerate files for multi-file skills
-                let resources: Vec<rmcp::model::Resource> = if let Some(route) = #router.get_by_uri(&request.uri) {
+                let router = #router;
+                let resources: Vec<rmcp::model::Resource> = if let Some(route) = router.get_by_uri(&request.uri) {
                     match &route.attr.resources {
                         Some(rmcp::model::skills::SkillResources::FileList(files)) => {
                             files.iter().map(|file| {

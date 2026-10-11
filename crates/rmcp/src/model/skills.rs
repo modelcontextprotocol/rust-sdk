@@ -527,8 +527,8 @@ mod tests {
     #[test]
     fn resources_directory_read_round_trip() {
         let resp = ResourcesDirectoryReadResult::new(vec![
-            DirectoryEntry::file("skill://a/SKILL.md", "SKILL.md"),
-            DirectoryEntry::dir("skill://b/", "b"),
+            Resource::new("skill://a/SKILL.md", "SKILL.md"),
+            Resource::new("skill://b/", "b").with_mime_type("inode/directory"),
         ]);
         let json = serde_json::to_string_pretty(&resp).unwrap();
         let decoded: ResourcesDirectoryReadResult = serde_json::from_str(&json).unwrap();

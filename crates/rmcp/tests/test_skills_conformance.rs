@@ -238,7 +238,12 @@ fn multi_file_skill_lists_siblings() {
         .map(|r| r["uri"].as_str().unwrap_or(""))
         .filter(|uri| uri.ends_with(".md"))
         .collect();
-    assert_eq!(names.len(), 2, "refunds skill should have 2 siblings");
+    // After defect 5 fix: SKILL.md + 2 siblings = 3 entries
+    assert_eq!(
+        names.len(),
+        3,
+        "refunds skill should have 3 entries (SKILL.md + 2 siblings)"
+    );
     assert!(
         names.iter().any(|uri| uri.ends_with("/FORMS.md")),
         "should contain FORMS.md"
@@ -274,9 +279,18 @@ fn single_file_skill_has_no_resources() {
         .find(|r| r["id"] == 2)
         .and_then(|r| r["result"]["skill"]["resources"].as_array());
 
-    assert!(
-        resources.is_none() || resources.unwrap().is_empty(),
-        "single-file skill should have no resources"
+    // After defect 5 fix: SKILL.md itself is included in resources.
+    // A single-file skill should have exactly 1 resource (SKILL.md).
+    let resources = resources.expect("single-file skill should have resources");
+    assert_eq!(
+        resources.len(),
+        1,
+        "single-file skill should have SKILL.md in resources"
+    );
+    assert_eq!(
+        resources[0]["uri"].as_str().unwrap(),
+        "skill://git-workflow/SKILL.md",
+        "resource should be SKILL.md"
     );
 }
 
@@ -401,5 +415,10 @@ fn multi_file_skill_has_resources_field() {
         .and_then(|r| r["result"]["skill"]["resources"].as_array())
         .expect("multi-file skill should have resources");
 
-    assert_eq!(resources.len(), 2, "should have 2 file entries");
+    // After defect 5 fix: SKILL.md + 2 siblings = 3 entries
+    assert_eq!(
+        resources.len(),
+        3,
+        "should have 3 file entries (SKILL.md + 2 siblings)"
+    );
 }

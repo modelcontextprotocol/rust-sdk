@@ -223,6 +223,11 @@ required-features = ["server", "client"]
 path = "tests/test_tool_macros.rs"
 
 [[test]]
+name = "test_skill_macros"
+required-features = ["server", "macros"]
+path = "tests/test_skill_macros.rs"
+
+[[test]]
 name = "test_with_python"
 required-features = [
   "reqwest",
