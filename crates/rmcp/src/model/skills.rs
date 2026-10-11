@@ -6,6 +6,10 @@
 // Skills are transported as MCP Resources. See §Resource Mapping and §Discovery of
 // the spec for the exact wire shapes.
 
+// `const_string!` expands a `#[cfg(feature = "schemars")]` impl that names
+// `Cow` unqualified, so the import is required only with that feature — and is
+// unused (hence a `-D warnings` error) without it.
+#[cfg(feature = "schemars")]
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
