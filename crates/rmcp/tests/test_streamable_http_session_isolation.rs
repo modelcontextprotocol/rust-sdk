@@ -3,13 +3,13 @@
 use std::{sync::Arc, time::Duration};
 
 use rmcp::{
-    model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+    model::{
+        ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId, ServerJsonRpcMessage,
+        ServerResult,
+    },
     transport::{
         Transport,
-        streamable_http_server::session::{
-            SessionId, SessionManager,
-            local::{LocalSessionManager, SessionConfig},
-        },
+        streamable_http_server::session::{SessionId, SessionManager, local::LocalSessionManager},
     },
 };
 use rstest::rstest;
@@ -64,7 +64,7 @@ fn spawn_call(
             StuckCall::AcceptMessage => {
                 // The worker no longer reads its event channel, so the push
                 // after the channel is full waits.
-                for _ in 0..=SessionConfig::DEFAULT_CHANNEL_CAPACITY {
+                for _ in 0..=manager.session_config.channel_capacity {
                     let _ = manager.accept_message(&id, ping()).await;
                 }
             }
@@ -127,5 +127,52 @@ async fn waiting_on_one_session_does_not_block_other_sessions(
         );
         task.abort();
     }
+    Ok(())
+}
+
+/// `close_session` must not wait for a pending `initialize`. The worker reads
+/// session events only after initialization, so the pending call still waits
+/// for the handler and still gets its response.
+#[tokio::test(start_paused = true)]
+async fn close_session_does_not_wait_for_pending_initialize() -> anyhow::Result<()> {
+    let manager = Arc::new(LocalSessionManager::default());
+    let (id, mut transport) = manager.create_session().await?;
+    let initialize = tokio::spawn({
+        let manager = manager.clone();
+        let id = id.clone();
+        async move { manager.initialize_session(&id, ping()).await }
+    });
+    assert!(
+        transport.receive().await.is_some(),
+        "the worker did not pass initialize on"
+    );
+
+    let closed = tokio::time::timeout(PROBE_TIMEOUT, manager.close_session(&id)).await;
+    assert!(
+        matches!(closed, Ok(Ok(()))),
+        "close_session blocked: {closed:?}"
+    );
+    assert!(
+        !manager.has_session(&id).await?,
+        "the closed session is still in the map"
+    );
+
+    settle().await;
+    assert!(
+        !initialize.is_finished(),
+        "initialize should still wait for the handler"
+    );
+
+    transport
+        .send(ServerJsonRpcMessage::response(
+            ServerResult::empty(()),
+            RequestId::Number(1),
+        ))
+        .await?;
+    let response = tokio::time::timeout(PROBE_TIMEOUT, initialize).await;
+    assert!(
+        matches!(response, Ok(Ok(Ok(ServerJsonRpcMessage::Response(_))))),
+        "initialize did not get the handler's response: {response:?}"
+    );
     Ok(())
 }
