@@ -10,9 +10,11 @@ name: Triage
 # misconfigured, or wrong, the item is still assigned to a human -- the AI pass
 # is an accelerator for triage, never the thing that decides it.
 #
-# The rotation roster is the membership of ROTATION_TEAM, sorted for a stable
-# order, with the ISO week number selecting whose turn it is. Adding or removing
-# a team member re-partitions future weeks. See docs/CONTRIBUTE.MD ("Triage")
+# The rotation roster is every member with the `rust-sdk` role in
+# modelcontextprotocol/access (src/config/users.ts), sorted for a stable order,
+# with the ISO week number selecting whose turn it is. Reading it from that
+# public repo instead of the org teams API means no `read:org` token is needed.
+# Adding or removing a member there re-partitions future weeks. See docs/CONTRIBUTE.MD ("Triage")
 # for the response-time expectations that go with being on rotation.
 #
 # Both stages also run on `reopened`, so labels get refreshed on an item coming
@@ -24,14 +26,12 @@ name: Triage
 #   CODEX_AUTH_JSON        Codex credentials; refreshed and written back each run.
 #   CODEX_AUTH_STORE_TOKEN Fine-grained PAT with `secrets: write`. GITHUB_TOKEN
 #                          has no `secrets` scope and cannot persist the refresh.
-#   ROTATION_TOKEN         Reads org team membership and assigns the reviewer.
-#                          Needs `read:org` plus write on issues and pull
-#                          requests -- `read:org` alone cannot call addAssignees
-#                          or createComment. A GitHub App installation token is
-#                          preferred over a PAT so the rotation does not break
-#                          when one maintainer's token expires.
 #
-# Any missing secret degrades that stage to a skip, never a red X on the item.
+# Reviewer assignment needs no secret: the roster comes from a public repo and
+# the default GITHUB_TOKEN can assign and comment.
+#
+# Any missing secret degrades classification to a skip, never a red X on the
+# item.
 
 on:
   issues:
@@ -72,14 +72,12 @@ jobs:
       number: ${{ steps.check.outputs.number }}
       kind: ${{ steps.check.outputs.kind }}
       classify: ${{ steps.check.outputs.classify }}
-      assign: ${{ steps.check.outputs.assign }}
       dry_run: ${{ steps.check.outputs.dry_run }}
     steps:
       - id: check
         env:
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           AUTH_STORE_TOKEN: ${{ secrets.CODEX_AUTH_STORE_TOKEN }}
-          ROTATION_TOKEN: ${{ secrets.ROTATION_TOKEN }}
           NUMBER: ${{ inputs.number || github.event.issue.number || github.event.pull_request.number }}
           # `issue` drives Codex: only issues get classified, since a PR's
           # signal is its diff and that is `auto-label-pr.yml`'s job.
@@ -101,14 +99,6 @@ jobs:
               echo "CODEX_AUTH_JSON or CODEX_AUTH_STORE_TOKEN is not configured; skipping AI classification." \
                 >> "$GITHUB_STEP_SUMMARY"
             fi
-          fi
-
-          if [ -n "$ROTATION_TOKEN" ]; then
-            echo "assign=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "assign=false" >> "$GITHUB_OUTPUT"
-            echo "ROTATION_TOKEN is not configured; skipping reviewer assignment." \
-              >> "$GITHUB_STEP_SUMMARY"
           fi
 
   classify:
@@ -436,26 +426,44 @@ jobs:
     # The human backstop is the point of this workflow, so it runs even when
     # classification or labeling failed or was skipped -- `always()` plus an
     # explicit gate on preflight, which is the only prerequisite it truly has.
-    if: always() && needs.preflight.outputs.assign == 'true'
+    if: always() && needs.preflight.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
     env:
-      ROTATION_ORG: modelcontextprotocol
-      ROTATION_TEAM: rust-sdk-maintainers
+      ROTATION_ROLE: rust-sdk
       # Passed through env, never interpolated into the script body: the
       # classification is model output and `${{ }}` there would be injection.
       TARGET_NUMBER: ${{ needs.preflight.outputs.number }}
       CLASSIFICATION: ${{ needs.classify.outputs.classification }}
       DRY_RUN: ${{ needs.preflight.outputs.dry_run }}
     steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      # The org's membership source of truth is public, so read the roster from
+      # it rather than the teams API, which would need a `read:org` token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Needs `read:org` for team membership plus write on issues and pull
-          # requests; the default GITHUB_TOKEN 403s on listMembersInOrg.
-          github-token: ${{ secrets.ROTATION_TOKEN }}
+          repository: modelcontextprotocol/access
+          path: access
+          persist-credentials: false
+
+      - id: members
+        run: |
+          set -euo pipefail
+          cat > members.mts <<'EOF'
+          import { MEMBERS } from './access/src/config/users.ts';
+          const role = process.env.ROTATION_ROLE!;
+          console.log(MEMBERS.filter(m => m.memberOf.includes(role)).map(m => m.github).join(','));
+          EOF
+          echo "list=$(npx -y tsx members.mts)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ROSTER: ${{ steps.members.outputs.list }}
+        with:
           script: |
-            const org = process.env.ROTATION_ORG;
-            const team_slug = process.env.ROTATION_TEAM;
+            const role = process.env.ROTATION_ROLE;
             const number = Number(process.env.TARGET_NUMBER);
 
             // This workflow also runs on `reopened`, so an item may already
@@ -476,15 +484,16 @@ jobs:
               return;
             }
 
-            // Roster: team membership, sorted so week-to-week order is stable.
-            const members = await github.paginate(
-              github.rest.teams.listMembersInOrg,
-              { org, team_slug, per_page: 100 },
-            );
-            const roster = members.map((m) => m.login).sort();
+            // Roster: `rust-sdk` role members from modelcontextprotocol/access,
+            // sorted so week-to-week order is stable.
+            const roster = (process.env.ROSTER || '')
+              .split(',')
+              .map((login) => login.trim())
+              .filter(Boolean)
+              .sort();
 
             if (roster.length === 0) {
-              core.setFailed(`Team ${org}/${team_slug} has no members; nothing to assign.`);
+              core.setFailed(`No members with role '${role}' in modelcontextprotocol/access; nothing to assign.`);
               return;
             }
 

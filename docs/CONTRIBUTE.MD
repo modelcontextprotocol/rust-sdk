@@ -50,9 +50,10 @@ person regardless of whether the automation worked.
 
 ## Rotation
 
-The roster is the membership of the `rust-sdk-maintainers` team, sorted by login
-for a stable order, with the ISO week number selecting whose turn it is. The
-rotation turns over Monday 00:00 UTC. Adding or removing a team member changes
+The roster is every member with the `rust-sdk` role in
+[`modelcontextprotocol/access`](https://github.com/modelcontextprotocol/access)
+(`src/config/users.ts`), sorted by login for a stable order, with the ISO week number selecting whose turn it is. The
+rotation turns over Monday 00:00 UTC. Adding or removing a member there changes
 the roster and re-partitions future weeks, so the person on rotation can shift
 when membership changes.
 
@@ -65,18 +66,16 @@ Assignment is a starting point, not ownership: reassign or hand off freely.
 
 ## Configuration
 
-The workflow needs three secrets, and each missing one degrades that stage to a
-skip rather than failing the run:
+Classification needs two secrets, and if either is missing that stage is
+skipped rather than failing the run:
 
 | Secret | Purpose |
 | --- | --- |
 | `CODEX_AUTH_JSON` | Codex credentials, refreshed and written back each run. |
 | `CODEX_AUTH_STORE_TOKEN` | Fine-grained PAT with `secrets: write`, since `GITHUB_TOKEN` has no `secrets` scope and cannot persist the refresh. |
-| `ROTATION_TOKEN` | Reads org team membership and assigns the reviewer. Needs `read:org` plus write on issues and pull requests. |
 
-`ROTATION_TOKEN` cannot be the default `GITHUB_TOKEN`, which 403s on
-`teams.listMembersInOrg`. A GitHub App installation token is preferred over a
-personal PAT so the rotation does not break when one maintainer's token expires.
+Reviewer assignment needs no secret. The roster is read from the public
+`access` repo, and the default `GITHUB_TOKEN` handles assigning and commenting.
 
 To test either stage without side effects, run the workflow from the Actions tab
 with `dry_run` enabled: it logs the verdict and the rotation pick, and changes
