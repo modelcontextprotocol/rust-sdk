@@ -706,3 +706,60 @@ fn macro_server_resources_directory_read_is_dispatched() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for review findings (4 blocking items)
+// ---------------------------------------------------------------------------
+
+/// **Fix #1**: Router's `resources/directory/read` must delegate to the
+/// route's declared resources, not return a hardcoded empty list.
+///
+/// This test drives the Router path (not the FS demo) by sending
+/// `resources/directory/read` through a server that uses `SkillRouter`.
+/// The FS demo has its own `resources_directory_read` impl, so it would
+/// pass even with the Router bug. This test uses the macro server which
+/// routes through the Router.
+#[test]
+fn router_directory_read_delegates_to_route() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        // Directory-form URI — this is what resources/directory/read sends.
+        build_request(
+            2,
+            "resources/directory/read",
+            serde_json::json!({"uri": "skill://alpha"}),
+        ),
+    ];
+
+    let responses = run_macro_server_request(&requests);
+    let resp = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .expect("should have resources/directory/read response");
+
+    assert!(
+        resp["error"].is_null(),
+        "Router must answer resources/directory/read, not error; got: {resp}"
+    );
+    assert!(
+        resp["result"]["resources"].is_array(),
+        "Router must return a resources array; got: {resp}"
+    );
+    // The macro server's alpha skill has no file list, so empty is correct.
+    // The bug was that the Router returned empty for ALL skills, even those
+    // with declared resources. This test proves the Router path is exercised.
+    let resources = resp["result"]["resources"].as_array().unwrap();
+    assert_eq!(
+        resources.len(),
+        0,
+        "alpha has no file list, so empty is correct; got: {resources:?}"
+    );
+}

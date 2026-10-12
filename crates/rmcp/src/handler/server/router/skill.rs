@@ -163,13 +163,16 @@ where
             return None;
         }
         // For each registered route, extract its skill path (e.g. `acme/billing/refunds`)
-        // and check if the request URI starts with `skill://<skill_path>/`.
-        // This handles both exact SKILL.md matches and nested file URIs.
+        // and check if the request URI is either the directory form
+        // `skill://<skill_path>` (no trailing slash, no file component — this is
+        // what `resources/directory/read` sends) or starts with
+        // `skill://<skill_path>/` (an exact SKILL.md match or a nested file URI).
         let mut best: Option<(&Cow<'static, str>, &SkillRoute<S>)> = None;
         for (key, route) in &self.map {
             if let Some(route_skill_path) = route.skill_path() {
                 let prefix = format!("skill://{}/", route_skill_path);
-                if uri.starts_with(&prefix) {
+                let directory_form = format!("skill://{}", route_skill_path);
+                if uri == directory_form || uri.starts_with(&prefix) {
                     match best {
                         Some((best_key, _)) if best_key.len() >= key.len() => {}
                         _ => best = Some((key, route)),
