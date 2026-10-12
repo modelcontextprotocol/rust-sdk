@@ -763,3 +763,61 @@ fn router_directory_read_delegates_to_route() {
         "alpha has no file list, so empty is correct; got: {resources:?}"
     );
 }
+
+/// **Fix #2**: `fill_missing_cache_hints` must cover `SkillsListResult` and
+/// `ResourcesDirectoryReadResult`, not just the original 5 types.
+///
+/// Before the fix, these two types fell to `_ => return` and never got
+/// cache hints filled in. This test constructs them without hints, calls
+/// `fill_missing_cache_hints`, and asserts the hints are now present.
+#[test]
+fn fill_missing_cache_hints_covers_skills_list_result() {
+    use rmcp::model::{ResultType, ServerResult, skills::SkillsListResult};
+
+    let mut result = SkillsListResult::new(vec![]);
+    result.result_type = Some(ResultType::COMPLETE);
+    // Simulate a server that didn't set cache hints.
+    result.ttl_ms = None;
+    result.cache_scope = None;
+
+    let mut server_result = ServerResult::SkillsListResult(result);
+    server_result.fill_missing_cache_hints();
+
+    let ServerResult::SkillsListResult(r) = &server_result else {
+        panic!("expected SkillsListResult");
+    };
+    assert!(
+        r.ttl_ms.is_some(),
+        "fill_missing_cache_hints must set ttl_ms on SkillsListResult; got: {r:?}"
+    );
+    assert!(
+        r.cache_scope.is_some(),
+        "fill_missing_cache_hints must set cache_scope on SkillsListResult; got: {r:?}"
+    );
+}
+
+/// **Fix #2**: Same for `ResourcesDirectoryReadResult`.
+#[test]
+fn fill_missing_cache_hints_covers_resources_directory_read_result() {
+    use rmcp::model::{ResultType, ServerResult, skills::ResourcesDirectoryReadResult};
+
+    let mut result = ResourcesDirectoryReadResult::new(vec![]);
+    result.result_type = Some(ResultType::COMPLETE);
+    result.ttl_ms = None;
+    result.cache_scope = None;
+
+    let mut server_result = ServerResult::ResourcesDirectoryReadResult(result);
+    server_result.fill_missing_cache_hints();
+
+    let ServerResult::ResourcesDirectoryReadResult(r) = &server_result else {
+        panic!("expected ResourcesDirectoryReadResult");
+    };
+    assert!(
+        r.ttl_ms.is_some(),
+        "fill_missing_cache_hints must set ttl_ms on ResourcesDirectoryReadResult; got: {r:?}"
+    );
+    assert!(
+        r.cache_scope.is_some(),
+        "fill_missing_cache_hints must set cache_scope on ResourcesDirectoryReadResult; got: {r:?}"
+    );
+}

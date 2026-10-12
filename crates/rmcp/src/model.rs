@@ -4861,6 +4861,10 @@ impl ServerResult {
     /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
     /// ```
     pub fn fill_missing_cache_hints(&mut self) {
+        // `cache_scope` is `Option<CacheScope>` on most result types but
+        // `Option<String>` on the two SEP-2640 skill results (SkillsListResult
+        // and ResourcesDirectoryReadResult). A single `match` cannot mix both
+        // types, so handle the two groups separately.
         let (result_type, ttl_ms, cache_scope) = match self {
             ServerResult::ListToolsResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
             ServerResult::ListPromptsResult(r) => {
@@ -4875,6 +4879,22 @@ impl ServerResult {
             ServerResult::ReadResourceResult(r) => {
                 (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
             }
+            // SEP-2640 skill results with `Option<String>` cache_scope.
+            // `SkillsGetResult` is absent on purpose: it has no cache fields.
+            ServerResult::SkillsListResult(r) => {
+                return fill_missing_cache_hints_for_string_scope(
+                    &r.result_type,
+                    &mut r.ttl_ms,
+                    &mut r.cache_scope,
+                );
+            }
+            ServerResult::ResourcesDirectoryReadResult(r) => {
+                return fill_missing_cache_hints_for_string_scope(
+                    &r.result_type,
+                    &mut r.ttl_ms,
+                    &mut r.cache_scope,
+                );
+            }
             _ => return,
         };
         // Only complete results are cacheable; the spec treats an absent
@@ -4885,6 +4905,20 @@ impl ServerResult {
         ttl_ms.get_or_insert(0);
         cache_scope.get_or_insert(CacheScope::Private);
     }
+}
+
+/// Helper for `fill_missing_cache_hints` on SEP-2640 skill result types whose
+/// `cache_scope` is `Option<String>` rather than `Option<CacheScope>`.
+fn fill_missing_cache_hints_for_string_scope(
+    result_type: &Option<ResultType>,
+    ttl_ms: &mut Option<u64>,
+    cache_scope: &mut Option<String>,
+) {
+    if result_type.as_ref().is_some_and(|t| !t.is_complete()) {
+        return;
+    }
+    ttl_ms.get_or_insert(0);
+    cache_scope.get_or_insert("private".to_string());
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;
