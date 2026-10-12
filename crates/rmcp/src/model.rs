@@ -373,6 +373,9 @@ impl<'de> Deserialize<'de> for NumberOrString {
                     } else {
                         Err(serde::de::Error::custom("Number too large for i64"))
                     }
+                } else if let Some(i) = n.as_f64().and_then(integral_f64_to_i64) {
+                    // `1.0` and `1e2` are integers written in float form
+                    Ok(NumberOrString::Number(i))
                 } else {
                     Err(serde::de::Error::custom("Expected an integer"))
                 }
@@ -381,6 +384,13 @@ impl<'de> Deserialize<'de> for NumberOrString {
             _ => Err(serde::de::Error::custom("Expect number or string")),
         }
     }
+}
+
+/// The integer a JSON number in float form stands for, when it is one that an
+/// `f64` represents exactly.
+fn integral_f64_to_i64(f: f64) -> Option<i64> {
+    const MAX_EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    (f.fract() == 0.0 && f.abs() <= MAX_EXACT).then_some(f as i64)
 }
 
 #[cfg(feature = "schemars")]
