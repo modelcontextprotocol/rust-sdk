@@ -476,7 +476,6 @@ impl Drop for AbandonedRequestGuard {
         let Some(id) = self.id.take() else {
             return;
         };
-        self.peer.unregister_subscription(&id);
         self.peer
             .try_cancel_request(id, Some(Self::REASON.to_owned()));
     }
@@ -1144,7 +1143,7 @@ macro_rules! method {
         $(#[$meta])*
         pub async fn $method(&self) -> Result<$Resp, ServiceError> {
             let result = self
-                .send_request(ClientRequest::$Req($Req {
+                .send_request_cancel_on_drop(ClientRequest::$Req($Req {
                     method: Default::default(),
                 }))
                 .await?;
@@ -1158,7 +1157,7 @@ macro_rules! method {
         $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<$Resp, ServiceError> {
             let result = self
-                .send_request(ClientRequest::$Req($Req {
+                .send_request_cancel_on_drop(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
                     extensions: Default::default(),
@@ -1174,7 +1173,7 @@ macro_rules! method {
         $(#[$meta])*
         pub async fn $method(&self, params: Option<$Param>) -> Result<$Resp, ServiceError> {
             let result = self
-                .send_request(ClientRequest::$Req($Req {
+                .send_request_cancel_on_drop(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
                     extensions: Default::default(),
@@ -1190,7 +1189,7 @@ macro_rules! method {
         $(#[$meta])*
         pub async fn $method(&self, params: $Param) -> Result<(), ServiceError> {
             let result = self
-                .send_request(ClientRequest::$Req($Req {
+                .send_request_cancel_on_drop(ClientRequest::$Req($Req {
                     method: Default::default(),
                     params,
                     extensions: Default::default(),
@@ -1342,7 +1341,7 @@ impl Peer<RoleClient> {
         let mut request = DiscoverRequest::new(DiscoverRequestParams {});
         request.extensions.insert(meta);
         let result = self
-            .send_request(ClientRequest::DiscoverRequest(request))
+            .send_request_cancel_on_drop(ClientRequest::DiscoverRequest(request))
             .await;
         let result = match result {
             Ok(result) => result,
@@ -1410,11 +1409,17 @@ impl Peer<RoleClient> {
 
     /// [`Peer::send_request`], except that dropping the returned future before
     /// the response arrives sends `notifications/cancelled` for the request.
+    /// Every request helper on the client peer sends through here.
     ///
     /// The guard covers only the wait for this one response. It is disarmed as
     /// soon as the response is in, so an MRTR driver that is dropped later, while
     /// it fulfils the input requests locally, cancels nothing: that round's
     /// request has already completed and the retry has not been sent yet.
+    ///
+    /// `initialize` is not sent through here, and must not be: a client must
+    /// never cancel it. This is client-only for the same kind of reason; from
+    /// 2026-07-28 a server may send `notifications/cancelled` only to end a
+    /// `subscriptions/listen` stream.
     async fn send_request_cancel_on_drop(
         &self,
         request: ClientRequest,
@@ -1455,7 +1460,7 @@ impl Peer<RoleClient> {
     /// SEP-2663 `tasks/get`: poll the current state of a task.
     pub async fn get_task(&self, params: GetTaskParams) -> Result<GetTaskResult, ServiceError> {
         let result = self
-            .send_request(ClientRequest::GetTaskRequest(GetTaskRequest::new(params)))
+            .send_request_cancel_on_drop(ClientRequest::GetTaskRequest(GetTaskRequest::new(params)))
             .await?;
         match result {
             ServerResult::GetTaskResult(result) => Ok(result),
@@ -1467,7 +1472,7 @@ impl Peer<RoleClient> {
     /// input requests. The acknowledgement is eventually consistent.
     pub async fn update_task(&self, params: UpdateTaskParams) -> Result<(), ServiceError> {
         let result = self
-            .send_request(ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
+            .send_request_cancel_on_drop(ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
                 params,
             )))
             .await?;
@@ -1481,7 +1486,7 @@ impl Peer<RoleClient> {
     /// is cooperative; the ack does not guarantee the task stops.
     pub async fn cancel_task(&self, params: CancelTaskParams) -> Result<(), ServiceError> {
         let result = self
-            .send_request(ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
+            .send_request_cancel_on_drop(ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
                 params,
             )))
             .await?;
@@ -1601,7 +1606,7 @@ impl Peer<RoleClient> {
         let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
-            .send_request(ClientRequest::ListPromptsRequest(ListPromptsRequest {
+            .send_request_cancel_on_drop(ClientRequest::ListPromptsRequest(ListPromptsRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),
@@ -1651,11 +1656,13 @@ impl Peer<RoleClient> {
         let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
-            .send_request(ClientRequest::ListResourcesRequest(ListResourcesRequest {
-                method: Default::default(),
-                params,
-                extensions: Default::default(),
-            }))
+            .send_request_cancel_on_drop(ClientRequest::ListResourcesRequest(
+                ListResourcesRequest {
+                    method: Default::default(),
+                    params,
+                    extensions: Default::default(),
+                },
+            ))
             .await;
         let result = match result {
             Ok(result) => result,
@@ -1702,7 +1709,7 @@ impl Peer<RoleClient> {
         let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
-            .send_request(ClientRequest::ListResourceTemplatesRequest(
+            .send_request_cancel_on_drop(ClientRequest::ListResourceTemplatesRequest(
                 ListResourceTemplatesRequest {
                     method: Default::default(),
                     params,
@@ -1764,7 +1771,7 @@ impl Peer<RoleClient> {
         let generation = self.capture_response_cache_generation().await;
         let uses_cursor = request_uses_cursor(&params);
         let result = self
-            .send_request(ClientRequest::ListToolsRequest(ListToolsRequest {
+            .send_request_cancel_on_drop(ClientRequest::ListToolsRequest(ListToolsRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),

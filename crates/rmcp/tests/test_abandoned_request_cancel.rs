@@ -1,10 +1,10 @@
-//! A client that stops waiting for a `tools/call`, `prompts/get` or
-//! `resources/read` tells the server with `notifications/cancelled`.
+//! A client that stops waiting for a request tells the server with
+//! `notifications/cancelled`.
 //!
-//! The MRTR helpers (`call_tool`, `get_prompt`, `read_resource`) hide each
-//! round's request, so the only way a caller can abandon one is to drop the
-//! future. These tests drop it at each point of a round and check what the
-//! server is told.
+//! The request helpers hide the request they send, and the MRTR helpers
+//! (`call_tool`, `get_prompt`, `read_resource`) hide one per round, so the only
+//! way a caller can abandon one is to drop the future. These tests drop it at
+//! each point of a round and check what the server is told.
 
 use std::{
     sync::{Arc, Mutex},
@@ -29,6 +29,9 @@ const WAIT: Duration = Duration::from_secs(5);
 /// - `ask_then_hang`: one elicitation round, then blocks on the retry;
 /// - `ask_blocking`: one elicitation the client never answers;
 /// - anything else completes at once.
+///
+/// `prompts/list` and `completion/complete` always block, to stand for the
+/// requests that have no MRTR rounds.
 #[derive(Clone)]
 struct ProbeServer {
     /// Signalled when a request starts to block.
@@ -109,6 +112,22 @@ impl ServerHandler for ProbeServer {
         _request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
+        Err(self.hang(context).await)
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Err(self.hang(context).await)
+    }
+
+    async fn complete(
+        &self,
+        _request: CompleteRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, ErrorData> {
         Err(self.hang(context).await)
     }
 
@@ -244,7 +263,9 @@ async fn abandon_when<T>(call: impl Future<Output = T>, reached: &Notify) {
     let mut call = Box::pin(call);
     tokio::select! {
         _ = &mut call => panic!("the call completed before it could be abandoned"),
-        _ = tokio::time::timeout(WAIT, reached.notified()) => {}
+        reached = tokio::time::timeout(WAIT, reached.notified()) => {
+            reached.expect("the call never reached the point to abandon it at");
+        }
     }
     drop(call);
 }
@@ -307,6 +328,26 @@ async fn abandoned_prompt_and_resource_requests_are_cancelled() -> anyhow::Resul
         let cancelled = probe.expect_cancelled().await;
         assert_eq!(cancelled.request_id, *probe.hanging_id.lock().unwrap());
         Ok(())
+    })
+    .await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn abandoned_requests_without_mrtr_rounds_are_cancelled() -> anyhow::Result<()> {
+    with_probe(|mut probe| async move {
+        abandon_when(probe.client.list_prompts(None), &probe.hanging).await;
+        let cancelled = probe.expect_cancelled().await;
+        assert_eq!(cancelled.request_id, *probe.hanging_id.lock().unwrap());
+        assert_eq!(cancelled.reason.as_deref(), Some(ABANDONED_REASON));
+
+        let complete = CompleteRequestParams::new(
+            Reference::for_prompt("anything"),
+            ArgumentInfo::new("argument", "va"),
+        );
+        abandon_when(probe.client.complete(complete), &probe.hanging).await;
+        let cancelled = probe.expect_cancelled().await;
+        assert_eq!(cancelled.request_id, *probe.hanging_id.lock().unwrap());
+        probe.expect_no_cancellation().await
     })
     .await
 }
