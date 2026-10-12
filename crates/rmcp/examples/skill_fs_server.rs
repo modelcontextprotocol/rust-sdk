@@ -18,7 +18,7 @@ use std::{
 use rmcp::{
     ServerHandler, ServiceExt,
     model::{
-        Resource,
+        Implementation, InitializeResult, Resource, ServerCapabilities,
         skills::{
             self, SkillEntry, SkillResource, SkillResources, SkillsGetRequestParams,
             SkillsGetResult, SkillsListResult,
@@ -238,6 +238,26 @@ impl FileSystemSkillServer {
 }
 
 impl ServerHandler for FileSystemSkillServer {
+    /// Per SEP-2640, a server that supports Skills MUST declare both the
+    /// `resources` capability and the `io.modelcontextprotocol/skills`
+    /// extension. The hand-written server gets no generated `get_info`, so it
+    /// must advertise them here or a conformant client never calls `skills/list`.
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
+            ServerCapabilities::builder()
+                .enable_resources()
+                .enable_skills_extension()
+                .build(),
+        )
+        .with_server_info(Implementation::new(
+            "skill-fs-server",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            "File-system-backed MCP server exposing SEP-2640 skills discovered from a root directory.",
+        )
+    }
+
     async fn skills_list(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,

@@ -821,3 +821,54 @@ fn fill_missing_cache_hints_covers_resources_directory_read_result() {
         "fill_missing_cache_hints must set cache_scope on ResourcesDirectoryReadResult; got: {r:?}"
     );
 }
+
+/// **Fix #3**: The FS demo server must advertise both the `resources`
+/// capability and the `io.modelcontextprotocol/skills` extension in its
+/// `initialize` response. Without this, a conformant client never calls
+/// `skills/list`.
+#[test]
+fn fs_demo_advertises_skills_extension_and_resources() {
+    let requests = vec![build_request(
+        1,
+        "initialize",
+        serde_json::json!({
+            "protocolVersion": "2026-07-28",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.1.0"}
+        }),
+    )];
+
+    let responses = run_server_request(&requests);
+    let init_resp = responses
+        .iter()
+        .find(|r| r["id"] == 1)
+        .expect("should have initialize response");
+
+    let capabilities = &init_resp["result"]["capabilities"];
+
+    assert!(
+        !capabilities["resources"].is_null(),
+        "FS demo must advertise resources capability; got: {capabilities}"
+    );
+
+    let extensions = &capabilities["extensions"];
+    assert!(
+        !extensions.is_null(),
+        "FS demo must advertise extensions map; got: {capabilities}"
+    );
+    assert!(
+        !extensions["io.modelcontextprotocol/skills"].is_null(),
+        "FS demo must advertise io.modelcontextprotocol/skills extension; got: {extensions}"
+    );
+}
+
+// **Fix #4** — directory-form URIs (`skill://alpha`) must be routable,
+// not just file-form (`skill://alpha/SKILL.md`).
+//
+// Covered by the router-level unit test
+// `router::tests::test_skill_router_matches_directory_form_uri`, which needs a
+// real `SkillRoute` (and therefore a `for<'a>` handler) that this
+// process-spawning integration file cannot construct.
+//
+// **Fix #1** — `resources/directory/read` delegation is covered by
+// `router::tests::test_router_directory_read_delegates_to_file_list_route`.
