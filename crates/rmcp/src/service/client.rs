@@ -448,6 +448,40 @@ impl Drop for PendingSubscriptionRequest {
     }
 }
 
+/// Tells the server about a request whose caller stopped waiting for it.
+///
+/// Armed while the response is awaited. Dropping it armed, which happens when
+/// the caller drops the future (a `tokio::time::timeout`, a lost `select!`
+/// branch), sends a best-effort `notifications/cancelled` for the request, so
+/// the server does not keep working on a result nobody will read.
+struct AbandonedRequestGuard {
+    peer: Peer<RoleClient>,
+    id: Option<RequestId>,
+}
+
+impl AbandonedRequestGuard {
+    const REASON: &str = "request abandoned by the caller";
+
+    fn new(peer: Peer<RoleClient>, id: RequestId) -> Self {
+        Self { peer, id: Some(id) }
+    }
+
+    fn disarm(&mut self) {
+        self.id.take();
+    }
+}
+
+impl Drop for AbandonedRequestGuard {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        self.peer.unregister_subscription(&id);
+        self.peer
+            .try_cancel_request(id, Some(Self::REASON.to_owned()));
+    }
+}
+
 impl Subscription {
     /// Return the originating listen request ID.
     pub fn id(&self) -> &RequestId {
@@ -1374,6 +1408,26 @@ impl Peer<RoleClient> {
             .await;
     }
 
+    /// [`Peer::send_request`], except that dropping the returned future before
+    /// the response arrives sends `notifications/cancelled` for the request.
+    ///
+    /// The guard covers only the wait for this one response. It is disarmed as
+    /// soon as the response is in, so an MRTR driver that is dropped later, while
+    /// it fulfils the input requests locally, cancels nothing: that round's
+    /// request has already completed and the retry has not been sent yet.
+    async fn send_request_cancel_on_drop(
+        &self,
+        request: ClientRequest,
+    ) -> Result<ServerResult, ServiceError> {
+        let handle = self
+            .send_request_with_option(request, PeerRequestOptions::no_options())
+            .await?;
+        let mut guard = AbandonedRequestGuard::new(self.clone(), handle.id.clone());
+        let result = handle.await_response().await;
+        guard.disarm();
+        result
+    }
+
     /// Send one `tools/call` request and return either a final result or an MRTR
     /// `InputRequiredResult` without driving any follow-up rounds.
     pub async fn call_tool_once(
@@ -1381,7 +1435,7 @@ impl Peer<RoleClient> {
         params: CallToolRequestParams,
     ) -> Result<CallToolResponse, ServiceError> {
         let result = self
-            .send_request(ClientRequest::CallToolRequest(CallToolRequest {
+            .send_request_cancel_on_drop(ClientRequest::CallToolRequest(CallToolRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),
@@ -1444,7 +1498,7 @@ impl Peer<RoleClient> {
         params: GetPromptRequestParams,
     ) -> Result<GetPromptResponse, ServiceError> {
         let result = self
-            .send_request(ClientRequest::GetPromptRequest(GetPromptRequest {
+            .send_request_cancel_on_drop(ClientRequest::GetPromptRequest(GetPromptRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),
@@ -1474,7 +1528,7 @@ impl Peer<RoleClient> {
 
         let generation = self.capture_response_cache_generation().await;
         let result = self
-            .send_request(ClientRequest::ReadResourceRequest(ReadResourceRequest {
+            .send_request_cancel_on_drop(ClientRequest::ReadResourceRequest(ReadResourceRequest {
                 method: Default::default(),
                 params,
                 extensions: Default::default(),

@@ -372,6 +372,11 @@ required-features = ["server", "client"]
 path = "tests/test_trace_context.rs"
 
 [[test]]
+name = "test_abandoned_request_cancel"
+required-features = ["server", "client"]
+path = "tests/test_abandoned_request_cancel.rs"
+
+[[test]]
 name = "test_mrtr_behavior"
 required-features = ["server", "client"]
 path = "tests/test_mrtr_behavior.rs"
