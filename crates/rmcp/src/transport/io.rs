@@ -38,37 +38,48 @@ pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
 /// mirroring `tokio::net::unix::pipe::Receiver::from_owned_fd`.
 pub fn stdio_pipes() -> (StdioReader, StdioWriter) {
     #[cfg(target_os = "linux")]
-    if let Some(pair) = try_pipe_transport() {
-        return pair;
+    {
+        use std::os::fd::AsRawFd;
+
+        if let Some(pair) =
+            reopen_fifo_pair(std::io::stdin().as_raw_fd(), std::io::stdout().as_raw_fd())
+        {
+            tracing::debug!("stdio_pipes: using the non-blocking Linux pipe transport");
+            return pair;
+        }
+        tracing::debug!("stdio_pipes: falling back to the blocking stdio handles");
     }
     (
-        StdioReader::Blocking(tokio::io::stdin()),
-        StdioWriter::Blocking(tokio::io::stdout()),
+        StdioReader {
+            imp: StdioReaderImp::Blocking(tokio::io::stdin()),
+        },
+        StdioWriter {
+            imp: StdioWriterImp::Blocking(tokio::io::stdout()),
+        },
     )
 }
 
-/// Takes the pipe fast path only when both standard streams are FIFOs.
+/// Reopens the given descriptors through `/proc/self/fd` and wraps them when
+/// both reopened descriptors are FIFOs.
 ///
-/// The descriptors are reopened through `/proc/self/fd` rather than
-/// duplicated. A duplicate shares its open file description with the original,
-/// and `/proc/self/fd` opens a fresh one, so `O_NONBLOCK` stays private to the
-/// transport instead of leaking into the process's standard streams (and into
+/// The reopened descriptors are the ones that are checked and the ones that
+/// are handed to Tokio; the originals are only read. The reopen gives the
+/// transport its own open file descriptions, so `O_NONBLOCK` stays private to
+/// it instead of leaking into the process's standard streams (and into
 /// children spawned with the inherited handles).
 #[cfg(target_os = "linux")]
-fn try_pipe_transport() -> Option<(StdioReader, StdioWriter)> {
-    use std::os::fd::AsFd;
-
-    let stdin = std::io::stdin().as_fd().try_clone_to_owned().ok()?;
-    if !is_fifo(&stdin) {
+fn reopen_fifo_pair(
+    read_fd: std::os::fd::RawFd,
+    write_fd: std::os::fd::RawFd,
+) -> Option<(StdioReader, StdioWriter)> {
+    let read = reopen_nonblocking(&format!("/proc/self/fd/{read_fd}"), false)?;
+    if !is_fifo(&read) {
         return None;
     }
-    let stdout = std::io::stdout().as_fd().try_clone_to_owned().ok()?;
-    if !is_fifo(&stdout) {
+    let write = reopen_nonblocking(&format!("/proc/self/fd/{write_fd}"), true)?;
+    if !is_fifo(&write) {
         return None;
     }
-
-    let read = reopen_nonblocking("/proc/self/fd/0", false)?;
-    let write = reopen_nonblocking("/proc/self/fd/1", true)?;
     pipe_transport(read, write)
 }
 
@@ -91,7 +102,14 @@ fn pipe_transport(
 ) -> Option<(StdioReader, StdioWriter)> {
     let read = tokio::net::unix::pipe::Receiver::from_owned_fd(read).ok()?;
     let write = tokio::net::unix::pipe::Sender::from_owned_fd(write).ok()?;
-    Some((StdioReader::Pipe(read), StdioWriter::Pipe(write)))
+    Some((
+        StdioReader {
+            imp: StdioReaderImp::Pipe(read),
+        },
+        StdioWriter {
+            imp: StdioWriterImp::Pipe(write),
+        },
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -105,8 +123,16 @@ fn is_fifo(fd: &std::os::fd::OwnedFd) -> bool {
 }
 
 /// Reader half of the transport returned by [`stdio_pipes`].
-#[non_exhaustive]
-pub enum StdioReader {
+///
+/// Implements [`AsyncRead`]. The underlying handle depends on the platform and
+/// on whether standard input is a pipe.
+#[derive(Debug)]
+pub struct StdioReader {
+    imp: StdioReaderImp,
+}
+
+#[derive(Debug)]
+enum StdioReaderImp {
     /// Blocking standard input, as returned by [`stdio`].
     Blocking(tokio::io::Stdin),
     /// Non-blocking standard input backed by a Linux pipe.
@@ -120,17 +146,25 @@ impl AsyncRead for StdioReader {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Self::Blocking(reader) => Pin::new(reader).poll_read(cx, buf),
+        match &mut self.get_mut().imp {
+            StdioReaderImp::Blocking(reader) => Pin::new(reader).poll_read(cx, buf),
             #[cfg(target_os = "linux")]
-            Self::Pipe(reader) => Pin::new(reader).poll_read(cx, buf),
+            StdioReaderImp::Pipe(reader) => Pin::new(reader).poll_read(cx, buf),
         }
     }
 }
 
 /// Writer half of the transport returned by [`stdio_pipes`].
-#[non_exhaustive]
-pub enum StdioWriter {
+///
+/// Implements [`AsyncWrite`]. The underlying handle depends on the platform and
+/// on whether standard output is a pipe.
+#[derive(Debug)]
+pub struct StdioWriter {
+    imp: StdioWriterImp,
+}
+
+#[derive(Debug)]
+enum StdioWriterImp {
     /// Blocking standard output, as returned by [`stdio`].
     Blocking(tokio::io::Stdout),
     /// Non-blocking standard output backed by a Linux pipe.
@@ -144,26 +178,26 @@ impl AsyncWrite for StdioWriter {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            Self::Blocking(writer) => Pin::new(writer).poll_write(cx, buf),
+        match &mut self.get_mut().imp {
+            StdioWriterImp::Blocking(writer) => Pin::new(writer).poll_write(cx, buf),
             #[cfg(target_os = "linux")]
-            Self::Pipe(writer) => Pin::new(writer).poll_write(cx, buf),
+            StdioWriterImp::Pipe(writer) => Pin::new(writer).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Self::Blocking(writer) => Pin::new(writer).poll_flush(cx),
+        match &mut self.get_mut().imp {
+            StdioWriterImp::Blocking(writer) => Pin::new(writer).poll_flush(cx),
             #[cfg(target_os = "linux")]
-            Self::Pipe(writer) => Pin::new(writer).poll_flush(cx),
+            StdioWriterImp::Pipe(writer) => Pin::new(writer).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match self.get_mut() {
-            Self::Blocking(writer) => Pin::new(writer).poll_shutdown(cx),
+        match &mut self.get_mut().imp {
+            StdioWriterImp::Blocking(writer) => Pin::new(writer).poll_shutdown(cx),
             #[cfg(target_os = "linux")]
-            Self::Pipe(writer) => Pin::new(writer).poll_shutdown(cx),
+            StdioWriterImp::Pipe(writer) => Pin::new(writer).poll_shutdown(cx),
         }
     }
 
@@ -172,18 +206,18 @@ impl AsyncWrite for StdioWriter {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        match self.get_mut() {
-            Self::Blocking(writer) => Pin::new(writer).poll_write_vectored(cx, bufs),
+        match &mut self.get_mut().imp {
+            StdioWriterImp::Blocking(writer) => Pin::new(writer).poll_write_vectored(cx, bufs),
             #[cfg(target_os = "linux")]
-            Self::Pipe(writer) => Pin::new(writer).poll_write_vectored(cx, bufs),
+            StdioWriterImp::Pipe(writer) => Pin::new(writer).poll_write_vectored(cx, bufs),
         }
     }
 
     fn is_write_vectored(&self) -> bool {
-        match self {
-            Self::Blocking(writer) => writer.is_write_vectored(),
+        match &self.imp {
+            StdioWriterImp::Blocking(writer) => writer.is_write_vectored(),
             #[cfg(target_os = "linux")]
-            Self::Pipe(writer) => writer.is_write_vectored(),
+            StdioWriterImp::Pipe(writer) => writer.is_write_vectored(),
         }
     }
 }
@@ -219,12 +253,12 @@ mod tests {
     async fn pipe_transport_round_trips_over_fifos() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        use super::{StdioReader, StdioWriter, pipe_transport};
+        use super::{StdioReaderImp, StdioWriterImp, pipe_transport};
 
         let (mut child, read, write) = fifo_pair();
         let (mut reader, mut writer) = pipe_transport(read, write).expect("child pipes are FIFOs");
-        assert!(matches!(reader, StdioReader::Pipe(_)));
-        assert!(matches!(writer, StdioWriter::Pipe(_)));
+        assert!(matches!(reader.imp, StdioReaderImp::Pipe(_)));
+        assert!(matches!(writer.imp, StdioWriterImp::Pipe(_)));
 
         let message = b"{\"jsonrpc\":\"2.0\",\"id\":1}\n";
         writer.write_all(message).await.unwrap();
@@ -241,8 +275,8 @@ mod tests {
     /// streams, so pin the property on a FIFO: the reopened descriptor is
     /// non-blocking and the descriptor it came from stays blocking.
     #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn reopening_a_fifo_keeps_the_original_flags() {
+    #[test]
+    fn reopening_a_fifo_keeps_the_original_flags() {
         use std::os::fd::AsRawFd;
 
         use super::{is_fifo, reopen_nonblocking};
@@ -277,23 +311,46 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The check the reviewer asked for: descriptor 0 keeps its flags.
+    /// The reopen path is taken on real pipes: CI runs `cargo test` without
+    /// piped standard streams, so build the FIFOs here. The reopened pair must
+    /// round-trip, and the descriptors it came from must keep their flags.
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn stdio_pipes_leaves_descriptor_zero_flags_alone() {
+    async fn reopened_fifo_pair_round_trips_and_keeps_originals_blocking() {
         use std::os::fd::AsRawFd;
 
-        use super::stdio_pipes;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let before = open_flags(std::io::stdin().as_raw_fd());
-        let _transport = stdio_pipes();
-        let after = open_flags(std::io::stdin().as_raw_fd());
-        assert_eq!(before, after);
+        use super::{StdioReaderImp, StdioWriterImp, reopen_fifo_pair};
+
+        let (mut child, read, write) = fifo_pair();
+        let read_flags = open_flags(read.as_raw_fd());
+        let write_flags = open_flags(write.as_raw_fd());
+        assert_eq!(read_flags & libc::O_NONBLOCK, 0);
+        assert_eq!(write_flags & libc::O_NONBLOCK, 0);
+
+        let (mut reader, mut writer) =
+            reopen_fifo_pair(read.as_raw_fd(), write.as_raw_fd()).expect("child pipes are FIFOs");
+        assert!(matches!(reader.imp, StdioReaderImp::Pipe(_)));
+        assert!(matches!(writer.imp, StdioWriterImp::Pipe(_)));
+
+        let message = b"{\"jsonrpc\":\"2.0\",\"id\":2}\n";
+        writer.write_all(message).await.unwrap();
+        writer.flush().await.unwrap();
+        let mut echoed = vec![0; message.len()];
+        reader.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(echoed, message);
+
+        assert_eq!(open_flags(read.as_raw_fd()), read_flags);
+        assert_eq!(open_flags(write.as_raw_fd()), write_flags);
+
+        drop(writer);
+        assert!(child.wait().unwrap().success());
     }
 
     #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn fifo_detection_rejects_character_devices() {
+    #[test]
+    fn fifo_detection_rejects_character_devices() {
         use super::is_fifo;
 
         let dev_null: std::os::fd::OwnedFd = std::fs::File::open("/dev/null")
@@ -312,13 +369,13 @@ mod tests {
         let _transport: AsyncRwTransport<RoleServer, _, _> = AsyncRwTransport::new(reader, writer);
     }
 
-    #[cfg(windows)]
+    #[cfg(not(target_os = "linux"))]
     #[tokio::test]
-    async fn stdio_pipes_falls_back_to_blocking_handles_on_windows() {
-        use super::{StdioReader, StdioWriter, stdio_pipes};
+    async fn stdio_pipes_falls_back_to_blocking_handles_off_linux() {
+        use super::{StdioReaderImp, StdioWriterImp, stdio_pipes};
 
         let (reader, writer) = stdio_pipes();
-        assert!(matches!(reader, StdioReader::Blocking(_)));
-        assert!(matches!(writer, StdioWriter::Blocking(_)));
+        assert!(matches!(reader.imp, StdioReaderImp::Blocking(_)));
+        assert!(matches!(writer.imp, StdioWriterImp::Blocking(_)));
     }
 }
