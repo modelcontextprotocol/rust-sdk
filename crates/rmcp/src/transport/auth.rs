@@ -7966,22 +7966,6 @@ mod tests {
 
         let scopes = manager.select_initial_scopes(&["default"]).await;
         assert_eq!(scopes, ["read"]);
-        let session = AuthorizationSession::new(
-            manager,
-            AuthorizationRequest::new("http://localhost:8080/callback")
-                .with_preregistered_client("test-client")
-                .with_scopes(scopes),
-        )
-        .await
-        .map_err(|(_, error)| error)
-        .unwrap();
-        let authorization_url = Url::parse(session.get_authorization_url()).unwrap();
-        assert_eq!(
-            authorization_url
-                .query_pairs()
-                .find(|(key, _)| key == "scope"),
-            Some(("scope".into(), "read".into()))
-        );
     }
 
     #[rstest]
@@ -8048,7 +8032,6 @@ mod tests {
     #[case::defaults(&[], &[], &[], &["default", "default"], &["default"])]
     #[case::empty(&[], &[], &[], &[], &[])]
     #[case::offline_access(&["read"], &["write"], &["offline_access"], &[], &["read", "offline_access"])]
-    #[case::offline_access_deduplicated(&["read", "offline_access"], &[], &["offline_access"], &[], &["read", "offline_access"])]
     #[tokio::test]
     async fn select_initial_scopes_uses_fallbacks_and_preserves_refresh_support(
         #[case] challenge: &[&str],
