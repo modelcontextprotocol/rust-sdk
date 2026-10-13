@@ -1979,6 +1979,9 @@ impl Peer<RoleClient> {
     ///
     /// Delegates to [`Peer<RoleClient>::read_resource`] with a resource reference
     /// built from the URI.
+    ///
+    /// A server that answers with an `InputRequired` variant (undefined for
+    /// skill files) yields [`ServiceError::UnexpectedResponse`].
     pub async fn read_skill_uri(
         peer: &Peer<RoleClient>,
         uri: impl Into<String>,
@@ -1986,14 +1989,15 @@ impl Peer<RoleClient> {
         let params = ReadResourceRequestParams::new(uri);
         peer.read_resource_once(params)
             .await
-            .map(|response| match response {
-                ReadResourceResponse::Complete(result) => result,
+            .and_then(|response| match response {
+                ReadResourceResponse::Complete(result) => Ok(result),
                 ReadResourceResponse::InputRequired(_) => {
-                    // The skills extension does not define input_required for skill
-                    // files; collapse the unexpected variant into the caller as a
-                    // transport-level error by returning the complete result path
-                    // through UnexpectedResponse.
-                    unreachable!("skills/read_resource MUST NOT return input_required")
+                    // The skills extension does not define input_required for
+                    // skill files, so an `InputRequired` response here means the
+                    // server returned a variant this wrapper does not handle.
+                    // Surface it as an error rather than panicking — a
+                    // non-conforming server must not abort the client.
+                    Err(ServiceError::UnexpectedResponse)
                 }
             })
     }

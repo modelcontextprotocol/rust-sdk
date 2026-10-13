@@ -228,6 +228,13 @@ where
             .tools
             .get_or_insert_with(Default::default)
             .list_changed = Some(true);
+        // A `Router` that owns skill routes must advertise the SEP-2640 skills
+        // extension; otherwise a conformant client never calls `skills/list`.
+        // The inner service's own capabilities are preserved — we only add the
+        // extension entry.
+        if !self.skill_router.map.is_empty() {
+            info.capabilities.insert_skills_extension();
+        }
         info
     }
 

@@ -7,13 +7,10 @@
 //! `Pin<Box<Future>>` so the gradebook can call it synchronously.
 
 use darling::{FromMeta, ast::NestedMeta};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Expr, Ident, ImplItemFn, LitStr, parse_quote};
+use syn::{Expr, Ident, ImplItemFn, parse_quote};
 
-use crate::common::extract_doc_line;
-
-#[allow(dead_code)]
 #[derive(FromMeta, Default, Debug)]
 #[darling(default)]
 pub struct SkillAttribute {
@@ -21,19 +18,13 @@ pub struct SkillAttribute {
     pub uri: Option<String>,
     /// Path to the frontmatter JSON (typically `include_str!("...frontmatter.json")`).
     pub frontmatter: Option<Expr>,
-    /// Human-readable description. Falls back to doc-comments.
-    pub description: Option<String>,
     /// Whether this skill generates its content dynamically (no fixed file list).
     pub dynamic: bool,
-    /// When true, the generated future will not require `Send`.
-    pub local: bool,
 }
 
-#[allow(dead_code)]
 pub struct ResolvedSkillAttribute {
     pub uri: String,
     pub frontmatter: Expr,
-    pub description: Option<Expr>,
     pub dynamic: bool,
 }
 
@@ -42,14 +33,8 @@ impl ResolvedSkillAttribute {
         let Self {
             uri,
             frontmatter,
-            description,
             dynamic,
         } = self;
-        let _description = if let Some(description) = description {
-            quote! { Some(#description.into()) }
-        } else {
-            quote! { None }
-        };
         let resources = if dynamic {
             quote! { Some(rmcp::model::skills::SkillResources::Dynamic) }
         } else {
@@ -124,19 +109,9 @@ pub fn skill(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> 
         )
     })?;
 
-    let description_expr = if let Some(s) = attribute.description {
-        Some(Expr::Lit(syn::ExprLit {
-            attrs: Vec::new(),
-            lit: syn::Lit::Str(LitStr::new(&s, Span::call_site())),
-        }))
-    } else {
-        fn_item.attrs.iter().try_fold(None, extract_doc_line)?
-    };
-
     let resolved = ResolvedSkillAttribute {
         uri,
         frontmatter,
-        description: description_expr,
         dynamic: attribute.dynamic,
     };
     let skill_attr_fn = resolved.into_fn(skill_attr_fn_ident.clone())?;

@@ -253,6 +253,34 @@ impl ServerCapabilities {
             .as_ref()
             .is_some_and(|e| e.contains_key(super::TASKS_EXTENSION_ID))
     }
+
+    /// Advertise the `io.modelcontextprotocol/skills` extension (SEP-2640) in
+    /// the `extensions` capability map with `directoryRead: true`.
+    ///
+    /// In-place equivalent of the `enable_skills_extension()` builder method,
+    /// for code that already holds a `ServerCapabilities` value (e.g. a
+    /// `Router` forwarding its inner service's capabilities).
+    ///
+    /// Gated to `server` (not `macros`): its only caller is the server-gated
+    /// `Router`, so under a `macros`-only build it would be dead code.
+    #[cfg(feature = "server")]
+    pub(crate) fn insert_skills_extension(&mut self) {
+        insert_skills_extension_into(&mut self.extensions);
+    }
+}
+
+/// Write the `io.modelcontextprotocol/skills` extension entry (SEP-2640) into
+/// an `extensions` capability map with `directoryRead: true`.
+///
+/// Shared by [`ServerCapabilities::insert_skills_extension`] (in-place) and the
+/// `enable_skills_extension()` builder method so the two cannot drift.
+#[cfg(any(feature = "server", feature = "macros"))]
+pub(crate) fn insert_skills_extension_into(extensions: &mut Option<ExtensionCapabilities>) {
+    let mut dir_read = JsonObject::new();
+    dir_read.insert("directoryRead".to_string(), serde_json::json!(true));
+    extensions
+        .get_or_insert_with(ExtensionCapabilities::new)
+        .insert(super::SKILLS_EXTENSION_ID.to_string(), dir_read);
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
@@ -442,11 +470,7 @@ impl<S> ServerCapabilitiesBuilder<S> {
     /// Advertise the `io.modelcontextprotocol/skills` extension (SEP-2640) in the
     /// `extensions` capability map with `directoryRead: true`.
     pub fn enable_skills_extension(mut self) -> Self {
-        let mut dir_read = JsonObject::new();
-        dir_read.insert("directoryRead".to_string(), serde_json::json!(true));
-        self.extensions
-            .get_or_insert_with(ExtensionCapabilities::new)
-            .insert(super::SKILLS_EXTENSION_ID.to_string(), dir_read);
+        insert_skills_extension_into(&mut self.extensions);
         self
     }
 }

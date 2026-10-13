@@ -1,6 +1,5 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, allow(unused_attributes))]
-#![allow(dead_code)]
 #![doc = include_str!("../README.md")]
 
 mod error;
