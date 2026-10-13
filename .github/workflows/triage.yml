@@ -3,8 +3,8 @@ name: Triage
 # Two-stage triage for newly opened issues and pull requests.
 #
 #   1. Codex classifies the item and applies type/priority/component labels.
-#   2. The maintainer on rotation this week is assigned as the human reviewer,
-#      and is responsible for confirming or correcting that classification.
+#   2. The maintainer on rotation this week is assigned to the issue, or
+#      requested as a reviewer on the PR, and has the final say on its labels.
 #
 # Stage 2 does not depend on stage 1 succeeding. If Codex is unavailable,
 # misconfigured, or wrong, the item is still assigned to a human -- the AI pass
@@ -18,9 +18,9 @@ name: Triage
 # for the response-time expectations that go with being on rotation.
 #
 # Both stages also run on `reopened`, so labels get refreshed on an item coming
-# back to life. Assignment is skipped when the item already has an assignee --
-# an owner from the first triage pass keeps it instead of being swapped for
-# whoever is on rotation the week it reopens.
+# back to life. Assignment is skipped when the item already has an assignee or
+# requested reviewer -- an owner from the first triage pass keeps it instead of
+# being swapped for whoever is on rotation the week it reopens.
 #
 # Secrets:
 #   CODEX_AUTH_JSON        Codex credentials; refreshed and written back each run.
@@ -466,19 +466,30 @@ jobs:
             const role = process.env.ROTATION_ROLE;
             const number = Number(process.env.TARGET_NUMBER);
 
-            // This workflow also runs on `reopened`, so an item may already
-            // have been triaged. An existing assignee means a human already
-            // owns it; re-assigning would hand it to whoever is on rotation
-            // this week and comment a second time. Leave it alone.
+            // Read from the item rather than the event, so a manual dispatch
+            // against a PR number is still handled as a PR.
             const { data: target } = await github.rest.issues.get({
               ...context.repo,
               issue_number: number,
             });
+            const isPr = Boolean(target.pull_request);
+            const author = target.user.login;
+
+            // This workflow also runs on `reopened`, so an item may already
+            // have been triaged. An existing assignee or requested reviewer
+            // means a human already owns it; leave it alone.
             const existing = (target.assignees || []).map((a) => a.login);
+            if (isPr) {
+              const { data: pr } = await github.rest.pulls.get({
+                ...context.repo,
+                pull_number: number,
+              });
+              existing.push(...(pr.requested_reviewers || []).map((r) => r.login));
+            }
 
             if (existing.length > 0) {
               core.notice(
-                `#${number} is already assigned to ${existing.join(', ')}; ` +
+                `#${number} is already owned by ${existing.join(', ')}; ` +
                   `leaving the existing owner in place.`,
               );
               return;
@@ -500,7 +511,17 @@ jobs:
             // ISO week number since epoch. Thursday-anchored so the rotation
             // turns over on Monday 00:00 UTC rather than mid-Sunday.
             const weeks = Math.floor((Date.now() / 86400000 + 3) / 7);
-            const onCall = roster[weeks % roster.length];
+            let onCall = roster[weeks % roster.length];
+
+            // GitHub rejects a review request for the PR's own author, so
+            // hand it to the next person on the roster.
+            if (isPr && onCall === author) {
+              onCall = roster[(weeks + 1) % roster.length];
+              if (onCall === author) {
+                core.notice(`${author} is the only one on the roster and wrote #${number}; nobody to request.`);
+                return;
+              }
+            }
 
             const classification = process.env.CLASSIFICATION;
 
@@ -532,7 +553,10 @@ jobs:
               (c) => typeof c === 'string' && COMPONENT.test(c),
             );
 
-            const summary = type && priority
+            // PRs never go through Codex; their labels come from auto-label-pr.yml.
+            const summary = isPr
+              ? `Labels come from the PR labeler. Please review the change.`
+              : type && priority
               ? `Codex labeled this **${type}** / **${priority}**` +
                 (components.length ? ` (${components.join(', ')})` : '') +
                 `. Please confirm or correct those labels.`
@@ -543,15 +567,29 @@ jobs:
               return;
             }
 
-            // addAssignees silently ignores users without write access, so
-            // verify the result and fall back to an @-mention comment.
-            const { data: updated } = await github.rest.issues.addAssignees({
-              ...context.repo,
-              issue_number: number,
-              assignees: [onCall],
-            });
-
-            const assigned = (updated.assignees || []).some((a) => a.login === onCall);
+            // Both calls can fail to land on users without write access
+            // (addAssignees silently, requestReviewers with a 422), so verify
+            // the result and fall back to an @-mention comment.
+            let assigned = false;
+            if (isPr) {
+              try {
+                const { data: updated } = await github.rest.pulls.requestReviewers({
+                  ...context.repo,
+                  pull_number: number,
+                  reviewers: [onCall],
+                });
+                assigned = (updated.requested_reviewers || []).some((r) => r.login === onCall);
+              } catch (error) {
+                core.warning(`requestReviewers failed: ${error.message}`);
+              }
+            } else {
+              const { data: updated } = await github.rest.issues.addAssignees({
+                ...context.repo,
+                issue_number: number,
+                assignees: [onCall],
+              });
+              assigned = (updated.assignees || []).some((a) => a.login === onCall);
+            }
 
             if (assigned) {
               core.info(`Assigned #${number} to ${onCall}`);
