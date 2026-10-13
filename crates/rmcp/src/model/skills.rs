@@ -53,9 +53,10 @@ pub struct SkillEntry {
     /// `description`. Optional: `version`, `license`, plus any custom metadata.
     pub frontmatter: serde_json::Value,
 
-    /// Optional array of the skill's files with their URIs, SHA-256 digests,
-    /// and sizes, or the literal string `"dynamic"` for dynamically-generated
-    /// skills. Omitted from bare `SKILL.md`-only skills.
+    /// The skill's files: an array of `{uri, digest, size}` triples, or the
+    /// literal string `"dynamic"` for dynamically-generated skills.
+    /// REQUIRED by the spec — a host MUST NOT load an entry with `null`.
+    /// Defaults to `SkillResources::Dynamic` via `SkillEntry::new()`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resources: Option<SkillResources>,
 
@@ -71,7 +72,7 @@ impl SkillEntry {
         Self {
             uri: uri.into(),
             frontmatter,
-            resources: None,
+            resources: Some(SkillResources::Dynamic),
             meta: None,
         }
     }
@@ -355,7 +356,13 @@ impl ResourcesDirectoryReadResult {
 
 /// Parse a `skill://` URI into `(skill_path, file_path)`.
 ///
-/// Per the spec: `skill://<skill-path>/<file-path>`.
+/// **Scope:** This function handles SKILL.md-form route URIs only — URIs of the
+/// shape `skill://<skill-path>/SKILL.md`. It is NOT a general-purpose parser for
+/// arbitrary nested-file URIs (e.g. `skill://acme/billing/references/FORMS.md`).
+/// The spec provides no in-URI delimiter between skill-path and file-path, so
+/// splitting on the last `/` is a heuristic that works for the canonical
+/// SKILL.md form but cannot disambiguate deeper paths without consulting the
+/// registered skill set.
 ///
 /// - `<skill-path>` MAY be single-segment (`git-workflow`) or nested
 ///   (`acme/billing/refunds`).
@@ -388,12 +395,7 @@ pub fn parse_skill_uri(uri: &str) -> Option<(String, String)> {
 /// Returns `None` if the URI is not a valid skill URI or is a directory URI
 /// without a file component.
 pub fn skill_path_from_uri(uri: &str) -> Option<String> {
-    let (path, file) = parse_skill_uri(uri)?;
-    if file.is_empty() {
-        // Directory URI — still has a skill path
-        return Some(path);
-    }
-    Some(path)
+    parse_skill_uri(uri).map(|(path, _file)| path)
 }
 
 /// Extract the skill name (final segment of `<skill-path>`) from a `skill://` URI.

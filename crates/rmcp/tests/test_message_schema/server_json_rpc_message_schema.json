@@ -3370,7 +3370,7 @@
           "description": "Verbatim copy of the `SKILL.md` YAML frontmatter, rendered as JSON.\n\nThe spec calls this \"the frontmatter properties, rendered as JSON\".\nRequired keys: `name` (MUST equal the final segment of the skill path),\n`description`. Optional: `version`, `license`, plus any custom metadata."
         },
         "resources": {
-          "description": "Optional array of the skill's files with their URIs, SHA-256 digests,\nand sizes, or the literal string `\"dynamic\"` for dynamically-generated\nskills. Omitted from bare `SKILL.md`-only skills.",
+          "description": "The skill's files: an array of `{uri, digest, size}` triples, or the\nliteral string `\"dynamic\"` for dynamically-generated skills.\nREQUIRED by the spec — a host MUST NOT load an entry with `null`.\nDefaults to `SkillResources::Dynamic` via `SkillEntry::new()`.",
           "anyOf": [
             {
               "$ref": "#/definitions/SkillResources"

@@ -100,7 +100,16 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                 let supports_cache_hints = context.protocol_version().is_some_and(|version| {
                     version >= rmcp::model::ProtocolVersion::V_2026_07_28
                 });
-                let mut result = rmcp::model::skills::SkillsListResult::new(#router.list_all());
+                // Spec: the final `<skill-path>` segment of `uri` MUST equal
+                // `frontmatter.name`. Entries that violate it are invalid, so
+                // they are not served.
+                let skills = #router.list_all().into_iter()
+                    .filter(|entry| {
+                        rmcp::model::skills::validate_skill_name(&entry.uri, &entry.frontmatter)
+                            .is_ok()
+                    })
+                    .collect();
+                let mut result = rmcp::model::skills::SkillsListResult::new(skills);
                 result.result_type = Some(rmcp::model::ResultType::COMPLETE);
                 result.ttl_ms = supports_cache_hints.then_some(0);
                 result.cache_scope = supports_cache_hints.then_some("public".to_string());
@@ -129,6 +138,10 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                     context,
                 );
                 let skill_entry = (route.call)(skill_context).await?;
+                // Spec: the final `<skill-path>` segment of `uri` MUST equal
+                // `frontmatter.name`.
+                rmcp::model::skills::validate_skill_name(&skill_entry.uri, &skill_entry.frontmatter)
+                    .map_err(|e| rmcp::ErrorData::invalid_params(e, None))?;
                 Ok(rmcp::model::skills::SkillsGetResult::new(skill_entry))
             }
         })?;
@@ -145,22 +158,75 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                 let supports_cache_hints = context.protocol_version().is_some_and(|version| {
                     version >= rmcp::model::ProtocolVersion::V_2026_07_28
                 });
-                // Enumerate files for multi-file skills
+                // The method applies only to directory resources. The skill root
+                // (`skill://<skill-path>`) is a directory; a file URI such as
+                // `skill://<skill-path>/SKILL.md` is not, and MUST return -32602.
                 let router = #router;
-                let resources: Vec<rmcp::model::Resource> = if let Some(route) = router.get_by_uri(&request.uri) {
-                    match &route.attr.resources {
-                        Some(rmcp::model::skills::SkillResources::FileList(files)) => {
-                            files.iter().map(|file| {
-                                let name = file.uri.rsplit('/').next().unwrap_or("").to_string();
-                                rmcp::model::Resource::new(file.uri.clone(), name)
-                            }).collect()
+                let resources: Vec<rmcp::model::Resource> = match router.get_by_uri(&request.uri) {
+                    Some(route) => {
+                        let directory_form = format!(
+                            "skill://{}",
+                            route.skill_path().unwrap_or_default()
+                        );
+                        if request.uri != directory_form {
+                            return Err(rmcp::ErrorData::invalid_params(
+                                format!("not a directory: {}", request.uri),
+                                None,
+                            ));
                         }
-                        Some(rmcp::model::skills::SkillResources::Dynamic) => vec![],
-                        Some(_) => vec![],
-                        None => vec![],
+                        match &route.attr.resources {
+                            Some(rmcp::model::skills::SkillResources::FileList(files)) => {
+                                // Spec, Directory Listing: "The result contains
+                                // every direct child of the directory." SKILL.md
+                                // is a file directly inside the skill root, so it
+                                // IS a direct child and MUST be listed.
+                                let root = route.attr.uri
+                                    .strip_suffix("/SKILL.md")
+                                    .or_else(|| route.attr.uri.strip_suffix("SKILL.md"))
+                                    .unwrap_or(&route.attr.uri);
+                                let prefix = format!("{}/", root);
+                                // Direct children only: a file maps to itself, a
+                                // nested path maps to its first segment as a
+                                // directory resource. The listing is not recursive.
+                                let mut children: std::collections::BTreeMap<String, bool> =
+                                    std::collections::BTreeMap::new();
+                                for file in files {
+                                    let Some(rest) = file.uri.strip_prefix(&prefix) else {
+                                        continue;
+                                    };
+                                    if rest.is_empty() {
+                                        continue;
+                                    }
+                                    match rest.split_once('/') {
+                                        Some((head, _)) => {
+                                            children.insert(format!("{}/{}", root, head), true);
+                                        }
+                                        None => {
+                                            children.entry(file.uri.clone()).or_insert(false);
+                                        }
+                                    }
+                                }
+                                children.into_iter().map(|(uri, is_dir)| {
+                                    let name = uri.rsplit('/').next().unwrap_or("").to_string();
+                                    let resource = rmcp::model::Resource::new(uri, name);
+                                    if is_dir {
+                                        resource.with_mime_type("inode/directory")
+                                    } else {
+                                        resource
+                                    }
+                                }).collect()
+                            }
+                            _ => vec![],
+                        }
                     }
-                } else {
-                    vec![]
+                    None => {
+                        // Spec line 453: a URI that does not identify a skill the
+                        // server serves MUST return -32602, not an empty list.
+                        return Err(rmcp::ErrorData::invalid_params(
+                            format!("unknown skill URI: {}", request.uri),
+                            None,
+                        ));
+                    }
                 };
                 let mut result = rmcp::model::skills::ResourcesDirectoryReadResult::new(resources);
                 result.result_type = Some(rmcp::model::ResultType::COMPLETE);

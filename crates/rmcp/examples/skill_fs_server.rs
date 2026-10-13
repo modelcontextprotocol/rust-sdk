@@ -216,9 +216,9 @@ impl FileSystemSkillServer {
         for entry in fs::read_dir(&dir_to_read).ok()?.flatten() {
             let path = entry.path();
             let name = path.file_name()?.to_str()?;
-            if name == SKILL_FILE {
-                continue;
-            }
+            // Spec, Directory Listing: "The result contains every direct child of
+            // the directory." SKILL.md is a file directly inside the skill root,
+            // so it IS a direct child and MUST be listed. Do NOT skip it.
             // Canonicalize each entry and verify it stays within root
             let canonical_entry = path.canonicalize().ok()?;
             if !canonical_entry.starts_with(&canonical_root) {

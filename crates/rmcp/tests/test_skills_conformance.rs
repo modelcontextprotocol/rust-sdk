@@ -453,11 +453,19 @@ fn resources_directory_read_lists_siblings() {
         .and_then(|r| r["result"]["resources"].as_array())
         .expect("resources/directory/read should return a resources array");
 
-    // SKILL.md is excluded from the directory listing; only the 2 siblings remain.
+    // Spec, Directory Listing: "The result contains every direct child of the
+    // directory." SKILL.md is a file directly inside the skill root, so it IS a
+    // direct child and MUST be listed. Expect SKILL.md + the 2 siblings = 3.
     assert_eq!(
         resources.len(),
-        2,
-        "refunds directory should list 2 sibling files (SKILL.md excluded)"
+        3,
+        "refunds directory should list every direct child (SKILL.md + 2 siblings)"
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["uri"].as_str().unwrap_or("").ends_with("/SKILL.md")),
+        "listing must contain SKILL.md — it is a direct child of the skill root"
     );
     assert!(
         resources
@@ -642,12 +650,14 @@ fn macro_server_skills_list_and_get() {
 /// The macro-generated handler must wire `resources/directory/read` into the
 /// `ServerHandler` dispatch and advertise the `resources` capability.
 ///
-/// The example declares no file lists — the `#[skill]` macro has no file-list
-/// attribute (only `dynamic`) — so an empty array is the correct result. The
-/// point of this test is that the method is *answered*, not that it lists
-/// files; the hand-written `skill_fs_server` covers the non-empty case. If the
-/// macro stops generating `resources_directory_read`, this endpoint falls back
-/// to the trait default and returns method-not-found (-32601) instead.
+/// The request URIs are **directory** URIs (`skill://alpha`, the skill root),
+/// per the spec: the skill root is a directory resource. The example declares
+/// no file lists — the `#[skill]` macro has no file-list attribute (only
+/// `dynamic`) — so an empty array is the correct result. The point of this test
+/// is that the method is *answered*, not that it lists files; the hand-written
+/// `skill_fs_server` covers the non-empty case. If the macro stops generating
+/// `resources_directory_read`, this endpoint falls back to the trait default
+/// and returns method-not-found (-32601) instead.
 #[test]
 fn macro_server_resources_directory_read_is_dispatched() {
     let requests = vec![
@@ -666,17 +676,17 @@ fn macro_server_resources_directory_read_is_dispatched() {
             "params": {}
         })
         .to_string(),
-        // Static skill (alpha) — no file list declared.
+        // Static skill (alpha) — skill root, no file list declared.
         build_request(
             2,
             "resources/directory/read",
-            serde_json::json!({"uri": "skill://alpha/SKILL.md"}),
+            serde_json::json!({"uri": "skill://alpha"}),
         ),
         // Dynamic skill (gamma) — macro returns an empty list for `Dynamic`.
         build_request(
             3,
             "resources/directory/read",
-            serde_json::json!({"uri": "skill://gamma/SKILL.md"}),
+            serde_json::json!({"uri": "skill://gamma"}),
         ),
     ];
 
@@ -703,6 +713,62 @@ fn macro_server_resources_directory_read_is_dispatched() {
         assert!(
             resp["result"]["resources"].is_array(),
             "resources/directory/read should return a resources array; got: {resp}"
+        );
+    }
+}
+
+/// A **file** URI (`skill://<skill-path>/SKILL.md`) is not a directory
+/// resource, so `resources/directory/read` on it MUST return `-32602`
+/// (Invalid params), per the spec: "If the URI does not exist, or exists but is
+/// not a directory resource, the server MUST return error `-32602`."
+///
+/// Regression guard for the behavior this test previously asserted the
+/// opposite of: it used to send `skill://alpha/SKILL.md` and require a
+/// `resources` array, which is the non-conforming answer. An unknown skill URI
+/// (`skill://nonexistent`) MUST also return `-32602`.
+#[test]
+fn macro_server_directory_read_rejects_file_and_unknown_uris() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-07-28",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        })
+        .to_string(),
+        // A file inside a served skill — not a directory.
+        build_request(
+            2,
+            "resources/directory/read",
+            serde_json::json!({"uri": "skill://alpha/SKILL.md"}),
+        ),
+        // A URI that does not identify any skill the server serves.
+        build_request(
+            3,
+            "resources/directory/read",
+            serde_json::json!({"uri": "skill://nonexistent"}),
+        ),
+    ];
+
+    let responses = run_macro_server_request(&requests);
+
+    for id in [2u64, 3] {
+        let resp = responses
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("macro server should answer id {id}"));
+        assert_eq!(
+            resp["error"]["code"],
+            serde_json::json!(-32602),
+            "expected -32602 (Invalid params) for id {id}; got: {resp}"
         );
     }
 }
