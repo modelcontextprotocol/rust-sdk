@@ -265,22 +265,32 @@ impl ServerCapabilities {
     /// `Router`, so under a `macros`-only build it would be dead code.
     #[cfg(feature = "server")]
     pub(crate) fn insert_skills_extension(&mut self) {
-        insert_skills_extension_into(&mut self.extensions);
+        insert_skills_extension_into(&mut self.extensions, true);
     }
 }
 
 /// Write the `io.modelcontextprotocol/skills` extension entry (SEP-2640) into
-/// an `extensions` capability map with `directoryRead: true`.
+/// an `extensions` capability map.
+///
+/// `directory_read: true` advertises support for [`resources/directory/read`].
+/// Pass `false` (or omit) when the server does not implement directory listing
+/// for skill directories — clients MUST NOT call `resources/directory/read`
+/// without this declaration.
 ///
 /// Shared by [`ServerCapabilities::insert_skills_extension`] (in-place) and the
 /// `enable_skills_extension()` builder method so the two cannot drift.
 #[cfg(any(feature = "server", feature = "macros"))]
-pub(crate) fn insert_skills_extension_into(extensions: &mut Option<ExtensionCapabilities>) {
-    let mut dir_read = JsonObject::new();
-    dir_read.insert("directoryRead".to_string(), serde_json::json!(true));
+pub(crate) fn insert_skills_extension_into(
+    extensions: &mut Option<ExtensionCapabilities>,
+    directory_read: bool,
+) {
+    let mut ext = JsonObject::new();
+    if directory_read {
+        ext.insert("directoryRead".to_string(), serde_json::json!(true));
+    }
     extensions
         .get_or_insert_with(ExtensionCapabilities::new)
-        .insert(super::SKILLS_EXTENSION_ID.to_string(), dir_read);
+        .insert(super::SKILLS_EXTENSION_ID.to_string(), ext);
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
@@ -469,8 +479,23 @@ impl<S> ServerCapabilitiesBuilder<S> {
 impl<S> ServerCapabilitiesBuilder<S> {
     /// Advertise the `io.modelcontextprotocol/skills` extension (SEP-2640) in the
     /// `extensions` capability map with `directoryRead: true`.
+    ///
+    /// Use [`enable_skills_extension_without_directory_read`](Self::enable_skills_extension_without_directory_read)
+    /// when the server does not implement `resources/directory/read` for skill
+    /// directories.
     pub fn enable_skills_extension(mut self) -> Self {
-        insert_skills_extension_into(&mut self.extensions);
+        insert_skills_extension_into(&mut self.extensions, true);
+        self
+    }
+
+    /// Advertise the `io.modelcontextprotocol/skills` extension (SEP-2640) in the
+    /// `extensions` capability map **without** `directoryRead`.
+    ///
+    /// Clients MUST NOT call `resources/directory/read` against a server that
+    /// has not declared `directoryRead: true`. Use this method when the server
+    /// does not implement directory listing for skill directories.
+    pub fn enable_skills_extension_without_directory_read(mut self) -> Self {
+        insert_skills_extension_into(&mut self.extensions, false);
         self
     }
 }

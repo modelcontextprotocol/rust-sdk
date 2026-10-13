@@ -607,6 +607,15 @@ fn macro_server_skills_list_and_get() {
             .is_null(),
         "skills extension must be advertised; got: {init_resp}"
     );
+    // The macro does NOT advertise directoryRead — it cannot enumerate files
+    // for dynamic skills, and the spec says clients MUST NOT call
+    // resources/directory/read without the declaration.
+    assert!(
+        init_resp["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/skills"]
+            ["directoryRead"]
+            .is_null(),
+        "macro server must NOT advertise directoryRead; got: {init_resp}"
+    );
 
     // skills/list → 3 skills from the macro server
     let skills_list = responses
@@ -710,9 +719,17 @@ fn macro_server_resources_directory_read_is_dispatched() {
             resp["error"].is_null(),
             "resources/directory/read must be dispatched, not method-not-found; got: {resp}"
         );
-        assert!(
-            resp["result"]["resources"].is_array(),
-            "resources/directory/read should return a resources array; got: {resp}"
+        let resources = resp["result"]["resources"].as_array().unwrap_or_else(|| {
+            panic!("resources/directory/read should return a resources array; got: {resp}")
+        });
+        // Both alpha (static, no file list) and gamma (dynamic) must return
+        // an empty array — the macro has no file-list attribute, so it cannot
+        // know what files exist. This assertion locks in the current behavior
+        // so a future change doesn't silently break it.
+        assert_eq!(
+            resources.len(),
+            0,
+            "macro server must return an empty resources array for skills without a file list; got: {resources:?}"
         );
     }
 }

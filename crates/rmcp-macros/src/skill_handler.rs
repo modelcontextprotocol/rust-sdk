@@ -48,7 +48,7 @@ pub(crate) fn build_get_info(
 
     let mut capability_calls = Vec::new();
     if has_skills {
-        capability_calls.push(quote! { .enable_skills_extension() });
+        capability_calls.push(quote! { .enable_skills_extension_without_directory_read() });
         capability_calls.push(quote! { .enable_resources() });
     }
     let server_info_expr = match (name, version) {
@@ -79,6 +79,16 @@ pub(crate) fn build_get_info(
     })
 }
 
+/// Generates a `ServerHandler` impl with SEP-2640 skills support.
+///
+/// **Limitation:** The `#[skill]` attribute has no file-list parameter, so
+/// macro-generated skills cannot declare their files. This means:
+/// - `SkillEntry::new()` defaults `resources` to `SkillResources::Dynamic`
+/// - `resources/directory/read` returns `{"resources": []}` for macro skills
+/// - The host cannot content-bind or verify digests
+///
+/// Use `#[skill_router]` with explicit `SkillEntry` construction if you need
+/// to serve a populated directory listing with content integrity.
 pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
     let attr_args = NestedMeta::parse_meta_list(attr)?;
     let SkillHandlerAttribute {
