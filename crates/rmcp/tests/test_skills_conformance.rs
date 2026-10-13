@@ -629,6 +629,17 @@ fn macro_server_skills_list_and_get() {
         3,
         "macro server should discover 3 skills (alpha, beta, gamma); got: {skills_list:?}"
     );
+    // SEP-2640 skills.mdx:225 — `resources` is REQUIRED on every skill entry,
+    // and an entry with no `resources` at all is invalid: hosts MUST NOT load
+    // it. The `#[skill]` attribute has no file-list parameter, so every
+    // macro-generated entry must carry the literal string "dynamic" rather
+    // than omitting the field.
+    for skill in skills_list {
+        assert_eq!(
+            skill["resources"], "dynamic",
+            "every macro skill entry must carry resources=\"dynamic\"; got: {skill}"
+        );
+    }
     let uris: Vec<&str> = skills_list
         .iter()
         .map(|s| s["uri"].as_str().unwrap_or(""))

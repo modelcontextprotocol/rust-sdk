@@ -50,8 +50,13 @@ fn skill_attr_generates_correct_entry() {
     assert_eq!(entry.uri, "skill://test-skill/SKILL.md");
     assert_eq!(entry.frontmatter["name"], "test-skill");
     assert_eq!(entry.frontmatter["description"], "A test skill");
-    // Non-dynamic skill with no file list should have None resources
-    assert!(entry.resources.is_none());
+    // SEP-2640 skills.mdx:225 — `resources` is REQUIRED on every skill entry
+    // and takes one of exactly two forms: a complete file list, or the string
+    // "dynamic". An entry with no `resources` at all is invalid, and hosts
+    // MUST NOT load it. The `#[skill]` attribute has no file-list parameter,
+    // so a non-dynamic skill still cannot publish digests; "dynamic" is the
+    // only valid value the macro can emit.
+    assert_eq!(entry.resources, Some(SkillResources::Dynamic));
 }
 
 #[test]

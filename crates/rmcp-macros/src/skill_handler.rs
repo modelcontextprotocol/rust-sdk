@@ -82,10 +82,13 @@ pub(crate) fn build_get_info(
 /// Generates a `ServerHandler` impl with SEP-2640 skills support.
 ///
 /// **Limitation:** The `#[skill]` attribute has no file-list parameter, so
-/// macro-generated skills cannot declare their files. This means:
-/// - `SkillEntry::new()` defaults `resources` to `SkillResources::Dynamic`
-/// - `resources/directory/read` returns `{"resources": []}` for macro skills
-/// - The host cannot content-bind or verify digests
+/// macro-generated skills cannot declare their files. Every generated entry
+/// therefore carries `resources: "dynamic"` — the only value the spec permits
+/// when stable digests cannot be published (`skills.mdx:225`; an entry with no
+/// `resources` at all is invalid and hosts MUST NOT load it). Consequences:
+/// - The host cannot content-bind or verify digests for these skills.
+/// - `resources/directory/read` returns `{"resources": []}` for macro skills,
+///   so the macro server does not advertise the `directoryRead` capability.
 ///
 /// Use `#[skill_router]` with explicit `SkillEntry` construction if you need
 /// to serve a populated directory listing with content integrity.

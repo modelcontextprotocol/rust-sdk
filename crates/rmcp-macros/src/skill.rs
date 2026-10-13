@@ -35,11 +35,15 @@ impl ResolvedSkillAttribute {
             frontmatter,
             dynamic,
         } = self;
-        let resources = if dynamic {
-            quote! { Some(rmcp::model::skills::SkillResources::Dynamic) }
-        } else {
-            quote! { None }
-        };
+        // SEP-2640 skills.mdx:225 — `resources` is REQUIRED on every skill
+        // entry, and an entry with no `resources` at all is invalid: hosts
+        // MUST NOT load it. The `#[skill]` attribute has no file-list
+        // parameter, so the macro cannot publish digests for a static skill
+        // and `"dynamic"` is the only valid value it can emit. (The `dynamic`
+        // flag is retained for source compatibility; both branches emit the
+        // same value until a file-list parameter exists.)
+        let _ = dynamic;
+        let resources = quote! { Some(rmcp::model::skills::SkillResources::Dynamic) };
         let doc_comment = format!("Generated skill metadata function for {uri}");
         let doc_attr: syn::Attribute = parse_quote!(#[doc = #doc_comment]);
         let tokens = quote! {
