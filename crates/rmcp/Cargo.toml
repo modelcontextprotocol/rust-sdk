@@ -1,5 +1,6 @@
 [package]
 name = "rmcp"
+exclude = ["tests/test_package_license.rs"]
 license = { workspace = true }
 version = { workspace = true }
 edition = { workspace = true }
