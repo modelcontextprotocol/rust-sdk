@@ -1140,6 +1140,10 @@ pub struct AuthorizationManager {
     scope_upgrade_config: ScopeUpgradeConfig,
     /// scopes from the initial 401 WWW-Authenticate header, used by select_scopes()
     www_auth_scopes: RwLock<Vec<String>>,
+    /// Initial resource challenge only; None means the resource has not been observed yet.
+    initial_challenge_scopes: RwLock<Option<Vec<String>>>,
+    /// Protected resource scopes from the current discovery, including an empty result.
+    initial_resource_scopes: RwLock<Vec<String>>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
     /// resource indicator from protected resource metadata, used for RFC 8707 `resource`
@@ -1386,6 +1390,8 @@ impl AuthorizationManager {
             scope_upgrade_attempts: RwLock::new(0),
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
+            initial_challenge_scopes: RwLock::new(None),
+            initial_resource_scopes: RwLock::new(Vec::new()),
             resource_scopes: RwLock::new(Vec::new()),
             discovered_resource: RwLock::new(None),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
@@ -1541,6 +1547,12 @@ impl AuthorizationManager {
     /// # }
     /// ```
     pub async fn resolve_metadata(&self) -> Result<AuthorizationMetadataResolution, AuthError> {
+        *self.initial_challenge_scopes.write().await = None;
+        self.initial_resource_scopes.write().await.clear();
+        self.resolve_metadata_inner().await
+    }
+
+    async fn resolve_metadata_inner(&self) -> Result<AuthorizationMetadataResolution, AuthError> {
         if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
             return Ok(AuthorizationMetadataResolution {
                 metadata,
@@ -1579,6 +1591,9 @@ impl AuthorizationManager {
         };
         let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
 
+        *self.initial_challenge_scopes.write().await = None;
+        self.initial_resource_scopes.write().await.clear();
+        self.record_initial_challenge_scope(Some(&params)).await;
         self.record_challenge_scope(&params).await;
 
         if let Some(resource_metadata_url) = &params.resource_metadata_url
@@ -1592,7 +1607,19 @@ impl AuthorizationManager {
             });
         }
 
-        self.resolve_metadata().await
+        self.resolve_metadata_inner().await
+    }
+
+    async fn record_initial_challenge_scope(&self, params: Option<&WWWAuthenticateParams>) {
+        let mut initial_scopes = self.initial_challenge_scopes.write().await;
+        if initial_scopes.is_none() {
+            *initial_scopes = Some(
+                params
+                    .and_then(|params| params.scope.as_deref())
+                    .map(|scope| scope.split_whitespace().map(str::to_owned).collect())
+                    .unwrap_or_default(),
+            );
+        }
     }
 
     /// Store a challenge's `scope` hint for later scope selection.
@@ -1948,7 +1975,58 @@ impl AuthorizationManager {
         attempts < self.scope_upgrade_config.max_upgrade_attempts
     }
 
-    /// select scopes to request from authorization server
+    /// Select scopes for initial authorization after resolving and setting metadata.
+    ///
+    /// Prefer the initial resource challenge, then protected resource metadata. If
+    /// neither supplies scopes, retain the authorization-server metadata and caller
+    /// defaults as compatibility fallbacks. Append `offline_access` when advertised
+    /// by the authorization server, as with [`Self::select_scopes`].
+    ///
+    /// Unlike [`Self::select_scopes`], this does not accumulate previously requested
+    /// scopes or challenges from metadata endpoints. Callers with explicit scopes
+    /// should continue to pass those scopes directly to authorization instead.
+    ///
+    /// ```no_run
+    /// # use rmcp::transport::AuthorizationManager;
+    /// # async fn initial_scopes() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut manager = AuthorizationManager::new("https://mcp.example.com/mcp").await?;
+    /// let resolution = manager.resolve_metadata().await?;
+    /// manager.set_metadata(resolution.metadata);
+    /// let scopes = manager.select_initial_scopes(&[]).await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn select_initial_scopes(&self, default_scopes: &[&str]) -> Vec<String> {
+        let mut scopes = self
+            .initial_challenge_scopes
+            .read()
+            .await
+            .clone()
+            .unwrap_or_default();
+        if scopes.is_empty() {
+            scopes = self.initial_resource_scopes.read().await.clone();
+        }
+        if scopes.is_empty() {
+            scopes = self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.scopes_supported.clone())
+                .filter(|scopes| !scopes.is_empty())
+                .unwrap_or_else(|| {
+                    default_scopes
+                        .iter()
+                        .map(|scope| (*scope).to_owned())
+                        .collect()
+                });
+        }
+        let mut scopes = Self::dedup_scopes(scopes);
+        self.add_offline_access_if_supported(&mut scopes);
+        scopes
+    }
+
+    /// Select cumulative scopes to request from the authorization server.
+    ///
+    /// For initial-login precedence instead of accumulation, use [`Self::select_initial_scopes`].
     pub fn select_scopes(
         &self,
         www_authenticate_scope: Option<&str>,
@@ -2615,6 +2693,10 @@ impl AuthorizationManager {
             .await
             .replace(resource_metadata.resource.clone().unwrap_or_default());
 
+        *self.initial_resource_scopes.write().await = resource_metadata
+            .scopes_supported
+            .clone()
+            .unwrap_or_default();
         // store scopes_supported from protected resource metadata for select_scopes()
         if let Some(scopes) = resource_metadata.scopes_supported
             && !scopes.is_empty()
@@ -2846,6 +2928,26 @@ impl AuthorizationManager {
             .discovery_get(&self.base_url)
             .await
             .map_err(|error| Self::discovery_failed(&self.base_url, error))?;
+
+        let initial_challenge = if response.status() == StatusCode::UNAUTHORIZED {
+            let challenges = || {
+                response
+                    .headers()
+                    .get_all(WWW_AUTHENTICATE)
+                    .iter()
+                    .filter_map(|value| value.to_str().ok())
+                    .map(|value| WWWAuthenticateParams::parse(value, &self.base_url))
+            };
+            // Keep scope selection tied to the header used for discovery. A scope-only
+            // challenge still applies when metadata is discovered at a well-known URL.
+            challenges()
+                .find(|params| params.resource_metadata_url.is_some())
+                .or_else(|| challenges().find(|params| params.scope.is_some()))
+        } else {
+            None
+        };
+        self.record_initial_challenge_scope(initial_challenge.as_ref())
+            .await;
 
         if response.status() == StatusCode::UNAUTHORIZED {
             return Ok(self
@@ -7818,6 +7920,322 @@ mod tests {
         assert!(result.contains(&"read".to_string()));
         assert!(result.contains(&"write".to_string()));
         assert_eq!(result.len(), 2);
+    }
+
+    fn initial_scope_metadata_responses() -> Vec<HttpResponse> {
+        vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"],
+                    "scopes_supported": ["read", "write"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token",
+                    "scopes_supported": ["admin"]
+                }),
+            ),
+        ]
+    }
+
+    #[rstest]
+    #[case::advertised_metadata(true, false)]
+    #[case::redirected_resource(true, true)]
+    #[case::scope_only(false, false)]
+    #[tokio::test]
+    async fn select_initial_scopes_prefers_resource_challenge(
+        #[case] advertised_metadata: bool,
+        #[case] redirected: bool,
+    ) {
+        let mut responses = Vec::new();
+        if redirected {
+            responses.push(redirect_response("/redirected-mcp"));
+        }
+        let challenge = if advertised_metadata {
+            r#"Bearer resource_metadata="/metadata", scope="read read""#
+        } else {
+            r#"Bearer scope="read read""#
+        };
+        responses.push(
+            oauth2::http::Response::builder()
+                .status(401)
+                .header("www-authenticate", challenge)
+                .body(Vec::new())
+                .unwrap(),
+        );
+        responses.extend(initial_scope_metadata_responses());
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(responses)),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+
+        let scopes = manager.select_initial_scopes(&["default"]).await;
+        assert_eq!(scopes, ["read"]);
+        let session = AuthorizationSession::new(
+            manager,
+            AuthorizationRequest::new("http://localhost:8080/callback")
+                .with_preregistered_client("test-client")
+                .with_scopes(scopes),
+        )
+        .await
+        .map_err(|(_, error)| error)
+        .unwrap();
+        let authorization_url = Url::parse(session.get_authorization_url()).unwrap();
+        assert_eq!(
+            authorization_url
+                .query_pairs()
+                .find(|(key, _)| key == "scope"),
+            Some(("scope".into(), "read".into()))
+        );
+    }
+
+    #[rstest]
+    #[case::initial_scope(Some("read"), vec!["read"])]
+    #[case::no_initial_scope(None, vec!["read", "write"])]
+    #[tokio::test]
+    async fn select_initial_scopes_ignores_later_metadata_challenges(
+        #[case] initial_scope: Option<&str>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let initial_response = match initial_scope {
+            Some(scope) => oauth2::http::Response::builder()
+                .status(401)
+                .header("www-authenticate", format!(r#"Bearer scope="{scope}""#))
+                .body(Vec::new())
+                .unwrap(),
+            None => empty_response(404),
+        };
+        let mut responses = vec![
+            initial_response,
+            oauth2::http::Response::builder()
+                .status(401)
+                .header(
+                    "www-authenticate",
+                    r#"Bearer resource_metadata="/metadata", scope="metadata:read""#,
+                )
+                .body(Vec::new())
+                .unwrap(),
+        ];
+        responses.extend(initial_scope_metadata_responses());
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(responses)),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+
+        assert_eq!(manager.select_initial_scopes(&[]).await, expected);
+        assert!(
+            manager
+                .select_scopes(None, &[])
+                .contains(&"metadata:read".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn select_initial_scopes_preserves_reactive_scope_during_fallback() {
+        let mut responses = vec![
+            oauth2::http::Response::builder()
+                .status(401)
+                .header(
+                    "www-authenticate",
+                    r#"Bearer resource_metadata="/metadata", scope="probe:read""#,
+                )
+                .body(Vec::new())
+                .unwrap(),
+        ];
+        responses.extend(initial_scope_metadata_responses());
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(responses)),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(r#"Bearer scope="read""#))
+            .await
+            .unwrap();
+        manager.set_metadata(resolution.metadata);
+
+        assert_eq!(manager.select_initial_scopes(&[]).await, ["read"]);
+    }
+
+    #[tokio::test]
+    async fn select_initial_scopes_resets_challenge_on_repeated_discovery() {
+        let mut responses = Vec::new();
+        for challenge in [
+            r#"Bearer resource_metadata="/metadata", scope="read""#,
+            r#"Bearer resource_metadata="/metadata""#,
+        ] {
+            responses.push(
+                oauth2::http::Response::builder()
+                    .status(401)
+                    .header("www-authenticate", challenge)
+                    .body(Vec::new())
+                    .unwrap(),
+            );
+            responses.extend(initial_scope_metadata_responses());
+        }
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(responses)),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        assert_eq!(manager.select_initial_scopes(&[]).await, ["read"]);
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        assert_eq!(manager.select_initial_scopes(&[]).await, ["read", "write"]);
+    }
+
+    #[rstest]
+    #[case::challenge(&["read", "read"], &["write"], &["admin"], &["default"], &["read"])]
+    #[case::resource(&[], &["read", "read"], &["admin"], &["default"], &["read"])]
+    #[case::authorization_server(&[], &[], &["admin", "admin"], &["default"], &["admin"])]
+    #[case::defaults(&[], &[], &[], &["default", "default"], &["default"])]
+    #[case::empty(&[], &[], &[], &[], &[])]
+    #[case::offline_access(&["read"], &["write"], &["offline_access"], &[], &["read", "offline_access"])]
+    #[case::offline_access_deduplicated(&["read", "offline_access"], &[], &["offline_access"], &[], &["read", "offline_access"])]
+    #[tokio::test]
+    async fn select_initial_scopes_uses_fallbacks_and_preserves_refresh_support(
+        #[case] challenge: &[&str],
+        #[case] resource: &[&str],
+        #[case] authorization_server: &[&str],
+        #[case] defaults: &[&str],
+        #[case] expected: &[&str],
+    ) {
+        let strings = |scopes: &[&str]| scopes.iter().map(|scope| (*scope).to_string()).collect();
+        let manager = manager_with_metadata(Some(AuthorizationMetadata {
+            scopes_supported: Some(strings(authorization_server)),
+            ..Default::default()
+        }))
+        .await;
+        *manager.initial_challenge_scopes.write().await = Some(strings(challenge));
+        *manager.initial_resource_scopes.write().await = strings(resource);
+        *manager.resource_scopes.write().await = strings(resource);
+        *manager.current_scopes.write().await = vec!["previous".to_string()];
+
+        assert_eq!(manager.select_initial_scopes(defaults).await, expected);
+        assert!(
+            manager
+                .select_scopes(Some("upgrade"), defaults)
+                .contains(&"previous".to_string())
+        );
+        assert!(
+            manager
+                .select_scopes(Some("upgrade"), defaults)
+                .contains(&"upgrade".to_string())
+        );
+    }
+
+    #[rstest]
+    #[case::missing(false)]
+    #[case::empty(true)]
+    #[tokio::test]
+    async fn select_initial_scopes_forgets_old_resource_scopes(
+        #[case] explicit_empty_scopes: bool,
+    ) {
+        let mut responses = Vec::new();
+        for second_discovery in [false, true] {
+            responses.push(
+                oauth2::http::Response::builder()
+                    .status(401)
+                    .header(
+                        "www-authenticate",
+                        r#"Bearer resource_metadata="/metadata""#,
+                    )
+                    .body(Vec::new())
+                    .unwrap(),
+            );
+            let mut metadata_responses = initial_scope_metadata_responses();
+            if second_discovery {
+                let mut metadata = serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                });
+                if explicit_empty_scopes {
+                    metadata["scopes_supported"] = serde_json::json!([]);
+                }
+                metadata_responses[0] = http_response(200, metadata);
+            }
+            responses.extend(metadata_responses);
+        }
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(responses)),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        assert_eq!(manager.select_initial_scopes(&[]).await, ["read", "write"]);
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        assert_eq!(manager.select_initial_scopes(&[]).await, ["admin"]);
+        assert_eq!(manager.select_scopes(None, &[]), ["read", "write"]);
+    }
+
+    #[rstest]
+    #[case::with_scope(
+        r#"Bearer resource_metadata="/metadata", scope="read""#,
+        vec!["read"]
+    )]
+    #[case::without_scope(
+        r#"Bearer resource_metadata="/metadata""#,
+        vec!["read", "write"]
+    )]
+    #[tokio::test]
+    async fn select_initial_scopes_matches_discovery_challenge_header(
+        #[case] selected_challenge: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        let mut responses = vec![
+            oauth2::http::Response::builder()
+                .status(401)
+                .header("www-authenticate", r#"Bearer scope="unrelated""#)
+                .header("www-authenticate", selected_challenge)
+                .header(
+                    "www-authenticate",
+                    r#"Bearer resource_metadata="/other-metadata", scope="admin""#,
+                )
+                .body(Vec::new())
+                .unwrap(),
+        ];
+        responses.extend(initial_scope_metadata_responses());
+        let client = RecordingOAuthHttpClient::with_responses(responses);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+
+        assert_eq!(manager.select_initial_scopes(&[]).await, expected);
+        assert_eq!(client.requests()[1].uri, "https://mcp.example.com/metadata");
     }
 
     // -- SEP-2207: offline_access --
