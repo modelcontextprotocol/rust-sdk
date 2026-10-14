@@ -756,7 +756,7 @@ impl ErrorData {
 /// This enum covers all possible message types in the JSON-RPC protocol:
 /// individual requests/responses, notifications, and errors.
 /// It serves as the top-level message container for MCP communication.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
@@ -833,6 +833,149 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
             JsonRpcMessage::Error(e) => Some((Err(e.error), e.id)),
 
             _ => None,
+        }
+    }
+}
+
+enum JsonRpcMessageShape {
+    Request,
+    Response,
+    Notification,
+    Error,
+}
+
+const UNRECOGNIZED_MESSAGE: &str = "unrecognized JSON-RPC message";
+
+impl<'de> Deserialize<'de> for JsonRpcMessageShape {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ShapeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ShapeVisitor {
+            type Value = JsonRpcMessageShape;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a JSON-RPC 2.0 message")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let (mut method, mut id, mut result, mut error) = (false, false, false, false);
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "method" => method = true,
+                        "id" => id = true,
+                        "result" => result = true,
+                        "error" => error = true,
+                        _ => {}
+                    }
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+                JsonRpcMessageShape::classify_object_keys(method, id, result, error)
+            }
+        }
+
+        deserializer.deserialize_map(ShapeVisitor)
+    }
+}
+
+impl JsonRpcMessageShape {
+    fn classify_object_keys<E: serde::de::Error>(
+        method: bool,
+        id: bool,
+        result: bool,
+        error: bool,
+    ) -> Result<Self, E> {
+        match (method, id, result, error) {
+            (true, true, false, false) => Ok(Self::Request),
+            (true, false, false, false) => Ok(Self::Notification),
+            (false, _, true, false) => Ok(Self::Response),
+            (false, _, false, true) => Ok(Self::Error),
+            _ => Err(E::custom(UNRECOGNIZED_MESSAGE)),
+        }
+    }
+}
+
+struct ExpectedMessageShape<const SHAPE: u8>;
+
+impl<'de, const SHAPE: u8> Deserialize<'de> for ExpectedMessageShape<SHAPE> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if JsonRpcMessageShape::deserialize(deserializer)? as u8 == SHAPE {
+            Ok(Self)
+        } else {
+            Err(serde::de::Error::custom(UNRECOGNIZED_MESSAGE))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ShapeCheckedMessage<T, const SHAPE: u8> {
+    // Check field presence without consuming the flattened payload. Serde's
+    // flatten buffer preserves borrows, including inside untagged wrappers.
+    #[serde(flatten)]
+    _shape: ExpectedMessageShape<SHAPE>,
+    #[serde(flatten)]
+    message: T,
+}
+
+impl<'de, Req, Resp, Noti> serde::Deserialize<'de> for JsonRpcMessage<Req, Resp, Noti>
+where
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
+{
+    fn deserialize<__D>(deserializer: __D) -> Result<Self, __D::Error>
+    where
+        __D: serde::Deserializer<'de>,
+    {
+        // A derived untagged enum silently drops a stray `result`/`error`
+        // (#1283). Check field presence before dispatching to a variant.
+        // Serde's buffer preserves borrowed payloads, including through outer
+        // untagged wrappers, without relying on serde_json's private protocol.
+        Self::from_buffered_deserializer(deserializer)
+    }
+}
+
+impl<'de, Req, Resp, Noti> JsonRpcMessage<Req, Resp, Noti>
+where
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
+{
+    fn from_buffered_deserializer<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged, expecting = "unrecognized JSON-RPC message")]
+        enum Message<Req, Resp, Noti> {
+            Request(
+                ShapeCheckedMessage<JsonRpcRequest<Req>, { JsonRpcMessageShape::Request as u8 }>,
+            ),
+            Response(
+                ShapeCheckedMessage<JsonRpcResponse<Resp>, { JsonRpcMessageShape::Response as u8 }>,
+            ),
+            Notification(
+                ShapeCheckedMessage<
+                    JsonRpcNotification<Noti>,
+                    { JsonRpcMessageShape::Notification as u8 },
+                >,
+            ),
+            Error(ShapeCheckedMessage<JsonRpcError, { JsonRpcMessageShape::Error as u8 }>),
+        }
+
+        match Message::deserialize(deserializer)? {
+            Message::Request(checked) => Ok(Self::Request(checked.message)),
+            Message::Response(checked) => Ok(Self::Response(checked.message)),
+            Message::Notification(checked) => Ok(Self::Notification(checked.message)),
+            Message::Error(checked) => Ok(Self::Error(checked.message)),
         }
     }
 }
@@ -5079,6 +5222,386 @@ mod tests {
 
         let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
+    }
+
+    #[test]
+    fn test_response_with_result_and_error_is_rejected() {
+        // https://github.com/modelcontextprotocol/rust-sdk/issues/1283
+        let raw = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": { "content": [] },
+            "error": { "code": -32603, "message": "injected error" },
+        });
+
+        let result: Result<JsonRpcMessage, _> = serde_json::from_value(raw);
+        assert!(
+            result.is_err(),
+            "a response carrying both `result` and `error` must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_request_with_stray_result_or_error_is_rejected() {
+        let with_result = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 2,
+            "method": "ping",
+            "result": { "injected": true },
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(with_result).is_err(),
+            "a request carrying `result` must be rejected"
+        );
+
+        let with_error = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 3,
+            "method": "ping",
+            "error": { "code": -32603, "message": "injected error" },
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(with_error).is_err(),
+            "a request carrying `error` must be rejected"
+        );
+
+        let notification_with_result = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/initialized",
+            "result": {},
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(notification_with_result).is_err(),
+            "a notification carrying `result` must be rejected"
+        );
+    }
+
+    #[test]
+    fn generic_borrowed_request_deserializes_from_str() {
+        // Regression: field-presence dispatch must not force owned Value so hard
+        // that generic payload types containing `&str` lose input borrows.
+        #[derive(Debug, Deserialize)]
+        struct BorrowedRequest<'a> {
+            method: &'a str,
+        }
+
+        let input = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let parsed =
+            serde_json::from_str::<JsonRpcMessage<BorrowedRequest<'_>, Value, Value>>(input)
+                .expect("generic Deserialize API accepts borrowed request strings");
+        match parsed {
+            JsonRpcMessage::Request(request) => {
+                assert_eq!(request.request.method, "ping");
+                let start = input.as_ptr() as usize;
+                let borrowed = request.request.method.as_ptr() as usize;
+                assert!(
+                    borrowed >= start && borrowed < start + input.len(),
+                    "method must borrow from the original input"
+                );
+            }
+            other => panic!("expected Request, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_borrowed_response_deserializes_from_str() {
+        #[derive(Debug, Deserialize)]
+        struct BorrowedResponse<'a> {
+            status: &'a str,
+        }
+
+        let input = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}"#;
+        let parsed =
+            serde_json::from_str::<JsonRpcMessage<Value, BorrowedResponse<'_>, Value>>(input)
+                .expect("generic Deserialize API accepts borrowed response strings");
+        match parsed {
+            JsonRpcMessage::Response(response) => {
+                assert_eq!(response.result.status, "ok");
+                let start = input.as_ptr() as usize;
+                let borrowed = response.result.status.as_ptr() as usize;
+                assert!(
+                    borrowed >= start && borrowed < start + input.len(),
+                    "status must borrow from the original input"
+                );
+            }
+            other => panic!("expected Response, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_deserializes_inside_untagged_wrappers() {
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            One(JsonRpcMessage),
+            Many(Vec<JsonRpcMessage>),
+        }
+
+        for input in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"boom"}}"#,
+        ] {
+            let expected: JsonRpcMessage =
+                serde_json::from_str(input).unwrap_or_else(|error| panic!("{input}: {error}"));
+            for parsed in [
+                serde_json::from_str::<Wrapper>(input).unwrap(),
+                serde_json::from_slice::<Wrapper>(input.as_bytes()).unwrap(),
+                serde_json::from_value::<Wrapper>(serde_json::from_str(input).unwrap()).unwrap(),
+            ] {
+                let Wrapper::One(message) = parsed else {
+                    panic!("expected one message")
+                };
+                assert_eq!(
+                    serde_json::to_value(message).unwrap(),
+                    serde_json::to_value(&expected).unwrap()
+                );
+            }
+            let batch = format!("[{input}]");
+            let Wrapper::Many(messages) = serde_json::from_str(&batch).unwrap() else {
+                panic!("expected multiple messages")
+            };
+            assert_eq!(
+                serde_json::to_value(messages).unwrap(),
+                serde_json::json!([expected])
+            );
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_borrows_directly_and_inside_untagged_wrappers() {
+        #[derive(Debug, Deserialize)]
+        struct BorrowedRequest<'a> {
+            method: &'a str,
+        }
+        #[derive(Debug, Deserialize)]
+        struct BorrowedResponse<'a> {
+            status: &'a str,
+        }
+        type BorrowedMessage<'a> =
+            JsonRpcMessage<BorrowedRequest<'a>, BorrowedResponse<'a>, BorrowedRequest<'a>>;
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper<'a> {
+            One(#[serde(borrow)] BorrowedMessage<'a>),
+            Many(#[serde(borrow)] Vec<BorrowedMessage<'a>>),
+        }
+        fn assert_borrowed(input: &str, message: BorrowedMessage<'_>) {
+            let borrowed = match message {
+                JsonRpcMessage::Request(request) => request.request.method,
+                JsonRpcMessage::Response(response) => response.result.status,
+                JsonRpcMessage::Notification(notification) => notification.notification.method,
+                JsonRpcMessage::Error(_) => panic!("expected borrowed payload"),
+            };
+            let start = input.as_ptr() as usize;
+            assert!((start..start + input.len()).contains(&(borrowed.as_ptr() as usize)));
+            assert!(matches!(borrowed, "ping" | "ok"));
+        }
+        for input in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}"#,
+            r#"{"jsonrpc":"2.0","method":"ping"}"#,
+        ] {
+            assert_borrowed(input, serde_json::from_str(input).unwrap());
+            assert_borrowed(input, serde_json::from_slice(input.as_bytes()).unwrap());
+            for parsed in [
+                serde_json::from_str::<Wrapper<'_>>(input).unwrap(),
+                serde_json::from_slice::<Wrapper<'_>>(input.as_bytes()).unwrap(),
+            ] {
+                let Wrapper::One(message) = parsed else {
+                    panic!("expected one message")
+                };
+                assert_borrowed(input, message);
+            }
+            let batch = format!("[{input}]");
+            for parsed in [
+                serde_json::from_str::<Wrapper<'_>>(&batch).unwrap(),
+                serde_json::from_slice::<Wrapper<'_>>(batch.as_bytes()).unwrap(),
+            ] {
+                let Wrapper::Many(messages) = parsed else {
+                    panic!("expected multiple messages")
+                };
+                assert_eq!(messages.len(), 1);
+                for message in messages {
+                    assert_borrowed(&batch, message);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_classifies_permissive_generic_payloads() {
+        for (input, expected) in [
+            (
+                json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+                "request",
+            ),
+            (
+                json!({"jsonrpc": "2.0", "id": 1, "result": null}),
+                "response",
+            ),
+            (json!({"jsonrpc": "2.0", "method": "ping"}), "notification"),
+            (
+                json!({"jsonrpc": "2.0", "error": {"code": -32603, "message": "boom"}}),
+                "error",
+            ),
+        ] {
+            let parsed: JsonRpcMessage<Value, Value, Value> =
+                serde_json::from_value(input).unwrap();
+            let actual = match parsed {
+                JsonRpcMessage::Request(_) => "request",
+                JsonRpcMessage::Response(_) => "response",
+                JsonRpcMessage::Notification(_) => "notification",
+                JsonRpcMessage::Error(_) => "error",
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_preserves_null_results() {
+        type Message = JsonRpcMessage<Request, Value, Notification>;
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            One(Message),
+            Many(Vec<Message>),
+        }
+
+        // A null result is still a present result for generic JSON-RPC payloads.
+        let input = r#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let assert_null = |message: Message| {
+            let JsonRpcMessage::Response(response) = message else {
+                panic!("expected response");
+            };
+            assert!(response.result.is_null());
+        };
+        for parsed in [
+            serde_json::from_str::<Message>(input).unwrap(),
+            serde_json::from_slice(input.as_bytes()).unwrap(),
+            serde_json::from_value(serde_json::from_str::<Value>(input).unwrap()).unwrap(),
+        ] {
+            assert_null(parsed);
+        }
+        for parsed in [
+            serde_json::from_str::<Wrapper>(input).unwrap(),
+            serde_json::from_slice(input.as_bytes()).unwrap(),
+            serde_json::from_value(serde_json::from_str::<Value>(input).unwrap()).unwrap(),
+        ] {
+            let Wrapper::One(message) = parsed else {
+                panic!("expected one message");
+            };
+            assert_null(message);
+        }
+        let batch = format!("[{input}]");
+        for parsed in [
+            serde_json::from_str::<Wrapper>(&batch).unwrap(),
+            serde_json::from_slice(batch.as_bytes()).unwrap(),
+            serde_json::from_value(serde_json::from_str::<Value>(&batch).unwrap()).unwrap(),
+        ] {
+            let Wrapper::Many(messages) = parsed else {
+                panic!("expected multiple messages");
+            };
+            assert_eq!(messages.len(), 1);
+            for message in messages {
+                assert_null(message);
+            }
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_rejects_conflicting_fields_inside_untagged_wrappers() {
+        type Message = JsonRpcMessage<Request, Value, Notification>;
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            One(Message),
+            Many(Vec<Message>),
+        }
+        for input in [
+            r#"{"jsonrpc":"2.0","id":1,"result":{},"error":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":-32603,"message":"boom"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":null,"error":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping","result":null}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","error":null}"#,
+        ] {
+            assert!(serde_json::from_str::<Message>(input).is_err());
+            for result in [
+                serde_json::from_str::<Wrapper>(input),
+                serde_json::from_slice::<Wrapper>(input.as_bytes()),
+                serde_json::from_value::<Wrapper>(serde_json::from_str(input).unwrap()),
+                serde_json::from_str::<Wrapper>(&format!("[{input}]")),
+            ] {
+                match result {
+                    Err(_) => {}
+                    Ok(Wrapper::One(message)) => panic!("unexpected valid message: {message:?}"),
+                    Ok(Wrapper::Many(messages)) => {
+                        panic!("unexpected valid messages: {messages:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_clean_shapes_and_extension_fields_still_deserialize() {
+        // The four clean shapes keep working.
+        let request = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "method": "ping",
+            "params": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(request).expect("request"),
+            JsonRpcMessage::Request(_)
+        ));
+
+        let response = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(response).expect("response"),
+            JsonRpcMessage::Response(_)
+        ));
+
+        let notification = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/initialized",
+            "params": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(notification).expect("notification"),
+            JsonRpcMessage::Notification(_)
+        ));
+
+        let error = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "error": { "code": -32603, "message": "boom" },
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(error).expect("error"),
+            JsonRpcMessage::Error(_)
+        ));
+
+        // Extension fields stay accepted (no deny_unknown_fields semantics).
+        let extended = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": {},
+            "x-vendor-extension": { "any": true },
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(extended).expect("extended response"),
+            JsonRpcMessage::Response(_)
+        ));
+
+        // Unrecognized shapes still fail.
+        assert!(serde_json::from_value::<JsonRpcMessage>(json!({ "id": 1 })).is_err());
     }
 
     #[test]
