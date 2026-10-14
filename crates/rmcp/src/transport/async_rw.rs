@@ -48,11 +48,36 @@ where
 
 pub type TransportWriter<Role, W> = FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<Role>>>;
 
+/// Default cap on the size of a single incoming line (one JSON-RPC message) for
+/// [`AsyncRwTransport`].
+///
+/// Without a cap, a peer that never sends a newline makes the read buffer grow
+/// until the process runs out of memory. 16 MiB matches the streamable HTTP
+/// client's `DEFAULT_MAX_SSE_EVENT_SIZE`, so a payload that is acceptable over
+/// HTTP is also acceptable over stdio.
+pub const DEFAULT_MAX_LINE_LENGTH: usize = 16 * 1024 * 1024;
+
 pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     read: BufReader<R>,
     line_buf: Vec<u8>,
+    max_line_length: usize,
+    /// Set once an oversized line has been rejected, until its terminating
+    /// newline is seen. Lives on the struct rather than in `read_line` because
+    /// `receive` is polled inside a `select!` and can be cancelled mid-discard.
+    discarding: bool,
     write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
     _role: PhantomData<fn() -> Role>,
+}
+
+/// Outcome of a single bounded line read.
+enum LineRead {
+    /// A whole `\n`-terminated line is in `line_buf`.
+    Line,
+    /// The line exceeded `max_line_length`; it has been dropped.
+    Oversized,
+    /// The peer closed the stream.
+    Eof,
+    Io(std::io::Error),
 }
 
 impl<Role: ServiceRole, R, W> AsyncRwTransport<Role, R, W>
@@ -69,10 +94,105 @@ where
         Self {
             read,
             line_buf: Vec::new(),
+            max_line_length: DEFAULT_MAX_LINE_LENGTH,
+            discarding: false,
             write,
             _role: PhantomData,
         }
     }
+
+    /// Override the maximum size of a single incoming line.
+    ///
+    /// Defaults to [`DEFAULT_MAX_LINE_LENGTH`]. Lines longer than this are
+    /// dropped and logged rather than buffered, and the connection stays open.
+    /// `usize::MAX` restores the previous unbounded behaviour.
+    pub fn with_max_line_length(mut self, max_line_length: usize) -> Self {
+        self.max_line_length = max_line_length;
+        self
+    }
+
+    /// Read one `\n`-terminated line into `self.line_buf` without ever letting
+    /// it grow past `self.max_line_length`.
+    ///
+    /// This replaces `read_until`, which cannot be bounded: it does not return
+    /// until it reaches a delimiter or EOF, so by the time its length could be
+    /// inspected the memory has already been committed. Reading through
+    /// `fill_buf`/`consume` lets the limit be checked before each append.
+    ///
+    /// Cancellation safety is preserved. `fill_buf` consumes nothing if the
+    /// future is dropped, and the copy into `line_buf` and the matching
+    /// `consume` are synchronous with no await between them, so a cancelled
+    /// read leaves a partial line in `line_buf` for the next call to resume,
+    /// exactly as `read_until` did.
+    async fn read_line(&mut self) -> LineRead {
+        loop {
+            // The borrow of `self.read` taken by `fill_buf` has to end before
+            // `consume` can be called, so the decision is made in this block
+            // and applied after it.
+            let (consumed, step) = {
+                let available = match self.read.fill_buf().await {
+                    Ok(available) => available,
+                    Err(e) => return LineRead::Io(e),
+                };
+                if available.is_empty() {
+                    return LineRead::Eof;
+                }
+
+                let newline = available.iter().position(|b| *b == b'\n');
+                let take = newline.map_or(available.len(), |idx| idx + 1);
+
+                if self.discarding {
+                    // Still dropping the tail of a line already rejected.
+                    (
+                        take,
+                        newline.map(|_| Step::EndDiscard).unwrap_or(Step::More),
+                    )
+                } else if self.line_buf.len().saturating_add(take) > self.max_line_length {
+                    self.line_buf.clear();
+                    (
+                        take,
+                        if newline.is_some() {
+                            // The oversized line ends here, nothing left to skip.
+                            Step::Oversized
+                        } else {
+                            Step::OversizedNeedsDiscard
+                        },
+                    )
+                } else {
+                    self.line_buf.extend_from_slice(&available[..take]);
+                    (
+                        take,
+                        if newline.is_some() {
+                            Step::Line
+                        } else {
+                            Step::More
+                        },
+                    )
+                }
+            };
+            self.read.consume(consumed);
+
+            match step {
+                Step::Line => return LineRead::Line,
+                Step::More => {}
+                Step::EndDiscard => self.discarding = false,
+                Step::Oversized => return LineRead::Oversized,
+                Step::OversizedNeedsDiscard => {
+                    self.discarding = true;
+                    return LineRead::Oversized;
+                }
+            }
+        }
+    }
+}
+
+/// What to do once the `fill_buf` borrow has been released.
+enum Step {
+    Line,
+    More,
+    EndDiscard,
+    Oversized,
+    OversizedNeedsDiscard,
 }
 
 #[cfg(feature = "client")]
@@ -124,22 +244,28 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<Role>> {
         loop {
-            // `read_until` is not cancellation-safe on its own, and `receive` is
-            // polled inside a `select!` in the service loop: an in-progress line
-            // read is dropped whenever another branch (e.g. an outgoing response)
-            // becomes ready. We rely on `read_until` appending into `self.line_buf`
-            // and only returning at a delimiter or EOF, so a cancelled read leaves
-            // its partial bytes in `self.line_buf`. Keeping that buffer across
-            // calls lets the next read resume the same line; it is cleared only
-            // after a whole line has been consumed. Clearing at the top of the
-            // loop (the previous behaviour) discarded the partial read and so
-            // dropped incoming requests under concurrent response load.
-            match self.read.read_until(b'\n', &mut self.line_buf).await {
+            // `receive` is polled inside a `select!` in the service loop, so an
+            // in-progress line read is dropped whenever another branch (e.g. an
+            // outgoing response) becomes ready. `read_line` appends into
+            // `self.line_buf` and only reports a line once it hits a delimiter,
+            // so a cancelled read leaves its partial bytes there and the next
+            // call resumes the same line; the buffer is cleared only after a
+            // whole line has been consumed. Clearing at the top of the loop (the
+            // behaviour before #947) discarded the partial read and so dropped
+            // incoming requests under concurrent response load.
+            match self.read_line().await {
+                LineRead::Line => {}
+                LineRead::Oversized => {
+                    tracing::error!(
+                        max_line_length = self.max_line_length,
+                        "Incoming message exceeded the maximum line length, discarding it"
+                    );
+                    continue;
+                }
                 // EOF. Any bytes still in `line_buf` are an incomplete trailing
                 // message with no delimiter, so there is nothing to deliver.
-                Ok(0) => return None,
-                Ok(_) => {}
-                Err(e) => {
+                LineRead::Eof => return None,
+                LineRead::Io(e) => {
                     tracing::error!("Error reading from stream: {}", e);
                     return None;
                 }
