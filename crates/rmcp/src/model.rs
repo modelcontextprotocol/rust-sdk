@@ -929,9 +929,9 @@ where
     Resp: Deserialize<'de>,
     Noti: Deserialize<'de>,
 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<__D>(deserializer: __D) -> Result<Self, __D::Error>
     where
-        D: serde::Deserializer<'de>,
+        __D: serde::Deserializer<'de>,
     {
         // A derived untagged enum silently drops a stray `result`/`error`
         // (#1283). Check field presence before dispatching to a variant.
