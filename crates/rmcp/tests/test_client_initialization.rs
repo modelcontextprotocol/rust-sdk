@@ -9,8 +9,9 @@ use common::handlers::TestClientHandler;
 use rmcp::{
     ServiceExt,
     model::{
-        ClientJsonRpcMessage, ErrorCode, ErrorData, InitializeResult, JsonRpcError,
-        JsonRpcVersion2_0, RequestId, ServerCapabilities, ServerJsonRpcMessage, ServerResult,
+        ClientConfig, ClientJsonRpcMessage, ClientResult, ErrorCode, ErrorData, InitializeResult,
+        JsonRpcError, JsonRpcVersion2_0, PingRequest, ProtocolVersion, RequestId,
+        ServerCapabilities, ServerJsonRpcMessage, ServerRequest, ServerResult,
     },
     transport::{IntoTransport, Transport},
 };
@@ -156,4 +157,53 @@ async fn test_client_init_handles_jsonrpc_error() {
         }
         _ => panic!("Expected ClientInitializeError::JsonRpcError"),
     }
+}
+
+#[tokio::test]
+async fn client_answers_server_ping_during_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(initialize) =
+            server.receive().await.expect("expected initialize request")
+        else {
+            panic!("expected initialize request");
+        };
+        let ping_id = RequestId::String("server-ping".into());
+        server
+            .send(ServerJsonRpcMessage::request(
+                ServerRequest::PingRequest(PingRequest::default()),
+                ping_id.clone(),
+            ))
+            .await
+            .expect("send ping");
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::InitializeResult(
+                    InitializeResult::new(ServerCapabilities::default())
+                        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE),
+                ),
+                initialize.id,
+            ))
+            .await
+            .expect("send initialize response");
+
+        let Some(ClientJsonRpcMessage::Response(response)) = server.receive().await else {
+            panic!("expected the ping response before notifications/initialized");
+        };
+        assert_eq!(response.id, ping_id);
+        assert!(matches!(response.result, ClientResult::EmptyResult(_)));
+        assert!(matches!(
+            server.receive().await,
+            Some(ClientJsonRpcMessage::Notification(_))
+        ));
+    });
+
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+        .serve(client_transport)
+        .await
+        .expect("initialize client");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
 }

@@ -4,8 +4,8 @@ use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
         ClientJsonRpcMessage, ClientRequest, DiscoverResult, ErrorCode, ErrorData, GetMeta,
-        Implementation, InitializeResult, ProtocolVersion, RequestId, ServerCapabilities,
-        ServerJsonRpcMessage, ServerResult,
+        Implementation, InitializeResult, PingRequest, ProtocolVersion, RequestId,
+        ServerCapabilities, ServerJsonRpcMessage, ServerRequest, ServerResult,
     },
     service::PeerRequestOptions,
     transport::{IntoTransport, Transport},
@@ -273,6 +273,67 @@ async fn discover_startup_omits_initialize() {
         .await_response()
         .await
         .expect("list tools response");
+    client.cancel().await.expect("cancel client");
+    server_task.await.expect("server task");
+}
+
+// 2026-07-28 has no ping and servers send no requests before discover
+// completes, so a stray ping stays unanswered.
+#[tokio::test]
+async fn discover_startup_ignores_server_ping() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
+    let server_task = tokio::spawn(async move {
+        let ClientJsonRpcMessage::Request(request) =
+            server.receive().await.expect("expected discover request")
+        else {
+            panic!("expected discover request");
+        };
+        server
+            .send(ServerJsonRpcMessage::request(
+                ServerRequest::PingRequest(PingRequest::default()),
+                RequestId::String("server-ping".into()),
+            ))
+            .await
+            .expect("send ping");
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::DiscoverResult(DiscoverResult::new(
+                    vec![ProtocolVersion::V_2026_07_28],
+                    ServerCapabilities::default(),
+                )),
+                request.id,
+            ))
+            .await
+            .expect("send discover response");
+
+        // Anything written for the ping would arrive before this request.
+        let Some(ClientJsonRpcMessage::Request(request)) = server.receive().await else {
+            panic!("expected the next client request, not a ping response");
+        };
+        assert!(matches!(
+            request.request,
+            ClientRequest::ListToolsRequest(_)
+        ));
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(Default::default()),
+                request.id,
+            ))
+            .await
+            .expect("send tools response");
+    });
+
+    let client = DiscoverClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("discover client should start");
+    client.list_tools(None).await.expect("list tools");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }
