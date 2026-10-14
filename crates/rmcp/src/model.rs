@@ -4879,8 +4879,13 @@ impl ServerResult {
             ServerResult::ReadResourceResult(r) => {
                 (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
             }
-            // SEP-2640 skill results with `Option<String>` cache_scope.
-            // `SkillsGetResult` is absent on purpose: it has no cache fields.
+            ServerResult::SkillsGetResult(r) => {
+                return fill_missing_cache_hints_for_string_scope(
+                    &r.result_type,
+                    &mut r.ttl_ms,
+                    &mut r.cache_scope,
+                );
+            }
             ServerResult::SkillsListResult(r) => {
                 return fill_missing_cache_hints_for_string_scope(
                     &r.result_type,

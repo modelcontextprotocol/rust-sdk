@@ -805,6 +805,207 @@ fn macro_server_directory_read_rejects_file_and_unknown_uris() {
 // Tests for SEP-2640 spec conformance fixes
 // ---------------------------------------------------------------------------
 
+/// `skills/get` on the **macro-generated** handler must reject a URI naming a
+/// file *inside* a skill, not just the Router path.
+///
+/// Spec: `params.uri` MUST be the skill's SKILL.md URI. `SkillRouter::get_by_uri`
+/// matches by longest prefix, so `skill://alpha/appendix.md` resolves to the
+/// `alpha` route — the macro-generated `skills_get` used to call straight
+/// through and return the skill entry instead of `-32602` (Invalid params).
+/// The hand-written Router path had this gate; the macro path did not.
+///
+/// The sibling test `skills_get_rejects_file_uri_within_skill` covers the same
+/// rule on the hand-written `skill_fs_server`, so this is the macro counterpart.
+#[test]
+fn macro_server_skills_get_rejects_non_skill_md_uri() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-03-26",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        })
+        .to_string(),
+        // A sibling file inside the served skill — NOT the SKILL.md URI.
+        build_request(
+            2,
+            "skills/get",
+            serde_json::json!({"uri": "skill://alpha/appendix.md"}),
+        ),
+        // A file nested below the skill root — also NOT the SKILL.md URI.
+        build_request(
+            3,
+            "skills/get",
+            serde_json::json!({"uri": "skill://beta/nested/refs/x.md"}),
+        ),
+        // The canonical URI must still resolve, so the gate is not over-broad.
+        build_request(
+            4,
+            "skills/get",
+            serde_json::json!({"uri": "skill://alpha/SKILL.md"}),
+        ),
+    ];
+
+    let responses = run_macro_server_request(&requests);
+
+    for id in [2u64, 3] {
+        let resp = responses
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("macro server should answer skills/get id {id}"));
+        assert_eq!(
+            resp["error"]["code"],
+            serde_json::json!(-32602),
+            "skills/get on a non-SKILL.md URI must return -32602 (Invalid params); got: {resp}"
+        );
+        assert!(
+            resp["result"].is_null(),
+            "a rejected skills/get must not also carry a result; got: {resp}"
+        );
+    }
+
+    // Happy path unaffected: the SKILL.md URI still returns the entry.
+    let ok = responses
+        .iter()
+        .find(|r| r["id"] == 4)
+        .expect("macro server should answer skills/get id 4");
+    assert!(
+        ok["error"].is_null(),
+        "skills/get on the canonical SKILL.md URI must succeed; got: {ok}"
+    );
+    assert_eq!(
+        ok["result"]["skill"]["uri"], "skill://alpha/SKILL.md",
+        "canonical skills/get should return the alpha entry; got: {ok}"
+    );
+}
+
+/// Hole (b): a nested SKILL.md URI that is not the canonical URI of any
+/// registered skill must be rejected. The `directory_form || skill_md_form`
+/// gate passes it because `parse_skill_uri` returns `("beta/nested/sub", "SKILL.md")`
+/// and `file == "SKILL.md"` is true. The 2-line equality gate rejects it because
+/// `"skill://beta/nested/sub/SKILL.md" != "skill://beta/nested/SKILL.md"`.
+#[test]
+fn macro_server_skills_get_rejects_nested_skill_md_uri() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-03-26",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        })
+        .to_string(),
+        // A nested SKILL.md URI that is not the canonical URI of any skill.
+        build_request(
+            2,
+            "skills/get",
+            serde_json::json!({"uri": "skill://beta/nested/sub/SKILL.md"}),
+        ),
+    ];
+
+    let responses = run_macro_server_request(&requests);
+
+    let resp = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .expect("macro server should answer skills/get id 2");
+    assert_eq!(
+        resp["error"]["code"],
+        serde_json::json!(-32602),
+        "skills/get on a nested SKILL.md URI must return -32602; got: {resp}"
+    );
+}
+
+/// Spec:419 — `GetSkillResult` extends `CacheableResult`, so `ttlMs` and
+/// `cacheScope` are REQUIRED on every `skills/get` response.
+///
+/// This is a unit test on `fill_missing_cache_hints` (same pattern as
+/// `fill_missing_cache_hints_covers_skills_list_result`), not an integration
+/// test through the server, because the server gates cache hints on the
+/// negotiated protocol version (2026-07-28+) and the `initialize` handshake
+/// negotiates down to 2025-11-25 when the client requests 2026-07-28.
+#[test]
+fn fill_missing_cache_hints_covers_skills_get_result() {
+    use rmcp::model::{ResultType, ServerResult, SkillEntry, skills::SkillsGetResult};
+
+    let entry = SkillEntry::new(
+        "skill://test/SKILL.md",
+        serde_json::json!({
+            "name": "test",
+            "description": "Test skill"
+        }),
+    );
+    let mut result = SkillsGetResult::new(entry);
+    result.result_type = Some(ResultType::COMPLETE);
+    result.ttl_ms = None;
+    result.cache_scope = None;
+
+    let mut server_result = ServerResult::SkillsGetResult(result);
+    server_result.fill_missing_cache_hints();
+
+    let ServerResult::SkillsGetResult(r) = &server_result else {
+        panic!("expected SkillsGetResult");
+    };
+    assert!(
+        r.ttl_ms.is_some(),
+        "fill_missing_cache_hints must set ttl_ms on SkillsGetResult; got: {r:?}"
+    );
+    assert!(
+        r.cache_scope.is_some(),
+        "fill_missing_cache_hints must set cache_scope on SkillsGetResult; got: {r:?}"
+    );
+}
+
+/// Hole (b) on the Router path: a nested SKILL.md URI that is not the
+/// canonical URI of any registered skill must be rejected.
+#[test]
+fn skills_get_rejects_nested_skill_md_uri() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-03-26",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        // A nested SKILL.md URI that is not the canonical URI of any skill.
+        build_request(
+            2,
+            "skills/get",
+            serde_json::json!({"uri": "skill://billing/refunds/forms/SKILL.md"}),
+        ),
+    ];
+
+    let responses = run_server_request(&requests);
+
+    let resp = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .expect("server should answer skills/get id 2");
+    assert_eq!(
+        resp["error"]["code"],
+        serde_json::json!(-32602),
+        "skills/get on a nested SKILL.md URI must return -32602; got: {resp}"
+    );
+}
+
 /// Resources completeness: files below the skill root must be published, even
 /// in subdirectories that are not themselves skills.
 ///

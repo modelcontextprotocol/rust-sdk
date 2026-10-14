@@ -145,6 +145,17 @@ pub fn skill_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Token
                         format!("skill not found: {}", request.uri),
                         None,
                     ))?;
+                // Spec: params.uri MUST be the skill SKILL.md URI. Reject
+                // any other URI with -32602. The equality check subsumes both
+                // the directory-form and skill-md-form checks and also rejects
+                // nested SKILL.md URIs that are not the canonical URI of any
+                // registered skill.
+                if request.uri != route.attr.uri {
+                    return Err(rmcp::ErrorData::invalid_params(
+                        format!("not a SKILL.md URI: {}", request.uri),
+                        None,
+                    ));
+                }
                 let skill_context = rmcp::handler::server::skill::SkillCallContext::new(
                     self,
                     request.uri.clone(),

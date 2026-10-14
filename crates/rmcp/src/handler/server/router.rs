@@ -187,16 +187,11 @@ where
             ClientRequest::SkillsGetRequest(request) => {
                 if let Some(route) = self.skill_router.get_by_uri(&request.params.uri) {
                     // Spec: params.uri MUST be the skill SKILL.md URI. Reject
-                    // any other file URI within the skill (e.g., FORMS.md) by
-                    // falling through to the default handler, which returns -32602.
-                    let directory_form = route
-                        .skill_path()
-                        .map(|p| request.params.uri == format!("skill://{}", p))
-                        .unwrap_or(false);
-                    let skill_md_form = crate::model::skills::parse_skill_uri(&request.params.uri)
-                        .map(|(_, file)| file == "SKILL.md")
-                        .unwrap_or(false);
-                    if directory_form || skill_md_form {
+                    // any other URI with -32602. The equality check subsumes both
+                    // the directory-form and skill-md-form checks and also rejects
+                    // nested SKILL.md URIs that are not the canonical URI of any
+                    // registered skill.
+                    if request.params.uri == route.attr.uri {
                         let skill_context = crate::handler::server::skill::SkillCallContext::new(
                             self.service.as_ref(),
                             request.params.uri.clone(),

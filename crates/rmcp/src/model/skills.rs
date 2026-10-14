@@ -250,9 +250,8 @@ pub type SkillsGetRequest = Request<SkillsGetRequestMethod, SkillsGetRequestPara
 
 /// Response to `skills/get`.
 ///
-/// Carries a single skill entry. No pagination cursor (a single entry is not
-/// a list). The caching fields (`ttlMs`/`cacheScope`) are left open — the
-/// spec does not settle whether `skills/get` results carry them.
+/// Spec:419 — `GetSkillResult` extends `CacheableResult`, so `ttlMs` and
+/// `cacheScope` are REQUIRED on every `skills/get` response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -261,6 +260,10 @@ pub struct SkillsGetResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<ResultType>,
     pub skill: SkillEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_scope: Option<String>,
 }
 
 impl SkillsGetResult {
@@ -268,6 +271,8 @@ impl SkillsGetResult {
         Self {
             result_type: Some(ResultType::COMPLETE),
             skill,
+            ttl_ms: None,
+            cache_scope: None,
         }
     }
 }

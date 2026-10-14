@@ -105,6 +105,15 @@ pub fn skill(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> 
         ));
     }
 
+    // Spec:415 — `params.uri` MUST be the URI of a skill's `SKILL.md`.
+    // Enforce at compile time so invalid URIs fail before deployment.
+    if !stripped.ends_with("/SKILL.md") {
+        return Err(syn::Error::new_spanned(
+            fn_ident,
+            format!("`#[skill]` URI must end with `/SKILL.md` (got `{uri}`)"),
+        ));
+    }
+
     // Validate frontmatter is present
     let frontmatter = attribute.frontmatter.ok_or_else(|| {
         syn::Error::new_spanned(
