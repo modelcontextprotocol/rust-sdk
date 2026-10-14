@@ -883,12 +883,6 @@ impl JsonRpcMessageShape {
         error: bool,
     ) -> Result<Self, E> {
         match (method, id, result, error) {
-            (_, _, true, true) => Err(E::custom(
-                "invalid JSON-RPC message: both `result` and `error` are present",
-            )),
-            (true, _, true, _) | (true, _, _, true) => Err(E::custom(
-                "invalid JSON-RPC message: a request or notification must not carry `result` or `error`",
-            )),
             (true, true, false, false) => Ok(Self::Request),
             (true, false, false, false) => Ok(Self::Notification),
             (false, _, true, false) => Ok(Self::Response),
