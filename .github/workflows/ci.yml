@@ -280,6 +280,12 @@ jobs:
       - name: Run lib tests without default features
         run: cargo test -p rmcp --lib --no-default-features
 
+      - name: Check published crates ship LICENSE
+        run: |
+          for crate in rmcp rmcp-macros; do
+            cargo package --list -p "$crate" | grep -qx LICENSE
+          done
+
   test-no-local:
     name: Run Tests (no local feature)
     runs-on: ubuntu-latest
