@@ -210,7 +210,7 @@
           ]
         },
         "structuredContent": {
-          "description": "An optional JSON object that represents the structured result of the tool call"
+          "description": "An optional JSON value that represents the structured result of the tool call.\nIt can be any JSON value, including `null`; an explicit `null` is kept\ndistinct from an absent field."
         }
       }
     },
@@ -3370,7 +3370,7 @@
           "description": "Verbatim copy of the `SKILL.md` YAML frontmatter, rendered as JSON.\n\nThe spec calls this \"the frontmatter properties, rendered as JSON\".\nRequired keys: `name` (MUST equal the final segment of the skill path),\n`description`. Optional: `version`, `license`, plus any custom metadata."
         },
         "resources": {
-          "description": "Optional array of the skill's files with their URIs, SHA-256 digests,\nand sizes, or the literal string `\"dynamic\"` for dynamically-generated\nskills. Omitted from bare `SKILL.md`-only skills.",
+          "description": "The skill's files: an array of `{uri, digest, size}` triples, or the\nliteral string `\"dynamic\"` for dynamically-generated skills.\nREQUIRED by the spec — a host MUST NOT load an entry with `null`.\nDefaults to `SkillResources::Dynamic` via `SkillEntry::new()`.",
           "anyOf": [
             {
               "$ref": "#/definitions/SkillResources"
@@ -3439,9 +3439,15 @@
       ]
     },
     "SkillsGetResult": {
-      "description": "Response to `skills/get`.\n\nCarries a single skill entry. No pagination cursor (a single entry is not\na list). The caching fields (`ttlMs`/`cacheScope`) are left open — the\nspec does not settle whether `skills/get` results carry them.",
+      "description": "Response to `skills/get`.\n\nSpec:419 — `GetSkillResult` extends `CacheableResult`, so `ttlMs` and\n`cacheScope` are REQUIRED on every `skills/get` response.",
       "type": "object",
       "properties": {
+        "cacheScope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "resultType": {
           "anyOf": [
             {
@@ -3454,6 +3460,14 @@
         },
         "skill": {
           "$ref": "#/definitions/SkillEntry"
+        },
+        "ttlMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "required": [

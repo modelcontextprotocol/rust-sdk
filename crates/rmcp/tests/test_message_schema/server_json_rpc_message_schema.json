@@ -3439,9 +3439,15 @@
       ]
     },
     "SkillsGetResult": {
-      "description": "Response to `skills/get`.\n\nCarries a single skill entry. No pagination cursor (a single entry is not\na list). The caching fields (`ttlMs`/`cacheScope`) are left open — the\nspec does not settle whether `skills/get` results carry them.",
+      "description": "Response to `skills/get`.\n\nSpec:419 — `GetSkillResult` extends `CacheableResult`, so `ttlMs` and\n`cacheScope` are REQUIRED on every `skills/get` response.",
       "type": "object",
       "properties": {
+        "cacheScope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "resultType": {
           "anyOf": [
             {
@@ -3454,6 +3460,14 @@
         },
         "skill": {
           "$ref": "#/definitions/SkillEntry"
+        },
+        "ttlMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "required": [
