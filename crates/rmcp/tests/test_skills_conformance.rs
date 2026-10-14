@@ -238,7 +238,7 @@ fn multi_file_skill_lists_siblings() {
         .map(|r| r["uri"].as_str().unwrap_or(""))
         .filter(|uri| uri.ends_with(".md"))
         .collect();
-    // After defect 5 fix: SKILL.md + 2 siblings = 3 entries
+    // SKILL.md + 2 siblings = 3 entries
     assert_eq!(
         names.len(),
         3,
@@ -279,7 +279,7 @@ fn single_file_skill_has_no_resources() {
         .find(|r| r["id"] == 2)
         .and_then(|r| r["result"]["skill"]["resources"].as_array());
 
-    // After defect 5 fix: SKILL.md itself is included in resources.
+    // SKILL.md itself is included in resources.
     // A single-file skill should have exactly 1 resource (SKILL.md).
     let resources = resources.expect("single-file skill should have resources");
     assert_eq!(
@@ -415,7 +415,7 @@ fn multi_file_skill_has_resources_field() {
         .and_then(|r| r["result"]["skill"]["resources"].as_array())
         .expect("multi-file skill should have resources");
 
-    // After defect 5 fix: SKILL.md + 2 siblings = 3 entries
+    // SKILL.md + 2 siblings = 3 entries
     assert_eq!(
         resources.len(),
         3,
@@ -799,6 +799,185 @@ fn macro_server_directory_read_rejects_file_and_unknown_uris() {
             "expected -32602 (Invalid params) for id {id}; got: {resp}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tests for SEP-2640 spec conformance fixes
+// ---------------------------------------------------------------------------
+
+/// Resources completeness: files below the skill root must be published, even
+/// in subdirectories that are not themselves skills.
+///
+/// Builds a skill tree where a data file lives in a subdirectory below the
+/// skill root (`billing/refunds/forms/FORMS.md`) and verifies `skills/get`
+/// lists it. Before the fix the walk skipped directories, so the file was
+/// invisible to a host.
+#[test]
+fn nested_skill_subdirectory_files_are_published_in_resources() {
+    use std::fs;
+
+    // Build a temp skill tree:
+    //   tmp_root/
+    //     billing/
+    //       refunds/
+    //         SKILL.md
+    //         forms/
+    //           FORMS.md
+    let tmp = std::env::temp_dir().join(format!("rmcp_test_{}", std::process::id()));
+    let skill_dir = tmp.join("billing").join("refunds");
+    let sub_dir = skill_dir.join("forms");
+    fs::create_dir_all(&sub_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: refunds\ndescription: Refund handling\n---\n# Refunds\n",
+    )
+    .unwrap();
+    fs::write(sub_dir.join("FORMS.md"), "# Refund Forms\n\nForm 101\n").unwrap();
+
+    // Run the server against the temp root
+    let mut child = Command::new("cargo")
+        .args([
+            "run",
+            "--example",
+            "skill_fs_server",
+            "--features",
+            "server,transport-io",
+            "--",
+            "--root",
+        ])
+        .arg(&tmp)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn server");
+
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-03-26",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        build_request(
+            2,
+            "skills/get",
+            serde_json::json!({"uri": "skill://billing/refunds/SKILL.md"}),
+        ),
+    ];
+    {
+        let stdin = child.stdin.as_mut().expect("failed to open stdin");
+        for req in &requests {
+            writeln!(stdin, "{}", req).expect("failed to write request");
+        }
+    }
+
+    let output = child.wait_with_output().expect("failed to wait for server");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let responses: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line.trim()).ok())
+        .collect();
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&tmp);
+
+    let resources = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .and_then(|r| r["result"]["skill"]["resources"].as_array())
+        .expect("should have resources for nested skill");
+
+    assert!(
+        resources.len() >= 2,
+        "should include SKILL.md + nested FORMS.md; got {} resources: {:?}",
+        resources.len(),
+        resources
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["uri"].as_str().unwrap_or("").ends_with("/FORMS.md")),
+        "should contain nested FORMS.md in resources"
+    );
+}
+
+/// `skills/get` must reject a URI naming a file *inside* a skill.
+///
+/// Spec: `params.uri` MUST be the skill's SKILL.md URI. The handler used to
+/// prefix-match through the router, so a request for
+/// `skill://billing/refunds/FORMS.md` returned the skill entry instead of
+/// `-32602` (Invalid params).
+#[test]
+fn skills_get_rejects_file_uri_within_skill() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-03-26",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        build_request(
+            2,
+            "skills/get",
+            serde_json::json!({"uri": "skill://billing/refunds/FORMS.md"}),
+        ),
+    ];
+
+    let responses = run_server_request(&requests);
+    let error = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .and_then(|r| r["error"].as_object())
+        .expect("should have error response for non-SKILL.md URI");
+
+    assert_eq!(
+        error["code"],
+        serde_json::json!(-32602),
+        "skills/get on a non-SKILL.md URI must return -32602; got: {error:?}"
+    );
+}
+
+/// `skills/get` must still resolve the canonical SKILL.md URI.
+///
+/// Regression guard: tightening the check must not break the happy path of
+/// `skill://billing/refunds/SKILL.md`.
+#[test]
+fn skills_get_accepts_skill_md_uri() {
+    let requests = vec![
+        build_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": "2026-03-26",
+                "capabilities": {"skills": {}},
+                "clientInfo": {"name": "test", "version": "0.1.0"}
+            }),
+        ),
+        build_request(
+            2,
+            "skills/get",
+            serde_json::json!({"uri": "skill://billing/refunds/SKILL.md"}),
+        ),
+    ];
+
+    let responses = run_server_request(&requests);
+    let skill = responses
+        .iter()
+        .find(|r| r["id"] == 2)
+        .and_then(|r| r["result"]["skill"].as_object())
+        .expect("should have skills/get response for SKILL.md URI");
+
+    assert_eq!(
+        skill["uri"], "skill://billing/refunds/SKILL.md",
+        "skills/get on SKILL.md URI must succeed"
+    );
 }
 
 // ---------------------------------------------------------------------------

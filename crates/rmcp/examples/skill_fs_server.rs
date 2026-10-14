@@ -87,29 +87,30 @@ impl FileSystemSkillServer {
         let skill_digest = Self::compute_sha256(&canonical_path);
         resources.push(SkillResource::new(uri.clone(), skill_digest, skill_size));
 
-        // Include sibling files (not subdirs — those are separate skills)
-        if let Ok(entries) = fs::read_dir(parent_dir) {
-            for entry in entries.flatten() {
-                let sibling = entry.path();
-                if sibling == canonical_path {
-                    continue;
-                }
-                let name = sibling.file_name().and_then(|s| s.to_str())?;
-                if name == SKILL_FILE || sibling.is_dir() {
-                    continue;
-                }
-                let canonical_sibling = sibling.canonicalize().ok()?;
-                if !canonical_sibling.starts_with(&canonical_root) {
-                    continue;
-                }
-                let sibling_relative = canonical_sibling.strip_prefix(&canonical_root).ok()?;
-                let sibling_uri = format!("skill://{}", sibling_relative.to_string_lossy());
-                let size = fs::metadata(&canonical_sibling)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                let digest = Self::compute_sha256(&canonical_sibling);
-                resources.push(SkillResource::new(sibling_uri, digest, size));
+        // Include all files below the skill root, recursing into subdirectories.
+        // Spec: "Completeness extends to nested skills. The enclosing skill
+        // resources lists them too."
+        let mut files = Vec::new();
+        Self::collect_files_recursive(parent_dir, &mut files);
+        for sibling in files {
+            if sibling == canonical_path {
+                continue;
             }
+            let name = sibling.file_name().and_then(|s| s.to_str())?;
+            if name == SKILL_FILE {
+                continue;
+            }
+            let canonical_sibling = sibling.canonicalize().ok()?;
+            if !canonical_sibling.starts_with(&canonical_root) {
+                continue;
+            }
+            let sibling_relative = canonical_sibling.strip_prefix(&canonical_root).ok()?;
+            let sibling_uri = format!("skill://{}", sibling_relative.to_string_lossy());
+            let size = fs::metadata(&canonical_sibling)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let digest = Self::compute_sha256(&canonical_sibling);
+            resources.push(SkillResource::new(sibling_uri, digest, size));
         }
 
         let resources = if resources.is_empty() {
@@ -126,6 +127,24 @@ impl FileSystemSkillServer {
         entry.resources = resources;
 
         Some(entry)
+    }
+
+    /// Recursively collect all files under `dir` into `out`.
+    ///
+    /// Used by `parse_skill_file` to enumerate every file below the skill root,
+    /// including files in nested subdirectories. The spec requires completeness:
+    /// "The enclosing skill resources lists them too."
+    fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::collect_files_recursive(&path, out);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
     }
 
     /// Compute SHA-256 digest of a file, returning "sha256:<hex>" format.
