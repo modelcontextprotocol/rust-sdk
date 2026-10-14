@@ -91,7 +91,7 @@ pub use child_process::{ConfigureCommandExt, TokioChildProcess};
 #[cfg(feature = "transport-io")]
 pub mod io;
 #[cfg(feature = "transport-io")]
-pub use io::stdio;
+pub use io::{StdioReader, StdioWriter, stdio, stdio_pipes};
 
 #[cfg(feature = "auth")]
 pub mod auth;
