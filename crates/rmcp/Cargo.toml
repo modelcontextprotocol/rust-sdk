@@ -365,6 +365,15 @@ required-features = [
 ]
 path = "tests/test_streamable_http_malformed_json_request.rs"
 
+[[test]]
+name = "test_streamable_http_initialize_error"
+required-features = [
+  "client",
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+]
+path = "tests/test_streamable_http_initialize_error.rs"
+
 
 [[test]]
 name = "test_custom_request"
