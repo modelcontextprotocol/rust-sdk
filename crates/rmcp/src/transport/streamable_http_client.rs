@@ -2555,6 +2555,46 @@ mod tests {
     }
 
     #[test]
+    fn cache_tools_keeps_nested_annotations_and_drops_array_annotations() {
+        let nested = tool(
+            "nested",
+            json!({
+                "type": "object",
+                "properties": { "region": { "type": "string", "x-mcp-header": "Region" } },
+            }),
+        );
+        let in_items = tool(
+            "in_items",
+            json!({ "type": "array", "items": { "type": "string", "x-mcp-header": "Item" } }),
+        );
+        let mut message = ServerJsonRpcMessage::response(
+            ServerResult::ListToolsResult(ListToolsResult::with_all_items(vec![nested, in_items])),
+            NumberOrString::Number(1),
+        );
+        let mut cache = HashMap::new();
+
+        cache_tools_from_response(&mut cache, &mut message, &ProtocolVersion::V_2026_07_28);
+
+        let ServerJsonRpcMessage::Response(response) = &mut message else {
+            panic!("expected tools/list response");
+        };
+        let ServerResult::ListToolsResult(result) = &mut response.result else {
+            panic!("expected tools/list result");
+        };
+        assert_eq!(
+            (
+                result
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_ref())
+                    .collect::<Vec<_>>(),
+                cache.keys().map(String::as_str).collect::<Vec<_>>(),
+            ),
+            (vec!["nested"], vec!["nested"])
+        );
+    }
+
+    #[test]
     fn cache_tools_preserves_pre_standard_header_results() {
         let invalid = tool("legacy", json!({ "type": "string", "x-mcp-header": "" }));
         let mut message = ServerJsonRpcMessage::response(
