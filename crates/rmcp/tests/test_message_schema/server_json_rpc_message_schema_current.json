@@ -3439,7 +3439,7 @@
       ]
     },
     "SkillsGetResult": {
-      "description": "Response to `skills/get`.\n\nSpec:419 — `GetSkillResult` extends `CacheableResult`, so `ttlMs` and\n`cacheScope` are REQUIRED on every `skills/get` response.",
+      "description": "Response to `skills/get`.\n\nSEP-2549 caching fields (`ttlMs`/`cacheScope`) are included for parity\nwith `SkillsListResult` and `ResourcesDirectoryReadResult`. The merged\nSEP-2640 does not settle whether `skills/get` results carry them; they\nare provided when the negotiated protocol version is 2026-07-28 or later.",
       "type": "object",
       "properties": {
         "cacheScope": {

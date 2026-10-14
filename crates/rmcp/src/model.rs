@@ -4923,7 +4923,7 @@ fn fill_missing_cache_hints_for_string_scope(
         return;
     }
     ttl_ms.get_or_insert(0);
-    cache_scope.get_or_insert("private".to_string());
+    cache_scope.get_or_insert("public".to_string());
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;

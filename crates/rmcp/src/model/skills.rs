@@ -250,8 +250,10 @@ pub type SkillsGetRequest = Request<SkillsGetRequestMethod, SkillsGetRequestPara
 
 /// Response to `skills/get`.
 ///
-/// Spec:419 — `GetSkillResult` extends `CacheableResult`, so `ttlMs` and
-/// `cacheScope` are REQUIRED on every `skills/get` response.
+/// SEP-2549 caching fields (`ttlMs`/`cacheScope`) are included for parity
+/// with `SkillsListResult` and `ResourcesDirectoryReadResult`. The merged
+/// SEP-2640 does not settle whether `skills/get` results carry them; they
+/// are provided when the negotiated protocol version is 2026-07-28 or later.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
