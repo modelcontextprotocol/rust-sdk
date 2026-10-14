@@ -344,7 +344,12 @@ mod tests {
         assert_eq!(open_flags(read.as_raw_fd()), read_flags);
         assert_eq!(open_flags(write.as_raw_fd()), write_flags);
 
+        // The originals hold the pipe's ends too, and a live write end would
+        // keep `cat` from ever seeing EOF.
+        drop(reader);
         drop(writer);
+        drop(read);
+        drop(write);
         assert!(child.wait().unwrap().success());
     }
 
