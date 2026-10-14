@@ -41,8 +41,10 @@ runs in two stages.
    applies a type (`bug`/`enhancement`/`question`), a priority (`P0`-`P3`),
    component `T-*` labels, and a workflow label. Pull requests skip this stage;
    their labels come from the diff via `auto-label-pr.yml`.
-2. **Human review.** The maintainer on rotation that week is assigned and
-   @-mentioned with what the AI concluded. They are responsible for the final
+2. **Human review.** The maintainer on rotation that week is assigned to the
+   issue, or requested as a reviewer on the pull request, and @-mentioned with
+   what the AI concluded. If they wrote the pull request, the next person on
+   the roster is requested instead. They are responsible for the final
    call, and the labels from stage 1 are only a first pass.
 
 Stage 2 runs even when stage 1 is skipped or fails, so every item reaches a
