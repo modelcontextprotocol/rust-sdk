@@ -22,7 +22,8 @@ use rmcp::{
     model::{ClientConfig, ProtocolVersion},
     service::ClientInitializeError,
     transport::{
-        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
+        StreamableHttpClientTransport,
+        streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
     },
 };
 use serde_json::{Value, json};
@@ -194,15 +195,22 @@ async fn assert_reinit_error_fails_pending_request(error_over_sse: bool) {
         "no notifications/initialized or retry may follow a failed re-initialize"
     );
 
-    match result {
-        Err(ServiceError::TransportSend(error)) => {
-            let message = error.to_string();
-            assert!(
-                message.contains("Unsupported protocol version"),
-                "expected the initialize error in: {message}"
+    let Err(ServiceError::TransportSend(error)) = result else {
+        panic!("expected TransportSend error, got: {result:?}");
+    };
+    match error
+        .error
+        .downcast_ref::<StreamableHttpError<reqwest::Error>>()
+    {
+        Some(StreamableHttpError::ReinitializationFailed(error)) => {
+            assert_eq!(error.code.0, -32602);
+            assert_eq!(error.message, "Unsupported protocol version");
+            assert_eq!(
+                error.data,
+                Some(json!({ "supported": ["2024-11-05"], "requested": "1.0.0" }))
             );
         }
-        other => panic!("expected TransportSend error, got: {other:?}"),
+        other => panic!("expected ReinitializationFailed, got: {other:?}"),
     }
     let _ = client.cancel().await;
 }

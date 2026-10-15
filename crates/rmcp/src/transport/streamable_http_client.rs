@@ -217,6 +217,9 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     /// Session recovery timed out. The server may have processed an interrupted POST.
     #[error("Session recovery timed out; the server may have processed the POST")]
     SessionRecoveryTimeout,
+    /// The server answered the session re-initialization with a JSON-RPC error.
+    #[error("Session re-initialization failed: {0}")]
+    ReinitializationFailed(ErrorData),
     /// A cancellation or reply POST did not finish in time.
     #[error("Control POST timed out")]
     ControlRequestTimeout,
@@ -1020,10 +1023,8 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             .await?
             .expect_initialized::<C::Error>()
             .await?;
-        if let ServerJsonRpcMessage::Error(error) = &init_msg {
-            return Err(StreamableHttpError::UnexpectedServerResponse(
-                format!("session re-initialization failed: {}", error.error).into(),
-            ));
+        if let ServerJsonRpcMessage::Error(error) = init_msg {
+            return Err(StreamableHttpError::ReinitializationFailed(error.error));
         }
 
         let new_session_id: Option<Arc<str>> = new_session_id_str.map(|s| Arc::from(s.as_str()));
