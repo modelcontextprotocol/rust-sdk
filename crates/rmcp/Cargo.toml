@@ -374,7 +374,6 @@ required-features = [
 ]
 path = "tests/test_streamable_http_initialize_error.rs"
 
-
 [[test]]
 name = "test_custom_request"
 required-features = ["server", "client"]
