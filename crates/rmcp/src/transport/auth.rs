@@ -813,10 +813,10 @@ impl OAuthClientConfig {
 pub struct AuthorizationRequest {
     /// Redirect URI for the authorization-code flow.
     pub redirect_uri: String,
-    /// Scopes to request. When empty, the SDK selects scopes from the
-    /// server's `WWW-Authenticate` challenge, Protected Resource Metadata,
-    /// or authorization server metadata.
+    /// Scopes to request. When empty, the SDK uses the configured scope-selection policy.
     pub scopes: Vec<String>,
+    /// Use initial-login scope selection when scopes are empty. Defaults to false.
+    pub use_initial_scopes: bool,
     /// Human-readable client name, used for Dynamic Client Registration.
     pub client_name: Option<String>,
     /// Pre-registered client ID obtained from the authorization server out of
@@ -845,6 +845,7 @@ impl AuthorizationRequest {
         Self {
             redirect_uri: redirect_uri.into(),
             scopes: Vec::new(),
+            use_initial_scopes: false,
             client_name: None,
             client_id: None,
             client_secret: None,
@@ -854,8 +855,14 @@ impl AuthorizationRequest {
         }
     }
 
+    /// Opt into [`AuthorizationManager::select_initial_scopes`]. Nonempty explicit scopes take precedence.
+    pub fn with_initial_scope_selection(mut self) -> Self {
+        self.use_initial_scopes = true;
+        self
+    }
+
     /// Set the scopes to request. When not set, the SDK auto-selects scopes
-    /// using its normal scope-selection policy.
+    /// using its configured scope-selection policy.
     pub fn with_scopes<I, S>(mut self, scopes: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -1125,6 +1132,14 @@ impl Default for ScopeUpgradeConfig {
     }
 }
 
+#[derive(Default)]
+struct InitialScopeState {
+    /// Initial resource challenge only; None means the resource has not been observed yet.
+    challenge_scopes: Option<Vec<String>>,
+    /// Protected resource scopes from the current discovery, including an empty result.
+    resource_scopes: Vec<String>,
+}
+
 /// oauth2 auth manager
 pub struct AuthorizationManager {
     http_client: Arc<dyn OAuthHttpClient>,
@@ -1140,10 +1155,7 @@ pub struct AuthorizationManager {
     scope_upgrade_config: ScopeUpgradeConfig,
     /// scopes from the initial 401 WWW-Authenticate header, used by select_scopes()
     www_auth_scopes: RwLock<Vec<String>>,
-    /// Initial resource challenge only; None means the resource has not been observed yet.
-    initial_challenge_scopes: RwLock<Option<Vec<String>>>,
-    /// Protected resource scopes from the current discovery, including an empty result.
-    initial_resource_scopes: RwLock<Vec<String>>,
+    initial_scopes: RwLock<InitialScopeState>,
     /// scopes_supported from protected resource metadata (RFC 9728)
     resource_scopes: RwLock<Vec<String>>,
     /// resource indicator from protected resource metadata, used for RFC 8707 `resource`
@@ -1390,8 +1402,7 @@ impl AuthorizationManager {
             scope_upgrade_attempts: RwLock::new(0),
             scope_upgrade_config: ScopeUpgradeConfig::default(),
             www_auth_scopes: RwLock::new(Vec::new()),
-            initial_challenge_scopes: RwLock::new(None),
-            initial_resource_scopes: RwLock::new(Vec::new()),
+            initial_scopes: RwLock::new(InitialScopeState::default()),
             resource_scopes: RwLock::new(Vec::new()),
             discovered_resource: RwLock::new(None),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
@@ -1547,8 +1558,7 @@ impl AuthorizationManager {
     /// # }
     /// ```
     pub async fn resolve_metadata(&self) -> Result<AuthorizationMetadataResolution, AuthError> {
-        *self.initial_challenge_scopes.write().await = None;
-        self.initial_resource_scopes.write().await.clear();
+        self.reset_initial_scopes().await;
         self.resolve_metadata_inner().await
     }
 
@@ -1591,8 +1601,7 @@ impl AuthorizationManager {
         };
         let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
 
-        *self.initial_challenge_scopes.write().await = None;
-        self.initial_resource_scopes.write().await.clear();
+        self.reset_initial_scopes().await;
         self.record_initial_challenge_scope(Some(&params)).await;
         self.record_challenge_scope(&params).await;
 
@@ -1610,10 +1619,14 @@ impl AuthorizationManager {
         self.resolve_metadata_inner().await
     }
 
+    async fn reset_initial_scopes(&self) {
+        *self.initial_scopes.write().await = InitialScopeState::default();
+    }
+
     async fn record_initial_challenge_scope(&self, params: Option<&WWWAuthenticateParams>) {
-        let mut initial_scopes = self.initial_challenge_scopes.write().await;
-        if initial_scopes.is_none() {
-            *initial_scopes = Some(
+        let mut initial_scopes = self.initial_scopes.write().await;
+        if initial_scopes.challenge_scopes.is_none() {
+            initial_scopes.challenge_scopes = Some(
                 params
                     .and_then(|params| params.scope.as_deref())
                     .map(|scope| scope.split_whitespace().map(str::to_string).collect())
@@ -1978,13 +1991,15 @@ impl AuthorizationManager {
     /// Select scopes for initial authorization after resolving and setting metadata.
     ///
     /// Prefer the initial resource challenge, then protected resource metadata. If
-    /// neither supplies scopes, retain the authorization-server metadata and caller
-    /// defaults as compatibility fallbacks. Append `offline_access` when advertised
-    /// by the authorization server, as with [`Self::select_scopes`].
+    /// neither supplies scopes, use the caller-provided `default_scopes`. Pass an
+    /// empty slice to omit scopes when discovery supplies none. Authorization-server
+    /// scopes are not used as a fallback. When the selected scopes are nonempty,
+    /// append `offline_access` if advertised by the authorization server, as with
+    /// [`Self::select_scopes`].
     ///
     /// Unlike [`Self::select_scopes`], this does not accumulate previously requested
-    /// scopes or challenges from metadata endpoints. Callers with explicit scopes
-    /// should continue to pass those scopes directly to authorization instead.
+    /// scopes or challenges from metadata endpoints. Callers that need to override
+    /// discovered scopes should pass those scopes directly to authorization instead.
     ///
     /// # Examples
     ///
@@ -1999,17 +2014,20 @@ impl AuthorizationManager {
     /// # }
     /// ```
     pub async fn select_initial_scopes(&self, default_scopes: &[&str]) -> Vec<String> {
-        let mut scopes = self
-            .initial_challenge_scopes
-            .read()
-            .await
-            .clone()
-            .unwrap_or_default();
+        let mut scopes = {
+            let initial_scopes = self.initial_scopes.read().await;
+            initial_scopes
+                .challenge_scopes
+                .as_ref()
+                .filter(|scopes| !scopes.is_empty())
+                .unwrap_or(&initial_scopes.resource_scopes)
+                .clone()
+        };
         if scopes.is_empty() {
-            scopes = self.initial_resource_scopes.read().await.clone();
-        }
-        if scopes.is_empty() {
-            scopes = self.select_fallback_scopes(default_scopes);
+            scopes = default_scopes
+                .iter()
+                .map(|scope| scope.to_string())
+                .collect();
         }
         let mut scopes = Self::dedup_scopes(scopes);
         self.add_offline_access_if_supported(&mut scopes);
@@ -2688,7 +2706,7 @@ impl AuthorizationManager {
             .await
             .replace(resource_metadata.resource.clone().unwrap_or_default());
 
-        *self.initial_resource_scopes.write().await = resource_metadata
+        self.initial_scopes.write().await.resource_scopes = resource_metadata
             .scopes_supported
             .clone()
             .unwrap_or_default();
@@ -3661,7 +3679,7 @@ impl AuthorizationSession {
     ///
     /// The manager must already have discovered authorization server metadata.
     /// If `request.scopes` is empty, scopes are selected using the SDK's
-    /// normal scope-selection policy.
+    /// configured scope-selection policy.
     ///
     /// On failure, the manager is returned alongside the error so callers can
     /// retry without losing the original configuration and stores.
@@ -3681,7 +3699,11 @@ impl AuthorizationSession {
         }
 
         if request.scopes.is_empty() {
-            request.scopes = auth_manager.select_scopes(None, &[]);
+            request.scopes = if request.use_initial_scopes {
+                auth_manager.select_initial_scopes(&[]).await
+            } else {
+                auth_manager.select_scopes(None, &[])
+            };
         } else {
             auth_manager.add_offline_access_if_supported(&mut request.scopes);
         }
@@ -4015,7 +4037,7 @@ impl OAuthState {
     ///    advertises a `registration_endpoint`
     ///
     /// If `request.scopes` is empty, scopes are selected using the SDK's
-    /// normal scope-selection policy.
+    /// configured scope-selection policy.
     ///
     /// On failure, the state returns to `Unauthorized` so callers can retry
     /// without losing the original configuration and stores.
@@ -4262,9 +4284,9 @@ mod tests {
         AuthError, AuthorizationCallback, AuthorizationManager, AuthorizationMetadata,
         AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession,
         CredentialRefreshGuard, CredentialStore, InMemoryCredentialStore, InMemoryStateStore,
-        OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture,
-        OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig, StateStore,
-        StoredAuthorizationState, is_https_url,
+        InitialScopeState, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
+        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
+        StateStore, StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -5962,6 +5984,55 @@ mod tests {
         // Empty request scopes fall back to the discovered scopes_supported.
         let query = auth_url_query(&session.auth_url);
         assert_eq!(query.get("scope").unwrap(), "read write offline_access");
+    }
+
+    #[rstest]
+    #[case::legacy(false, Some("read"), Some(&["read", "write"][..]), &[], Some("read write offline_access"))]
+    #[case::initial(true, Some("read"), Some(&["read", "write"][..]), &[], Some("read offline_access"))]
+    #[case::resource(true, None, Some(&["read", "write"][..]), &[], Some("read write offline_access"))]
+    #[case::missing(true, None, None, &[], None)]
+    #[case::explicit(true, Some("read"), Some(&["read", "write"][..]), &["custom"], Some("custom offline_access"))]
+    #[tokio::test]
+    async fn oauth_state_uses_requested_scope_selection(
+        #[case] opt_in: bool,
+        #[case] challenge_scope: Option<&str>,
+        #[case] resource_scopes: Option<&[&str]>,
+        #[case] explicit_scopes: &[&str],
+        #[case] expected_scope: Option<&str>,
+    ) {
+        let mut challenge = r#"Bearer resource_metadata="/metadata""#.to_string();
+        if let Some(scope) = challenge_scope {
+            challenge.push_str(&format!(r#", scope="{scope}""#));
+        }
+        let mut resource_metadata = serde_json::json!({
+            "resource": "https://mcp.example.com/mcp",
+            "authorization_servers": ["https://auth.example.com"]
+        });
+        if let Some(scopes) = resource_scopes {
+            resource_metadata["scopes_supported"] = serde_json::json!(scopes);
+        }
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge_response(&challenge),
+            http_response(200, resource_metadata),
+            preregistered_as_metadata_response(),
+        ]);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+
+        let mut request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_preregistered_client("preregistered-client")
+            .with_scopes(explicit_scopes.iter().copied());
+        if opt_in {
+            request = request.with_initial_scope_selection();
+        }
+        state.start_authorization(request).await.unwrap();
+
+        let query = auth_url_query(&state.get_authorization_url().await.unwrap());
+        assert_eq!(query.get("scope").map(String::as_str), expected_scope);
     }
 
     #[tokio::test]
@@ -7968,14 +8039,9 @@ mod tests {
         assert_eq!(scopes, ["read"]);
     }
 
-    #[rstest]
-    #[case::initial_scope(Some("read"), vec!["read"])]
-    #[case::no_initial_scope(None, vec!["read", "write"])]
-    #[tokio::test]
-    async fn select_initial_scopes_ignores_later_metadata_challenges(
-        #[case] initial_scope: Option<&str>,
-        #[case] expected: Vec<&str>,
-    ) {
+    async fn manager_with_later_metadata_challenge(
+        initial_scope: Option<&str>,
+    ) -> AuthorizationManager {
         let initial_response = match initial_scope {
             Some(scope) => challenge_response(&format!(r#"Bearer scope="{scope}""#)),
             None => empty_response(404),
@@ -7995,7 +8061,31 @@ mod tests {
         let resolution = manager.resolve_metadata().await.unwrap();
         manager.set_metadata(resolution.metadata);
 
+        manager
+    }
+
+    #[rstest]
+    #[case::initial_scope(Some("read"), vec!["read"])]
+    #[case::no_initial_scope(None, vec!["read", "write"])]
+    #[tokio::test]
+    async fn select_initial_scopes_ignores_later_metadata_challenges(
+        #[case] initial_scope: Option<&str>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let manager = manager_with_later_metadata_challenge(initial_scope).await;
+
         assert_eq!(manager.select_initial_scopes(&[]).await, expected);
+    }
+
+    #[rstest]
+    #[case::initial_scope(Some("read"))]
+    #[case::no_initial_scope(None)]
+    #[tokio::test]
+    async fn select_scopes_preserves_later_metadata_challenges(
+        #[case] initial_scope: Option<&str>,
+    ) {
+        let manager = manager_with_later_metadata_challenge(initial_scope).await;
+
         assert!(
             manager
                 .select_scopes(None, &[])
@@ -8028,10 +8118,13 @@ mod tests {
     #[rstest]
     #[case::challenge(&["read", "read"], &["write"], &["admin"], &["default"], &["read"])]
     #[case::resource(&[], &["read", "read"], &["admin"], &["default"], &["read"])]
-    #[case::authorization_server(&[], &[], &["admin", "admin"], &["default"], &["admin"])]
+    #[case::defaults_ignore_authorization_server(&[], &[], &["admin", "admin"], &["default"], &["default"])]
+    #[case::authorization_server_ignored(&[], &[], &["admin"], &[], &[])]
     #[case::defaults(&[], &[], &[], &["default", "default"], &["default"])]
     #[case::empty(&[], &[], &[], &[], &[])]
     #[case::offline_access(&["read"], &["write"], &["offline_access"], &[], &["read", "offline_access"])]
+    #[case::offline_access_without_selected_scopes(&[], &[], &["admin", "offline_access"], &[], &[])]
+    #[case::defaults_with_offline_access(&[], &[], &["admin", "offline_access"], &["default", "default"], &["default", "offline_access"])]
     #[tokio::test]
     async fn select_initial_scopes_uses_fallbacks_and_preserves_refresh_support(
         #[case] challenge: &[&str],
@@ -8046,8 +8139,10 @@ mod tests {
             ..Default::default()
         }))
         .await;
-        *manager.initial_challenge_scopes.write().await = Some(strings(challenge));
-        *manager.initial_resource_scopes.write().await = strings(resource);
+        *manager.initial_scopes.write().await = InitialScopeState {
+            challenge_scopes: Some(strings(challenge)),
+            resource_scopes: strings(resource),
+        };
         *manager.current_scopes.write().await = vec!["previous".to_string()];
 
         assert_eq!(manager.select_initial_scopes(defaults).await, expected);
@@ -8055,8 +8150,8 @@ mod tests {
 
     #[rstest]
     #[case::challenge(Some("read"), Some(&["read", "write"][..]), &["read"], &["read", "write"])]
-    #[case::missing_resource_scopes(None, None, &["read", "write"], &["admin"])]
-    #[case::empty_resource_scopes(None, Some(&[][..]), &["read", "write"], &["admin"])]
+    #[case::missing_resource_scopes(None, None, &["read", "write"], &[])]
+    #[case::empty_resource_scopes(None, Some(&[][..]), &["read", "write"], &[])]
     #[tokio::test]
     async fn select_initial_scopes_resets_on_repeated_discovery(
         #[case] initial_scope: Option<&str>,
