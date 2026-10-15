@@ -412,7 +412,14 @@ mod request_id {
 
     #[test]
     fn request_with_unusable_id_is_rejected() {
-        for id in ["9223372036854775808", "1.5", "true", "[1]", "{}"] {
+        for id in [
+            "9223372036854775808",
+            "1.5",
+            "9007199254740993.0",
+            "true",
+            "[1]",
+            "{}",
+        ] {
             for method in ["ping", "tools/list", "notifications/initialized"] {
                 let result = parse(id, method);
                 assert!(

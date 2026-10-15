@@ -387,10 +387,11 @@ impl<'de> Deserialize<'de> for NumberOrString {
 }
 
 /// The integer a JSON number in float form stands for, when it is one that an
-/// `f64` represents exactly.
+/// `f64` represents exactly. 2^53 itself is excluded: 2^53 + 1 parses to the
+/// same `f64`, so that value cannot say which integer was sent.
 fn integral_f64_to_i64(f: f64) -> Option<i64> {
     const MAX_EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
-    (f.fract() == 0.0 && f.abs() <= MAX_EXACT).then_some(f as i64)
+    (f.fract() == 0.0 && f.abs() < MAX_EXACT).then_some(f as i64)
 }
 
 #[cfg(feature = "schemars")]
