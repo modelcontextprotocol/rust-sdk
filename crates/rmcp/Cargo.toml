@@ -488,3 +488,8 @@ path = "tests/test_streamable_http_disconnect_cancel.rs"
 name = "test_sep_2260_stream_routing"
 required-features = ["server", "elicitation", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_sep_2260_stream_routing.rs"
+
+[[test]]
+name = "test_cancelled_response"
+path = "tests/test_cancelled_response.rs"
+required-features = ["server", "transport-io"]
