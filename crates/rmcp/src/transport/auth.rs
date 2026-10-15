@@ -2082,10 +2082,6 @@ impl AuthorizationManager {
             return Self::dedup_scopes(accumulated);
         }
 
-        self.select_fallback_scopes(default_scopes)
-    }
-
-    fn select_fallback_scopes(&self, default_scopes: &[&str]) -> Vec<String> {
         if let Some(metadata) = &self.metadata
             && let Some(scopes_supported) = &metadata.scopes_supported
             && !scopes_supported.is_empty()
@@ -6033,6 +6029,37 @@ mod tests {
 
         let query = auth_url_query(&state.get_authorization_url().await.unwrap());
         assert_eq!(query.get("scope").map(String::as_str), expected_scope);
+    }
+
+    #[tokio::test]
+    async fn oauth_state_uses_initial_scopes_from_supplied_challenge() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/mcp",
+                    "authorization_servers": ["https://auth.example.com"],
+                    "scopes_supported": ["read", "write"]
+                }),
+            ),
+            preregistered_as_metadata_response(),
+        ]);
+        let mut state = super::OAuthState::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let request = AuthorizationRequest::new("http://localhost:8080/callback")
+            .with_preregistered_client("preregistered-client")
+            .with_challenge(r#"Bearer resource_metadata="/metadata", scope="read""#)
+            .with_initial_scope_selection();
+        state.start_authorization(request).await.unwrap();
+
+        let query = auth_url_query(&state.get_authorization_url().await.unwrap());
+        assert_eq!(query.get("scope").unwrap(), "read offline_access");
+        assert_eq!(client.requests()[0].uri, "https://mcp.example.com/metadata");
     }
 
     #[tokio::test]
