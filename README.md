@@ -1503,8 +1503,8 @@ untouched.
 - `Mcp-Param-*` — selected `tools/call` arguments, promoted from the tool's
   input schema.
 
-To promote a tool argument into a routing header, annotate the top-level schema
-property with `x-mcp-header`:
+To promote a tool argument into a routing header, annotate its schema property
+with `x-mcp-header`:
 
 ```rust, ignore
 // A `region` argument surfaces as the `Mcp-Param-Region` request header.
@@ -1517,7 +1517,29 @@ let schema = serde_json::json!({
 ```
 
 Annotations must be non-empty RFC 9110 tokens, case-insensitively unique, and
-applied only to top-level primitive (`string`/`integer`/`boolean`) properties.
+applied only to primitive (`string`/`integer`/`boolean`) properties. Nested
+properties are allowed when every step from the root is a `properties` key; an
+annotation under `items`, `oneOf`/`anyOf`/`allOf`/`not`, `if`/`then`/`else`, or
+`$ref` makes the tool invalid, and clients drop it from `tools/list`.
+
+With `schemars`, a nested struct is emitted behind a `$ref` by default. Mark it
+`#[schemars(inline)]` so its annotated fields stay on the `properties` path:
+
+```rust, ignore
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[schemars(inline)]
+struct Location {
+    #[schemars(extend("x-mcp-header" = "Region"))]
+    region: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct DeployRequest {
+    location: Location,
+    image: String,
+}
+```
+
 Values that cannot travel as a bare header (leading/trailing whitespace,
 control/non-ASCII characters) are transparently Base64-wrapped as
 `=?base64?<b64>?=`.

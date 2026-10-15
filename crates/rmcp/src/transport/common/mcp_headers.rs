@@ -707,6 +707,51 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server")]
+    mod derived_schema {
+        use schemars::JsonSchema;
+
+        use super::*;
+        use crate::handler::server::common::schema_for_type;
+
+        #[derive(JsonSchema)]
+        #[expect(dead_code)]
+        struct RefLocation {
+            #[schemars(extend("x-mcp-header" = "Region"))]
+            region: String,
+        }
+
+        #[derive(JsonSchema)]
+        #[expect(dead_code)]
+        struct RefDeploy {
+            location: RefLocation,
+        }
+
+        #[derive(JsonSchema)]
+        #[schemars(inline)]
+        #[expect(dead_code)]
+        struct InlineLocation {
+            #[schemars(extend("x-mcp-header" = "Region"))]
+            region: String,
+        }
+
+        #[derive(JsonSchema)]
+        #[expect(dead_code)]
+        struct InlineDeploy {
+            location: InlineLocation,
+        }
+
+        #[test]
+        fn rejects_nested_struct_behind_ref() {
+            assert!(validate_param_header_annotations(&schema_for_type::<RefDeploy>()).is_err());
+        }
+
+        #[test]
+        fn accepts_inlined_nested_struct() {
+            assert!(validate_param_header_annotations(&schema_for_type::<InlineDeploy>()).is_ok());
+        }
+    }
+
     mod standard_request_headers {
         use super::*;
 
