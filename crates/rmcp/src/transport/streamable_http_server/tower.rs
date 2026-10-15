@@ -10,7 +10,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt, future::BoxFuture};
+use futures::{Stream, StreamExt};
 use http::{HeaderMap, Method, Request, Response, header::ALLOW};
 use http_body::Body;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -32,8 +32,8 @@ use crate::{
     },
     serve_server,
     service::{
-        NotificationContext, RequestContext, Service, negotiate_protocol_version,
-        serve_directly_with_ct, uses_legacy_lifecycle,
+        MaybeBoxFuture, NotificationContext, RequestContext, Service, negotiate_protocol_version,
+        serve_directly_with_ct, spawn_service_task, uses_legacy_lifecycle,
     },
     transport::{
         OneshotTransport, TransportAdapterIdentity,
@@ -126,8 +126,11 @@ pub struct StreamableHttpServerConfig {
     ///
     /// Call [`StreamableHttpServerConfig::enforce_origin_validation`] to enable
     /// validation with an empty list, rejecting every present Origin value.
-    /// examples:
-    ///     allowed_origins = ["https://app.example.com:443", "http://localhost:*"]
+    ///
+    /// # Example
+    /// ```text
+    /// allowed_origins = ["https://app.example.com:443", "http://localhost:*"]
+    /// ```
     pub allowed_origins: Vec<String>,
     validate_empty_origin_allowlist: bool,
     /// Optional external session store for cross-instance recovery.
@@ -1366,7 +1369,7 @@ where
 {
     type Response = BoxResponse;
     type Error = Infallible;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = MaybeBoxFuture<'static, Result<Self::Response, Self::Error>>;
     fn call(&mut self, req: http::Request<RequestBody>) -> Self::Future {
         let service = self.clone();
         Box::pin(async move {
@@ -1404,7 +1407,7 @@ impl Drop for PendingRestoreGuard {
         // Remove the map entry asynchronously (requires the async write lock).
         let pending_restores = self.pending_restores.clone();
         let session_id = self.session_id.clone();
-        tokio::spawn(async move {
+        spawn_service_task(async move {
             pending_restores.write().await.remove(&session_id);
         });
     }
@@ -1449,7 +1452,7 @@ where
         let retry = self.config.sse_retry;
         let server_ct = self.config.cancellation_token.child_token();
 
-        tokio::spawn(async move {
+        spawn_service_task(async move {
             let mut sender = Some(sender);
             if let Some(retry) = retry
                 && let Err(error) = persist_and_forward_event(
@@ -1554,7 +1557,7 @@ where
             peer_info,
             request_ct.clone(),
         );
-        tokio::spawn(async move {
+        spawn_service_task(async move {
             let _ = service.waiting().await;
         });
 
@@ -1636,7 +1639,7 @@ where
         S: crate::ServerHandler + Send + 'static,
         M: SessionManager,
     {
-        tokio::spawn(async move {
+        spawn_service_task(async move {
             let svc =
                 serve_server::<S, M::Transport, _, TransportAdapterIdentity>(service, transport)
                     .await;
@@ -2305,7 +2308,7 @@ where
                         peer_info,
                         request_ct.clone(),
                     );
-                    tokio::spawn(async move {
+                    spawn_service_task(async move {
                         // on service created
                         let _ = service.waiting().await;
                     });

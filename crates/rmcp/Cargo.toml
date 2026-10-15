@@ -252,6 +252,11 @@ required-features = [
 path = "tests/test_with_js.rs"
 
 [[test]]
+name = "test_local_streamable_http"
+required-features = ["server", "local", "transport-streamable-http-server"]
+path = "tests/test_local_streamable_http.rs"
+
+[[test]]
 name = "test_local_client_handler"
 required-features = ["client", "local"]
 path = "tests/test_local_client_handler.rs"
