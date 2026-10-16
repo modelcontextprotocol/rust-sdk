@@ -158,6 +158,14 @@ where
         .ok_or_else(|| ClientInitializeError::ConnectionClosed(context.to_string()))
 }
 
+/// Whether `expect_response` answers a server ping that arrives before the
+/// handshake completes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreInitPing {
+    Answer,
+    Ignore,
+}
+
 /// Helper function to expect a response from the stream, correlated to
 /// `expected_id`.
 ///
@@ -166,7 +174,7 @@ where
 /// `id` is optional per spec) it is `UncorrelatedErrorResponse`. The caller
 /// never sees an uncorrelated response.
 ///
-/// A server ping is answered only when `answer_ping` is set. The discover
+/// A server ping is answered only with `PreInitPing::Answer`. The discover
 /// wait, including Auto's timeout-bounded probe, leaves it unanswered:
 /// 2026-07-28 has no ping, and a cancelled send could leave a partial frame.
 async fn expect_response<T, S>(
@@ -175,7 +183,7 @@ async fn expect_response<T, S>(
     service: &S,
     peer: Peer<RoleClient>,
     expected_id: &RequestId,
-    answer_ping: bool,
+    pre_init_ping: PreInitPing,
 ) -> Result<ServerResult, ClientInitializeError>
 where
     T: Transport<RoleClient> + 'static,
@@ -239,7 +247,7 @@ where
             ServerJsonRpcMessage::Request(request)
                 if matches!(request.request, ServerRequest::PingRequest(_)) =>
             {
-                if answer_ping {
+                if pre_init_ping == PreInitPing::Answer {
                     transport
                         .send(ClientJsonRpcMessage::response(
                             ClientResult::empty(()),
@@ -941,7 +949,7 @@ where
         service,
         peer.clone(),
         &id,
-        true,
+        PreInitPing::Answer,
     )
     .await?;
 
@@ -1019,7 +1027,7 @@ where
             service,
             peer.clone(),
             &id,
-            false,
+            PreInitPing::Ignore,
         )
         .await
         {
