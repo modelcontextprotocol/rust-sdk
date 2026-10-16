@@ -9,8 +9,8 @@ use common::handlers::TestClientHandler;
 use rmcp::{
     ServiceExt,
     model::{
-        ClientConfig, ClientJsonRpcMessage, ClientResult, ErrorCode, ErrorData, InitializeResult,
-        JsonRpcError, JsonRpcVersion2_0, PingRequest, ProtocolVersion, RequestId,
+        ClientConfig, ClientJsonRpcMessage, ClientNotification, ClientResult, ErrorCode, ErrorData,
+        InitializeResult, JsonRpcError, JsonRpcVersion2_0, PingRequest, ProtocolVersion, RequestId,
         ServerCapabilities, ServerJsonRpcMessage, ServerRequest, ServerResult,
     },
     transport::{IntoTransport, Transport},
@@ -195,7 +195,8 @@ async fn client_answers_server_ping_during_initialize() {
         assert!(matches!(response.result, ClientResult::EmptyResult(_)));
         assert!(matches!(
             server.receive().await,
-            Some(ClientJsonRpcMessage::Notification(_))
+            Some(ClientJsonRpcMessage::Notification(notification))
+                if matches!(notification.notification, ClientNotification::InitializedNotification(_))
         ));
     });
 
