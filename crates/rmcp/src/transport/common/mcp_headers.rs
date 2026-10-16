@@ -207,14 +207,22 @@ pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Re
 fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
     schema.iter().any(|(key, value)| match key.as_str() {
         "x-mcp-header" => !on_chain,
-        "properties" => value.as_object().is_some_and(|props| {
-            props
-                .values()
-                .any(|prop| subschema_has_off_chain_annotation(prop, on_chain))
-        }),
+        "properties" => schema_map_has_off_chain_annotation(value, on_chain),
+        "$defs" | "definitions" | "dependentSchemas" | "patternProperties" => {
+            schema_map_has_off_chain_annotation(value, false)
+        }
         // Instance data, not subschemas.
         "default" | "const" | "enum" | "examples" => false,
         _ => subschema_has_off_chain_annotation(value, false),
+    })
+}
+
+/// Like [`has_off_chain_annotation`] for each value of a name-to-schema map.
+#[cfg(feature = "client-side-sse")]
+fn schema_map_has_off_chain_annotation(map: &Value, on_chain: bool) -> bool {
+    map.as_object().is_some_and(|map| {
+        map.values()
+            .any(|schema| subschema_has_off_chain_annotation(schema, on_chain))
     })
 }
 
@@ -687,6 +695,18 @@ mod tests {
         }
 
         #[test]
+        fn rejects_annotation_in_def_named_like_a_keyword() {
+            let schema = json!({
+                "type": "object",
+                "$defs": { "default": { "type": "string", "x-mcp-header": "Region" } }
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            assert!(validate_param_header_annotations(&schema).is_err());
+        }
+
+        #[test]
         fn rejects_annotation_on_root() {
             let schema = json!({ "type": "object", "x-mcp-header": "Root" })
                 .as_object()
@@ -817,6 +837,32 @@ mod tests {
             let headers = nested_call_headers(json!({ "location": { "region": "eu" } }));
             assert_eq!(
                 headers.get("mcp-param-region").map(String::as_str),
+                Some("eu")
+            );
+        }
+
+        #[test]
+        fn sets_nested_param_header_after_sibling_property() {
+            let schema = schema_with(json!({
+                "image": { "type": "string" },
+                "location": {
+                    "type": "object",
+                    "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                }
+            }));
+            let request = json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "deploy",
+                    "arguments": { "image": "app:1", "location": { "region": "eu" } }
+                }
+            });
+            let headers = super::super::standard_request_headers(&request, Some(&schema));
+            assert_eq!(
+                headers
+                    .iter()
+                    .find(|(name, _)| name == "mcp-param-region")
+                    .map(|(_, value)| value.to_str().unwrap()),
                 Some("eu")
             );
         }
