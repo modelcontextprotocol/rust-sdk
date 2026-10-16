@@ -454,15 +454,15 @@ impl Drop for PendingSubscriptionRequest {
 /// the caller drops the future (a `tokio::time::timeout`, a lost `select!`
 /// branch), sends a best-effort `notifications/cancelled` for the request, so
 /// the server does not keep working on a result nobody will read.
-struct AbandonedRequestGuard {
-    peer: Peer<RoleClient>,
+struct AbandonedRequestGuard<'a> {
+    peer: &'a Peer<RoleClient>,
     id: Option<RequestId>,
 }
 
-impl AbandonedRequestGuard {
-    const REASON: &str = "request abandoned by the caller";
+impl<'a> AbandonedRequestGuard<'a> {
+    const REASON: &'static str = "request abandoned by the caller";
 
-    fn new(peer: Peer<RoleClient>, id: RequestId) -> Self {
+    fn new(peer: &'a Peer<RoleClient>, id: RequestId) -> Self {
         Self { peer, id: Some(id) }
     }
 
@@ -471,7 +471,7 @@ impl AbandonedRequestGuard {
     }
 }
 
-impl Drop for AbandonedRequestGuard {
+impl Drop for AbandonedRequestGuard<'_> {
     fn drop(&mut self) {
         let Some(id) = self.id.take() else {
             return;
@@ -1341,7 +1341,7 @@ impl Peer<RoleClient> {
         let mut request = DiscoverRequest::new(DiscoverRequestParams {});
         request.extensions.insert(meta);
         let result = self
-            .send_request_cancel_on_drop(ClientRequest::DiscoverRequest(request))
+            .send_request(ClientRequest::DiscoverRequest(request))
             .await;
         let result = match result {
             Ok(result) => result,
@@ -1407,19 +1407,8 @@ impl Peer<RoleClient> {
             .await;
     }
 
-    /// [`Peer::send_request`], except that dropping the returned future before
-    /// the response arrives sends `notifications/cancelled` for the request.
-    /// Every request helper on the client peer sends through here.
-    ///
-    /// The guard covers only the wait for this one response. It is disarmed as
-    /// soon as the response is in, so an MRTR driver that is dropped later, while
-    /// it fulfils the input requests locally, cancels nothing: that round's
-    /// request has already completed and the retry has not been sent yet.
-    ///
-    /// `initialize` is not sent through here, and must not be: a client must
-    /// never cancel it. This is client-only for the same kind of reason; from
-    /// 2026-07-28 a server may send `notifications/cancelled` only to end a
-    /// `subscriptions/listen` stream.
+    /// [`Peer::send_request`] that sends `notifications/cancelled` if dropped before
+    /// the response arrives. Never route `initialize` or `server/discover` through here.
     async fn send_request_cancel_on_drop(
         &self,
         request: ClientRequest,
@@ -1427,7 +1416,7 @@ impl Peer<RoleClient> {
         let handle = self
             .send_request_with_option(request, PeerRequestOptions::no_options())
             .await?;
-        let mut guard = AbandonedRequestGuard::new(self.clone(), handle.id.clone());
+        let mut guard = AbandonedRequestGuard::new(self, handle.id.clone());
         let result = handle.await_response().await;
         guard.disarm();
         result
