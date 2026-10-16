@@ -1216,6 +1216,87 @@ mod origin_validation {
     }
 
     #[tokio::test]
+    async fn serialized_origin_rejects_userinfo_path_query_and_fragment() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        for malformed in [
+            "http://user@localhost:8080",
+            "http://localhost:8080/path",
+            "http://localhost:8080?query",
+            "http://localhost:8080#fragment",
+        ] {
+            let response = service.handle(init_request(Some(malformed))).await;
+            assert_eq!(
+                response.status(),
+                http::StatusCode::FORBIDDEN,
+                "malformed Origin {malformed:?} must not match an allowed authority"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn serialized_origin_rejects_malformed_ports_that_would_default_to_http() {
+        let service = service_with_allowed_origins(&["http://localhost:80"]);
+        for malformed in [
+            "http://localhost:",
+            "http://localhost:abc",
+            "http://localhost:65536",
+        ] {
+            let response = service.handle(init_request(Some(malformed))).await;
+            assert_eq!(
+                response.status(),
+                http::StatusCode::FORBIDDEN,
+                "malformed Origin {malformed:?} must not match an allowed authority"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn serialized_origin_rejects_malformed_authority_brackets() {
+        for (allowed, malformed) in [
+            ("http://[::1]:80", "http://[::1]garbage"),
+            ("http://[::1]:80", "http://[::1]]:80"),
+            ("http://localhost:8080", "http://localhost:8080[::1]:8080"),
+        ] {
+            let service = service_with_allowed_origins(&[allowed]);
+            let response = service.handle(init_request(Some(malformed))).await;
+            assert_eq!(
+                response.status(),
+                http::StatusCode::FORBIDDEN,
+                "malformed Origin {malformed:?} must not match {allowed:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bracketed_registered_names_and_ipv4_are_forbidden() {
+        for (allowed, malformed) in [
+            ("http://localhost:8080", "http://[localhost]:8080"),
+            ("http://127.0.0.1:8080", "http://[127.0.0.1]:8080"),
+        ] {
+            let service = service_with_allowed_origins(&[allowed]);
+            let response = service.handle(init_request(Some(malformed))).await;
+            assert_eq!(
+                response.status(),
+                http::StatusCode::FORBIDDEN,
+                "invalid IP literal {malformed:?} must not match {allowed:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicated_origin_headers_are_forbidden_before_value_selection() {
+        let service = service_with_allowed_origins(&["http://localhost:8080"]);
+        let mut request = init_request(Some("http://localhost:8080"));
+        request.headers_mut().append(
+            http::header::ORIGIN,
+            HeaderValue::from_static("http://attacker.example"),
+        );
+
+        let response = service.handle(request).await;
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn non_utf8_origin_is_forbidden() {
         let service = service_with_allowed_origins(&["http://localhost:8080"]);
         let mut request = init_request(None);
@@ -1326,6 +1407,22 @@ mod origin_validation {
         let service = service_with_allowed_origins(&["http://client.example:80"]);
         let response = service
             .handle(init_request(Some("http://client.example")))
+            .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bracketed_ipv6_origin_accepts_its_explicit_default_port() {
+        let service = service_with_allowed_origins(&["http://[::1]:80"]);
+        let response = service.handle(init_request(Some("http://[::1]"))).await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bracketed_ipvfuture_origin_is_accepted() {
+        let service = service_with_allowed_origins(&["http://[v1.alpha:beta]"]);
+        let response = service
+            .handle(init_request(Some("http://[v1.alpha:beta]")))
             .await;
         assert_eq!(response.status(), http::StatusCode::OK);
     }
