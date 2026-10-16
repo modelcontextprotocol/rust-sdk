@@ -366,6 +366,13 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
     /// ```
     ///
+    /// # Redirects
+    ///
+    /// The default client follows same-origin 307 and 308 redirects, up to 10
+    /// hops. A 301, 302 or 303, or a redirect to another origin, returns an
+    /// error. A 308 does not change the stored URI. To use another redirect
+    /// policy, pass your own `reqwest::Client` to [`with_client`](Self::with_client).
+    ///
     /// # Feature requirement
     ///
     /// This method requires the `transport-streamable-http-client-reqwest` feature.
@@ -385,6 +392,9 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// # Arguments
     ///
     /// * `config` - The config to use with this transport
+    ///
+    /// Uses the same default client as [`from_uri`](Self::from_uri), including
+    /// its redirect handling.
     pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
         StreamableHttpClientTransport::with_client(Self::default_http_client(), config)
     }
@@ -401,7 +411,9 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// would turn a POST into a bodyless GET and lose the message, and a
     /// cross-origin redirect would replay the session id and caller-supplied
     /// custom headers to another host, so both are returned to the caller as
-    /// the redirect response instead.
+    /// the redirect response instead. A followed 308 does not update the
+    /// stored URI, so each request still starts at the configured one. A
+    /// client passed to `with_client` keeps its own redirect policy.
     fn default_http_client() -> reqwest::Client {
         reqwest::Client::builder()
             .pool_max_idle_per_host(0)
