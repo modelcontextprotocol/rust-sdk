@@ -223,6 +223,36 @@ impl StreamableHttpServerConfig {
         self.allowed_hosts.clear();
         self
     }
+
+    /// Check whether a request's host passes this configuration's Host validation.
+    ///
+    /// Middleware can call this before authentication. It reuses
+    /// [`StreamableHttpService`]'s Host parsing and allowlist check, giving the
+    /// same Host decision without checking `Origin`. The `Host` header takes
+    /// precedence over URI authority (the HTTP/2 `:authority` fallback).
+    ///
+    /// Hostnames are compared case-insensitively. An allowed entry with a port
+    /// parsed as `u16` requires the same parsed request port; no parsed port
+    /// (absent or unparseable) matches any port. An empty
+    /// [`allowed_hosts`](Self::allowed_hosts) list allows any host rmcp can parse.
+    ///
+    /// Returns `false` for a missing `Host` with no URI authority, a non-UTF-8
+    /// `Host`, a host rmcp cannot parse, or an allowlist mismatch. This is not a
+    /// full RFC 9110 Host syntax validator. Rejections emit a warning; callers
+    /// should immediately reject requests when this returns `false`.
+    ///
+    /// ```
+    /// use http::{HeaderMap, Uri};
+    /// use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
+    ///
+    /// let config = StreamableHttpServerConfig::default();
+    /// let uri: Uri = "http://localhost:8080/mcp".parse().unwrap();
+    /// assert!(config.is_host_allowed(&uri, &HeaderMap::new()));
+    /// ```
+    pub fn is_host_allowed(&self, uri: &http::Uri, headers: &HeaderMap) -> bool {
+        validate_host_header(uri, headers, &self.allowed_hosts).is_ok()
+    }
+
     pub fn with_allowed_origins(
         mut self,
         allowed_origins: impl IntoIterator<Item = impl Into<String>>,
@@ -1196,19 +1226,28 @@ fn parse_host_header(uri: &http::Uri, headers: &HeaderMap) -> HttpResult<Normali
     Ok(normalize_authority(authority.host(), authority.port_u16()))
 }
 
-fn validate_dns_rebinding_headers(
+fn validate_host_header(
     uri: &http::Uri,
     headers: &HeaderMap,
-    config: &StreamableHttpServerConfig,
+    allowed_hosts: &[String],
 ) -> HttpResult<()> {
     let host = parse_host_header(uri, headers)?;
-    if !host_is_allowed(&host, &config.allowed_hosts) {
+    if !host_is_allowed(&host, allowed_hosts) {
         tracing::warn!(
             host = ?host,
             "rejected request with disallowed Host header (possible DNS rebinding attempt)",
         );
         return Err(forbidden_response("Forbidden: Host header is not allowed").into());
     }
+    Ok(())
+}
+
+fn validate_dns_rebinding_headers(
+    uri: &http::Uri,
+    headers: &HeaderMap,
+    config: &StreamableHttpServerConfig,
+) -> HttpResult<()> {
+    validate_host_header(uri, headers, &config.allowed_hosts)?;
     validate_origin_header(headers, config)?;
     Ok(())
 }
