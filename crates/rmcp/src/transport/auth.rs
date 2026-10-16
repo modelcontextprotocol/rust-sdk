@@ -1558,11 +1558,39 @@ impl AuthorizationManager {
     /// # }
     /// ```
     pub async fn resolve_metadata(&self) -> Result<AuthorizationMetadataResolution, AuthError> {
-        self.reset_initial_scopes().await;
-        self.resolve_metadata_inner().await
+        self.resolve_metadata_from_challenge(None).await
     }
 
-    async fn resolve_metadata_inner(&self) -> Result<AuthorizationMetadataResolution, AuthError> {
+    /// Resolve authorization server metadata starting from the
+    /// `WWW-Authenticate` challenge of a real request's 401 response — the
+    /// reactive discovery path, matching the TypeScript and Python SDKs.
+    ///
+    /// Seeds scope selection with the challenge's `scope` hint and prefers
+    /// the challenge's `resource_metadata` URL; falls back to ordinary metadata
+    /// discovery when the challenge is `None` or carries no usable metadata pointer.
+    pub async fn resolve_metadata_from_challenge(
+        &self,
+        www_authenticate: Option<&str>,
+    ) -> Result<AuthorizationMetadataResolution, AuthError> {
+        *self.initial_scopes.write().await = InitialScopeState::default();
+
+        if let Some(www_authenticate) = www_authenticate {
+            let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
+            self.record_initial_challenge_scope(Some(&params)).await;
+            self.record_challenge_scope(&params).await;
+
+            if let Some(resource_metadata_url) = &params.resource_metadata_url
+                && let Some(metadata) = self
+                    .discover_oauth_server_from_resource_metadata_url(resource_metadata_url)
+                    .await?
+            {
+                return Ok(AuthorizationMetadataResolution {
+                    metadata,
+                    source: AuthorizationMetadataSource::ProtectedResourceMetadata,
+                });
+            }
+        }
+
         if let Some(metadata) = self.discover_oauth_server_via_resource_metadata().await? {
             return Ok(AuthorizationMetadataResolution {
                 metadata,
@@ -1582,45 +1610,6 @@ impl AuthorizationManager {
             metadata: Self::legacy_authorization_metadata(&self.base_url),
             source: AuthorizationMetadataSource::LegacyEndpointFallback,
         })
-    }
-
-    /// Resolve authorization server metadata starting from the
-    /// `WWW-Authenticate` challenge of a real request's 401 response — the
-    /// reactive discovery path, matching the TypeScript and Python SDKs.
-    ///
-    /// Seeds scope selection with the challenge's `scope` hint and prefers
-    /// the challenge's `resource_metadata` URL; falls back to
-    /// [`resolve_metadata`](Self::resolve_metadata) when the challenge is
-    /// `None` or carries no usable metadata pointer.
-    pub async fn resolve_metadata_from_challenge(
-        &self,
-        www_authenticate: Option<&str>,
-    ) -> Result<AuthorizationMetadataResolution, AuthError> {
-        let Some(www_authenticate) = www_authenticate else {
-            return self.resolve_metadata().await;
-        };
-        let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
-
-        self.reset_initial_scopes().await;
-        self.record_initial_challenge_scope(Some(&params)).await;
-        self.record_challenge_scope(&params).await;
-
-        if let Some(resource_metadata_url) = &params.resource_metadata_url
-            && let Some(metadata) = self
-                .discover_oauth_server_from_resource_metadata_url(resource_metadata_url)
-                .await?
-        {
-            return Ok(AuthorizationMetadataResolution {
-                metadata,
-                source: AuthorizationMetadataSource::ProtectedResourceMetadata,
-            });
-        }
-
-        self.resolve_metadata_inner().await
-    }
-
-    async fn reset_initial_scopes(&self) {
-        *self.initial_scopes.write().await = InitialScopeState::default();
     }
 
     async fn record_initial_challenge_scope(&self, params: Option<&WWWAuthenticateParams>) {
