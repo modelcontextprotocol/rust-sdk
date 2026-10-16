@@ -158,6 +158,14 @@ where
         .ok_or_else(|| ClientInitializeError::ConnectionClosed(context.to_string()))
 }
 
+/// Whether `expect_response` answers a server ping that arrives before the
+/// handshake completes.
+#[derive(Clone, Copy)]
+enum PreInitPing {
+    Answer,
+    Ignore,
+}
+
 /// Helper function to expect a response from the stream, correlated to
 /// `expected_id`.
 ///
@@ -165,15 +173,20 @@ where
 /// success response is `ConflictInitResponseId`; on an error response (whose
 /// `id` is optional per spec) it is `UncorrelatedErrorResponse`. The caller
 /// never sees an uncorrelated response.
+///
+/// A server ping is answered only with `PreInitPing::Answer`. The discover
+/// wait, including Auto's timeout-bounded probe, leaves it unanswered:
+/// 2026-07-28 has no ping, and a cancelled send could leave a partial frame.
 async fn expect_response<T, S>(
     transport: &mut T,
     context: &str,
     service: &S,
     peer: Peer<RoleClient>,
     expected_id: &RequestId,
+    pre_init_ping: PreInitPing,
 ) -> Result<ServerResult, ClientInitializeError>
 where
-    T: Transport<RoleClient>,
+    T: Transport<RoleClient> + 'static,
     S: Service<RoleClient>,
 {
     loop {
@@ -231,10 +244,26 @@ where
                 }
             }
             // Server could send pings before handshake
-            ServerJsonRpcMessage::Request(ref request)
+            ServerJsonRpcMessage::Request(request)
                 if matches!(request.request, ServerRequest::PingRequest(_)) =>
             {
-                tracing::trace!("Received ping request. Ignored.")
+                match pre_init_ping {
+                    PreInitPing::Answer => {
+                        transport
+                            .send(ClientJsonRpcMessage::response(
+                                ClientResult::empty(()),
+                                request.id,
+                            ))
+                            .await
+                            .map_err(|error| {
+                                ClientInitializeError::transport::<T>(
+                                    error,
+                                    "send pre-init ping response",
+                                )
+                            })?;
+                    }
+                    PreInitPing::Ignore => tracing::trace!("Received ping request. Ignored."),
+                }
             }
             // Server SHOULD NOT send any other messages before handshake. We ignore them anyway
             _ => tracing::warn!(?message, "Received unexpected message"),
@@ -948,8 +977,15 @@ where
             context: "send initialize request".into(),
         })?;
 
-    let response =
-        expect_response(transport, "initialize response", service, peer.clone(), &id).await?;
+    let response = expect_response(
+        transport,
+        "initialize response",
+        service,
+        peer.clone(),
+        &id,
+        PreInitPing::Answer,
+    )
+    .await?;
 
     let ServerResult::InitializeResult(initialize_result) = response else {
         return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
@@ -1019,7 +1055,16 @@ where
                 ClientInitializeError::transport::<T>(error, "send discover request")
             })?;
 
-        match expect_response(transport, "discover response", service, peer.clone(), &id).await {
+        match expect_response(
+            transport,
+            "discover response",
+            service,
+            peer.clone(),
+            &id,
+            PreInitPing::Ignore,
+        )
+        .await
+        {
             Ok(ServerResult::DiscoverResult(result)) => {
                 let Some(selected) =
                     select_protocol_version(&preferred_versions, &result.supported_versions)
