@@ -277,8 +277,6 @@ async fn discover_startup_omits_initialize() {
     server_task.await.expect("server task");
 }
 
-// 2026-07-28 has no ping and servers send no requests before discover
-// completes, so a stray ping stays unanswered.
 #[tokio::test]
 async fn discover_startup_ignores_server_ping() {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
