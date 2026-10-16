@@ -366,6 +366,13 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// let transport = StreamableHttpClientTransport::from_uri("http://localhost:8000/mcp");
     /// ```
     ///
+    /// # Redirects
+    ///
+    /// The default client follows same-origin 307 and 308 redirects, up to 10
+    /// hops. A 301, 302 or 303, or a redirect to another origin, returns an
+    /// error. A 308 does not change the stored URI. To use another redirect
+    /// policy, pass your own `reqwest::Client` to [`with_client`](Self::with_client).
+    ///
     /// # Feature requirement
     ///
     /// This method requires the `transport-streamable-http-client-reqwest` feature.
@@ -385,6 +392,9 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// # Arguments
     ///
     /// * `config` - The config to use with this transport
+    ///
+    /// Uses the same default client as [`from_uri`](Self::from_uri), including
+    /// its redirect handling.
     pub fn from_config(config: StreamableHttpClientTransportConfig) -> Self {
         StreamableHttpClientTransport::with_client(Self::default_http_client(), config)
     }
@@ -395,15 +405,45 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// TCP Delayed ACK on Linux when the previous response body was not
     /// fully consumed before the pool attempts to reuse the connection.
     ///
-    /// Automatic redirects are disabled so caller-supplied custom headers
-    /// cannot be replayed to a redirect target.
+    /// Only same-origin 307 and 308 redirects are followed, up to
+    /// [`MAX_REDIRECTS`] hops. Those keep the method and body, so the
+    /// JSON-RPC message reaches the new location intact. A 301, 302 or 303
+    /// would turn a POST into a bodyless GET and lose the message, and a
+    /// cross-origin redirect would replay the session id and caller-supplied
+    /// custom headers to another host, so both are returned to the caller as
+    /// the redirect response instead. A followed 308 does not update the
+    /// stored URI, so each request still starts at the configured one. A
+    /// client passed to `with_client` keeps its own redirect policy.
     fn default_http_client() -> reqwest::Client {
         reqwest::Client::builder()
             .pool_max_idle_per_host(0)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(same_origin_redirect_policy())
             .build()
             .expect("failed to build default reqwest client")
     }
+}
+
+/// Maximum number of redirects the default client follows for one request.
+const MAX_REDIRECTS: usize = 10;
+
+fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let preserves_body = matches!(
+            attempt.status(),
+            reqwest::StatusCode::TEMPORARY_REDIRECT | reqwest::StatusCode::PERMANENT_REDIRECT
+        );
+        let same_origin = attempt
+            .previous()
+            .first()
+            .is_some_and(|original| original.origin() == attempt.url().origin());
+        if !preserves_body || !same_origin {
+            attempt.stop()
+        } else if attempt.previous().len() > MAX_REDIRECTS {
+            attempt.error(format!("exceeded {MAX_REDIRECTS} redirects"))
+        } else {
+            attempt.follow()
+        }
+    })
 }
 
 #[cfg(test)]
@@ -638,6 +678,254 @@ mod tests {
         redirect_server.abort();
         redirected_server.abort();
 
+        Ok(())
+    }
+
+    /// What the redirect target saw for a single request.
+    #[derive(Debug, Default)]
+    struct CapturedRequest {
+        method: String,
+        body: Vec<u8>,
+        session_id: Option<String>,
+        authorization: Option<String>,
+        api_key: Option<String>,
+    }
+
+    /// Serves `POST /mcp` with a redirect of `status` to `/v2/mcp` on the same
+    /// origin, and records every request that reaches `/v2/mcp`.
+    async fn spawn_same_origin_redirect_server(
+        status: http::StatusCode,
+    ) -> anyhow::Result<(
+        std::net::SocketAddr,
+        std::sync::Arc<tokio::sync::Mutex<Vec<CapturedRequest>>>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    )> {
+        use std::{net::SocketAddr, sync::Arc};
+
+        use axum::{
+            Router,
+            body::Bytes,
+            extract::State,
+            response::IntoResponse,
+            routing::{any, post},
+        };
+        use http::{HeaderMap, Method, header::LOCATION};
+        use tokio::sync::Mutex;
+
+        use crate::transport::common::http_header::HEADER_SESSION_ID;
+
+        type Captured = Arc<Mutex<Vec<CapturedRequest>>>;
+
+        fn header(headers: &HeaderMap, name: &str) -> Option<String> {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        }
+
+        async fn target_handler(
+            State(captured): State<Captured>,
+            method: Method,
+            headers: HeaderMap,
+            body: Bytes,
+        ) -> impl IntoResponse {
+            captured.lock().await.push(CapturedRequest {
+                method: method.to_string(),
+                body: body.to_vec(),
+                session_id: header(&headers, HEADER_SESSION_ID),
+                authorization: header(&headers, http::header::AUTHORIZATION.as_str()),
+                api_key: header(&headers, "x-api-key"),
+            });
+            (
+                http::StatusCode::OK,
+                [(http::header::CONTENT_TYPE, "application/json")],
+                r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            )
+        }
+
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let addr = listener.local_addr()?;
+        let location = format!("http://{addr}/v2/mcp");
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/mcp",
+                post(move || {
+                    let location = location.clone();
+                    async move { (status, [(LOCATION, location)], "") }
+                }),
+            )
+            .route("/v2/mcp", any(target_handler))
+            .with_state(captured.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        Ok((addr, captured, server))
+    }
+
+    fn ping_message() -> ClientJsonRpcMessage {
+        ClientJsonRpcMessage::request(
+            ClientRequest::PingRequest(PingRequest::default()),
+            RequestId::Number(1),
+        )
+    }
+
+    #[rstest]
+    #[case::temporary_redirect(http::StatusCode::TEMPORARY_REDIRECT)]
+    #[case::permanent_redirect(http::StatusCode::PERMANENT_REDIRECT)]
+    #[tokio::test]
+    async fn default_http_client_follows_same_origin_body_preserving_redirect(
+        #[case] status: http::StatusCode,
+    ) -> anyhow::Result<()> {
+        use std::{collections::HashMap, sync::Arc};
+
+        use http::{HeaderName, HeaderValue};
+
+        use super::StreamableHttpClientTransport;
+        use crate::transport::streamable_http_client::{
+            StreamableHttpClient, StreamableHttpPostResponse,
+        };
+
+        let (addr, captured, server) = spawn_same_origin_redirect_server(status).await?;
+        let mut custom_headers = HashMap::new();
+        custom_headers.insert(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_static("secret"),
+        );
+        let message = ping_message();
+        let expected_body = serde_json::to_value(&message)?;
+
+        let client = StreamableHttpClientTransport::<reqwest::Client>::default_http_client();
+        let result = client
+            .post_message(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                message,
+                Some(Arc::from("session-1")),
+                Some("token".to_owned()),
+                custom_headers,
+            )
+            .await;
+        server.abort();
+
+        assert!(
+            matches!(result, Ok(StreamableHttpPostResponse::Json(..))),
+            "same-origin {status} should be followed, got {result:?}"
+        );
+        let captured = captured.lock().await;
+        assert_eq!(captured.len(), 1, "target should be hit exactly once");
+        let request = &captured[0];
+        assert_eq!(request.method, "POST", "{status} must keep the method");
+        // reqwest can only replay a reusable body on 307/308; the JSON-RPC
+        // message must arrive intact, not empty.
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&request.body)?,
+            expected_body,
+            "{status} must replay the JSON-RPC body"
+        );
+        assert_eq!(request.session_id.as_deref(), Some("session-1"));
+        assert_eq!(request.authorization.as_deref(), Some("Bearer token"));
+        assert_eq!(request.api_key.as_deref(), Some("secret"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_http_client_stops_redirect_loop() -> anyhow::Result<()> {
+        use std::{
+            collections::HashMap,
+            net::SocketAddr,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
+
+        use axum::{Router, routing::post};
+        use http::header::LOCATION;
+
+        use super::{MAX_REDIRECTS, StreamableHttpClientTransport};
+        use crate::transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError};
+
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let addr = listener.local_addr()?;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/mcp",
+            post({
+                let hits = hits.clone();
+                move || {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        (
+                            http::StatusCode::TEMPORARY_REDIRECT,
+                            [(LOCATION, "/mcp")],
+                            "",
+                        )
+                    }
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let client = StreamableHttpClientTransport::<reqwest::Client>::default_http_client();
+        let result = client
+            .post_message(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                ping_message(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await;
+        server.abort();
+
+        assert!(
+            matches!(&result, Err(StreamableHttpError::Client(error)) if error.is_redirect()),
+            "redirect loop should end in a redirect error, got {result:?}"
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), MAX_REDIRECTS + 1);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::moved_permanently(http::StatusCode::MOVED_PERMANENTLY)]
+    #[case::found(http::StatusCode::FOUND)]
+    #[case::see_other(http::StatusCode::SEE_OTHER)]
+    #[tokio::test]
+    async fn default_http_client_does_not_follow_method_rewriting_redirect(
+        #[case] status: http::StatusCode,
+    ) -> anyhow::Result<()> {
+        use std::{collections::HashMap, sync::Arc};
+
+        use super::StreamableHttpClientTransport;
+        use crate::transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError};
+
+        let (addr, captured, server) = spawn_same_origin_redirect_server(status).await?;
+
+        let client = StreamableHttpClientTransport::<reqwest::Client>::default_http_client();
+        let result = client
+            .post_message(
+                Arc::<str>::from(format!("http://{addr}/mcp")),
+                ping_message(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await;
+        server.abort();
+
+        // Following would turn the POST into a bodyless GET, which a
+        // Streamable HTTP server may accept as an SSE stream request, so the
+        // message would be lost silently.
+        assert!(
+            matches!(
+                &result,
+                Err(StreamableHttpError::UnexpectedServerResponse(message))
+                    if message.contains(status.as_str())
+            ),
+            "{status} should surface as an error, got {result:?}"
+        );
+        assert!(
+            captured.lock().await.is_empty(),
+            "{status} must not be followed"
+        );
         Ok(())
     }
 }
