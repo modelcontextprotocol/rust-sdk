@@ -326,10 +326,32 @@ async fn rejects_missing_param_header_with_32020() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Server whose `deploy` tool gains the `x-mcp-header` annotation at runtime.
+/// Server whose `deploy` tool gains or loses the `x-mcp-header` annotation at runtime.
 #[derive(Clone, Default)]
 struct ChangingToolServer {
     annotated: Arc<AtomicBool>,
+}
+
+async fn spawn_changing_tool_server(
+    server: &ChangingToolServer,
+) -> (reqwest::Client, String, CancellationToken) {
+    let server = server.clone();
+    spawn_server_with(move || Ok(server.clone())).await
+}
+
+/// POSTs a `deploy` call whose `Mcp-Param-Region` header contradicts the body.
+async fn post_mismatched_region(client: &reqwest::Client, url: &str) -> reqwest::Response {
+    post_tool_call(
+        client,
+        url,
+        SEP_VERSION,
+        "deploy",
+        serde_json::json!({ "region": "us-west1" }),
+        Some("tools/call"),
+        Some("deploy"),
+        Some("eu-central1"),
+    )
+    .await
 }
 
 impl ServerHandler for ChangingToolServer {
@@ -346,37 +368,43 @@ impl ServerHandler for ChangingToolServer {
 }
 
 #[tokio::test]
-async fn validates_param_header_against_current_tool_schema() -> anyhow::Result<()> {
+async fn validates_param_header_once_tool_gains_annotation() -> anyhow::Result<()> {
     let server = ChangingToolServer::default();
-    let (client, url, ct) = spawn_server_with({
-        let server = server.clone();
-        move || Ok(server.clone())
-    })
-    .await;
-    let send_mismatch = || {
-        post_tool_call(
-            &client,
-            &url,
-            SEP_VERSION,
-            "deploy",
-            serde_json::json!({ "region": "us-west1" }),
-            Some("tools/call"),
-            Some("deploy"),
-            Some("eu-central1"),
-        )
-    };
+    let (client, url, ct) = spawn_changing_tool_server(&server).await;
 
-    let before: serde_json::Value = send_mismatch().await.json().await?;
-    assert_ne!(
-        before["error"]["code"], -32020,
-        "unannotated tool must not validate Mcp-Param-*, got: {before}"
-    );
+    // Header validation passes, so the request fails later on its missing `_meta`.
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32602);
 
     server.annotated.store(true, Ordering::SeqCst);
-    let response = send_mismatch().await;
+    let response = post_mismatched_region(&client, &url).await;
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["error"]["code"], -32020);
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skips_param_header_validation_once_tool_loses_annotation() -> anyhow::Result<()> {
+    let server = ChangingToolServer {
+        annotated: Arc::new(AtomicBool::new(true)),
+    };
+    let (client, url, ct) = spawn_changing_tool_server(&server).await;
+
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32020);
+
+    server.annotated.store(false, Ordering::SeqCst);
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32602);
 
     ct.cancel();
     Ok(())
