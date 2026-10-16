@@ -2306,10 +2306,8 @@ impl AuthorizationManager {
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
             .add_extra_param("resource", self.oauth_resource().await);
-        let mut refresh_scopes = stored_credentials.granted_scopes.clone();
-        self.add_offline_access_if_supported(&mut refresh_scopes);
-        let requested_scopes = refresh_scopes.clone();
-        for scope in refresh_scopes {
+        let requested_scopes = stored_credentials.granted_scopes.clone();
+        for scope in requested_scopes.iter().cloned() {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let mut token_result = match refresh_request
@@ -9052,7 +9050,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_token_adds_offline_access_when_as_supports_it() {
+    async fn refresh_token_does_not_add_ungranted_offline_access() {
         let (base_url, captured) = start_token_server().await;
 
         let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
@@ -9071,6 +9069,45 @@ mod tests {
                 "my-refresh-token",
             )),
             granted_scopes: vec!["read".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        let scope = params
+            .get("scope")
+            .expect("scope should be present in refresh request");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["read"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_keeps_offline_access_when_it_was_granted() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            scopes_supported: Some(vec!["read".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string(), "offline_access".to_string()],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
         };
