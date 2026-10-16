@@ -160,7 +160,7 @@ where
 
 /// Whether `expect_response` answers a server ping that arrives before the
 /// handshake completes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum PreInitPing {
     Answer,
     Ignore,
@@ -247,21 +247,22 @@ where
             ServerJsonRpcMessage::Request(request)
                 if matches!(request.request, ServerRequest::PingRequest(_)) =>
             {
-                if pre_init_ping == PreInitPing::Answer {
-                    transport
-                        .send(ClientJsonRpcMessage::response(
-                            ClientResult::empty(()),
-                            request.id,
-                        ))
-                        .await
-                        .map_err(|error| {
-                            ClientInitializeError::transport::<T>(
-                                error,
-                                "send pre-init ping response",
-                            )
-                        })?;
-                } else {
-                    tracing::trace!("Received ping request. Ignored.")
+                match pre_init_ping {
+                    PreInitPing::Answer => {
+                        transport
+                            .send(ClientJsonRpcMessage::response(
+                                ClientResult::empty(()),
+                                request.id,
+                            ))
+                            .await
+                            .map_err(|error| {
+                                ClientInitializeError::transport::<T>(
+                                    error,
+                                    "send pre-init ping response",
+                                )
+                            })?;
+                    }
+                    PreInitPing::Ignore => tracing::trace!("Received ping request. Ignored."),
                 }
             }
             // Server SHOULD NOT send any other messages before handshake. We ignore them anyway
