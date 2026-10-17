@@ -902,4 +902,49 @@ mod test {
             }),
         );
     }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn receive_rejects_request_with_unusable_id() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        use crate::{RoleServer, transport::Transport};
+
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        let (server_r, server_w) = tokio::io::split(server_io);
+        let (client_r, mut client_w) = tokio::io::split(client_io);
+
+        let mut transport = AsyncRwTransport::<RoleServer, _, _>::new(server_r, server_w);
+
+        // A request whose `id` is not an integer or a string, followed by a valid
+        // notification. The request must be answered with an error, not read as a
+        // notification and dropped, or the peer waits for a response forever.
+        client_w
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"tools/list\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+            )
+            .await
+            .unwrap();
+
+        let received = transport
+            .receive()
+            .await
+            .expect("transport should reject the request and yield the next valid message");
+        assert_eq!(
+            serde_json::to_value(&received).unwrap()["method"],
+            "notifications/initialized",
+        );
+
+        let mut reply_buf = Vec::new();
+        let mut peer = BufReader::new(client_r);
+        peer.read_until(b'\n', &mut reply_buf).await.unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&reply_buf).unwrap();
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32600, "message": "Invalid request"},
+            }),
+        );
+    }
 }
