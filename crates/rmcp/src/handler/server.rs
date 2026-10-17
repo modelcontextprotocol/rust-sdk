@@ -220,10 +220,31 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
-            ClientRequest::CustomRequest(request) => self
-                .on_custom_request(request, context)
-                .await
-                .map(ServerResult::CustomResult),
+            ClientRequest::CustomRequest(request) => {
+                // A known method only lands here when its params failed to
+                // deserialize; that is the client's mistake, not an unknown method.
+                // Methods this lifecycle does not serve stay "method not found",
+                // as the typed arms above answer them (SEP-2575).
+                let not_served: &[&str] = if legacy_request {
+                    &[SubscriptionsListenRequestMethod::VALUE]
+                } else {
+                    &[
+                        InitializeResultMethod::VALUE,
+                        PingRequestMethod::VALUE,
+                        SetLevelRequestMethod::VALUE,
+                        SubscribeRequestMethod::VALUE,
+                        UnsubscribeRequestMethod::VALUE,
+                    ]
+                };
+                if !not_served.contains(&request.method.as_str())
+                    && let Some(reason) = ClientRequest::known_method_params_error(&request)
+                {
+                    return Err(McpError::invalid_params(reason, None));
+                }
+                self.on_custom_request(request, context)
+                    .await
+                    .map(ServerResult::CustomResult)
+            }
             ClientRequest::GetTaskRequest(request) => {
                 validate_tasks_capability::<GetTaskMethod, _>(self, &context)?;
                 self.get_task(request.params, context)

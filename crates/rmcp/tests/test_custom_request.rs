@@ -188,3 +188,66 @@ async fn test_custom_server_request_reaches_client() -> anyhow::Result<()> {
     client.cancel().await?;
     Ok(())
 }
+
+/// A request that names a method the SDK defines but whose params do not fit
+/// it is answered with `-32602` Invalid params, not `-32601` Method not found,
+/// and never reaches `on_custom_request` (#1347).
+#[tokio::test]
+async fn test_known_method_with_invalid_params_is_invalid_params() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let payload = Arc::new(Mutex::new(None));
+    {
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            let server = CustomRequestServer {
+                receive_signal: Arc::new(Notify::new()),
+                payload,
+            }
+            .serve(server_transport)
+            .await?;
+            server.waiting().await?;
+            anyhow::Ok(())
+        });
+    }
+    let client = ().serve(client_transport).await?;
+
+    for (method, params) in [
+        ("tools/call", Some(json!({ "name": 7, "arguments": {} }))),
+        (
+            "tools/call",
+            Some(json!({ "name": "ok", "arguments": "x" })),
+        ),
+        ("tools/call", None),
+        ("prompts/get", Some(json!({ "name": 7 }))),
+        ("resources/read", Some(json!({ "uri": 7 }))),
+    ] {
+        let result = client
+            .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                method,
+                params.clone(),
+            )))
+            .await;
+        match result {
+            Err(rmcp::ServiceError::McpError(error)) => {
+                assert_eq!(
+                    error.code,
+                    rmcp::model::ErrorCode::INVALID_PARAMS,
+                    "{method} {params:?}: {error:?}"
+                );
+                assert!(
+                    error.message.contains(method),
+                    "{method} {params:?}: message {:?} does not name the method",
+                    error.message
+                );
+            }
+            other => panic!("{method} {params:?}: expected Invalid params, got {other:?}"),
+        }
+    }
+    assert!(
+        payload.lock().await.is_none(),
+        "a known method with invalid params reached on_custom_request"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}
