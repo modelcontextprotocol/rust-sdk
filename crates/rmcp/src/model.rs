@@ -4825,6 +4825,7 @@ impl ClientRequest {
     /// recovers the error, so the server can answer `-32602` rather than treat
     /// a known method as unknown. Returns `None` for a method the SDK does not
     /// define.
+    #[cfg(feature = "server")]
     pub(crate) fn known_method_params_error(request: &CustomRequest) -> Option<String> {
         let mut message = serde_json::Map::new();
         message.insert("method".into(), Value::String(request.method.clone()));
