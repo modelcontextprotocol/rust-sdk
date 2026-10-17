@@ -45,7 +45,7 @@ use crate::{
             mcp_headers,
             server_side_http::{
                 BoxResponse, ServerSseMessage, accepted_response, expect_json,
-                internal_error_response, sse_stream_response, unexpected_message_response,
+                internal_error_response, session_id_required_response, sse_stream_response,
             },
         },
     },
@@ -1914,11 +1914,7 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
-            // MCP spec: servers that require a session ID SHOULD respond with 400 Bad Request
-            return Ok(Response::builder()
-                .status(http::StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
-                .expect("valid response"));
+            return Ok(session_id_required_response());
         };
         // check if session exists
         let has_session = self
@@ -2159,7 +2155,7 @@ where
                 let stored_init_params = match &mut message {
                     ClientJsonRpcMessage::Request(req) => {
                         let ClientRequest::InitializeRequest(init_req) = &req.request else {
-                            return Err(unexpected_message_response("initialize request").into());
+                            return Err(session_id_required_response().into());
                         };
                         // Reject mismatched MCP-Protocol-Version header before binding the session to anything.
                         validate_header_matches_init_body(
@@ -2177,7 +2173,7 @@ where
                         stored_init_params
                     }
                     _ => {
-                        return Err(unexpected_message_response("initialize request").into());
+                        return Err(session_id_required_response().into());
                     }
                 };
                 let service = self
@@ -2382,11 +2378,7 @@ where
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_owned().into());
         let Some(session_id) = session_id else {
-            // MCP spec: servers that require a session ID SHOULD respond with 400 Bad Request
-            return Ok(Response::builder()
-                .status(http::StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
-                .expect("valid response"));
+            return Ok(session_id_required_response());
         };
         // Validate MCP-Protocol-Version header (per 2025-06-18 spec)
         validate_protocol_version_header(request.headers(), false)?;

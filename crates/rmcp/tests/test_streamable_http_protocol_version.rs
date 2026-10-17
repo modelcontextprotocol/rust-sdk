@@ -240,6 +240,41 @@ async fn stateful_init_rejects_when_header_mismatches_body() -> anyhow::Result<(
     Ok(())
 }
 
+/// MCP spec (Streamable HTTP, Session Management): servers that require a
+/// session ID SHOULD respond to requests without an `Mcp-Session-Id` header
+/// (other than initialization) with HTTP 400 Bad Request.
+#[tokio::test]
+async fn stateful_post_without_session_id_is_bad_request() -> anyhow::Result<()> {
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let (client, url, ct) =
+        spawn_server_with_manager(stateful_config(), session_manager.clone()).await;
+
+    let response = post_non_initialize(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.text().await?,
+        "Bad Request: Session ID is required"
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.text().await?,
+        "Bad Request: Session ID is required"
+    );
+
+    assert_eq!(session_manager.sessions.read().await.len(), 0);
+
+    ct.cancel();
+    Ok(())
+}
+
 #[tokio::test]
 async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Result<()> {
     let session_manager = Arc::new(LocalSessionManager::default());
@@ -247,7 +282,7 @@ async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Res
         spawn_server_with_manager(stateful_config(), session_manager.clone()).await;
 
     let response = post_non_initialize(&client, &url).await;
-    assert_eq!(response.status(), 422);
+    assert_eq!(response.status(), 400);
     assert_eq!(session_manager.sessions.read().await.len(), 0);
 
     let response = post_init(&client, &url, Some("2024-11-05"), "2025-11-25").await;
