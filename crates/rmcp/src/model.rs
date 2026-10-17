@@ -4816,6 +4816,59 @@ ts_union!(
 );
 
 impl ClientRequest {
+    /// Why the params of `request` do not fit the method it names, when that
+    /// method is one this SDK defines.
+    ///
+    /// `ClientRequest` is untagged, so a request for a known method whose params
+    /// fail to deserialize lands in [`ClientRequest::CustomRequest`] instead of
+    /// its typed variant. Reading the request again as that method's type
+    /// recovers the error, so the server can answer `-32602` rather than treat
+    /// a known method as unknown. Returns `None` for a method the SDK does not
+    /// define.
+    pub(crate) fn known_method_params_error(request: &CustomRequest) -> Option<String> {
+        let mut message = serde_json::Map::new();
+        message.insert("method".into(), Value::String(request.method.clone()));
+        if let Some(params) = &request.params {
+            message.insert("params".into(), params.clone());
+        }
+        let message = Value::Object(message);
+        macro_rules! check {
+            ($($method:ty => $request:ty),* $(,)?) => {
+                $(
+                    if request.method == <$method as ConstString>::VALUE {
+                        let error = serde_json::from_value::<$request>(message)
+                            .err()
+                            .map_or_else(|| "params do not match the method".to_owned(), |e| e.to_string());
+                        return Some(format!("invalid params for {}: {error}", request.method));
+                    }
+                )*
+            };
+        }
+        check!(
+            PingRequestMethod => PingRequest,
+            InitializeResultMethod => InitializeRequest,
+            DiscoverRequestMethod => DiscoverRequest,
+            CompleteRequestMethod => CompleteRequest,
+            SetLevelRequestMethod => SetLevelRequest,
+            GetPromptRequestMethod => GetPromptRequest,
+            ListPromptsRequestMethod => ListPromptsRequest,
+            ListResourcesRequestMethod => ListResourcesRequest,
+            ListResourceTemplatesRequestMethod => ListResourceTemplatesRequest,
+            ReadResourceRequestMethod => ReadResourceRequest,
+            SubscriptionsListenRequestMethod => SubscriptionsListenRequest,
+            SubscribeRequestMethod => SubscribeRequest,
+            UnsubscribeRequestMethod => UnsubscribeRequest,
+            CallToolRequestMethod => CallToolRequest,
+            ListToolsRequestMethod => ListToolsRequest,
+            GetTaskMethod => GetTaskRequest,
+            UpdateTaskMethod => UpdateTaskRequest,
+            CancelTaskMethod => CancelTaskRequest,
+        );
+        None
+    }
+}
+
+impl ClientRequest {
     pub fn method(&self) -> &str {
         match &self {
             ClientRequest::PingRequest(r) => r.method.as_str(),

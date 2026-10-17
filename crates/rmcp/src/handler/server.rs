@@ -220,10 +220,16 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
-            ClientRequest::CustomRequest(request) => self
-                .on_custom_request(request, context)
-                .await
-                .map(ServerResult::CustomResult),
+            ClientRequest::CustomRequest(request) => {
+                // A known method only lands here when its params failed to
+                // deserialize; that is the client's mistake, not an unknown method.
+                if let Some(reason) = ClientRequest::known_method_params_error(&request) {
+                    return Err(McpError::invalid_params(reason, None));
+                }
+                self.on_custom_request(request, context)
+                    .await
+                    .map(ServerResult::CustomResult)
+            }
             ClientRequest::GetTaskRequest(request) => {
                 validate_tasks_capability::<GetTaskMethod, _>(self, &context)?;
                 self.get_task(request.params, context)
