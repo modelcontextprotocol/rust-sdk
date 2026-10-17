@@ -2361,8 +2361,13 @@ where
                     // ignore
                     Ok(accepted_response())
                 }
-                ClientJsonRpcMessage::Response(_json_rpc_response) => Ok(accepted_response()),
-                ClientJsonRpcMessage::Error(_json_rpc_error) => Ok(accepted_response()),
+                // A stateless request has no pending server-to-client request to answer.
+                ClientJsonRpcMessage::Response(_) | ClientJsonRpcMessage::Error(_) => {
+                    Ok(invalid_request_jsonrpc_response(
+                        None,
+                        "stateless server does not accept JSON-RPC responses",
+                    ))
+                }
             }
         }
     }

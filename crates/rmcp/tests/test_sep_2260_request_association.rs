@@ -1,32 +1,25 @@
 #![cfg(all(feature = "server", feature = "client", not(feature = "local")))]
-#![expect(
-    deprecated,
-    reason = "This test verifies request association for the deprecated sampling API"
-)]
-
-use std::sync::{Arc, Mutex};
+#![expect(deprecated, reason = "This test exercises the deprecated sampling API")]
 
 use rmcp::{
     ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
-        CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult, ProtocolVersion,
-        SamplingMessage, ServerCapabilities, ServerConfig, ServerRequest,
+        CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult, ErrorCode,
+        PingRequest, ProtocolVersion, SamplingMessage, ServerCapabilities, ServerConfig,
+        ServerRequest,
     },
     service::{RequestContext, RunningService, serve_directly},
 };
 use serde_json::{Value, json};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf},
-    sync::oneshot,
+use tokio::io::{
+    AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf,
 };
 
-type RequestResultSender = oneshot::Sender<Result<(), ServiceError>>;
-
+/// Sends the server-to-client request named by the tool and reports whether it
+/// was rejected as `invalid_request`.
 #[derive(Clone)]
-struct SamplingServer {
-    outside: Arc<Mutex<Option<RequestResultSender>>>,
-}
+struct SamplingServer;
 
 impl ServerHandler for SamplingServer {
     fn get_info(&self) -> ServerConfig {
@@ -38,42 +31,30 @@ impl ServerHandler for SamplingServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
-        let peer = context.peer.clone();
-        let slot = self.outside.clone();
-
-        let use_generic = request.name == "sample_generic";
-        tokio::spawn(async move {
-            let outside = if use_generic {
-                peer.send_request(ServerRequest::CreateMessageRequest(
-                    CreateMessageRequest::new(CreateMessageRequestParams::new(
-                        vec![SamplingMessage::user_text("standalone-generic")],
-                        16,
-                    )),
+        let params =
+            CreateMessageRequestParams::new(vec![SamplingMessage::user_text("nested")], 16);
+        let outcome = match request.name.as_ref() {
+            "sample" => context.peer.create_message(params).await.map(|_| ()),
+            "sample_generic" => context
+                .peer
+                .send_request(ServerRequest::CreateMessageRequest(
+                    CreateMessageRequest::new(params),
                 ))
                 .await
-                .map(|_| ())
-            } else {
-                peer.create_message(CreateMessageRequestParams::new(
-                    vec![SamplingMessage::user_text("standalone")],
-                    16,
-                ))
+                .map(|_| ()),
+            "ping" => context
+                .peer
+                .send_request(ServerRequest::PingRequest(PingRequest::default()))
                 .await
-                .map(|_| ())
-            };
-            if let Some(tx) = slot.lock().unwrap().take() {
-                let _ = tx.send(outside);
-            }
-        });
-
-        let nested = context
-            .peer
-            .create_message(CreateMessageRequestParams::new(
-                vec![SamplingMessage::user_text("nested")],
-                16,
-            ))
-            .await;
-        nested.map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text("ok")]).into())
+                .map(|_| ()),
+            other => panic!("unexpected tool {other}"),
+        };
+        let text = match outcome {
+            Err(ServiceError::McpError(e)) if e.code == ErrorCode::INVALID_REQUEST => "rejected",
+            Ok(()) => "sent",
+            Err(e) => return Err(rmcp::ErrorData::internal_error(e.to_string(), None)),
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]).into())
     }
 }
 
@@ -103,18 +84,16 @@ impl ClientHandler for SamplingClient {
 /// Connects the pair on `2026-07-28`. That revision dropped the `initialize`
 /// handshake, so the version is agreed up front the way a discover-lifecycle
 /// startup leaves it.
-fn serve_modern_pair(
-    server: SamplingServer,
-) -> (
+fn serve_modern_pair() -> (
     RunningService<RoleServer, SamplingServer>,
     RunningService<RoleClient, SamplingClient>,
 ) {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
-    let mut server_peer_info = server.get_info();
+    let mut server_peer_info = SamplingServer.get_info();
     server_peer_info.protocol_version = ProtocolVersion::V_2026_07_28;
 
     let running_server = serve_directly::<RoleServer, _, _, _, _>(
-        server,
+        SamplingServer,
         server_transport,
         Some(SamplingClient.get_info()),
     );
@@ -126,13 +105,8 @@ fn serve_modern_pair(
     (running_server, client)
 }
 
-#[tokio::test]
-async fn nested_sampling_allowed_standalone_rejected() -> anyhow::Result<()> {
-    let (tx, rx) = oneshot::channel();
-    let server = SamplingServer {
-        outside: Arc::new(Mutex::new(Some(tx))),
-    };
-    let (running_server, client) = serve_modern_pair(server);
+async fn call_tool_on_modern_pair(tool: &'static str) -> anyhow::Result<String> {
+    let (running_server, client) = serve_modern_pair();
     let server_handle = tokio::spawn(async move {
         running_server.waiting().await?;
         anyhow::Ok(())
@@ -140,55 +114,45 @@ async fn nested_sampling_allowed_standalone_rejected() -> anyhow::Result<()> {
 
     let result = client
         .peer()
-        .call_tool(CallToolRequestParams::new("sample"))
+        .call_tool(CallToolRequestParams::new(tool))
         .await?;
-    assert_eq!(
-        result.content.first().unwrap().as_text().unwrap().text,
-        "ok"
-    );
-
-    let outside = rx.await?;
-    assert!(matches!(outside, Err(ServiceError::McpError(_))));
+    let text = result
+        .content
+        .first()
+        .unwrap()
+        .as_text()
+        .unwrap()
+        .text
+        .clone();
 
     client.cancel().await?;
     let _ = server_handle.await?;
+    Ok(text)
+}
+
+#[tokio::test]
+async fn sampling_from_handler_rejected_on_modern_protocol() -> anyhow::Result<()> {
+    assert_eq!(call_tool_on_modern_pair("sample").await?, "rejected");
     Ok(())
 }
 
 #[tokio::test]
-async fn generic_send_request_bypass_rejected() -> anyhow::Result<()> {
-    let (tx, rx) = oneshot::channel();
-    let server = SamplingServer {
-        outside: Arc::new(Mutex::new(Some(tx))),
-    };
-    let (running_server, client) = serve_modern_pair(server);
-    let server_handle = tokio::spawn(async move {
-        running_server.waiting().await?;
-        anyhow::Ok(())
-    });
-
-    let result = client
-        .peer()
-        .call_tool(CallToolRequestParams::new("sample_generic"))
-        .await?;
+async fn generic_send_request_rejected_on_modern_protocol() -> anyhow::Result<()> {
     assert_eq!(
-        result.content.first().unwrap().as_text().unwrap().text,
-        "ok"
+        call_tool_on_modern_pair("sample_generic").await?,
+        "rejected"
     );
-
-    let outside = rx.await?;
-    assert!(
-        matches!(outside, Err(ServiceError::McpError(_))),
-        "generic send_request must not bypass SEP-2260 enforcement"
-    );
-
-    client.cancel().await?;
-    let _ = server_handle.await?;
     Ok(())
 }
 
-// A compliant rmcp server cannot produce an unassociated server-to-client
-// request at >= 2026-07-28 (send-side enforcement blocks it), so the client's
+#[tokio::test]
+async fn ping_rejected_on_modern_protocol() -> anyhow::Result<()> {
+    assert_eq!(call_tool_on_modern_pair("ping").await?, "rejected");
+    Ok(())
+}
+
+// A compliant rmcp server cannot produce a server-to-client request at
+// >= 2026-07-28 (send-side enforcement blocks it), so the client's
 // receive-side enforcement is exercised with a raw JSON-RPC server.
 type RawServer = (
     Lines<BufReader<ReadHalf<DuplexStream>>>,
