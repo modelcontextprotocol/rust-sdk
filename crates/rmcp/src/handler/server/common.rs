@@ -12,41 +12,61 @@ use crate::{
     RoleServer, model::JsonObject, schemars::generate::SchemaSettings, service::RequestContext,
 };
 
-/// Generates a JSON schema for a type
+/// Generates a JSON schema for a type, for the deserialize contract (what the type accepts).
+/// Use this for tool and prompt inputs.
 pub fn schema_for_type<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     thread_local! {
         static CACHE_FOR_TYPE: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
     };
-    CACHE_FOR_TYPE.with(|cache| {
+    // explicitly to align json schema version to official specifications.
+    // refer to https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655 for details.
+    //
+    // Note: AddNullable is intentionally NOT used here because the `nullable` keyword
+    // is an OpenAPI 3.0 extension, not part of JSON Schema 2020-12. Using it would
+    // cause validation failures with strict JSON Schema validators.
+    cached_schema::<T>(&CACHE_FOR_TYPE, SchemaSettings::draft2020_12())
+}
+
+/// Generates a JSON schema for a type, for the serialize contract (what the type writes).
+/// Use this for tool outputs: a result is serialised by the server, so its schema must describe
+/// what `Serialize` produces (an `Option` field with no `skip_serializing_if` is always present,
+/// a `Decimal` is a string, a `#[serde(default)]` field is always written).
+fn schema_for_serialized<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    thread_local! {
+        static CACHE_FOR_SERIALIZED: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
+    };
+    cached_schema::<T>(
+        &CACHE_FOR_SERIALIZED,
+        SchemaSettings::draft2020_12().for_serialize(),
+    )
+}
+
+fn cached_schema<T: JsonSchema + std::any::Any>(
+    cache: &'static std::thread::LocalKey<std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>>>,
+    settings: SchemaSettings,
+) -> Arc<JsonObject> {
+    cache.with(|cache| {
         if let Some(x) = cache
             .read()
             .expect("schema cache lock poisoned")
             .get(&TypeId::of::<T>())
         {
-            x.clone()
-        } else {
-            // explicitly to align json schema version to official specifications.
-            // refer to https://github.com/modelcontextprotocol/modelcontextprotocol/pull/655 for details.
-            let settings = SchemaSettings::draft2020_12();
-            // Note: AddNullable is intentionally NOT used here because the `nullable` keyword
-            // is an OpenAPI 3.0 extension, not part of JSON Schema 2020-12. Using it would
-            // cause validation failures with strict JSON Schema validators.
-            let generator = settings.into_generator();
-            let schema = generator.into_root_schema_for::<T>();
-            let object = serde_json::to_value(schema).expect("failed to serialize schema");
-            let serde_json::Value::Object(object) = object else {
-                panic!(
-                    "Schema serialization produced non-object value: expected JSON object but got {object:?}"
-                );
-            };
-            let schema = Arc::new(object);
-            cache
-                .write()
-                .expect("schema cache lock poisoned")
-                .insert(TypeId::of::<T>(), schema.clone());
-
-            schema
+            return x.clone();
         }
+        let generator = settings.into_generator();
+        let schema = generator.into_root_schema_for::<T>();
+        let object = serde_json::to_value(schema).expect("failed to serialize schema");
+        let serde_json::Value::Object(object) = object else {
+            panic!(
+                "Schema serialization produced non-object value: expected JSON object but got {object:?}"
+            );
+        };
+        let schema = Arc::new(object);
+        cache
+            .write()
+            .expect("schema cache lock poisoned")
+            .insert(TypeId::of::<T>(), schema.clone());
+        schema
     })
 }
 
@@ -116,8 +136,9 @@ fn strip_output(raw: &Arc<JsonObject>) -> Arc<JsonObject> {
     Arc::new(object)
 }
 
-/// Generate and strip a JSON schema for outputSchema (top-level "title" and
-/// "description" are removed; output schemas are not restricted to root type "object").
+/// Generate and strip a JSON schema for outputSchema, for the serialize contract (top-level
+/// "title" and "description" are removed; output schemas are not restricted to root type
+/// "object").
 pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
     thread_local! {
         static CACHE_FOR_OUTPUT: std::sync::RwLock<HashMap<TypeId, Arc<JsonObject>>> = Default::default();
@@ -132,7 +153,7 @@ pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
             return schema.clone();
         }
 
-        let schema = strip_output(&schema_for_type::<T>());
+        let schema = strip_output(&schema_for_serialized::<T>());
 
         cache
             .write()
@@ -248,6 +269,39 @@ mod tests {
     #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
     struct TestObject {
         value: i32,
+    }
+
+    #[derive(serde::Serialize, JsonSchema)]
+    struct OutputWithOption {
+        always: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sometimes: Option<i32>,
+    }
+
+    #[derive(serde::Deserialize, JsonSchema)]
+    struct InputWithOption {
+        maybe: Option<i32>,
+    }
+
+    /// An output schema describes what the type serialises: an `Option` field serde always
+    /// writes is required, one it skips when `None` is not.
+    #[test]
+    fn schema_for_output_describes_the_serialized_form() {
+        let schema = schema_for_output::<OutputWithOption>();
+        assert_eq!(
+            schema.get("required"),
+            Some(&serde_json::json!(["always"])),
+            "{schema:?}"
+        );
+    }
+
+    /// An input schema keeps describing what the type accepts: an `Option` field may be absent.
+    #[test]
+    fn schema_for_input_keeps_the_deserialize_form() {
+        let schema = schema_for_type::<InputWithOption>();
+        assert_eq!(schema.get("required"), None, "{schema:?}");
+        let parsed: InputWithOption = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(parsed.maybe, None);
     }
 
     #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
