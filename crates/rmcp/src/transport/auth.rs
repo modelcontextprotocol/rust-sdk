@@ -723,8 +723,9 @@ pub struct WWWAuthenticateParams {
 }
 
 impl WWWAuthenticateParams {
-    /// Parse a `WWW-Authenticate` header value, resolving a relative
-    /// `resource_metadata` URL against `base_url`.
+    /// Parse a Bearer challenge from a `WWW-Authenticate` header value, preferring
+    /// one with a usable `resource_metadata` URL and resolving it against `base_url`.
+    /// Other schemes can supply a metadata URL, but never Bearer scopes or errors.
     pub fn parse(header: &str, base_url: &Url) -> Self {
         AuthorizationManager::extract_www_authenticate_params(header, base_url)
     }
@@ -2468,8 +2469,11 @@ impl AuthorizationManager {
                 let Ok(value_str) = value.to_str() else {
                     continue;
                 };
-                let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
-                if params.is_insufficient_scope() {
+                if let Some((_, params)) =
+                    Self::parse_www_authenticate_challenges(value_str, &self.base_url)
+                        .into_iter()
+                        .find(|(_, params)| params.is_insufficient_scope())
+                {
                     let required_scope = params.scope.unwrap_or_default();
                     return Err(AuthError::InsufficientScope {
                         required_scope,
@@ -2947,24 +2951,19 @@ impl AuthorizationManager {
         &self,
         response: &HttpResponse,
     ) -> Option<WWWAuthenticateParams> {
-        let mut scope_only_challenge = None;
-        for value in response.headers().get_all(WWW_AUTHENTICATE).iter() {
-            let Ok(value_str) = value.to_str() else {
-                continue;
-            };
-            let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
-            if params.resource_metadata_url.is_some() {
-                self.record_challenge_scope(&params).await;
-                return Some(params);
-            }
-            // Scope-only challenges guide initial selection, but do not seed the
-            // cumulative selector or override the header used for discovery.
-            if scope_only_challenge.is_none() && params.scope.is_some() {
-                scope_only_challenge = Some(params);
-            }
+        let challenges = response
+            .headers()
+            .get_all(WWW_AUTHENTICATE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| Self::parse_www_authenticate_challenges(value, &self.base_url));
+        let params = Self::select_www_authenticate_challenge(challenges)?;
+        // Scope-only challenges guide initial selection, but do not seed the
+        // cumulative selector or override the header used for discovery.
+        if params.resource_metadata_url.is_some() {
+            self.record_challenge_scope(&params).await;
         }
-
-        scope_only_challenge
+        Some(params)
     }
 
     async fn fetch_resource_metadata_from_url(
@@ -3122,60 +3121,104 @@ impl AuthorizationManager {
         )))
     }
 
-    /// extract parameters from WWW-Authenticate header (resource_metadata and scope)
+    /// Select one challenge without combining parameters from different schemes or realms.
     fn extract_www_authenticate_params(header: &str, base_url: &Url) -> WWWAuthenticateParams {
-        let mut params = WWWAuthenticateParams::default();
-        let header_lowercase = header.to_ascii_lowercase();
+        Self::select_www_authenticate_challenge(Self::parse_www_authenticate_challenges(
+            header, base_url,
+        ))
+        .unwrap_or_default()
+    }
 
-        // extract resource_metadata
-        let mut search_offset = 0;
-        let resource_key = "resource_metadata=";
-        while let Some(pos) = header_lowercase[search_offset..].find(resource_key) {
-            let global_pos = search_offset + pos + resource_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, consumed)) = Self::parse_next_header_value(value_slice) {
-                if let Some(url) = Self::resolve_resource_metadata_url(&value, base_url) {
-                    params.resource_metadata_url = Some(url);
-                    break;
+    fn select_www_authenticate_challenge(
+        challenges: impl IntoIterator<Item = (bool, WWWAuthenticateParams)>,
+    ) -> Option<WWWAuthenticateParams> {
+        let mut first_challenge = None;
+        let mut scope_challenge = None;
+        let mut other_metadata = None;
+        for (bearer, params) in challenges {
+            if params.resource_metadata_url.is_some() {
+                if bearer {
+                    return Some(params);
                 }
-                search_offset = global_pos + consumed;
+                // RFC 9728 permits metadata pointers on other authentication schemes.
+                other_metadata.get_or_insert(params);
+            } else if bearer {
+                if params.scope.is_some() {
+                    scope_challenge.get_or_insert(params);
+                } else if params.error.is_some() || params.error_description.is_some() {
+                    first_challenge.get_or_insert(params);
+                }
+            }
+        }
+        other_metadata.or(scope_challenge).or(first_challenge)
+    }
+
+    fn parse_www_authenticate_challenges(
+        header: &str,
+        base_url: &Url,
+    ) -> Vec<(bool, WWWAuthenticateParams)> {
+        let mut challenges = Vec::new();
+        let mut quoted = false;
+        let mut escaped = false;
+        // A comma separates either parameters or challenges, except inside quoted strings.
+        // Retain support for semicolon-separated parameters accepted by the old parser.
+        for part in header.split(|ch| {
+            if escaped {
+                escaped = false;
+            } else if quoted && ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = !quoted;
+            } else if !quoted && matches!(ch, ',' | ';') {
+                return true;
+            }
+            false
+        }) {
+            let part = part.trim();
+            if part.is_empty() {
                 continue;
+            }
+            let name_end = part
+                .find(|ch: char| ch.is_ascii_whitespace() || ch == '=')
+                .unwrap_or(part.len());
+            let (name, rest) = part.split_at(name_end);
+            let rest = rest.trim_start();
+            let parameter = if rest.starts_with('=') {
+                part
             } else {
-                break;
+                let bearer = name.eq_ignore_ascii_case("Bearer");
+                challenges.push((bearer, WWWAuthenticateParams::default()));
+                rest
+            };
+            let Some((bearer, params)) = challenges.last_mut() else {
+                continue;
+            };
+            let Some((name, value)) = parameter.split_once('=') else {
+                continue;
+            };
+            let Some((value, _)) = Self::parse_next_header_value(value) else {
+                continue;
+            };
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("resource_metadata") {
+                if params.resource_metadata_url.is_none() {
+                    params.resource_metadata_url =
+                        Self::resolve_resource_metadata_url(&value, base_url);
+                }
+            } else if *bearer {
+                let target = if name.eq_ignore_ascii_case("scope") {
+                    &mut params.scope
+                } else if name.eq_ignore_ascii_case("error") {
+                    &mut params.error
+                } else if name.eq_ignore_ascii_case("error_description") {
+                    &mut params.error_description
+                } else {
+                    continue;
+                };
+                target.get_or_insert(value);
             }
         }
-
-        // extract scope
-        let scope_key = "scope=";
-        if let Some(pos) = header_lowercase.find(scope_key) {
-            let global_pos = pos + scope_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
-                params.scope = Some(value);
-            }
-        }
-
-        // extract error
-        let error_key = "error=";
-        if let Some(pos) = header_lowercase.find(error_key) {
-            let global_pos = pos + error_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
-                params.error = Some(value);
-            }
-        }
-
-        // extract error_description
-        let desc_key = "error_description=";
-        if let Some(pos) = header_lowercase.find(desc_key) {
-            let global_pos = pos + desc_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
-                params.error_description = Some(value);
-            }
-        }
-
-        params
+        challenges
     }
 
     /// Parses an authentication parameter value from a `WWW-Authenticate` header fragment.
@@ -4271,7 +4314,7 @@ mod tests {
         CredentialRefreshGuard, CredentialStore, InMemoryCredentialStore, InMemoryStateStore,
         InitialScopeState, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
         OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
-        StateStore, StoredAuthorizationState, is_https_url,
+        StateStore, StoredAuthorizationState, WWWAuthenticateParams, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
 
@@ -7002,6 +7045,163 @@ mod tests {
 
     // -- www-authenticate param extraction --
 
+    #[rstest]
+    #[case::mixed_schemes(
+        r#"DPoP scope="dpop:read", Bearer resource_metadata="/metadata", scope="read""#,
+        Some("/metadata"),
+        Some("read"),
+        None,
+        None
+    )]
+    #[case::foreign_metadata_first(
+        r#"DPoP resource_metadata="/dpop", scope="dpop:read", Bearer resource_metadata="/metadata", scope="read""#,
+        Some("/metadata"), Some("read"), None, None
+    )]
+    #[case::scope_only(
+        r#"DPoP scope="dpop:read", Bearer scope="read""#,
+        None,
+        Some("read"),
+        None,
+        None
+    )]
+    #[case::scope_after_error_only(
+        r#"Bearer error="invalid_token", Bearer scope="read""#,
+        None,
+        Some("read"),
+        None,
+        None
+    )]
+    #[case::error_after_bare_bearer(
+        r#"Bearer, Bearer error="invalid_token""#,
+        None,
+        None,
+        Some("invalid_token"),
+        None
+    )]
+    #[case::foreign_challenge_after_bearer(
+        r#"Bearer scope="read", DPoP scope="dpop:read", error="insufficient_scope""#,
+        None,
+        Some("read"),
+        None,
+        None
+    )]
+    #[case::quoted_decoys(
+        r#"Basic realm="scope=wrong, resource_metadata=/wrong, Bearer scope=wrong", Bearer other_scope="wrong", other_resource_metadata="/wrong", scope="read""#,
+        None, Some("read"), None, None
+    )]
+    #[case::case_and_whitespace(
+        "bEaReR ScOpE \t=\t \"read\", RESOURCE_METADATA = \"/metadata\"",
+        Some("/metadata"),
+        Some("read"),
+        None,
+        None
+    )]
+    #[case::escaped_quotes_and_commas(
+        r#"Basic realm="a\", Bearer scope=wrong", Bearer scope="read,write", error_description="a\"b\\c, more""#,
+        None, Some("read,write"), None, Some("a\"b\\c, more")
+    )]
+    #[case::separate_bearer_realms(
+        r#"Bearer scope="unrelated", Bearer resource_metadata="/metadata", scope="read""#,
+        Some("/metadata"),
+        Some("read"),
+        None,
+        None
+    )]
+    #[case::no_scope_in_selected_challenge(
+        r#"Bearer scope="unrelated", Bearer resource_metadata="/metadata""#,
+        Some("/metadata"),
+        None,
+        None,
+        None
+    )]
+    #[case::foreign_metadata_fallback(
+        r#"DPoP resource_metadata="/metadata", scope="dpop:read", error="invalid_token", error_description="foreign""#,
+        Some("/metadata"), None, None, None
+    )]
+    #[case::foreign_scope_only(
+        r#"DPoP scope="dpop:read", error="insufficient_scope""#,
+        None,
+        None,
+        None,
+        None
+    )]
+    #[case::unterminated_quote(
+        r#"Basic realm="unterminated, Bearer scope=wrong"#,
+        None,
+        None,
+        None,
+        None
+    )]
+    fn www_authenticate_keeps_challenge_parameters_together(
+        #[case] header: &str,
+        #[case] metadata_path: Option<&str>,
+        #[case] scope: Option<&str>,
+        #[case] error: Option<&str>,
+        #[case] error_description: Option<&str>,
+    ) {
+        let base = Url::parse("https://example.com/mcp").unwrap();
+        let params = WWWAuthenticateParams::parse(header, &base);
+        assert_eq!(
+            (
+                params.resource_metadata_url,
+                params.scope.as_deref(),
+                params.error.as_deref(),
+                params.error_description.as_deref()
+            ),
+            (
+                metadata_path.map(|path| base.join(path).unwrap()),
+                scope,
+                error,
+                error_description
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::foreign_error(
+        r#"DPoP error="insufficient_scope", scope="dpop:read""#,
+        r#"Bearer error="invalid_token""#,
+        None
+    )]
+    #[case::bearer_error(
+        r#"DPoP error="insufficient_scope", scope="dpop:read""#,
+        r#"Bearer error="insufficient_scope", scope="read""#,
+        Some("read")
+    )]
+    #[case::later_bearer_error(
+        r#"Bearer resource_metadata="/metadata", scope="unrelated""#,
+        r#"Bearer error="insufficient_scope", scope="read""#,
+        Some("read")
+    )]
+    #[tokio::test]
+    async fn forbidden_response_uses_bearer_error_and_scope(
+        #[case] first: &str,
+        #[case] second: &str,
+        #[case] expected_scope: Option<&str>,
+        #[values(false, true)] combined: bool,
+    ) {
+        let manager = manager_with_metadata(None).await;
+        let mut response = oauth2::http::Response::builder().status(403);
+        if combined {
+            response = response.header("www-authenticate", format!("{first}, {second}"));
+        } else {
+            response = response
+                .header("www-authenticate", first)
+                .header("www-authenticate", second);
+        }
+        let error = manager
+            .handle_response(response.body(String::new()).unwrap().into())
+            .await
+            .unwrap_err();
+        match expected_scope {
+            Some(expected) => assert!(matches!(
+                error,
+                AuthError::InsufficientScope { required_scope, .. } if required_scope == expected
+            )),
+            None => assert!(matches!(error, AuthError::AuthorizationFailed(_))),
+        }
+    }
+
     #[test]
     fn parses_resource_metadata_parameter() {
         let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
@@ -8055,6 +8255,37 @@ mod tests {
         assert_eq!(scopes, ["read"]);
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn select_initial_scopes_uses_bearer_scope_only_challenge(
+        #[values(false, true)] combined: bool,
+    ) {
+        let challenges = [
+            r#"DPoP scope="dpop:read""#,
+            r#"Bearer error="invalid_token""#,
+            r#"Bearer scope="read""#,
+        ];
+        let mut response = oauth2::http::Response::builder().status(401);
+        if combined {
+            response = response.header("www-authenticate", challenges.join(", "));
+        } else {
+            for challenge in challenges {
+                response = response.header("www-authenticate", challenge);
+            }
+        }
+        let mut responses = vec![response.body(Vec::new()).unwrap()];
+        responses.extend(initial_scope_metadata_responses(Some(&["read", "write"])));
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::with_responses(responses)),
+        )
+        .await
+        .unwrap();
+        let resolution = manager.resolve_metadata().await.unwrap();
+        manager.set_metadata(resolution.metadata);
+        assert_eq!(manager.select_initial_scopes(&[]).await, ["read"]);
+    }
+
     async fn manager_with_later_metadata_challenge(
         initial_scope: Option<&str>,
     ) -> AuthorizationManager {
@@ -8213,19 +8444,23 @@ mod tests {
     async fn select_initial_scopes_matches_discovery_challenge_header(
         #[case] selected_challenge: &str,
         #[case] expected: Vec<&str>,
+        #[values(false, true)] combined: bool,
     ) {
-        let mut responses = vec![
-            oauth2::http::Response::builder()
-                .status(401)
-                .header("www-authenticate", r#"Bearer scope="unrelated""#)
-                .header("www-authenticate", selected_challenge)
-                .header(
-                    "www-authenticate",
-                    r#"Bearer resource_metadata="/other-metadata", scope="admin""#,
-                )
-                .body(Vec::new())
-                .unwrap(),
+        let challenges = [
+            r#"DPoP resource_metadata="/dpop-metadata", scope="dpop:read""#,
+            r#"Bearer scope="unrelated""#,
+            selected_challenge,
+            r#"Bearer resource_metadata="/other-metadata", scope="admin""#,
         ];
+        let mut response = oauth2::http::Response::builder().status(401);
+        if combined {
+            response = response.header("www-authenticate", challenges.join(", "));
+        } else {
+            for challenge in challenges {
+                response = response.header("www-authenticate", challenge);
+            }
+        }
+        let mut responses = vec![response.body(Vec::new()).unwrap()];
         responses.extend(initial_scope_metadata_responses(Some(&["read", "write"])));
         let client = RecordingOAuthHttpClient::with_responses(responses);
         let mut manager = AuthorizationManager::new_with_oauth_http_client(
