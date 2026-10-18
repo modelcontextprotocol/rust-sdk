@@ -99,28 +99,34 @@ impl TokioChildProcess {
     /// exit; if it doesn't exit within the timeout, send `SIGTERM` (Unix only) and
     /// wait again; if it still doesn't exit, kill it.
     pub async fn graceful_shutdown(&mut self) -> std::io::Result<()> {
-        if let Some(mut child) = self.child.inner.take() {
-            self.transport.close().await?;
+        // The child stays in its cleanup guard until it has exited or been killed, so if this
+        // future is cancelled partway through, dropping the transport still kills the child.
+        let Some(child) = self.child.inner.as_mut() else {
+            return Ok(());
+        };
+        self.transport.close().await?;
 
-            if wait_for_exit(&mut child).await?.is_some() {
-                return Ok(());
-            }
-
-            #[cfg(unix)]
-            match child.signal(libc::SIGTERM) {
-                Ok(()) => {
-                    if wait_for_exit(&mut child).await?.is_some() {
-                        return Ok(());
-                    }
-                }
-                Err(e) => tracing::warn!("Error sending SIGTERM to child: {e}"),
-            }
-
-            if let Err(e) = Box::into_pin(child.kill()).await {
-                tracing::warn!("Error killing child: {e}");
-                return Err(e);
-            }
+        if wait_for_exit(child).await?.is_some() {
+            self.child.inner = None;
+            return Ok(());
         }
+
+        #[cfg(unix)]
+        match child.signal(libc::SIGTERM) {
+            Ok(()) => {
+                if wait_for_exit(child).await?.is_some() {
+                    self.child.inner = None;
+                    return Ok(());
+                }
+            }
+            Err(e) => tracing::warn!("Error sending SIGTERM to child: {e}"),
+        }
+
+        if let Err(e) = Box::into_pin(child.kill()).await {
+            tracing::warn!("Error killing child: {e}");
+            return Err(e);
+        }
+        self.child.inner = None;
         Ok(())
     }
 
@@ -337,6 +343,44 @@ mod tests {
             "child exited on SIGTERM, so the kill timeout should not be reached"
         );
         let _ = std::fs::remove_file(&marker);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_tokio_child_process_cancelled_graceful_shutdown_still_cleans_up() {
+        // A server that ignores both stdin EOF and SIGTERM.
+        let mut child_process = TokioChildProcess::new(Command::new("sh").configure(|cmd| {
+            cmd.arg("-c")
+                .arg("trap '' TERM; while :; do sleep 0.1; done");
+        }))
+        .unwrap();
+        let id = child_process.id().unwrap();
+
+        // Cancel the shutdown during the second wait, after SIGTERM and before the kill.
+        let shutdown = tokio::time::timeout(
+            std::time::Duration::from_secs(MAX_WAIT_ON_DROP_SECS + 1),
+            child_process.graceful_shutdown(),
+        )
+        .await;
+        assert!(
+            shutdown.is_err(),
+            "shutdown should still be waiting when the timeout fires"
+        );
+
+        // Dropping the transport must still clean the child up.
+        drop(child_process);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let status = Command::new("ps")
+            .arg("-p")
+            .arg(id.to_string())
+            .status()
+            .await
+            .unwrap();
+        assert!(
+            !status.success(),
+            "Process with PID {} survived a cancelled graceful_shutdown",
+            id
+        );
     }
 
     #[tokio::test]
