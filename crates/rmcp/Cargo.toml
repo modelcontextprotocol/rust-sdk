@@ -122,8 +122,9 @@ chrono = { version = "0.4.38", default-features = false, features = [
   "oldtime",
 ] }
 
-# the stdio pipe transport reopens `/proc/self/fd` with `O_NONBLOCK`
-[target.'cfg(target_os = "linux")'.dependencies]
+# the stdio pipe transport reopens `/proc/self/fd` with `O_NONBLOCK`;
+# the child process transport sends `SIGTERM` during graceful shutdown
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [features]
