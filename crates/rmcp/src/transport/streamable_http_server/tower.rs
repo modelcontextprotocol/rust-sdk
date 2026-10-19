@@ -1338,10 +1338,6 @@ pub struct StreamableHttpService<S, M> {
     /// than racing to replay the initialize handshake. `None` when no external
     /// session store is configured (avoids allocating the map).
     pending_restores: Option<PendingRestores>,
-    /// Caches tool input schemas by name for SEP-2243 `Mcp-Param-*` validation.
-    /// Populated lazily via `get_tool` so the service factory runs at most once
-    /// per tool name. `None` value means the tool exposes no schema.
-    tool_schemas: Arc<std::sync::RwLock<HashMap<String, Option<Arc<JsonObject>>>>>,
 }
 
 impl<S, M> Clone for StreamableHttpService<S, M> {
@@ -1351,7 +1347,6 @@ impl<S, M> Clone for StreamableHttpService<S, M> {
             session_manager: self.session_manager.clone(),
             service_factory: self.service_factory.clone(),
             pending_restores: self.pending_restores.clone(),
-            tool_schemas: self.tool_schemas.clone(),
         }
     }
 }
@@ -1430,7 +1425,6 @@ where
             session_manager,
             service_factory: Arc::new(service_factory),
             pending_restores,
-            tool_schemas: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
     fn get_service(&self) -> Result<S, std::io::Error> {
@@ -1599,24 +1593,12 @@ where
         Ok(self.stateless_sse_response(Some(first), receiver, request_ct))
     }
 
-    /// Returns the cached input schema for `name`, constructing a service once
-    /// per name to read its `ServerHandler::get_tool` definition. Used to
-    /// validate SEP-2243 `Mcp-Param-*` headers against the request body.
+    /// Looks up `name`'s input schema for SEP-2243 `Mcp-Param-*` validation.
     fn tool_schema(&self, name: &str) -> Option<Arc<JsonObject>> {
-        if let Ok(cache) = self.tool_schemas.read()
-            && let Some(schema) = cache.get(name)
-        {
-            return schema.clone();
-        }
-        let schema = self
-            .get_service()
-            .ok()
-            .and_then(|service| service.get_tool(name))
-            .map(|tool| tool.input_schema);
-        if let Ok(mut cache) = self.tool_schemas.write() {
-            cache.insert(name.to_owned(), schema.clone());
-        }
-        schema
+        self.get_service()
+            .ok()?
+            .get_tool(name)
+            .map(|tool| tool.input_schema)
     }
 
     /// Spawn a task that runs `serve_server` for the given session, waits for
@@ -2265,13 +2247,15 @@ where
                     validate_protocol_version_header(&part.headers, has_per_request_version)?;
                 }
             }
-            // Validate SEP-2243 standard headers against the body
-            validate_standard_headers(&part.headers, &message, |name| self.tool_schema(name))?;
-            validate_request_protocol_version_meta(&part.headers, &message)?;
-            validate_required_protocol_meta(&self.config, &message)?;
             let service = self
                 .get_service()
                 .map_err(internal_error_response("get service"))?;
+            // Validate SEP-2243 standard headers against the body
+            validate_standard_headers(&part.headers, &message, |name| {
+                service.get_tool(name).map(|tool| tool.input_schema)
+            })?;
+            validate_request_protocol_version_meta(&part.headers, &message)?;
+            validate_required_protocol_meta(&self.config, &message)?;
             match message {
                 ClientJsonRpcMessage::Request(mut request) => {
                     let negotiates_per_request = has_per_request_version
