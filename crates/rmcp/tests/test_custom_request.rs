@@ -251,3 +251,71 @@ async fn test_known_method_with_invalid_params_is_invalid_params() -> anyhow::Re
     client.cancel().await?;
     Ok(())
 }
+
+/// The legacy lifecycle does not serve `subscriptions/listen`, so a malformed
+/// one keeps `-32601` Method not found, while a malformed request for a
+/// method this lifecycle does serve is `-32602` on the same connection (#1347).
+#[tokio::test]
+async fn test_legacy_lifecycle_keeps_unserved_method_not_found() -> anyhow::Result<()> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let payload = Arc::new(Mutex::new(None));
+    {
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            let server = CustomRequestServer {
+                receive_signal: Arc::new(Notify::new()),
+                payload,
+            }
+            .serve(server_transport)
+            .await?;
+            server.waiting().await?;
+            anyhow::Ok(())
+        });
+    }
+    let mut info = rmcp::model::ClientConfig::default();
+    info.protocol_version = rmcp::model::ProtocolVersion::V_2025_11_25;
+    let client = info.serve(client_transport).await?;
+    assert_eq!(
+        client.peer_info().map(|info| info.protocol_version.clone()),
+        Some(rmcp::model::ProtocolVersion::V_2025_11_25),
+        "the handshake should settle on the legacy lifecycle"
+    );
+
+    for (method, params, want) in [
+        (
+            "subscriptions/listen",
+            json!({ "notifications": 7 }),
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+        ),
+        (
+            "tools/call",
+            json!({ "name": 7, "arguments": {} }),
+            rmcp::model::ErrorCode::INVALID_PARAMS,
+        ),
+    ] {
+        let result = client
+            .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                method,
+                Some(params.clone()),
+            )))
+            .await;
+        match result {
+            Err(rmcp::ServiceError::McpError(error)) => {
+                assert_eq!(error.code, want, "{method} {params}: {error:?}");
+                assert!(
+                    error.message.contains(method),
+                    "{method}: message {:?} does not name the method",
+                    error.message
+                );
+            }
+            other => panic!("{method} {params}: expected code {want:?}, got {other:?}"),
+        }
+    }
+    assert!(
+        payload.lock().await.is_none(),
+        "a known method reached on_custom_request"
+    );
+
+    client.cancel().await?;
+    Ok(())
+}

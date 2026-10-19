@@ -79,6 +79,24 @@ pub trait ConstString: Default {
         Self::VALUE
     }
 }
+
+/// The wire method name of a typed request, read off its method marker, so a
+/// union of requests can be dispatched on `method` without a hand-kept table.
+pub(crate) trait RequestMethod {
+    const METHOD: &'static str;
+}
+
+impl<M: ConstString, P> RequestMethod for Request<M, P> {
+    const METHOD: &'static str = M::VALUE;
+}
+
+impl<M: ConstString, P> RequestMethod for RequestOptionalParam<M, P> {
+    const METHOD: &'static str = M::VALUE;
+}
+
+impl<M: ConstString> RequestMethod for RequestNoParam<M> {
+    const METHOD: &'static str = M::VALUE;
+}
 #[macro_export]
 macro_rules! const_string {
     ($name:ident = $value:literal) => {
@@ -1211,6 +1229,67 @@ impl CustomRequest {
             .as_ref()
             .map(|params| serde_json::from_value(params.clone()))
             .transpose()
+    }
+}
+
+/// A request for a method this SDK defines whose `params` did not deserialize
+/// as that method's type.
+///
+/// Only the `Deserialize` of a `#[request]` union builds one, so that a peer's
+/// mistake in the arguments is answered with `-32602` Invalid params instead
+/// of falling through to the custom-request path and `-32601` Method not
+/// found. It keeps the request's `_meta` in `extensions`, so lifecycle checks
+/// still see the protocol version the request declared. Not part of the
+/// public API.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct InvalidParamsRequest {
+    method: String,
+    params: Option<Value>,
+    error: String,
+    extensions: Extensions,
+}
+
+impl InvalidParamsRequest {
+    fn new(body: &Value, error: serde_json::Error) -> Result<Self, serde_json::Error> {
+        let CustomRequest {
+            method,
+            params,
+            extensions,
+        } = CustomRequest::deserialize(body)?;
+        Ok(Self {
+            method,
+            params,
+            error: error.to_string(),
+            extensions,
+        })
+    }
+
+    /// The method the request named.
+    pub(crate) fn method(&self) -> &str {
+        &self.method
+    }
+}
+
+/// Why the params did not fit, worded as the error message for the peer.
+impl std::fmt::Display for InvalidParamsRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid params for {}: {}", self.method, self.error)
+    }
+}
+
+impl Serialize for InvalidParamsRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // On the wire it is the request as it was received.
+        CustomRequest {
+            method: self.method.clone(),
+            params: self.params.clone(),
+            extensions: self.extensions.clone(),
+        }
+        .serialize(serializer)
     }
 }
 
@@ -4742,27 +4821,45 @@ pub type TaskStatusNotification =
 // MESSAGE TYPE UNIONS
 // =============================================================================
 
+/// Declares a `#[serde(untagged)]` union of message types with a `From` impl
+/// for each variant.
+///
+/// `#[request]` marks a union of requests. Its variants are read by `method`
+/// rather than tried in order: only the variant whose method matches is
+/// deserialized; a known method whose `params` do not fit that variant becomes
+/// the hidden `InvalidParams` variant, with the error kept; and only an unknown
+/// method reaches the catch-all, which must be the last variant and be named
+/// `CustomRequest`.
 macro_rules! ts_union {
     (
         export type $U:ident =
             $($rest:tt)*
     ) => {
-        ts_union!(@declare $U { $($rest)* });
+        ts_union!(@declare untagged $U { $($rest)* });
         ts_union!(@impl_from $U { $($rest)* });
     };
-    (@declare $U:ident { $($variant:tt)* }) => {
-        ts_union!(@declare_variant $U { } {$($variant)*} );
+    (
+        #[request]
+        export type $U:ident =
+            $($rest:tt)*
+    ) => {
+        ts_union!(@declare request $U { $($rest)* });
+        ts_union!(@impl_from $U { $($rest)* });
+        ts_union!(@impl_deserialize_by_method $U { $($rest)* });
     };
-    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? box $V:ident $($rest:tt)*}) => {
-        ts_union!(@declare_variant $U { $($declared)* $V(Box<$V>), }  {$($rest)*});
+    (@declare $mode:tt $U:ident { $($variant:tt)* }) => {
+        ts_union!(@declare_variant $mode $U { } {$($variant)*} );
     };
-    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? $V:ident $($rest:tt)*}) => {
-        ts_union!(@declare_variant $U { $($declared)* $V($V), } {$($rest)*});
+    (@declare_variant $mode:tt $U:ident { $($declared:tt)* } {$(|)? box $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $mode $U { $($declared)* $V(Box<$V>), }  {$($rest)*});
     };
-    (@declare_variant $U:ident { $($declared:tt)* }  { ; }) => {
-        ts_union!(@declare_end $U { $($declared)* } );
+    (@declare_variant $mode:tt $U:ident { $($declared:tt)* } {$(|)? $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $mode $U { $($declared)* $V($V), } {$($rest)*});
     };
-    (@declare_end $U:ident { $($declared:tt)* }) => {
+    (@declare_variant $mode:tt $U:ident { $($declared:tt)* }  { ; }) => {
+        ts_union!(@declare_end $mode $U { $($declared)* } );
+    };
+    (@declare_end untagged $U:ident { $($declared:tt)* }) => {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         #[allow(clippy::large_enum_variant)]
@@ -4772,6 +4869,64 @@ macro_rules! ts_union {
             $($declared)*
         }
     };
+    (@declare_end request $U:ident { $($declared:tt)* }) => {
+        #[derive(Debug, Serialize, Clone)]
+        #[serde(untagged)]
+        #[allow(clippy::large_enum_variant)]
+        #[non_exhaustive]
+        #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+        pub enum $U {
+            $($declared)*
+            /// A request for a method this SDK defines whose `params` did not
+            /// deserialize as that method's type. Only `Deserialize` builds
+            /// it; the receiving side answers it with `-32602` Invalid params.
+            #[doc(hidden)]
+            #[cfg_attr(feature = "schemars", schemars(skip))]
+            InvalidParams(InvalidParamsRequest),
+        }
+    };
+    (@impl_deserialize_by_method $U:ident { $($variant:tt)* }) => {
+        impl<'de> Deserialize<'de> for $U {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                // The body is buffered once; `method` picks the one variant to read.
+                let body = Value::Object(JsonObject::deserialize(deserializer)?);
+                if let Some(method) = body.get("method").and_then(Value::as_str) {
+                    ts_union!(@dispatch $U body method { $($variant)* });
+                }
+                CustomRequest::deserialize(&body)
+                    .map($U::CustomRequest)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+    };
+    (@dispatch $U:ident $body:ident $method:ident { $(|)? CustomRequest $($rest:tt)* }) => {};
+    (@dispatch $U:ident $body:ident $method:ident { $(|)? box $V:ident $($rest:tt)* }) => {
+        if $method == <$V as RequestMethod>::METHOD {
+            return Ok(match <$V as Deserialize>::deserialize(&$body) {
+                Ok(request) => $U::$V(Box::new(request)),
+                Err(error) => $U::InvalidParams(
+                    InvalidParamsRequest::new(&$body, error).map_err(serde::de::Error::custom)?,
+                ),
+            });
+        }
+        ts_union!(@dispatch $U $body $method { $($rest)* });
+    };
+    (@dispatch $U:ident $body:ident $method:ident { $(|)? $V:ident $($rest:tt)* }) => {
+        if $method == <$V as RequestMethod>::METHOD {
+            return Ok(match <$V as Deserialize>::deserialize(&$body) {
+                Ok(request) => $U::$V(request),
+                Err(error) => $U::InvalidParams(
+                    InvalidParamsRequest::new(&$body, error).map_err(serde::de::Error::custom)?,
+                ),
+            });
+        }
+        ts_union!(@dispatch $U $body $method { $($rest)* });
+    };
+    (@dispatch $U:ident $body:ident $method:ident { ; }) => {};
+    (@dispatch $U:ident $body:ident $method:ident { }) => {};
     (@impl_from $U: ident {$(|)? box $V:ident $($rest:tt)*}) => {
         impl From<$V> for $U {
             fn from(value: $V) -> Self {
@@ -4793,6 +4948,7 @@ macro_rules! ts_union {
 }
 
 ts_union!(
+    #[request]
     export type ClientRequest =
     | PingRequest
     | InitializeRequest
@@ -4816,60 +4972,6 @@ ts_union!(
 );
 
 impl ClientRequest {
-    /// Why the params of `request` do not fit the method it names, when that
-    /// method is one this SDK defines.
-    ///
-    /// `ClientRequest` is untagged, so a request for a known method whose params
-    /// fail to deserialize lands in [`ClientRequest::CustomRequest`] instead of
-    /// its typed variant. Reading the request again as that method's type
-    /// recovers the error, so the server can answer `-32602` rather than treat
-    /// a known method as unknown. Returns `None` for a method the SDK does not
-    /// define.
-    #[cfg(feature = "server")]
-    pub(crate) fn known_method_params_error(request: &CustomRequest) -> Option<String> {
-        let mut message = serde_json::Map::new();
-        message.insert("method".into(), Value::String(request.method.clone()));
-        if let Some(params) = &request.params {
-            message.insert("params".into(), params.clone());
-        }
-        let message = Value::Object(message);
-        macro_rules! check {
-            ($($method:ty => $request:ty),* $(,)?) => {
-                $(
-                    if request.method == <$method as ConstString>::VALUE {
-                        let error = serde_json::from_value::<$request>(message)
-                            .err()
-                            .map_or_else(|| "params do not match the method".to_owned(), |e| e.to_string());
-                        return Some(format!("invalid params for {}: {error}", request.method));
-                    }
-                )*
-            };
-        }
-        check!(
-            PingRequestMethod => PingRequest,
-            InitializeResultMethod => InitializeRequest,
-            DiscoverRequestMethod => DiscoverRequest,
-            CompleteRequestMethod => CompleteRequest,
-            SetLevelRequestMethod => SetLevelRequest,
-            GetPromptRequestMethod => GetPromptRequest,
-            ListPromptsRequestMethod => ListPromptsRequest,
-            ListResourcesRequestMethod => ListResourcesRequest,
-            ListResourceTemplatesRequestMethod => ListResourceTemplatesRequest,
-            ReadResourceRequestMethod => ReadResourceRequest,
-            SubscriptionsListenRequestMethod => SubscriptionsListenRequest,
-            SubscribeRequestMethod => SubscribeRequest,
-            UnsubscribeRequestMethod => UnsubscribeRequest,
-            CallToolRequestMethod => CallToolRequest,
-            ListToolsRequestMethod => ListToolsRequest,
-            GetTaskMethod => GetTaskRequest,
-            UpdateTaskMethod => UpdateTaskRequest,
-            CancelTaskMethod => CancelTaskRequest,
-        );
-        None
-    }
-}
-
-impl ClientRequest {
     pub fn method(&self) -> &str {
         match &self {
             ClientRequest::PingRequest(r) => r.method.as_str(),
@@ -4891,6 +4993,7 @@ impl ClientRequest {
             ClientRequest::UpdateTaskRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
+            ClientRequest::InvalidParams(r) => r.method(),
         }
     }
 }

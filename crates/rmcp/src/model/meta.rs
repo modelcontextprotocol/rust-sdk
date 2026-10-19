@@ -191,6 +191,7 @@ variant_extension! {
         GetTaskRequest
         UpdateTaskRequest
         CancelTaskRequest
+        InvalidParams
     }
 }
 
