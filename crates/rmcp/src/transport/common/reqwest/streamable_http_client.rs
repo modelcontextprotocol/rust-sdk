@@ -684,7 +684,7 @@ mod tests {
     }
 
     /// What the redirect target saw for a single request.
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct CapturedRequest {
         method: String,
         body: Vec<u8>,
