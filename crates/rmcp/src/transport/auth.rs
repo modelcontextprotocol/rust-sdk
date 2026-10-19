@@ -589,10 +589,7 @@ pub enum AuthError {
     MetadataError(String),
 
     /// An OAuth discovery request failed before usable metadata could be read.
-    #[error(
-        "Metadata error: OAuth metadata discovery failed for {url}\n  Caused by: {source_chain}",
-        source_chain = crate::error::ErrorChain(source.as_ref())
-    )]
+    #[error("Metadata error: OAuth metadata discovery failed for {url}")]
     DiscoveryRequestFailed {
         url: Url,
         #[source]
@@ -4454,7 +4451,7 @@ mod tests {
         let error = AuthorizationManager::discovery_failed(&url, error);
         assert_eq!(
             error.to_string(),
-            "Metadata error: OAuth metadata discovery failed for https://mcp.example.com/mcp\n  Caused by: request failed\n  Caused by: certificate signed by unknown authority"
+            "Metadata error: OAuth metadata discovery failed for https://mcp.example.com/mcp"
         );
         assert!(matches!(
             &error,
