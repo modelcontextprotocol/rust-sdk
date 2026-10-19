@@ -4887,9 +4887,12 @@ macro_rules! ts_union {
     };
     (@impl_deserialize_by_method $U:ident { $($variant:tt)* }) => {
         impl<'de> Deserialize<'de> for $U {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            // `__D` rather than `D`: `#[derive(Deserialize)]` named it that, and
+            // the public-API check compares the rendered signature, so a plain
+            // `D` reads as a changed public item (CI "Public API Check").
+            fn deserialize<__D>(deserializer: __D) -> Result<Self, __D::Error>
             where
-                D: serde::Deserializer<'de>,
+                __D: serde::Deserializer<'de>,
             {
                 // The body is buffered once; `method` picks the one variant to read.
                 let body = Value::Object(JsonObject::deserialize(deserializer)?);
