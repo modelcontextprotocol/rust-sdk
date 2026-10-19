@@ -405,15 +405,7 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     /// TCP Delayed ACK on Linux when the previous response body was not
     /// fully consumed before the pool attempts to reuse the connection.
     ///
-    /// Only same-origin 307 and 308 redirects are followed, up to
-    /// [`MAX_REDIRECTS`] hops. Those keep the method and body, so the
-    /// JSON-RPC message reaches the new location intact. A 301, 302 or 303
-    /// would turn a POST into a bodyless GET and lose the message, and a
-    /// cross-origin redirect would replay the session id and caller-supplied
-    /// custom headers to another host, so both are returned to the caller as
-    /// the redirect response instead. A followed 308 does not update the
-    /// stored URI, so each request still starts at the configured one. A
-    /// client passed to `with_client` keeps its own redirect policy.
+    /// Redirects follow [`same_origin_redirect_policy`].
     fn default_http_client() -> reqwest::Client {
         reqwest::Client::builder()
             .pool_max_idle_per_host(0)
@@ -426,6 +418,16 @@ impl StreamableHttpClientTransport<reqwest::Client> {
 /// Maximum number of redirects the default client follows for one request.
 const MAX_REDIRECTS: usize = 10;
 
+/// Redirect policy for the default client.
+///
+/// Only same-origin 307 and 308 redirects are followed, up to
+/// [`MAX_REDIRECTS`] hops. Those keep the method and body, so the JSON-RPC
+/// message reaches the new location intact. A 301, 302 or 303 would turn a
+/// POST into a bodyless GET and lose the message, and a cross-origin redirect
+/// would replay the session id and caller-supplied custom headers to another
+/// host, so both are returned to the caller as the redirect response instead.
+/// A followed 308 does not update the stored URI, so each request still
+/// starts at the configured one.
 fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         let preserves_body = matches!(
