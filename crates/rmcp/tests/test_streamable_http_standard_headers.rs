@@ -48,8 +48,18 @@ async fn spawn_server_with<S>(
 where
     S: ServerHandler + Send + 'static,
 {
+    spawn_server_with_mode(service_factory, false).await
+}
+
+async fn spawn_server_with_mode<S>(
+    service_factory: impl Fn() -> Result<S, std::io::Error> + Send + Sync + 'static,
+    legacy_session_mode: bool,
+) -> (reqwest::Client, String, CancellationToken)
+where
+    S: ServerHandler + Send + 'static,
+{
     let config = StreamableHttpServerConfig::default()
-        .with_legacy_session_mode(false)
+        .with_legacy_session_mode(legacy_session_mode)
         .with_json_response(true)
         .with_sse_keep_alive(None)
         .with_cancellation_token(CancellationToken::new());
@@ -494,4 +504,135 @@ async fn accepts_initialize_with_matching_mcp_method() -> anyhow::Result<()> {
 
     ct.cancel();
     Ok(())
+}
+
+#[tokio::test]
+async fn media_type_headers_follow_http_semantics() {
+    let (client, url, ct) = spawn_server().await;
+    let cases: &[(&str, &[&str], &str, u16)] = &[
+        (
+            "ordinary",
+            &["application/json, text/event-stream"],
+            "application/json",
+            202,
+        ),
+        (
+            "content type case",
+            &["application/json, text/event-stream"],
+            "Application/JSON",
+            202,
+        ),
+        (
+            "accept case",
+            &["APPLICATION/JSON, TEXT/EVENT-STREAM"],
+            "application/json",
+            202,
+        ),
+        (
+            "split accept",
+            &["application/json", "text/event-stream"],
+            "application/json",
+            202,
+        ),
+        (
+            "content type suffix",
+            &["application/json, text/event-stream"],
+            "application/jsonx",
+            415,
+        ),
+        (
+            "accept suffix",
+            &["application/json-seq, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "zero quality",
+            &["application/json;q=0, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "zero quality decimal",
+            &["application/json;Q=0.000, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "positive quality",
+            &["application/json;q=0.001, text/event-stream"],
+            "application/json",
+            202,
+        ),
+        (
+            "parameters",
+            &["application/json;profile=\"a,b;c\", text/event-stream"],
+            "application/json; charset=utf-8",
+            202,
+        ),
+        (
+            "parameter is not media",
+            &["text/plain;profile=\"application/json, text/event-stream\""],
+            "application/json",
+            406,
+        ),
+        (
+            "escaped quoted parameter",
+            &[r#"application/json;profile="a\",b;c", text/event-stream"#],
+            "application/json",
+            202,
+        ),
+        (
+            "quoted quality is not a weight",
+            &[r#"application/json;profile="a;q=0", text/event-stream"#],
+            "application/json",
+            202,
+        ),
+        (
+            "escaped parameter is not media",
+            &[r#"text/plain;profile="a\",application/json, text/event-stream""#],
+            "application/json",
+            406,
+        ),
+        ("wildcard alone", &["*/*"], "application/json", 406),
+    ];
+    let mut failures = Vec::new();
+    for (name, accept, content_type, expected) in cases {
+        let mut request = client
+            .post(&url)
+            .header("Content-Type", *content_type)
+            .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        for value in *accept {
+            request = request.header("Accept", *value);
+        }
+        let actual = request.send().await.unwrap().status().as_u16();
+        eprintln!("POST {name}: expected {expected}, got {actual}");
+        if actual != *expected {
+            failures.push(format!("{name}: expected {expected}, got {actual}"));
+        }
+    }
+    ct.cancel();
+    // Legacy mode dispatches GET through media validation before requiring a session ID.
+    let (client, url, ct) = spawn_server_with_mode(|| Ok(HeaderValidationServer), true).await;
+    for (accept, expected) in [
+        ("text/event-stream", 400),
+        ("TEXT/EVENT-STREAM", 400),
+        ("text/event-streamx", 406),
+        ("text/event-stream;q=0.0", 406),
+    ] {
+        let actual = client
+            .get(&url)
+            .header("Accept", accept)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16();
+        eprintln!("GET {accept}: expected {expected}, got {actual}");
+        if actual != expected {
+            failures.push(format!("GET {accept}: expected {expected}, got {actual}"));
+        }
+    }
+    ct.cancel();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

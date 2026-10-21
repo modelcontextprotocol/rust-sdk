@@ -55,6 +55,59 @@ use crate::{
 pub(crate) const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 const STATELESS_STREAM_CHANNEL_CAPACITY: usize = 16;
 
+// HTTP lists and parameter lists may contain delimiters in quoted strings.
+// A quoted-pair keeps an escaped quote from ending the string.
+fn split_unquoted(value: &str, delimiter: char) -> impl Iterator<Item = &str> {
+    let mut quoted = false;
+    let mut escaped = false;
+    value.split(move |character| {
+        if escaped {
+            escaped = false;
+        } else if quoted && character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            quoted = !quoted;
+        } else if !quoted && character == delimiter {
+            return true;
+        }
+        false
+    })
+}
+
+// MCP requires explicit media types, rather than general wildcard negotiation.
+fn accepts_media_type(headers: &HeaderMap, expected: &str) -> bool {
+    headers.get_all(http::header::ACCEPT).iter().any(|value| {
+        let Ok(value) = value.to_str() else {
+            return false;
+        };
+        split_unquoted(value, ',').any(|entry| {
+            let mut parts = split_unquoted(entry, ';');
+            parts
+                .next()
+                .is_some_and(|essence| essence.trim().eq_ignore_ascii_case(expected))
+                && parts.all(|parameter| {
+                    let Some((name, value)) = parameter.split_once('=') else {
+                        return true;
+                    };
+                    !name.trim().eq_ignore_ascii_case("q") || quality_is_acceptable(value.trim())
+                })
+        })
+    })
+}
+
+// RFC 9110 section 12.4.2 permits up to three fractional digits.
+fn quality_is_acceptable(quality: &str) -> bool {
+    let (whole, fraction) = quality.split_once('.').unwrap_or((quality, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|digit| digit.is_ascii_digit()) {
+        return false;
+    }
+    match whole {
+        "0" => fraction.bytes().any(|digit| digit != b'0'),
+        "1" => fraction.bytes().all(|digit| digit == b'0'),
+        _ => false,
+    }
+}
+
 struct ErrorResponse(Box<BoxResponse>);
 
 impl ErrorResponse {
@@ -1847,12 +1900,7 @@ where
         B::Error: Display,
     {
         // check accept header
-        if !request
-            .headers()
-            .get(http::header::ACCEPT)
-            .and_then(|header| header.to_str().ok())
-            .is_some_and(|header| header.contains(EVENT_STREAM_MIME_TYPE))
-        {
+        if !accepts_media_type(request.headers(), EVENT_STREAM_MIME_TYPE) {
             return Ok(Response::builder()
                 .status(http::StatusCode::NOT_ACCEPTABLE)
                 .body(
@@ -1986,13 +2034,8 @@ where
         B::Error: Display,
     {
         // check accept header
-        if !request
-            .headers()
-            .get(http::header::ACCEPT)
-            .and_then(|header| header.to_str().ok())
-            .is_some_and(|header| {
-                header.contains(JSON_MIME_TYPE) && header.contains(EVENT_STREAM_MIME_TYPE)
-            })
+        if !accepts_media_type(request.headers(), JSON_MIME_TYPE)
+            || !accepts_media_type(request.headers(), EVENT_STREAM_MIME_TYPE)
         {
             return Ok(Response::builder()
                 .status(http::StatusCode::NOT_ACCEPTABLE)
@@ -2005,7 +2048,12 @@ where
             .headers()
             .get(http::header::CONTENT_TYPE)
             .and_then(|header| header.to_str().ok())
-            .is_some_and(|header| header.starts_with(JSON_MIME_TYPE))
+            .is_some_and(|header| {
+                header
+                    .split(';')
+                    .next()
+                    .is_some_and(|essence| essence.trim().eq_ignore_ascii_case(JSON_MIME_TYPE))
+            })
         {
             return Ok(Response::builder()
                 .status(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
