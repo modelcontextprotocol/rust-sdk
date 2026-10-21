@@ -828,7 +828,8 @@
               ]
             },
             "elicitationId": {
-              "type": "string"
+              "type": "string",
+              "default": ""
             },
             "message": {
               "type": "string"
@@ -844,8 +845,7 @@
           "required": [
             "mode",
             "message",
-            "url",
-            "elicitationId"
+            "url"
           ]
         },
         {

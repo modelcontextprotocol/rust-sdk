@@ -458,6 +458,35 @@ mod tests {
         }
 
         #[test]
+        fn deserializes_url_elicitation_without_elicitation_id() {
+            let json = serde_json::json!({
+                "resultType": "input_required",
+                "inputRequests": {
+                    "api_key": {
+                        "method": "elicitation/create",
+                        "params": {
+                            "mode": "url",
+                            "url": "https://mcp.example.com/ui/set_api_key",
+                            "message": "Please provide your API key to continue."
+                        }
+                    }
+                },
+                "requestState": "abc123"
+            });
+
+            let result: ServerResult = serde_json::from_value(json).unwrap();
+
+            let ServerResult::InputRequiredResult(result) = result else {
+                panic!("expected InputRequiredResult, got {result:?}");
+            };
+            let requests = result.input_requests.expect("should have input_requests");
+            assert!(matches!(
+                requests.get("api_key"),
+                Some(InputRequest::Elicitation(_))
+            ));
+        }
+
+        #[test]
         fn rejects_missing_input_requests_and_request_state() {
             let json = serde_json::json!({
                 "resultType": "input_required",
