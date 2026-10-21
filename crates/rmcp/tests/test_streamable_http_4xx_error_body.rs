@@ -152,3 +152,45 @@ async fn sessionful_discover_4xx_does_not_trigger_legacy_fallback() {
         other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
     }
 }
+
+const JSON_RPC_ERROR_BODY: &str =
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"Unauthorized"}}"#;
+
+async fn post_ping_expecting_status_error(status: u16, expected_prefix: &str) {
+    let url = spawn_mock_server(status, "application/json", JSON_RPC_ERROR_BODY).await;
+
+    let client = reqwest::Client::new();
+    let result = client
+        .post_message(
+            Arc::from(url.as_str()),
+            ping_message(),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    match result {
+        Err(StreamableHttpError::UnexpectedServerResponse(message)) => {
+            assert!(
+                message.starts_with(expected_prefix),
+                "expected message starting with {expected_prefix:?}, got: {message}"
+            );
+        }
+        other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+    }
+}
+
+/// A 401 without `WWW-Authenticate` must not be swallowed into a JSON-RPC
+/// error just because the body happens to be one; the HTTP status has to
+/// reach the caller, as it does for a plain-text 401.
+#[tokio::test]
+async fn http_401_json_rpc_error_body_without_challenge_keeps_status() {
+    post_ping_expecting_status_error(401, "HTTP 401 Unauthorized").await;
+}
+
+/// Same as above for 403 without `WWW-Authenticate`.
+#[tokio::test]
+async fn http_403_json_rpc_error_body_without_challenge_keeps_status() {
+    post_ping_expecting_status_error(403, "HTTP 403 Forbidden").await;
+}
