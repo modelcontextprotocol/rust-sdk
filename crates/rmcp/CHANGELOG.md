@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.6.0...rmcp-v3.7.0) - 2026-10-22
+
+### Added
+
+- *(auth)* support OIDC ID-token subjects in enterprise exchange ([#1385](https://github.com/modelcontextprotocol/rust-sdk/pull/1385))
+
+### Fixed
+
+- *(auth)* allow cross-origin resource_metadata urls ([#1302](https://github.com/modelcontextprotocol/rust-sdk/pull/1302))
+- *(transport)* keep 401/403 status when the body is a JSON-RPC error ([#1341](https://github.com/modelcontextprotocol/rust-sdk/pull/1341))
+
+### Other
+
+- Merge commit from fork
+
 ## [3.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.5.1...rmcp-v3.6.0) - 2026-10-19
 
 ### Added
