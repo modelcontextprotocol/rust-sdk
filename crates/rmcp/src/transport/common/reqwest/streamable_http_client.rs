@@ -276,13 +276,17 @@ impl StreamableHttpClient for reqwest::Client {
         let is_json_response = content_type
             .as_deref()
             .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
-        // Preserve JSON-RPC errors carried by JSON responses. Non-JSON failures
-        // can be reported without waiting for a possibly unfinished body.
+        // Rate limits must not wait for a body. Preserve JSON-RPC errors from
+        // JSON server failures; non-JSON failures also return immediately.
         let status_error = match (
             http_status_error(status, response.headers()),
             is_json_response,
         ) {
-            (Some(error), false) => return Err(error.into()),
+            (Some(error), is_json)
+                if !is_json || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                return Err(error.into());
+            }
             (error, _) => error,
         };
         let content_length = response.content_length();

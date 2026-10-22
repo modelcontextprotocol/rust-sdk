@@ -181,7 +181,8 @@ pub(crate) const MAX_RETRY_AFTER_BYTES: usize = 128;
 /// Body-free HTTP failure metadata.
 ///
 /// The built-in reqwest client returns this for HTTP 429 and 5xx responses.
-/// POST responses containing a valid JSON-RPC error retain that error instead.
+/// HTTP 429 is classified without reading the body. JSON POST 5xx responses
+/// containing a valid JSON-RPC error retain that error instead.
 /// No response body, request URL, credentials, or other headers are retained.
 #[derive(Debug, Error)]
 #[error("HTTP {status}")]

@@ -160,7 +160,6 @@ async fn get_errors_keep_only_status_and_retry_after() {
 }
 
 #[rstest::rstest]
-#[case(429)]
 #[case(500)]
 #[case(503)]
 #[tokio::test]
@@ -182,6 +181,22 @@ async fn json_rpc_errors_preserve_the_server_code_and_message(#[case] status: u1
         }
         other => panic!("expected the original JSON-RPC error, got {other:?}"),
     }
+}
+
+#[rstest::rstest]
+#[case::unfinished(true)]
+#[case::complete(false)]
+#[tokio::test]
+async fn json_rate_limits_return_without_reading_the_body(#[case] unfinished: bool) {
+    let text = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"private-error"}}"#;
+    let server = mock_response(429, unfinished, text, "application/json").await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        reqwest::Client::new().post_message(server.uri.clone(), ping(), None, None, HashMap::new()),
+    )
+    .await
+    .expect("JSON rate limits must not wait for the body to finish");
+    assert_status_error(result.unwrap_err(), 429);
 }
 
 #[rstest::rstest]
