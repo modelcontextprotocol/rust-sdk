@@ -122,7 +122,7 @@ fn authenticated_form(request: &OAuthHttpRequest) -> BTreeMap<String, String> {
 }
 
 #[tokio::test]
-async fn refresh_exchange_preserves_exact_forms_and_signed_narrowing() {
+async fn subject_exchange_preserves_exact_forms_and_signed_narrowing() {
     for id_token in [None, Some("oidc-id-token")] {
         for scopes in ["files.read files.write", ""] {
             let response = jag(&claims());

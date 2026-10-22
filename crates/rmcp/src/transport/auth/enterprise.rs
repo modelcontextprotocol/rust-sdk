@@ -56,6 +56,8 @@ use super::{
 };
 
 const ID_JAG_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id-jag";
+const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
+const REFRESH_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:refresh_token";
 
 /// Authentication approved for a pre-registered client at one authorization server.
 ///
@@ -164,13 +166,33 @@ impl EmaAuthorizationServer {
     }
 }
 
+enum EmaSubjectToken<'a> {
+    RefreshToken(&'a RefreshToken),
+    IdToken(&'a str),
+}
+
+impl EmaSubjectToken<'_> {
+    fn secret(&self) -> &str {
+        match self {
+            Self::RefreshToken(token) => token.secret(),
+            Self::IdToken(token) => token,
+        }
+    }
+
+    fn token_type(&self) -> &'static str {
+        match self {
+            Self::RefreshToken(_) => REFRESH_TOKEN_TYPE,
+            Self::IdToken(_) => ID_TOKEN_TYPE,
+        }
+    }
+}
+
 /// An identity token exchange bound to one MCP resource and two registered clients.
 pub struct EmaExchangeRequest<'a> {
     idp: EmaAuthorizationServer,
     resource_as: EmaAuthorizationServer,
     resource: &'a str,
-    subject_token: &'a str,
-    subject_token_type: &'static str,
+    subject_token: EmaSubjectToken<'a>,
     scopes: Vec<String>,
 }
 
@@ -186,8 +208,7 @@ impl<'a> EmaExchangeRequest<'a> {
             idp,
             resource_as,
             resource,
-            subject_token: refresh_token.secret(),
-            subject_token_type: "urn:ietf:params:oauth:token-type:refresh_token",
+            subject_token: EmaSubjectToken::RefreshToken(refresh_token),
             scopes: Vec::new(),
         }
     }
@@ -204,8 +225,7 @@ impl<'a> EmaExchangeRequest<'a> {
             idp,
             resource_as,
             resource,
-            subject_token: id_token,
-            subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+            subject_token: EmaSubjectToken::IdToken(id_token),
             scopes: Vec::new(),
         }
     }
@@ -243,7 +263,7 @@ impl<'a> EmaExchangeRequest<'a> {
         }
         if self.idp.client_id.trim().is_empty()
             || self.resource_as.client_id.trim().is_empty()
-            || self.subject_token.trim().is_empty()
+            || self.subject_token.secret().trim().is_empty()
         {
             return Err(EmaError::InvalidRequest(
                 "client IDs and subject token must not be empty",
@@ -263,8 +283,8 @@ impl<'a> EmaExchangeRequest<'a> {
                 "urn:ietf:params:oauth:grant-type:token-exchange",
             ),
             ("requested_token_type", ID_JAG_TOKEN_TYPE),
-            ("subject_token_type", self.subject_token_type),
-            ("subject_token", self.subject_token),
+            ("subject_token_type", self.subject_token.token_type()),
+            ("subject_token", self.subject_token.secret()),
             ("audience", self.resource_as.issuer.as_str()),
             ("resource", self.resource),
         ];
