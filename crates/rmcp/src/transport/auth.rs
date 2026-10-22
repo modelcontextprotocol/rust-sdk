@@ -774,7 +774,7 @@ impl WWWAuthenticateParams {
     /// Parse a `WWW-Authenticate` header value, resolving a relative
     /// `resource_metadata` URL against `base_url`.
     pub fn parse(header: &str, base_url: &Url) -> Self {
-        AuthorizationManager::extract_www_authenticate_params(header, base_url)
+        AuthorizationManager::extract_www_authenticate_params(header, base_url, false)
     }
 
     /// check if this is an insufficient_scope error
@@ -1381,7 +1381,12 @@ impl AuthorizationManager {
             && Self::is_loopback_metadata_host(host)
     }
 
-    fn resolve_resource_metadata_url(value: &str, base_url: &Url) -> Option<Url> {
+    /// Accepts the resource's own origin, or any URL the metadata host policy allows.
+    fn resolve_resource_metadata_url(
+        value: &str,
+        base_url: &Url,
+        allow_private: bool,
+    ) -> Option<Url> {
         let value = value.trim();
         if value.is_empty() {
             debug!("ignoring empty resource_metadata value");
@@ -1396,15 +1401,19 @@ impl AuthorizationManager {
             }
         };
 
+        if Self::is_http_url(&url) && Self::is_same_origin(base_url, &url) {
+            return Some(url);
+        }
         if base_url.scheme() == "https" && url.scheme() != "https" {
             warn!("rejecting resource metadata URL `{url}`: downgrades `{base_url}` from https");
             return None;
         }
-
-        if Self::is_allowed_metadata_url(base_url, &url, false) {
+        if Self::is_allowed_metadata_url(base_url, &url, allow_private) {
             Some(url)
         } else {
-            warn!("rejecting resource metadata URL `{url}`");
+            warn!(
+                "rejecting resource metadata URL `{url}`: not same-origin with `{base_url}` and not an allowed metadata host"
+            );
             None
         }
     }
@@ -1687,7 +1696,11 @@ impl AuthorizationManager {
         *self.initial_scopes.write().await = InitialScopeState::default();
 
         if let Some(www_authenticate) = www_authenticate {
-            let params = WWWAuthenticateParams::parse(www_authenticate, &self.base_url);
+            let params = Self::extract_www_authenticate_params(
+                www_authenticate,
+                &self.base_url,
+                self.allow_private_metadata_addresses,
+            );
             self.record_initial_challenge_scope(Some(&params)).await;
             self.record_challenge_scope(&params).await;
 
@@ -2580,7 +2593,11 @@ impl AuthorizationManager {
                 let Ok(value_str) = value.to_str() else {
                     continue;
                 };
-                let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+                let params = Self::extract_www_authenticate_params(
+                    value_str,
+                    &self.base_url,
+                    self.allow_private_metadata_addresses,
+                );
                 if params.is_insufficient_scope() {
                     let required_scope = params.scope.unwrap_or_default();
                     return Err(AuthError::InsufficientScope {
@@ -3068,7 +3085,11 @@ impl AuthorizationManager {
             let Ok(value_str) = value.to_str() else {
                 continue;
             };
-            let params = Self::extract_www_authenticate_params(value_str, &self.base_url);
+            let params = Self::extract_www_authenticate_params(
+                value_str,
+                &self.base_url,
+                self.allow_private_metadata_addresses,
+            );
             if params.resource_metadata_url.is_some() {
                 self.record_challenge_scope(&params).await;
                 return Some(params);
@@ -3239,7 +3260,11 @@ impl AuthorizationManager {
     }
 
     /// extract parameters from WWW-Authenticate header (resource_metadata and scope)
-    fn extract_www_authenticate_params(header: &str, base_url: &Url) -> WWWAuthenticateParams {
+    fn extract_www_authenticate_params(
+        header: &str,
+        base_url: &Url,
+        allow_private: bool,
+    ) -> WWWAuthenticateParams {
         let mut params = WWWAuthenticateParams::default();
         let header_lowercase = header.to_ascii_lowercase();
 
@@ -3250,7 +3275,9 @@ impl AuthorizationManager {
             let global_pos = search_offset + pos + resource_key.len();
             let value_slice = &header[global_pos..];
             if let Some((value, consumed)) = Self::parse_next_header_value(value_slice) {
-                if let Some(url) = Self::resolve_resource_metadata_url(&value, base_url) {
+                if let Some(url) =
+                    Self::resolve_resource_metadata_url(&value, base_url, allow_private)
+                {
                     params.resource_metadata_url = Some(url);
                     break;
                 }
@@ -5356,6 +5383,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_metadata_from_challenge_honors_private_address_opt_in() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.corp/mcp",
+                    "authorization_servers": ["https://auth.example.com"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/authorize",
+                    "token_endpoint": "https://auth.example.com/token"
+                }),
+            ),
+        ]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.corp/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.allow_private_metadata_addresses = true;
+
+        let resolution = manager
+            .resolve_metadata_from_challenge(Some(
+                r#"Bearer resource_metadata="https://10.0.0.9/.well-known/oauth-protected-resource/mcp""#,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                resolution.source,
+                client.requests().first().map(|request| request.uri.clone()),
+            ),
+            (
+                AuthorizationMetadataSource::ProtectedResourceMetadata,
+                Some("https://10.0.0.9/.well-known/oauth-protected-resource/mcp".to_string()),
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_metadata_from_challenge_falls_back_without_metadata_pointer() {
         let client = RecordingOAuthHttpClient::with_responses(vec![
             empty_response(404),
@@ -6619,7 +6692,7 @@ mod tests {
     }
 
     #[test]
-    fn authorization_server_metadata_url_checks_bracketed_ipv6_literals() {
+    fn metadata_url_checks_bracketed_ipv6_literals() {
         let allowed = |base: &str, url: &str| {
             AuthorizationManager::is_allowed_metadata_url(
                 &Url::parse(base).unwrap(),
@@ -6642,7 +6715,7 @@ mod tests {
     }
 
     #[test]
-    fn authorization_server_metadata_url_allows_private_literals_only_when_opted_in() {
+    fn metadata_url_allows_private_literals_only_when_opted_in() {
         let allowed = |url: &str, allow_private: bool| {
             AuthorizationManager::is_allowed_metadata_url(
                 &Url::parse("https://mcp.corp/mcp").unwrap(),
@@ -6651,10 +6724,10 @@ mod tests {
             )
         };
 
-        assert!(!allowed("http://10.0.0.9/", false));
-        assert!(allowed("http://10.0.0.9/", true));
-        assert!(!allowed("http://169.254.169.254/", true));
-        assert!(!allowed("http://127.0.0.1/", true));
+        assert!(!allowed("https://10.0.0.9/", false));
+        assert!(allowed("https://10.0.0.9/", true));
+        assert!(!allowed("https://169.254.169.254/", true));
+        assert!(!allowed("https://127.0.0.1/", true));
     }
 
     #[tokio::test]
@@ -7210,7 +7283,7 @@ mod tests {
     fn parses_resource_metadata_parameter() {
         let header = r#"Bearer error="invalid_request", error_description="missing token", resource_metadata="https://example.com/.well-known/oauth-protected-resource/api""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
         assert_eq!(
             params.resource_metadata_url.unwrap().as_str(),
             "https://example.com/.well-known/oauth-protected-resource/api"
@@ -7221,7 +7294,7 @@ mod tests {
     fn parses_relative_resource_metadata_parameter() {
         let header = r#"Bearer error="invalid_request", resource_metadata="/.well-known/oauth-protected-resource/api""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
         assert_eq!(
             params.resource_metadata_url.unwrap().as_str(),
             "https://example.com/.well-known/oauth-protected-resource/api"
@@ -7232,7 +7305,7 @@ mod tests {
     fn parses_cross_origin_resource_metadata_parameter() {
         let header = r#"Bearer resource_metadata="https://prm.example.net/.well-known/oauth-protected-resource/api""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
         assert_eq!(
             params.resource_metadata_url.unwrap().as_str(),
             "https://prm.example.net/.well-known/oauth-protected-resource/api"
@@ -7240,14 +7313,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::cloud_metadata("http://169.254.169.254/latest/meta-data/")]
-    #[case::private_network("http://10.0.0.1/.well-known/oauth-protected-resource")]
-    #[case::loopback("http://127.0.0.1/.well-known/oauth-protected-resource")]
-    #[case::localhost("http://localhost/.well-known/oauth-protected-resource")]
+    #[case::cloud_metadata("https://169.254.169.254/latest/meta-data/")]
+    #[case::private_network("https://10.0.0.1/.well-known/oauth-protected-resource")]
+    #[case::loopback("https://127.0.0.1/.well-known/oauth-protected-resource")]
+    #[case::localhost("https://localhost/.well-known/oauth-protected-resource")]
     fn rejects_disallowed_host_resource_metadata_parameter(#[case] resource_metadata: &str) {
         let header = format!(r#"Bearer resource_metadata="{resource_metadata}", scope="read""#);
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(&header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(&header, &base, false);
 
         assert_eq!(
             (params.resource_metadata_url, params.scope.as_deref()),
@@ -7256,10 +7329,40 @@ mod tests {
     }
 
     #[test]
+    fn keeps_same_origin_resource_metadata_parameter_for_private_resource() {
+        let header = r#"Bearer resource_metadata="/custom/prm.json""#;
+        let base = Url::parse("https://10.0.0.1/mcp").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
+
+        assert_eq!(
+            params.resource_metadata_url.unwrap().as_str(),
+            "https://10.0.0.1/custom/prm.json"
+        );
+    }
+
+    #[rstest]
+    #[case::default_policy(false, None)]
+    #[case::private_addresses_allowed(true, Some("https://10.0.0.9/prm.json"))]
+    fn cross_origin_private_resource_metadata_parameter_follows_policy(
+        #[case] allow_private: bool,
+        #[case] expected: Option<&str>,
+    ) {
+        let header = r#"Bearer resource_metadata="https://10.0.0.9/prm.json""#;
+        let base = Url::parse("https://mcp.corp/mcp").unwrap();
+        let params =
+            AuthorizationManager::extract_www_authenticate_params(header, &base, allow_private);
+
+        assert_eq!(
+            params.resource_metadata_url.as_ref().map(Url::as_str),
+            expected
+        );
+    }
+
+    #[test]
     fn rejects_http_resource_metadata_parameter_for_https_resource() {
         let header = r#"Bearer resource_metadata="http://prm.example.net/.well-known/oauth-protected-resource""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert!(params.resource_metadata_url.is_none());
     }
@@ -7281,7 +7384,7 @@ mod tests {
     ) {
         let header = format!(r#"Bearer resource_metadata="{metadata_url}""#);
         let base = Url::parse(base_url).unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(&header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(&header, &base, false);
 
         assert_eq!(params.resource_metadata_url.is_some(), expected);
     }
@@ -7304,7 +7407,7 @@ mod tests {
     fn parses_loopback_resource_metadata_parameter_for_loopback_resource() {
         let header = r#"Bearer resource_metadata="http://127.0.0.1:9000/.well-known/oauth-protected-resource""#;
         let base = Url::parse("http://localhost:8080/mcp").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
         assert_eq!(
             params.resource_metadata_url.unwrap().as_str(),
             "http://127.0.0.1:9000/.well-known/oauth-protected-resource"
@@ -7315,7 +7418,7 @@ mod tests {
     fn rejects_non_http_resource_metadata_parameter() {
         let header = r#"Bearer resource_metadata="file:///etc/passwd""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert!(params.resource_metadata_url.is_none());
     }
@@ -7324,7 +7427,7 @@ mod tests {
     fn extract_www_authenticate_params_with_all_fields() {
         let header = r#"Bearer error="invalid_token", resource_metadata="https://example.com/.well-known/oauth-protected-resource", scope="read:data write:data", error_description="token expired""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert_eq!(
             params.resource_metadata_url.unwrap().as_str(),
@@ -7339,7 +7442,7 @@ mod tests {
     fn extract_www_authenticate_params_insufficient_scope() {
         let header = r#"Bearer error="insufficient_scope", scope="admin:write", error_description="Additional file write permission required""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert!(params.resource_metadata_url.is_none());
         assert!(params.is_insufficient_scope());
@@ -7355,7 +7458,7 @@ mod tests {
     fn extract_www_authenticate_params_with_only_resource_metadata() {
         let header = r#"Bearer resource_metadata="/.well-known/oauth-protected-resource""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert_eq!(
             params.resource_metadata_url.unwrap().as_str(),
@@ -7368,7 +7471,7 @@ mod tests {
     fn extract_www_authenticate_params_bare_bearer() {
         let header = "Bearer";
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert!(params.resource_metadata_url.is_none());
         assert!(params.scope.is_none());
@@ -7380,7 +7483,7 @@ mod tests {
     fn extract_www_authenticate_params_error_only() {
         let header = r#"Bearer error="invalid_token""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert!(params.resource_metadata_url.is_none());
         assert!(params.scope.is_none());
@@ -7393,7 +7496,7 @@ mod tests {
     fn extract_www_authenticate_params_with_unquoted_scope() {
         let header = r#"Bearer scope=read:data, error="insufficient_scope""#;
         let base = Url::parse("https://example.com/api").unwrap();
-        let params = AuthorizationManager::extract_www_authenticate_params(header, &base);
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert_eq!(params.scope.unwrap(), "read:data");
     }
