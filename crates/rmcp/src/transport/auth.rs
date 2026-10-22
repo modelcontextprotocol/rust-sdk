@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr},
     pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -25,15 +25,17 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
+use url::Host;
 
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 
 #[cfg(feature = "auth-enterprise-managed")]
 pub mod enterprise;
+mod metadata_resolver;
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OAUTH_HTTP_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
-const MAX_OAUTH_DISCOVERY_REDIRECTS: usize = 10;
+const MAX_OAUTH_REDIRECTS: usize = 10;
 const CLOUD_METADATA_HOSTS: &[&str] = &[
     "metadata",
     "metadata.google.internal",
@@ -84,8 +86,10 @@ enum OAuthHttpError {
     UnexpectedStatus(StatusCode),
     #[error("OAuth discovery redirect to non-same-origin URL rejected: {0}")]
     CrossOriginRedirect(Url),
-    #[error("OAuth discovery exceeded {0} redirects")]
+    #[error("OAuth request exceeded {0} redirects")]
     TooManyRedirects(usize),
+    #[error("OAuth request to `{0}` rejected: address not allowed for this resource")]
+    DisallowedAddress(Url),
 }
 
 /// Future returned by [`OAuthHttpClient::execute`].
@@ -107,6 +111,9 @@ pub trait OAuthHttpClient: Send + Sync {
 /// Honors each request's redirect policy, with a 30-second timeout and bounded
 /// response bodies. Enable a TLS feature such as `reqwest` for HTTPS requests.
 /// Implement [`OAuthHttpClient`] instead when custom network policy is required.
+///
+/// This client does not filter resolved addresses. [`AuthorizationManager::new`]
+/// builds a client that does.
 pub fn default_oauth_http_client() -> Result<impl OAuthHttpClient, AuthError> {
     let client = ReqwestClient::builder()
         .timeout(DEFAULT_HTTP_TIMEOUT)
@@ -118,6 +125,7 @@ pub fn default_oauth_http_client() -> Result<impl OAuthHttpClient, AuthError> {
 struct ReqwestOAuthHttpClient {
     follow_redirects: ReqwestClient,
     stop_redirects: ReqwestClient,
+    address_policy: Option<Arc<metadata_resolver::MetadataAddressResolver>>,
 }
 
 impl ReqwestOAuthHttpClient {
@@ -130,6 +138,39 @@ impl ReqwestOAuthHttpClient {
         Ok(Self {
             follow_redirects,
             stop_redirects,
+            address_policy: None,
+        })
+    }
+
+    /// Both clients resolve names through `resolver`, and requests and
+    /// redirects to IP-literal hosts are checked against its policy.
+    fn with_resolver(
+        resolver: Arc<metadata_resolver::MetadataAddressResolver>,
+    ) -> Result<Self, AuthError> {
+        let build = |redirect: reqwest::redirect::Policy| {
+            ReqwestClient::builder()
+                .timeout(DEFAULT_HTTP_TIMEOUT)
+                .redirect(redirect)
+                .dns_resolver(resolver.clone())
+                .build()
+                .map_err(|error| AuthError::InternalError(error.to_string()))
+        };
+        let policy = resolver.clone();
+        let follow = reqwest::redirect::Policy::custom(move |attempt| {
+            if !policy.allows_url(attempt.url()) {
+                let error = OAuthHttpError::DisallowedAddress(attempt.url().clone());
+                warn!("{error}");
+                attempt.error(error)
+            } else if attempt.previous().len() > MAX_OAUTH_REDIRECTS {
+                attempt.error(OAuthHttpError::TooManyRedirects(MAX_OAUTH_REDIRECTS))
+            } else {
+                attempt.follow()
+            }
+        });
+        Ok(Self {
+            follow_redirects: build(follow)?,
+            stop_redirects: build(reqwest::redirect::Policy::none())?,
+            address_policy: Some(resolver),
         })
     }
 }
@@ -148,6 +189,13 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
             };
             let request = reqwest::Request::try_from(request)
                 .map_err(|error| Box::new(error) as OAuthHttpClientError)?;
+            if let Some(policy) = &self.address_policy
+                && !policy.allows_url(request.url())
+            {
+                let error = OAuthHttpError::DisallowedAddress(request.url().clone());
+                warn!("{error}");
+                return Err(Box::new(error) as OAuthHttpClientError);
+            }
             let response = client
                 .execute(request)
                 .await
@@ -1163,6 +1211,7 @@ pub struct AuthorizationManager {
     /// OIDC Dynamic Client Registration `application_type` (SEP-837)
     application_type: Option<String>,
     allow_missing_issuer: bool,
+    allow_private_metadata_addresses: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1216,10 +1265,10 @@ fn is_allowed_client_credentials_endpoint(resource: &Url, token_endpoint: &Url) 
     token_endpoint.scheme() == "https"
         || (token_endpoint.scheme() == "http"
             && resource
-                .host_str()
+                .host()
                 .is_some_and(AuthorizationManager::is_loopback_metadata_host)
             && token_endpoint
-                .host_str()
+                .host()
                 .is_some_and(AuthorizationManager::is_loopback_metadata_host))
 }
 
@@ -1254,9 +1303,23 @@ impl AuthorizationManager {
             || (octets[0] == 198 && matches!(octets[1], 18 | 19))
     }
 
+    /// Returns the IPv4 address embedded by IPv4-mapped, IPv4-compatible,
+    /// NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) addresses. Teredo and
+    /// local-use NAT64 addresses are blocked outright instead.
+    fn embedded_ipv4(addr: Ipv6Addr) -> Option<Ipv4Addr> {
+        let [a, b, c, d, e, f, g, h] = addr.segments();
+        let low = Ipv4Addr::from((u32::from(g) << 16) | u32::from(h));
+        match [a, b, c, d, e, f] {
+            [0, 0, 0, 0, 0, 0xffff] | [0x64, 0xff9b, 0, 0, 0, 0] => Some(low),
+            [0, 0, 0, 0, 0, 0] if !addr.is_loopback() && !addr.is_unspecified() => Some(low),
+            [0x2002, ..] => Some(Ipv4Addr::from((u32::from(b) << 16) | u32::from(c))),
+            _ => None,
+        }
+    }
+
     fn is_disallowed_metadata_ipv6(addr: Ipv6Addr) -> bool {
-        if let Some(mapped) = addr.to_ipv4_mapped() {
-            return Self::is_disallowed_metadata_ipv4(mapped);
+        if let Some(embedded) = Self::embedded_ipv4(addr) {
+            return Self::is_disallowed_metadata_ipv4(embedded);
         }
 
         let segments = addr.segments();
@@ -1265,6 +1328,8 @@ impl AuthorizationManager {
             || addr.is_multicast()
             || (segments[0] & 0xffc0) == 0xfe80
             || (segments[0] & 0xfe00) == 0xfc00
+            || segments[..2] == [0x2001, 0]
+            || segments[..3] == [0x64, 0xff9b, 1]
     }
 
     fn is_disallowed_metadata_hostname(host: &str) -> bool {
@@ -1273,43 +1338,54 @@ impl AuthorizationManager {
             || CLOUD_METADATA_HOSTS.contains(&host)
     }
 
-    fn is_disallowed_metadata_host(host: &str) -> bool {
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        if Self::is_disallowed_metadata_hostname(&host) {
-            return true;
-        }
-
-        match host.parse::<IpAddr>() {
-            Ok(IpAddr::V4(addr)) => Self::is_disallowed_metadata_ipv4(addr),
-            Ok(IpAddr::V6(addr)) => Self::is_disallowed_metadata_ipv6(addr),
-            Err(_) => false,
+    fn is_disallowed_metadata_host(host: Host<&str>) -> bool {
+        match host {
+            Host::Domain(domain) => Self::is_disallowed_metadata_hostname(
+                &domain.trim_end_matches('.').to_ascii_lowercase(),
+            ),
+            Host::Ipv4(addr) => Self::is_disallowed_metadata_ipv4(addr),
+            Host::Ipv6(addr) => Self::is_disallowed_metadata_ipv6(addr),
         }
     }
 
-    fn is_loopback_metadata_host(host: &str) -> bool {
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        host == "localhost"
-            || host.ends_with(".localhost")
-            || matches!(host.parse::<IpAddr>(), Ok(IpAddr::V4(addr)) if addr.is_loopback())
-            || matches!(host.parse::<IpAddr>(), Ok(IpAddr::V6(addr)) if addr.is_loopback())
+    fn is_loopback_metadata_host(host: Host<&str>) -> bool {
+        match host {
+            Host::Domain(domain) => {
+                let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+                domain == "localhost" || domain.ends_with(".localhost")
+            }
+            Host::Ipv4(addr) => addr.is_loopback(),
+            Host::Ipv6(addr) => addr.is_loopback(),
+        }
     }
 
-    fn is_allowed_authorization_server_metadata_url(base_url: &Url, url: &Url) -> bool {
+    fn is_allowed_authorization_server_metadata_url(
+        base_url: &Url,
+        url: &Url,
+        allow_private: bool,
+    ) -> bool {
         if !Self::is_http_url(url) {
             return false;
         }
 
-        let Some(host) = url.host_str() else {
+        let Some(host) = url.host() else {
             return false;
         };
 
-        if !Self::is_disallowed_metadata_host(host) {
+        if !Self::is_disallowed_metadata_host(host.clone()) {
             return true;
         }
 
-        base_url
-            .host_str()
-            .is_some_and(Self::is_loopback_metadata_host)
+        let class = match host {
+            Host::Ipv4(addr) => Some(metadata_resolver::AddressClass::of(addr.into())),
+            Host::Ipv6(addr) => Some(metadata_resolver::AddressClass::of(addr.into())),
+            Host::Domain(_) => None,
+        };
+        if allow_private && class == Some(metadata_resolver::AddressClass::Private) {
+            return true;
+        }
+
+        base_url.host().is_some_and(Self::is_loopback_metadata_host)
             && Self::is_loopback_metadata_host(host)
     }
 
@@ -1365,17 +1441,53 @@ impl AuthorizationManager {
         candidates
     }
 
-    /// create new auth manager with base url
+    /// Create an auth manager with the SDK's default HTTP client.
+    ///
+    /// A host named by discovered metadata may resolve to a loopback or private
+    /// address only when the base URL names one of the same class: `localhost`
+    /// or a loopback or private IP literal. Link-local and other reserved
+    /// addresses are always rejected. Hosts of proxies set through
+    /// `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` are not filtered. Use
+    /// [`AuthorizationManager::new_allowing_private_addresses`] for deployments
+    /// whose authorization server is reached at a private address.
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
+        let base_url = base_url.into_url()?;
+        let resolver = metadata_resolver::MetadataAddressResolver::new(&base_url);
+        Self::new_filtered(base_url, resolver).await
+    }
+
+    /// Like [`AuthorizationManager::new`], but hosts named by discovered
+    /// metadata may also be private addresses, such as an authorization server
+    /// at `sso.corp` resolving to `10.0.0.9`. Loopback addresses still need a
+    /// loopback base URL, and link-local and other reserved addresses stay
+    /// rejected.
+    pub async fn new_allowing_private_addresses<U: IntoUrl>(
+        base_url: U,
+    ) -> Result<Self, AuthError> {
+        let base_url = base_url.into_url()?;
+        let resolver =
+            metadata_resolver::MetadataAddressResolver::new(&base_url).allowing_private_addresses();
+        let mut manager = Self::new_filtered(base_url, resolver).await?;
+        manager.allow_private_metadata_addresses = true;
+        Ok(manager)
+    }
+
+    async fn new_filtered(
+        base_url: Url,
+        resolver: metadata_resolver::MetadataAddressResolver,
+    ) -> Result<Self, AuthError> {
         Self::new_inner(
             base_url,
-            Arc::new(default_oauth_http_client()?),
+            Arc::new(ReqwestOAuthHttpClient::with_resolver(Arc::new(resolver))?),
             OAuthHttpRedirectPolicy::Stop,
         )
         .await
     }
 
     /// Create an auth manager with a client used for every OAuth HTTP operation.
+    ///
+    /// The client's own network policy decides which resolved addresses it
+    /// connects to; the SDK checks only the host strings of discovered URLs.
     pub async fn new_with_oauth_http_client<U: IntoUrl>(
         base_url: U,
         http_client: Arc<dyn OAuthHttpClient>,
@@ -1407,6 +1519,7 @@ impl AuthorizationManager {
             discovered_resource: RwLock::new(None),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
             allow_missing_issuer: false,
+            allow_private_metadata_addresses: false,
         };
 
         Ok(manager)
@@ -1521,12 +1634,16 @@ impl AuthorizationManager {
     /// and [`OAuthHttpRedirectPolicy::Stop`] is not enforced for token operations.
     /// Callers needing strict no-redirect handling should pass a custom
     /// [`OAuthHttpClient`] to [`AuthorizationManager::new_with_oauth_http_client`].
+    ///
+    /// The client's own DNS resolver is used, so resolved addresses are not
+    /// filtered as they are by [`AuthorizationManager::new`].
     pub fn with_client(&mut self, http_client: ReqwestClient) -> Result<(), AuthError> {
         // One client for both modes: a built reqwest::Client can't be rebuilt as a
         // no-redirect variant without dropping the caller's configuration.
         self.http_client = Arc::new(ReqwestOAuthHttpClient {
             follow_redirects: http_client.clone(),
             stop_redirects: http_client,
+            address_policy: None,
         });
         self.refresh_redirect_policy = OAuthHttpRedirectPolicy::Follow;
         Ok(())
@@ -2739,7 +2856,11 @@ impl AuthorizationManager {
                 },
             };
 
-            if !Self::is_allowed_authorization_server_metadata_url(&self.base_url, &candidate_url) {
+            if !Self::is_allowed_authorization_server_metadata_url(
+                &self.base_url,
+                &candidate_url,
+                self.allow_private_metadata_addresses,
+            ) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
@@ -3081,7 +3202,7 @@ impl AuthorizationManager {
 
     async fn discovery_get(&self, url: &Url) -> Result<HttpResponse, OAuthHttpClientError> {
         let mut current_url = url.clone();
-        for _ in 0..MAX_OAUTH_DISCOVERY_REDIRECTS {
+        for _ in 0..MAX_OAUTH_REDIRECTS {
             let request = oauth2::http::Request::builder()
                 .method("GET")
                 .uri(current_url.as_str())
@@ -3118,7 +3239,7 @@ impl AuthorizationManager {
         }
 
         Err(Box::new(OAuthHttpError::TooManyRedirects(
-            MAX_OAUTH_DISCOVERY_REDIRECTS,
+            MAX_OAUTH_REDIRECTS,
         )))
     }
 
@@ -6451,6 +6572,45 @@ mod tests {
             ),
             (true, 1)
         );
+    }
+
+    #[test]
+    fn authorization_server_metadata_url_checks_bracketed_ipv6_literals() {
+        let allowed = |base: &str, url: &str| {
+            AuthorizationManager::is_allowed_authorization_server_metadata_url(
+                &Url::parse(base).unwrap(),
+                &Url::parse(url).unwrap(),
+                false,
+            )
+        };
+
+        for url in [
+            "http://[::1]:8080/",
+            "http://[::ffff:127.0.0.1]:8080/",
+            "http://[fe80::1]/",
+        ] {
+            assert!(
+                !allowed("https://mcp.example.com/mcp", url),
+                "{url} was allowed"
+            );
+        }
+        assert!(allowed("http://[::1]:3000/mcp", "http://[::1]:8080/"));
+    }
+
+    #[test]
+    fn authorization_server_metadata_url_allows_private_literals_only_when_opted_in() {
+        let allowed = |url: &str, allow_private: bool| {
+            AuthorizationManager::is_allowed_authorization_server_metadata_url(
+                &Url::parse("https://mcp.corp/mcp").unwrap(),
+                &Url::parse(url).unwrap(),
+                allow_private,
+            )
+        };
+
+        assert!(!allowed("http://10.0.0.9/", false));
+        assert!(allowed("http://10.0.0.9/", true));
+        assert!(!allowed("http://169.254.169.254/", true));
+        assert!(!allowed("http://127.0.0.1/", true));
     }
 
     #[tokio::test]
