@@ -49,9 +49,7 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
     }
 }
 
-const MAX_RETRY_AFTER_BYTES: usize = 128;
-
-// Classify from headers alone: error bodies may be private, malformed, or unfinished.
+// Retain only status and bounded Retry-After metadata for HTTP failures.
 fn http_status_error(status: StatusCode, headers: &HeaderMap) -> Option<HttpStatusError> {
     if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
         return None;
@@ -61,10 +59,7 @@ fn http_status_error(status: StatusCode, headers: &HeaderMap) -> Option<HttpStat
         .filter(|value| value.as_bytes().len() <= MAX_RETRY_AFTER_BYTES)
         .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
         .map(str::to_owned);
-    Some(HttpStatusError {
-        status: status.as_u16(),
-        retry_after,
-    })
+    Some(HttpStatusError::new(status.as_u16(), retry_after))
 }
 
 impl StreamableHttpClient for reqwest::Client {
@@ -274,13 +269,22 @@ impl StreamableHttpClient for reqwest::Client {
         if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
             return Err(StreamableHttpError::SessionExpired);
         }
-        if let Some(error) = http_status_error(status, response.headers()) {
-            return Err(error.into());
-        }
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
+        let is_json_response = content_type
+            .as_deref()
+            .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
+        // Preserve JSON-RPC errors carried by JSON responses. Non-JSON failures
+        // can be reported without waiting for a possibly unfinished body.
+        let status_error = match (
+            http_status_error(status, response.headers()),
+            is_json_response,
+        ) {
+            (Some(error), false) => return Err(error.into()),
+            (error, _) => error,
+        };
         let content_length = response.content_length();
         let session_id = response
             .headers()
@@ -321,11 +325,7 @@ impl StreamableHttpClient for reqwest::Client {
                 status,
                 reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
             );
-            if !is_auth_failure
-                && content_type
-                    .as_deref()
-                    .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
-            {
+            if !is_auth_failure && is_json_response {
                 match parse_json_rpc_error(&body) {
                     Some(message) => {
                         return Ok(StreamableHttpPostResponse::Json(message, session_id));
@@ -334,6 +334,9 @@ impl StreamableHttpClient for reqwest::Client {
                         "HTTP {status}: could not parse JSON body as a JSON-RPC error"
                     ),
                 }
+            }
+            if let Some(error) = status_error {
+                return Err(error.into());
             }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                 format!("HTTP {status}: {body}"),
@@ -488,6 +491,10 @@ mod tests {
     use rstest::rstest;
 
     use super::{http_status_error, parse_json_rpc_error};
+    use crate::{
+        model::{ClientJsonRpcMessage, ClientRequest, JsonRpcMessage, PingRequest, RequestId},
+        transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
+    };
 
     #[test]
     fn http_status_error_classifies_only_429_and_5xx() {
@@ -502,48 +509,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn http_status_error_retains_only_bounded_utf8_retry_after() {
-        fn retained(value: http::HeaderValue) -> Option<String> {
-            let mut headers = http::HeaderMap::new();
-            headers.insert(http::header::RETRY_AFTER, value);
-            headers.insert(
-                "x-private-response",
-                http::HeaderValue::from_static("private"),
-            );
-            http_status_error(http::StatusCode::SERVICE_UNAVAILABLE, &headers)
-                .unwrap()
-                .retry_after
-        }
-        for value in ["17", "Fri, 23 Oct 2026 12:00:00 GMT", "", "é"] {
-            assert_eq!(
-                retained(http::HeaderValue::from_bytes(value.as_bytes()).unwrap()),
-                Some(value.to_owned())
-            );
-        }
-        let boundary = "a".repeat(128);
-        assert_eq!(
-            retained(http::HeaderValue::from_str(&boundary).unwrap()),
-            Some(boundary)
+    #[rstest]
+    #[case::delay_seconds(b"17".to_vec(), true)]
+    #[case::http_date(b"Fri, 23 Oct 2026 12:00:00 GMT".to_vec(), true)]
+    #[case::empty(Vec::new(), true)]
+    #[case::non_ascii_utf8("é".as_bytes().to_vec(), true)]
+    #[case::at_limit("a".repeat(128).into_bytes(), true)]
+    #[case::over_limit("a".repeat(129).into_bytes(), false)]
+    #[case::limit_counts_bytes_not_chars("é".repeat(65).into_bytes(), false)]
+    #[case::invalid_utf8(b"\xff".to_vec(), false)]
+    fn http_status_error_retains_only_bounded_utf8_retry_after(
+        #[case] value: Vec<u8>,
+        #[case] retained: bool,
+    ) {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::RETRY_AFTER,
+            http::HeaderValue::from_bytes(&value).unwrap(),
         );
+        let error = http_status_error(http::StatusCode::SERVICE_UNAVAILABLE, &headers).unwrap();
         assert_eq!(
-            retained(http::HeaderValue::from_str(&"a".repeat(129)).unwrap()),
-            None
-        );
-        // Bound bytes rather than Unicode scalar values.
-        assert_eq!(
-            retained(http::HeaderValue::from_bytes("é".repeat(65).as_bytes()).unwrap()),
-            None
-        );
-        assert_eq!(
-            retained(http::HeaderValue::from_bytes(b"\xff").unwrap()),
-            None
+            error.retry_after,
+            retained.then(|| String::from_utf8(value).unwrap())
         );
     }
-    use crate::{
-        model::{ClientJsonRpcMessage, ClientRequest, JsonRpcMessage, PingRequest, RequestId},
-        transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
-    };
 
     #[test]
     fn auth_required_error_new() {
