@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Return body-free HTTP status and bounded `Retry-After` metadata for 429/5xx responses from the built-in reqwest GET/POST client, before parsing JSON-RPC or SSE bodies. Other HTTP statuses retain their existing handling.
+
 ## [3.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.5.1...rmcp-v3.6.0) - 2026-10-19
 
 ### Added

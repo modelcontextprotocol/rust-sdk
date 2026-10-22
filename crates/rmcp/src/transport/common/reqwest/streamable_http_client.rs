@@ -1,7 +1,10 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use futures::stream::BoxStream;
-use http::{HeaderName, HeaderValue, header::WWW_AUTHENTICATE};
+use http::{
+    HeaderMap, HeaderName, HeaderValue, StatusCode,
+    header::{RETRY_AFTER, WWW_AUTHENTICATE},
+};
 use reqwest::header::ACCEPT;
 use sse_stream::Sse;
 
@@ -44,6 +47,24 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
         Ok(message @ JsonRpcMessage::Error(_)) => Some(message),
         _ => None,
     }
+}
+
+const MAX_RETRY_AFTER_BYTES: usize = 128;
+
+// Classify from headers alone: error bodies may be private, malformed, or unfinished.
+fn http_status_error(status: StatusCode, headers: &HeaderMap) -> Option<HttpStatusError> {
+    if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
+        return None;
+    }
+    let retry_after = headers
+        .get(RETRY_AFTER)
+        .filter(|value| value.as_bytes().len() <= MAX_RETRY_AFTER_BYTES)
+        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+        .map(str::to_owned);
+    Some(HttpStatusError {
+        status: status.as_u16(),
+        retry_after,
+    })
 }
 
 impl StreamableHttpClient for reqwest::Client {
@@ -124,6 +145,9 @@ impl StreamableHttpClient for reqwest::Client {
                     required_scope: scope,
                 },
             ));
+        }
+        if let Some(error) = http_status_error(response.status(), response.headers()) {
+            return Err(error.into());
         }
         let response = response.error_for_status()?;
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
@@ -249,6 +273,9 @@ impl StreamableHttpClient for reqwest::Client {
         }
         if status == reqwest::StatusCode::NOT_FOUND && session_was_attached {
             return Err(StreamableHttpError::SessionExpired);
+        }
+        if let Some(error) = http_status_error(status, response.headers()) {
+            return Err(error.into());
         }
         let content_type = response
             .headers()
@@ -460,7 +487,59 @@ fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
 mod tests {
     use rstest::rstest;
 
-    use super::parse_json_rpc_error;
+    use super::{http_status_error, parse_json_rpc_error};
+
+    #[test]
+    fn http_status_error_classifies_only_429_and_5xx() {
+        let headers = http::HeaderMap::new();
+        for code in 100..=599 {
+            let error = http_status_error(http::StatusCode::from_u16(code).unwrap(), &headers);
+            assert_eq!(error.is_some(), code == 429 || code >= 500, "HTTP {code}");
+            if let Some(error) = error {
+                assert_eq!(error.status, code);
+                assert_eq!(error.retry_after, None);
+            }
+        }
+    }
+
+    #[test]
+    fn http_status_error_retains_only_bounded_utf8_retry_after() {
+        fn retained(value: http::HeaderValue) -> Option<String> {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(http::header::RETRY_AFTER, value);
+            headers.insert(
+                "x-private-response",
+                http::HeaderValue::from_static("private"),
+            );
+            http_status_error(http::StatusCode::SERVICE_UNAVAILABLE, &headers)
+                .unwrap()
+                .retry_after
+        }
+        for value in ["17", "Fri, 23 Oct 2026 12:00:00 GMT", "", "é"] {
+            assert_eq!(
+                retained(http::HeaderValue::from_bytes(value.as_bytes()).unwrap()),
+                Some(value.to_owned())
+            );
+        }
+        let boundary = "a".repeat(128);
+        assert_eq!(
+            retained(http::HeaderValue::from_str(&boundary).unwrap()),
+            Some(boundary)
+        );
+        assert_eq!(
+            retained(http::HeaderValue::from_str(&"a".repeat(129)).unwrap()),
+            None
+        );
+        // Bound bytes rather than Unicode scalar values.
+        assert_eq!(
+            retained(http::HeaderValue::from_bytes("é".repeat(65).as_bytes()).unwrap()),
+            None
+        );
+        assert_eq!(
+            retained(http::HeaderValue::from_bytes(b"\xff").unwrap()),
+            None
+        );
+    }
     use crate::{
         model::{ClientJsonRpcMessage, ClientRequest, JsonRpcMessage, PingRequest, RequestId},
         transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},

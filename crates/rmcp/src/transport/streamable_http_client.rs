@@ -176,6 +176,25 @@ impl InsufficientScopeError {
     }
 }
 
+/// Body-free HTTP failure metadata returned by the built-in reqwest client's
+/// GET and POST methods for HTTP 429 and 5xx responses.
+///
+/// These statuses are classified before decoding any JSON-RPC or SSE body.
+/// No response body, request URL, credentials, or other headers are retained.
+/// This does not add automatic retries or change session DELETE handling.
+#[derive(Debug, Error)]
+#[error("HTTP {status}")]
+#[non_exhaustive]
+pub struct HttpStatusError {
+    /// HTTP status code (429 or 500..=599 for the built-in reqwest client).
+    pub status: u16,
+    /// First raw `Retry-After` value, if valid UTF-8 and at most 128 bytes.
+    ///
+    /// This is not parsed as a delay or date; callers decide whether and when
+    /// to retry. Missing, oversized, or invalid UTF-8 values become `None`.
+    pub retry_after: Option<String>,
+}
+
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
@@ -185,6 +204,9 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Io(#[from] std::io::Error),
     #[error("Client error: {0}")]
     Client(E),
+    /// HTTP 429 or 5xx from a built-in reqwest GET/POST, classified before body parsing.
+    #[error(transparent)]
+    HttpStatus(#[from] HttpStatusError),
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,
     #[error("unexpected server response: {0}")]
