@@ -29,8 +29,8 @@ use rmcp::{
         StreamableHttpClientTransport,
         common::client_side_sse::FixedInterval,
         streamable_http_client::{
-            StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
-            StreamableHttpPostResponse,
+            AuthRequiredError, InsufficientScopeError, StreamableHttpClient,
+            StreamableHttpClientTransportConfig, StreamableHttpError, StreamableHttpPostResponse,
         },
     },
 };
@@ -50,6 +50,8 @@ enum PingResponse {
 enum GetResponse {
     EmptySse,
     Unsupported,
+    AuthRequired,
+    InsufficientScope,
     Transient,
     CompletePending,
     ToolsChanged,
@@ -174,6 +176,15 @@ impl StreamableHttpClient for ScriptedHttpClient {
         match scripted {
             GetResponse::EmptySse => Ok(futures::stream::empty().boxed()),
             GetResponse::Unsupported => Err(StreamableHttpError::ServerDoesNotSupportSse),
+            GetResponse::AuthRequired => Err(StreamableHttpError::AuthRequired(
+                AuthRequiredError::new("Bearer error=\"invalid_token\"".to_owned()),
+            )),
+            GetResponse::InsufficientScope => Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError::new(
+                    "Bearer error=\"insufficient_scope\", scope=\"tools:read\"".to_owned(),
+                    Some("tools:read".to_owned()),
+                ),
+            )),
             GetResponse::Transient => Err(StreamableHttpError::Client(io::Error::other(
                 "transient reconnect failure",
             ))),
@@ -250,6 +261,7 @@ impl Harness {
         retry_config.max_times = None;
         retry_config.duration = RETRY_INTERVAL;
         config.retry_config = Arc::new(retry_config);
+        config.auth_header = Some("Bearer test-token".to_owned());
         let transport = StreamableHttpClientTransport::with_client(
             ScriptedHttpClient {
                 session_id,
@@ -362,6 +374,67 @@ async fn interrupted_post_with_event_id_stops_after_reconnect_405() -> anyhow::R
     harness.assert_get_count_stays(1).await;
     assert_eq!(harness.last_event_ids(), vec![Some("event-1".to_owned())]);
     harness.ping().await?;
+    harness.finish().await
+}
+
+#[tokio::test]
+async fn established_listener_stops_after_reconnect_401() -> anyhow::Result<()> {
+    assert_listener_auth_failure_stops(GetResponse::AuthRequired).await
+}
+
+#[tokio::test]
+async fn established_listener_stops_after_reconnect_403() -> anyhow::Result<()> {
+    assert_listener_auth_failure_stops(GetResponse::InsufficientScope).await
+}
+
+async fn assert_listener_auth_failure_stops(error: GetResponse) -> anyhow::Result<()> {
+    let harness = Harness::start(
+        Some("session-1"),
+        [PingResponse::Json],
+        [GetResponse::EmptySse, error],
+    )
+    .await?;
+    harness.wait_for_gets(2).await;
+    harness.assert_get_count_stays(2).await;
+    harness.ping().await?;
+    harness.assert_get_count_stays(2).await;
+    harness.finish().await
+}
+
+#[tokio::test]
+async fn interrupted_post_stops_after_reconnect_401_without_replaying_post() -> anyhow::Result<()> {
+    assert_post_auth_failure_stops(GetResponse::AuthRequired).await
+}
+
+#[tokio::test]
+async fn interrupted_post_stops_after_reconnect_403_without_replaying_post() -> anyhow::Result<()> {
+    assert_post_auth_failure_stops(GetResponse::InsufficientScope).await
+}
+
+async fn assert_post_auth_failure_stops(error: GetResponse) -> anyhow::Result<()> {
+    let harness = Harness::start(
+        None,
+        [
+            PingResponse::InterruptedSse {
+                event_id: Some("event-1"),
+            },
+            PingResponse::Json,
+        ],
+        [error],
+    )
+    .await?;
+    let first = timeout(TEST_TIMEOUT, harness.ping())
+        .await
+        .expect("authorization failure should stop resuming promptly");
+    assert!(
+        first.is_err(),
+        "request must fail instead of silently succeeding"
+    );
+    harness.assert_get_count_stays(1).await;
+    assert_eq!(harness.state.ping_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.last_event_ids(), vec![Some("event-1".to_owned())]);
+    harness.ping().await?;
+    assert_eq!(harness.state.ping_calls.load(Ordering::SeqCst), 2);
     harness.finish().await
 }
 

@@ -270,7 +270,7 @@ impl<E: std::error::Error + Send> SseStreamReconnect for NeverReconnect<E> {
 }
 
 /// Controls whether an SSE reconnection failure should follow the retry policy or stop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ReconnectErrorDisposition {
     Retry,
     Terminate,
@@ -513,8 +513,8 @@ where
                         }
                         Err(e) => {
                             tracing::debug!("retry sse stream error: {e}");
-                            if this.connector.classify_reconnect_error(&e)
-                                == ReconnectErrorDisposition::Terminate
+                            if let ReconnectErrorDisposition::Terminate =
+                                this.connector.classify_reconnect_error(&e)
                             {
                                 this.state.set(SseAutoReconnectStreamState::Terminated);
                                 return Poll::Ready(Some(Err(e)));
