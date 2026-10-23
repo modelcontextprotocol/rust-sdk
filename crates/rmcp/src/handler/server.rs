@@ -47,6 +47,30 @@ fn validate_tasks_capability<M: ConstString, H: ServerHandler>(
     }
 }
 
+/// SEP-2640: `skills/*` are unimplemented (`-32601`) unless the server
+/// declares the skills extension; `resources/directory/read` also needs
+/// `directoryRead`.
+fn validate_skills_capability<M: ConstString, H: ServerHandler>(
+    handler: &H,
+    directory_read: bool,
+) -> Result<(), McpError> {
+    let capabilities = handler.get_info().capabilities;
+    let declared = if directory_read {
+        capabilities.supports_directory_read()
+    } else {
+        capabilities.supports_skills()
+    };
+    if declared {
+        Ok(())
+    } else {
+        Err(McpError::method_not_found::<M>())
+    }
+}
+
+fn invalid_handler_result(error: impl std::fmt::Display) -> McpError {
+    McpError::internal_error(format!("handler returned an invalid result: {error}"), None)
+}
+
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,
@@ -241,6 +265,37 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 self.cancel_task(request.params, context)
                     .await
                     .map(ServerResult::task_ack)
+            }
+            ClientRequest::ListSkillsRequest(request) => {
+                validate_skills_capability::<ListSkillsRequestMethod, _>(self, false)?;
+                let result = self.list_skills(request.params, context).await?;
+                validate_skills(&result.skills).map_err(invalid_handler_result)?;
+                Ok(ServerResult::ListSkillsResult(result))
+            }
+            ClientRequest::GetSkillRequest(request) => {
+                validate_skills_capability::<GetSkillRequestMethod, _>(self, false)?;
+                if skill_name_from_uri(&request.params.uri).is_none() {
+                    return Err(McpError::invalid_params(
+                        format!("{} is not the uri of a SKILL.md", request.params.uri),
+                        None,
+                    ));
+                }
+                let uri = request.params.uri.clone();
+                let result = self.get_skill(request.params, context).await?;
+                if result.skill.uri != uri {
+                    return Err(invalid_handler_result(format_args!(
+                        "skill uri {} does not match the request {uri}",
+                        result.skill.uri
+                    )));
+                }
+                result.skill.validate().map_err(invalid_handler_result)?;
+                Ok(ServerResult::GetSkillResult(result))
+            }
+            ClientRequest::ReadResourceDirectoryRequest(request) => {
+                validate_skills_capability::<ReadResourceDirectoryRequestMethod, _>(self, true)?;
+                self.read_resource_directory(request.params, context)
+                    .await
+                    .map(ServerResult::ListResourcesResult)
             }
         };
         let result = result.and_then(|mut result| {
@@ -634,6 +689,41 @@ macro_rules! server_handler_methods {
             let _ = (request, context);
             std::future::ready(Err(McpError::method_not_found::<CancelTaskMethod>()))
         }
+
+        /// SEP-2640 `skills/list`: one page of the skills this server serves.
+        fn list_skills(
+            &self,
+            request: Option<PaginatedRequestParams>,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<ListSkillsResult, McpError>> + MaybeSendFuture + '_ {
+            let _ = (request, context);
+            std::future::ready(Err(McpError::method_not_found::<ListSkillsRequestMethod>()))
+        }
+
+        /// SEP-2640 `skills/get`: the entry for one skill, or `-32602` when the
+        /// server does not serve a skill at that URI.
+        fn get_skill(
+            &self,
+            request: GetSkillRequestParams,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<GetSkillResult, McpError>> + MaybeSendFuture + '_ {
+            let _ = (request, context);
+            std::future::ready(Err(McpError::method_not_found::<GetSkillRequestMethod>()))
+        }
+
+        /// SEP-2640 `resources/directory/read`: the direct children of a
+        /// directory resource, or `-32602` when the URI is not a directory.
+        fn read_resource_directory(
+            &self,
+            request: ReadResourceDirectoryRequestParams,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<ReadResourceDirectoryResult, McpError>> + MaybeSendFuture + '_
+        {
+            let _ = (request, context);
+            std::future::ready(Err(McpError::method_not_found::<
+                ReadResourceDirectoryRequestMethod,
+            >()))
+        }
     };
 }
 
@@ -864,6 +954,33 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_ {
                 (**self).cancel_task(request, context)
+            }
+
+            fn list_skills(
+                &self,
+                request: Option<PaginatedRequestParams>,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<ListSkillsResult, McpError>> + MaybeSendFuture + '_
+            {
+                (**self).list_skills(request, context)
+            }
+
+            fn get_skill(
+                &self,
+                request: GetSkillRequestParams,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<GetSkillResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).get_skill(request, context)
+            }
+
+            fn read_resource_directory(
+                &self,
+                request: ReadResourceDirectoryRequestParams,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<ReadResourceDirectoryResult, McpError>>
+            + MaybeSendFuture
+            + '_ {
+                (**self).read_resource_directory(request, context)
             }
         }
     };

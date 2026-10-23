@@ -80,6 +80,134 @@ impl ConformanceServer {
     }
 }
 
+// ─── SEP-2640 Skills extension fixtures ─────────────────────────────────────
+
+/// A file of a fixture skill, served through `resources/read`.
+struct SkillFile {
+    uri: &'static str,
+    bytes: &'static [u8],
+}
+
+/// Every file the fixture skills contain. `acme/billing/refunds` is nested in
+/// `acme/billing`, so its files belong to both manifests. `live-metrics` is
+/// dynamic and has no files beyond its `SKILL.md`.
+const SKILL_FILES: &[SkillFile] = &[
+    SkillFile {
+        uri: "skill://pdf-processing/SKILL.md",
+        bytes: b"---\nname: pdf-processing\ndescription: Extract, fill, and assemble PDF documents\n---\n\n# PDF processing\n\nChoose the matching template from `templates/`.\n",
+    },
+    SkillFile {
+        uri: "skill://pdf-processing/templates/invoice.md",
+        bytes: b"# Invoice\n\nBill-to, line items, total.\n",
+    },
+    SkillFile {
+        uri: "skill://pdf-processing/templates/purchase-order.md",
+        bytes: b"# Purchase order\n\nVendor, items, approval.\n",
+    },
+    SkillFile {
+        uri: "skill://pdf-processing/templates/regional/eu.md",
+        bytes: b"# EU invoice\n\nVAT number required.\n",
+    },
+    SkillFile {
+        uri: "skill://acme/billing/SKILL.md",
+        bytes: b"---\nname: billing\ndescription: Issue and track customer invoices\n---\n\n# Billing\n\nFor refunds, see the nested `refunds` skill.\n",
+    },
+    SkillFile {
+        uri: "skill://acme/billing/refunds/SKILL.md",
+        bytes: b"---\nname: refunds\ndescription: Process customer refund requests per company policy\nlicense: Apache-2.0\n---\n\n# Refunds\n\nFollow `examples/email.md` when writing to the customer.\n",
+    },
+    SkillFile {
+        uri: "skill://acme/billing/refunds/examples/email.md",
+        bytes: b"Subject: Your refund has been processed\n",
+    },
+    SkillFile {
+        uri: "skill://live-metrics/SKILL.md",
+        bytes: b"---\nname: live-metrics\ndescription: Metrics regenerated on every read\n---\n\n# Live metrics\n",
+    },
+];
+
+fn skill_file(uri: &str) -> Option<&'static SkillFile> {
+    SKILL_FILES.iter().find(|file| file.uri == uri)
+}
+
+/// The manifest of the skill rooted at `root`: every fixture file under it.
+fn skill_manifest(root: &str) -> SkillResources {
+    let prefix = format!("{root}/");
+    SkillResources::Files(
+        SKILL_FILES
+            .iter()
+            .filter(|file| file.uri.starts_with(&prefix))
+            .map(|file| SkillResource::from_bytes(file.uri, file.bytes))
+            .collect(),
+    )
+}
+
+fn skill_fixtures() -> Vec<Skill> {
+    vec![
+        Skill::new(
+            "skill://pdf-processing/SKILL.md",
+            SkillFrontmatter::new(
+                "pdf-processing",
+                "Extract, fill, and assemble PDF documents",
+            ),
+            skill_manifest("skill://pdf-processing"),
+        ),
+        Skill::new(
+            "skill://acme/billing/SKILL.md",
+            SkillFrontmatter::new("billing", "Issue and track customer invoices"),
+            skill_manifest("skill://acme/billing"),
+        ),
+        Skill::new(
+            "skill://acme/billing/refunds/SKILL.md",
+            SkillFrontmatter::new(
+                "refunds",
+                "Process customer refund requests per company policy",
+            )
+            .with_field("license", "Apache-2.0"),
+            skill_manifest("skill://acme/billing/refunds"),
+        ),
+        Skill::new(
+            "skill://live-metrics/SKILL.md",
+            SkillFrontmatter::new("live-metrics", "Metrics regenerated on every read"),
+            SkillResources::Dynamic,
+        ),
+    ]
+}
+
+/// The `SKILL.md` of each fixture skill as a resource, so `resources/list`
+/// advertises the skills with the name and description of their frontmatter.
+fn skill_resources() -> Vec<Resource> {
+    skill_fixtures()
+        .iter()
+        .map(|skill| {
+            Resource::new(&skill.uri, &skill.frontmatter.name)
+                .with_description(&skill.frontmatter.description)
+                .with_mime_type("text/markdown")
+        })
+        .collect()
+}
+
+/// The direct children of the directory `dir`, or `None` when no fixture file
+/// lives under it. Directory URIs carry no trailing slash.
+fn directory_children(dir: &str) -> Option<Vec<Resource>> {
+    let prefix = format!("{dir}/");
+    let mut children: Vec<Resource> = Vec::new();
+    for file in SKILL_FILES {
+        let Some(relative) = file.uri.strip_prefix(&prefix) else {
+            continue;
+        };
+        let child = match relative.split_once('/') {
+            None => Resource::new(file.uri, relative).with_mime_type("text/markdown"),
+            Some((subdir, _)) => Resource::new(format!("{prefix}{subdir}"), subdir)
+                .with_mime_type(DIRECTORY_MIME_TYPE),
+        };
+        if !children.iter().any(|existing| existing.uri == child.uri) {
+            children.push(child);
+        }
+    }
+    (!children.is_empty()).then_some(children)
+}
+
 // ─── SEP-2663 Tasks extension fixtures ──────────────────────────────────────
 
 /// Fixture tools required by the Tasks extension conformance scenarios.
@@ -716,6 +844,7 @@ impl ServerHandler for ConformanceServer {
                 .enable_tool_list_changed()
                 .enable_logging()
                 .enable_tasks()
+                .enable_skills_with_directory_read()
                 .build(),
         )
         .with_server_info(Implementation::new("rust-conformance-server", "0.1.0"))
@@ -762,6 +891,45 @@ impl ServerHandler for ConformanceServer {
         _cx: RequestContext<RoleServer>,
     ) -> Result<GetTaskResult, ErrorData> {
         Ok(GetTaskResult::new(self.tasks.get_task(&request.task_id)?))
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _cx: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, ErrorData> {
+        Ok(ListSkillsResult::with_all_items(skill_fixtures())
+            .with_ttl_ms(CACHE_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        _cx: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, ErrorData> {
+        let skill = skill_fixtures()
+            .into_iter()
+            .find(|skill| skill.uri == request.uri)
+            .ok_or_else(|| {
+                ErrorData::invalid_params(format!("No skill at {}", request.uri), None)
+            })?;
+        Ok(GetSkillResult::new(skill)
+            .with_ttl_ms(CACHE_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
+    }
+
+    async fn read_resource_directory(
+        &self,
+        request: ReadResourceDirectoryRequestParams,
+        _cx: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceDirectoryResult, ErrorData> {
+        let children = directory_children(&request.uri).ok_or_else(|| {
+            ErrorData::invalid_params(format!("Not a directory: {}", request.uri), None)
+        })?;
+        Ok(ReadResourceDirectoryResult::with_all_items(children)
+            .with_ttl_ms(CACHE_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
     }
 
     async fn update_task(
@@ -1452,15 +1620,17 @@ impl ServerHandler for ConformanceServer {
         _request: Option<PaginatedRequestParams>,
         _cx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
+        let mut resources = vec![
+            Resource::new("test://static-text", "Static Text Resource")
+                .with_description("A static text resource for testing")
+                .with_mime_type("text/plain"),
+            Resource::new("test://static-binary", "Static Binary Resource")
+                .with_description("A static binary/blob resource for testing")
+                .with_mime_type("image/png"),
+        ];
+        resources.extend(skill_resources());
         Ok(ListResourcesResult {
-            resources: vec![
-                Resource::new("test://static-text", "Static Text Resource")
-                    .with_description("A static text resource for testing")
-                    .with_mime_type("text/plain"),
-                Resource::new("test://static-binary", "Static Binary Resource")
-                    .with_description("A static binary/blob resource for testing")
-                    .with_mime_type("image/png"),
-            ],
+            resources,
             ..Default::default()
         }
         .with_ttl_ms(CACHE_TTL_MS)
@@ -1491,7 +1661,16 @@ impl ServerHandler for ConformanceServer {
                 },
             ])),
             _ => {
-                if uri.starts_with("test://template/") && uri.ends_with("/data") {
+                if let Some(file) = skill_file(uri) {
+                    Ok(ReadResourceResult::new(vec![
+                        ResourceContents::TextResourceContents {
+                            uri: uri.into(),
+                            mime_type: Some("text/markdown".into()),
+                            text: String::from_utf8_lossy(file.bytes).into_owned(),
+                            meta: None,
+                        },
+                    ]))
+                } else if uri.starts_with("test://template/") && uri.ends_with("/data") {
                     let id = uri
                         .strip_prefix("test://template/")
                         .and_then(|s| s.strip_suffix("/data"))
