@@ -5,8 +5,9 @@ use std::marker::PhantomData;
 #[cfg(any(feature = "server", feature = "macros"))]
 use pastey::paste;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use super::JsonObject;
+use super::{JsonObject, SkillsCapability};
 pub type ExperimentalCapabilities = BTreeMap<String, JsonObject>;
 
 /// MCP extension capabilities map.
@@ -250,6 +251,24 @@ impl ServerCapabilities {
             .as_ref()
             .is_some_and(|e| e.contains_key(super::TASKS_EXTENSION_ID))
     }
+
+    /// The settings of the skills extension (SEP-2640), if declared.
+    ///
+    /// Settings that do not parse count as declared with the defaults.
+    pub fn skills(&self) -> Option<SkillsCapability> {
+        let settings = self.extensions.as_ref()?.get(super::SKILLS_EXTENSION_ID)?;
+        Some(serde_json::from_value(Value::Object(settings.clone())).unwrap_or_default())
+    }
+
+    /// Returns `true` if the skills extension (SEP-2640) is declared.
+    pub fn supports_skills(&self) -> bool {
+        self.skills().is_some()
+    }
+
+    /// Returns `true` if the server serves `resources/directory/read`.
+    pub fn supports_directory_read(&self) -> bool {
+        self.skills().is_some_and(|skills| skills.directory_read)
+    }
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
@@ -432,6 +451,29 @@ impl<S> ServerCapabilitiesBuilder<S> {
             .insert(super::TASKS_EXTENSION_ID.to_string(), JsonObject::new());
         self
     }
+
+    /// Declare the skills extension (SEP-2640) without directory reads.
+    ///
+    /// Skills ride on resources: the server must also enable `resources` and
+    /// serve the skill files through `resources/read`.
+    pub fn enable_skills(self) -> Self {
+        self.enable_skills_with(SkillsCapability::new())
+    }
+
+    /// Declare the skills extension (SEP-2640) with `resources/directory/read`.
+    pub fn enable_skills_with_directory_read(self) -> Self {
+        self.enable_skills_with(SkillsCapability::new().with_directory_read())
+    }
+
+    fn enable_skills_with(mut self, skills: SkillsCapability) -> Self {
+        let Ok(Value::Object(settings)) = serde_json::to_value(skills) else {
+            unreachable!("SkillsCapability serializes to an object")
+        };
+        self.extensions
+            .get_or_insert_with(ExtensionCapabilities::new)
+            .insert(super::SKILLS_EXTENSION_ID.to_string(), settings);
+        self
+    }
 }
 
 #[cfg(any(feature = "server", feature = "macros"))]
@@ -589,6 +631,62 @@ mod test {
             json["extensions"][crate::model::TASKS_EXTENSION_ID],
             serde_json::json!({})
         );
+    }
+
+    #[test]
+    fn enable_skills_declares_the_extension_with_empty_settings() {
+        let server = ServerCapabilities::builder().enable_skills().build();
+        let json = serde_json::to_value(&server).unwrap();
+        assert_eq!(
+            json["extensions"][crate::model::SKILLS_EXTENSION_ID],
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn enable_skills_with_directory_read_declares_the_setting() {
+        let server = ServerCapabilities::builder()
+            .enable_skills_with_directory_read()
+            .build();
+        let json = serde_json::to_value(&server).unwrap();
+        assert_eq!(
+            json["extensions"][crate::model::SKILLS_EXTENSION_ID],
+            serde_json::json!({ "directoryRead": true })
+        );
+    }
+
+    #[test]
+    fn supports_skills_is_false_without_the_extension() {
+        assert!(
+            !ServerCapabilities::builder()
+                .enable_tasks()
+                .build()
+                .supports_skills()
+        );
+    }
+
+    #[test]
+    fn supports_directory_read_is_false_for_plain_skills() {
+        let server = ServerCapabilities::builder().enable_skills().build();
+        assert!(server.supports_skills() && !server.supports_directory_read());
+    }
+
+    #[test]
+    fn skills_reads_directory_read_from_the_wire() {
+        let json = serde_json::json!({
+            "extensions": { crate::model::SKILLS_EXTENSION_ID: { "directoryRead": true } }
+        });
+        let server: ServerCapabilities = serde_json::from_value(json).unwrap();
+        assert!(server.supports_directory_read());
+    }
+
+    #[test]
+    fn skills_treats_malformed_settings_as_declared_with_defaults() {
+        let json = serde_json::json!({
+            "extensions": { crate::model::SKILLS_EXTENSION_ID: { "directoryRead": "yes" } }
+        });
+        let server: ServerCapabilities = serde_json::from_value(json).unwrap();
+        assert_eq!(server.skills(), Some(SkillsCapability::new()));
     }
 
     #[test]

@@ -200,6 +200,86 @@ impl Skill {
     pub fn name(&self) -> &str {
         &self.frontmatter.name
     }
+
+    /// Check the rules the spec puts on a skill entry that can be checked
+    /// without reading any file.
+    pub fn validate(&self) -> Result<(), SkillValidationError> {
+        let Some(name) = skill_name_from_uri(&self.uri) else {
+            return Err(SkillValidationError::UriNotSkillMd(self.uri.clone()));
+        };
+        if name != self.frontmatter.name {
+            return Err(SkillValidationError::NameMismatch {
+                uri: self.uri.clone(),
+                name: self.frontmatter.name.clone(),
+            });
+        }
+        let SkillResources::Files(files) = &self.resources else {
+            return Ok(());
+        };
+        if !files.iter().any(|file| file.uri == self.uri) {
+            return Err(SkillValidationError::MissingSkillMd(self.uri.clone()));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(files.len());
+        for file in files {
+            if !seen.insert(file.uri.as_str()) {
+                return Err(SkillValidationError::DuplicateResource(file.uri.clone()));
+            }
+            if !is_sha256_digest(&file.digest) {
+                return Err(SkillValidationError::MalformedDigest {
+                    uri: file.uri.clone(),
+                    digest: file.digest.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// File name of the skill entry point.
+pub const SKILL_MD: &str = "SKILL.md";
+
+/// The skill name encoded in a `SKILL.md` URI: the path segment before `SKILL.md`.
+pub fn skill_name_from_uri(uri: &str) -> Option<&str> {
+    let path = uri.strip_suffix(SKILL_MD)?.strip_suffix('/')?;
+    let name = path.rsplit('/').next()?;
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether `digest` is `sha256:` followed by 64 lowercase hex characters.
+pub fn is_sha256_digest(digest: &str) -> bool {
+    digest.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+/// Check every skill of a listing, including that no URI appears twice.
+pub fn validate_skills(skills: &[Skill]) -> Result<(), SkillValidationError> {
+    let mut seen = std::collections::HashSet::with_capacity(skills.len());
+    for skill in skills {
+        skill.validate()?;
+        if !seen.insert(skill.uri.as_str()) {
+            return Err(SkillValidationError::DuplicateSkill(skill.uri.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// A skill entry that breaks a structural rule of the spec.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SkillValidationError {
+    #[error("skill uri {0} does not end in /SKILL.md")]
+    UriNotSkillMd(String),
+    #[error("skill uri {uri} does not end in the frontmatter name {name}")]
+    NameMismatch { uri: String, name: String },
+    #[error("skill manifest {0} does not list its own SKILL.md")]
+    MissingSkillMd(String),
+    #[error("skill manifest lists {0} twice")]
+    DuplicateResource(String),
+    #[error("skill file {uri} has a malformed digest {digest}")]
+    MalformedDigest { uri: String, digest: String },
+    #[error("skill {0} is listed twice")]
+    DuplicateSkill(String),
 }
 
 /// Result of `skills/get`.
@@ -349,6 +429,130 @@ mod tests {
         #[test]
         fn name_comes_from_the_frontmatter() {
             assert_eq!(billing_skill().name(), "billing");
+        }
+    }
+
+    mod skill_name_from_uri {
+        use super::*;
+
+        #[test]
+        fn returns_the_segment_before_skill_md() {
+            assert_eq!(
+                skill_name_from_uri("skill://acme/billing/SKILL.md"),
+                Some("billing")
+            );
+        }
+
+        #[test]
+        fn returns_none_without_skill_md() {
+            assert_eq!(skill_name_from_uri("skill://acme/billing/README.md"), None);
+        }
+
+        #[test]
+        fn returns_none_for_skill_md_at_the_root() {
+            assert_eq!(skill_name_from_uri("skill:///SKILL.md"), None);
+        }
+    }
+
+    mod is_sha256_digest {
+        use super::*;
+
+        #[test]
+        fn accepts_sixty_four_lowercase_hex_characters() {
+            assert!(is_sha256_digest(&format!("sha256:{}", "a".repeat(64))));
+        }
+
+        #[test]
+        fn rejects_uppercase_hex() {
+            assert!(!is_sha256_digest(&format!("sha256:{}", "A".repeat(64))));
+        }
+
+        #[test]
+        fn rejects_a_short_digest() {
+            assert!(!is_sha256_digest("sha256:abc"));
+        }
+
+        #[test]
+        fn rejects_a_missing_prefix() {
+            assert!(!is_sha256_digest(&"a".repeat(64)));
+        }
+    }
+
+    mod skill_validate {
+        use super::*;
+
+        #[test]
+        fn accepts_a_consistent_entry() {
+            assert_eq!(billing_skill().validate(), Ok(()));
+        }
+
+        #[test]
+        fn accepts_a_dynamic_entry_without_files() {
+            let skill = Skill::new(
+                "skill://acme/billing/SKILL.md",
+                SkillFrontmatter::new("billing", "Issue invoices"),
+                SkillResources::Dynamic,
+            );
+            assert_eq!(skill.validate(), Ok(()));
+        }
+
+        #[test]
+        fn rejects_a_name_that_differs_from_the_uri() {
+            let mut skill = billing_skill();
+            skill.frontmatter.name = "invoices".into();
+            assert!(matches!(
+                skill.validate(),
+                Err(SkillValidationError::NameMismatch { .. })
+            ));
+        }
+
+        #[test]
+        fn rejects_a_manifest_without_skill_md() {
+            let mut skill = billing_skill();
+            skill.resources = SkillResources::Files(vec![]);
+            assert!(matches!(
+                skill.validate(),
+                Err(SkillValidationError::MissingSkillMd(_))
+            ));
+        }
+
+        #[test]
+        fn rejects_a_duplicate_file() {
+            let mut skill = billing_skill();
+            let SkillResources::Files(files) = &mut skill.resources else {
+                unreachable!()
+            };
+            files.push(files[0].clone());
+            assert!(matches!(
+                skill.validate(),
+                Err(SkillValidationError::DuplicateResource(_))
+            ));
+        }
+
+        #[test]
+        fn rejects_a_malformed_digest() {
+            let mut skill = billing_skill();
+            let SkillResources::Files(files) = &mut skill.resources else {
+                unreachable!()
+            };
+            files[0].digest = "md5:00".into();
+            assert!(matches!(
+                skill.validate(),
+                Err(SkillValidationError::MalformedDigest { .. })
+            ));
+        }
+    }
+
+    mod validate_skills {
+        use super::*;
+
+        #[test]
+        fn rejects_the_same_skill_listed_twice() {
+            let skills = [billing_skill(), billing_skill()];
+            assert!(matches!(
+                validate_skills(&skills),
+                Err(SkillValidationError::DuplicateSkill(_))
+            ));
         }
     }
 

@@ -4919,6 +4919,9 @@ ts_union!(
     | GetTaskRequest
     | UpdateTaskRequest
     | CancelTaskRequest
+    | ListSkillsRequest
+    | GetSkillRequest
+    | ReadResourceDirectoryRequest
     | CustomRequest;
 );
 
@@ -4943,6 +4946,9 @@ impl ClientRequest {
             ClientRequest::GetTaskRequest(r) => r.method.as_str(),
             ClientRequest::UpdateTaskRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
+            ClientRequest::ListSkillsRequest(r) => r.method.as_str(),
+            ClientRequest::GetSkillRequest(r) => r.method.as_str(),
+            ClientRequest::ReadResourceDirectoryRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
     }
@@ -5009,6 +5015,8 @@ ts_union!(
     | ReadResourceResult
     | SubscriptionsListenResult
     | ListToolsResult
+    | ListSkillsResult
+    | GetSkillResult
     | ElicitResult
     | CreateTaskResult
     | GetTaskResult
@@ -5065,6 +5073,8 @@ impl ServerResult {
             ServerResult::ReadResourceResult(r) => &mut r.result_type,
             ServerResult::ListToolsResult(r) => &mut r.result_type,
             ServerResult::CallToolResult(r) => &mut r.result_type,
+            ServerResult::ListSkillsResult(r) => &mut r.result_type,
+            ServerResult::GetSkillResult(r) => &mut r.result_type,
             _ => return,
         };
         result_type.take_if(|result_type| result_type.is_complete());
@@ -5112,6 +5122,10 @@ impl ServerResult {
             ServerResult::ReadResourceResult(r) => {
                 (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
             }
+            ServerResult::ListSkillsResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::GetSkillResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
             _ => return,
         };
         // Only complete results are cacheable; the spec treats an absent

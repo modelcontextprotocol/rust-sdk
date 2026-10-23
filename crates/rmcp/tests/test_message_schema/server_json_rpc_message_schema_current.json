@@ -210,7 +210,7 @@
           ]
         },
         "structuredContent": {
-          "description": "An optional JSON object that represents the structured result of the tool call"
+          "description": "An optional JSON value that represents the structured result of the tool call.\nIt can be any JSON value, including `null`; an explicit `null` is kept\ndistinct from an absent field."
         }
       }
     },
@@ -963,6 +963,10 @@
       "description": "Type-safe elicitation schema for requesting structured user input.\n\nThis enforces the MCP 2025-06-18 specification that elicitation schemas\nmust be objects with primitive-typed properties.\n\n# Example\n\n```rust\nuse rmcp::model::*;\n\nlet schema = ElicitationSchema::builder()\n    .required_email(\"email\")\n    .required_integer(\"age\", 0, 150)\n    .optional_bool(\"newsletter\", false)\n    .build();\n```",
       "type": "object",
       "properties": {
+        "$schema": {
+          "description": "Optional JSON Schema dialect identifier (the `$schema` keyword).\n\nThe 2025-11-25 protocol revision allows a `requestedSchema` to declare its\ndialect. It is preserved verbatim so a declared dialect survives a\ndecode/re-encode round-trip instead of being silently dropped.",
+          "type": "string"
+        },
         "description": {
           "description": "Optional description of what this schema represents",
           "type": [
@@ -1148,6 +1152,59 @@
       },
       "required": [
         "messages"
+      ]
+    },
+    "GetSkillResult": {
+      "description": "Result of `skills/get`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheScope": {
+          "description": "Who may cache this result (SEP-2549); required on 2026-07-28, absent before.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resultType": {
+          "description": "Result type discriminator (SEP-2322); `None` on the wire means complete.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skill": {
+          "$ref": "#/definitions/Skill"
+        },
+        "ttlMs": {
+          "description": "Freshness in milliseconds (SEP-2549); required on 2026-07-28, absent before.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "skill"
       ]
     },
     "GetTaskResult": {
@@ -1930,6 +1987,67 @@
       "type": "string",
       "format": "const",
       "const": "roots/list"
+    },
+    "ListSkillsResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheScope": {
+          "description": "Scope describing who may cache this result (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CacheScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resultType": {
+          "description": "Result type discriminator (SEP-2322). Required by the [spec schema]\nfor servers implementing protocol version `2026-07-28`, but optional\nhere because this type also models results from older protocol\nversions, which do not carry the field: `None` means absent on the\nwire, and per the spec \"the client MUST treat the absent field as\n`\"complete\"`\". Constructors default to `Some(ResultType::COMPLETE)`;\nthe server handler clears the field when responding to peers that\nnegotiated an older version.\n\n[spec schema]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/271ecc9accafdd9b83a3c869fa67c22953b2af80/schema/2026-07-28/schema.ts#L219-L235",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResultType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Skill"
+          }
+        },
+        "ttlMs": {
+          "description": "Time, in milliseconds, that this result may be treated as fresh (SEP-2549).\nRequired by spec version 2026-07-28, but optional here to maintain compatibility\nwith older spec versions.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "skills"
+      ]
     },
     "ListToolsResult": {
       "type": "object",
@@ -3257,6 +3375,12 @@
           "$ref": "#/definitions/ListToolsResult"
         },
         {
+          "$ref": "#/definitions/ListSkillsResult"
+        },
+        {
+          "$ref": "#/definitions/GetSkillResult"
+        },
+        {
           "$ref": "#/definitions/ElicitResult"
         },
         {
@@ -3290,6 +3414,93 @@
         },
         {
           "$ref": "#/definitions/TitledSingleSelectEnumSchema"
+        }
+      ]
+    },
+    "Skill": {
+      "description": "One skill as listed by `skills/list` or returned by `skills/get`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frontmatter": {
+          "$ref": "#/definitions/SkillFrontmatter"
+        },
+        "resources": {
+          "$ref": "#/definitions/SkillResources"
+        },
+        "uri": {
+          "description": "Resource URI of the skill's `SKILL.md`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "frontmatter",
+        "resources"
+      ]
+    },
+    "SkillFrontmatter": {
+      "description": "The `SKILL.md` frontmatter, with every field the author wrote.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "SkillResource": {
+      "description": "One file of a skill, with the digest and size of its bytes.",
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "`sha256:` followed by 64 lowercase hex characters.",
+          "type": "string"
+        },
+        "size": {
+          "description": "Length of the file in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "uri": {
+          "description": "Resource URI of the file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "digest",
+        "size"
+      ]
+    },
+    "SkillResources": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillResource"
+          }
+        },
+        {
+          "type": "string",
+          "const": "dynamic"
         }
       ]
     },

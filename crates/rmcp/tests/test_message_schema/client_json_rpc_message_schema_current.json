@@ -773,6 +773,34 @@
         "name"
       ]
     },
+    "GetSkillRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "skills/get"
+    },
+    "GetSkillRequestParams": {
+      "description": "Parameters for fetching one skill by the URI of its `SKILL.md`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uri": {
+          "description": "URI of the skill's `SKILL.md`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
     "GetTaskMethod": {
       "type": "string",
       "format": "const",
@@ -1113,6 +1141,15 @@
           "$ref": "#/definitions/Request13"
         },
         {
+          "$ref": "#/definitions/RequestOptionalParam5"
+        },
+        {
+          "$ref": "#/definitions/Request14"
+        },
+        {
+          "$ref": "#/definitions/Request15"
+        },
+        {
           "$ref": "#/definitions/CustomRequest"
         }
       ],
@@ -1184,6 +1221,11 @@
       "required": [
         "roots"
       ]
+    },
+    "ListSkillsRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "skills/list"
     },
     "ListToolsRequestMethod": {
       "type": "string",
@@ -1385,6 +1427,40 @@
       "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
     },
+    "ReadResourceDirectoryRequestMethod": {
+      "type": "string",
+      "format": "const",
+      "const": "resources/directory/read"
+    },
+    "ReadResourceDirectoryRequestParams": {
+      "description": "Parameters for listing the direct children of a directory resource.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestMetaObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "URI of the directory resource.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ]
+    },
     "ReadResourceRequestMethod": {
       "type": "string",
       "format": "const",
@@ -1540,6 +1616,38 @@
         },
         "params": {
           "$ref": "#/definitions/CancelTaskParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request14": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/GetSkillRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/GetSkillRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    "Request15": {
+      "description": "Represents a JSON-RPC request with method, parameters, and extensions.\n\nThis is the core structure for all MCP requests, containing:\n- `method`: The name of the method being called\n- `params`: The parameters for the method\n- `extensions`: Additional context data (similar to HTTP headers)",
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ReadResourceDirectoryRequestMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/ReadResourceDirectoryRequestParams"
         }
       },
       "required": [
@@ -1776,6 +1884,27 @@
       "properties": {
         "method": {
           "$ref": "#/definitions/ListToolsRequestMethod"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PaginatedRequestParams"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "RequestOptionalParam5": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "$ref": "#/definitions/ListSkillsRequestMethod"
         },
         "params": {
           "anyOf": [
