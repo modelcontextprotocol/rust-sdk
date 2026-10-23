@@ -1897,6 +1897,24 @@ impl AuthorizationManager {
         };
         self.validate_server_metadata("code")?;
 
+        let auth_method = match metadata
+            .additional_fields
+            .get("token_endpoint_auth_methods_supported")
+        {
+            None => "none",
+            Some(methods) => ["none", "client_secret_basic", "client_secret_post"]
+                .into_iter()
+                .find(|method| {
+                    methods.as_array().is_some_and(|methods| {
+                        methods.iter().any(|value| value.as_str() == Some(*method))
+                    })
+                })
+                .ok_or_else(|| {
+                    AuthError::RegistrationFailed(
+                        "No supported client authentication method".to_string(),
+                    )
+                })?,
+        };
         let application_type = self.application_type.clone();
         let registration_request = ClientRegistrationRequest {
             client_name: name.to_string(),
@@ -1905,7 +1923,7 @@ impl AuthorizationManager {
                 "authorization_code".to_string(),
                 "refresh_token".to_string(),
             ],
-            token_endpoint_auth_method: "none".to_string(), // public client
+            token_endpoint_auth_method: auth_method.to_string(),
             response_types: vec!["code".to_string()],
             scope: if scopes.is_empty() {
                 None
@@ -1977,6 +1995,11 @@ impl AuthorizationManager {
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             application_type,
         };
+        if auth_method != "none" && config.client_secret.is_none() {
+            return Err(AuthError::RegistrationFailed(
+                "Confidential registration returned no client secret".to_string(),
+            ));
+        }
 
         self.configure_client(config.clone())?;
         Ok(config)
@@ -6559,6 +6582,116 @@ mod tests {
             .expect("registration endpoint should be called");
         let body: serde_json::Value = serde_json::from_slice(&registration.body).unwrap();
         assert_eq!(body.get("application_type").unwrap(), "web");
+    }
+
+    async fn registration_fixture(
+        methods: Option<serde_json::Value>,
+        secret: Option<&str>,
+    ) -> (AuthorizationManager, RecordingOAuthHttpClient) {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            201,
+            serde_json::json!({
+                "client_id": "registered-client",
+                "client_secret": secret,
+                "redirect_uris": ["http://localhost/callback"]
+            }),
+        )]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        let mut metadata = AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: Some("https://auth.example.com/register".to_string()),
+            response_types_supported: Some(vec!["code".to_string()]),
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
+            ..Default::default()
+        };
+        if let Some(methods) = methods {
+            metadata
+                .additional_fields
+                .insert("token_endpoint_auth_methods_supported".to_string(), methods);
+        }
+        manager.set_metadata(metadata);
+        (manager, client)
+    }
+
+    #[rstest]
+    #[case::omitted(None, "none")]
+    #[case::public(
+        Some(serde_json::json!(["client_secret_post", "none", "client_secret_basic"])),
+        "none"
+    )]
+    #[case::basic(
+        Some(serde_json::json!(["client_secret_basic"])),
+        "client_secret_basic"
+    )]
+    #[case::post(
+        Some(serde_json::json!(["client_secret_post"])),
+        "client_secret_post"
+    )]
+    #[case::both(
+        Some(serde_json::json!(["client_secret_post", "client_secret_basic"])),
+        "client_secret_basic"
+    )]
+    #[tokio::test]
+    async fn registers_with_supported_authentication(
+        #[case] methods: Option<serde_json::Value>,
+        #[case] expected: &str,
+    ) {
+        let secret = (expected != "none").then_some("registered-secret");
+        let (mut manager, client) = registration_fixture(methods, secret).await;
+        let config = manager
+            .register_client("test-client", "http://localhost/callback", &["tools"])
+            .await
+            .unwrap();
+        let requests = client.requests();
+        assert_eq!(requests.len(), 1);
+        let registration: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(registration["token_endpoint_auth_method"], expected);
+        assert_eq!(config.client_secret.as_deref(), secret);
+        if expected != "none" {
+            assert_eq!(
+                matches!(
+                    manager.oauth_client.as_ref().unwrap().auth_type(),
+                    AuthType::RequestBody
+                ),
+                expected == "client_secret_post"
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::unsupported(serde_json::json!(["private_key_jwt"]))]
+    #[case::empty(serde_json::json!([]))]
+    #[case::malformed(serde_json::json!("client_secret_post"))]
+    #[tokio::test]
+    async fn rejects_unsupported_registration_authentication(#[case] methods: serde_json::Value) {
+        let (mut manager, client) = registration_fixture(Some(methods), None).await;
+        let error = manager
+            .register_client("test-client", "http://localhost/callback", &[])
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::RegistrationFailed(_)));
+        assert!(client.requests().is_empty());
+    }
+
+    #[rstest]
+    #[case::missing(None)]
+    #[case::empty(Some(""))]
+    #[tokio::test]
+    async fn rejects_missing_confidential_registration_secret(#[case] secret: Option<&str>) {
+        let (mut manager, client) =
+            registration_fixture(Some(serde_json::json!(["client_secret_post"])), secret).await;
+        let error = manager
+            .register_client("test-client", "http://localhost/callback", &[])
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::RegistrationFailed(_)));
+        assert_eq!(client.requests().len(), 1);
     }
 
     #[tokio::test]
