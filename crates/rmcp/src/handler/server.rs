@@ -47,6 +47,25 @@ fn validate_tasks_capability<M: ConstString, H: ServerHandler>(
     }
 }
 
+/// Client request methods that the server dispatches without a protocol-era
+/// or capability gate. `initialize`, `server/discover`, `ping`, the
+/// subscription methods and `tasks/*` are left out: for those a -32601 answer
+/// can be correct (era or capability mismatch) and drives client fallback.
+fn is_ungated_spec_request_method(method: &str) -> bool {
+    [
+        CallToolRequestMethod::VALUE,
+        ListToolsRequestMethod::VALUE,
+        GetPromptRequestMethod::VALUE,
+        ListPromptsRequestMethod::VALUE,
+        ListResourcesRequestMethod::VALUE,
+        ListResourceTemplatesRequestMethod::VALUE,
+        ReadResourceRequestMethod::VALUE,
+        CompleteRequestMethod::VALUE,
+        SetLevelRequestMethod::VALUE,
+    ]
+    .contains(&method)
+}
+
 impl<H: ServerHandler> Service<RoleServer> for H {
     async fn handle_request(
         &self,
@@ -220,10 +239,20 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
-            ClientRequest::CustomRequest(request) => self
-                .on_custom_request(request, context)
-                .await
-                .map(ServerResult::CustomResult),
+            ClientRequest::CustomRequest(request) => {
+                // A spec method only reaches `CustomRequest` when its params
+                // failed to deserialize into the typed request. The method
+                // exists, so the error is -32602 Invalid params, not -32601.
+                if is_ungated_spec_request_method(&request.method) {
+                    return Err(McpError::invalid_params(
+                        format!("invalid params for {}", request.method),
+                        None,
+                    ));
+                }
+                self.on_custom_request(request, context)
+                    .await
+                    .map(ServerResult::CustomResult)
+            }
             ClientRequest::GetTaskRequest(request) => {
                 validate_tasks_capability::<GetTaskMethod, _>(self, &context)?;
                 self.get_task(request.params, context)
