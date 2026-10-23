@@ -276,8 +276,9 @@ impl StreamableHttpClient for reqwest::Client {
         let is_json_response = content_type
             .as_deref()
             .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
-        // Rate limits must not wait for a body. Preserve JSON-RPC errors from
-        // JSON server failures; non-JSON failures also return immediately.
+        // Rate limits and non-JSON failures return without reading the body. JSON
+        // server failures are read to keep their JSON-RPC error, so an unfinished
+        // body still blocks here.
         let status_error = match (
             http_status_error(status, response.headers()),
             is_json_response,
