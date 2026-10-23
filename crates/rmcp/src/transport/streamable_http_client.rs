@@ -18,7 +18,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::common::client_side_sse::{
-    DEFAULT_MAX_SSE_EVENT_SIZE, ExponentialBackoff, SseRetryPolicy, SseStreamReconnect,
+    DEFAULT_MAX_SSE_EVENT_SIZE, ExponentialBackoff, ReconnectErrorDisposition, SseRetryPolicy,
+    SseStreamReconnect,
 };
 use crate::{
     RoleClient,
@@ -586,6 +587,16 @@ impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconne
                 )
                 .await
         })
+    }
+
+    fn classify_reconnect_error(&self, error: &Self::Error) -> ReconnectErrorDisposition {
+        match error {
+            // Repeating GET cannot enable SSE or repair the cloned credentials.
+            StreamableHttpError::ServerDoesNotSupportSse
+            | StreamableHttpError::AuthRequired(_)
+            | StreamableHttpError::InsufficientScope(_) => ReconnectErrorDisposition::Terminate,
+            _ => ReconnectErrorDisposition::Retry,
+        }
     }
 
     fn map_fatal_stream_error(&mut self, error: SseError) -> Option<Self::Error> {

@@ -269,6 +269,13 @@ impl<E: std::error::Error + Send> SseStreamReconnect for NeverReconnect<E> {
     }
 }
 
+/// Controls whether an SSE reconnection failure should follow the retry policy or stop.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ReconnectErrorDisposition {
+    Retry,
+    Terminate,
+}
+
 /// Abstraction for SSE reconnection logic. Implementors can hook into
 /// [`handle_control_event`](Self::handle_control_event) to consume control
 /// frames (e.g. `event: endpoint`) that arrive when a server restarts an SSE
@@ -278,6 +285,9 @@ pub(crate) trait SseStreamReconnect {
     type Error: std::error::Error;
     type Future: Future<Output = Result<BoxedSseResponse, Self::Error>> + Send;
     fn retry_connection(&mut self, last_event_id: Option<&str>) -> Self::Future;
+    fn classify_reconnect_error(&self, _error: &Self::Error) -> ReconnectErrorDisposition {
+        ReconnectErrorDisposition::Retry
+    }
     fn handle_control_event(&mut self, _event: &Sse) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -503,6 +513,12 @@ where
                         }
                         Err(e) => {
                             tracing::debug!("retry sse stream error: {e}");
+                            if let ReconnectErrorDisposition::Terminate =
+                                this.connector.classify_reconnect_error(&e)
+                            {
+                                this.state.set(SseAutoReconnectStreamState::Terminated);
+                                return Poll::Ready(Some(Err(e)));
+                            }
                             *retry_times += 1;
                             if let Some(interval) = this.retry_policy.retry(*retry_times) {
                                 let interval = this
