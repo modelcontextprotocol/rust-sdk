@@ -5,6 +5,7 @@
 //! `resources/read` serves the file bytes. The request and result wiring
 //! lives in the parent module next to the other methods.
 
+#[cfg(feature = "schemars")]
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,69 @@ impl SkillResource {
             size,
         }
     }
+
+    /// Describe `bytes` as the file at `uri`, with its digest and size computed.
+    pub fn from_bytes(uri: impl Into<String>, bytes: &[u8]) -> Self {
+        Self::new(uri, sha256_digest(bytes), bytes.len() as u64)
+    }
+
+    /// Check that `bytes` has the size and digest this entry promises.
+    ///
+    /// Compare the size first, so a wrong length is reported without hashing.
+    /// Whether the frontmatter in the bytes matches `skills/get` is the host's
+    /// check, not this one.
+    pub fn verify(&self, bytes: &[u8]) -> Result<(), SkillIntegrityError> {
+        let size = bytes.len() as u64;
+        if size != self.size {
+            return Err(SkillIntegrityError::Size {
+                uri: self.uri.clone(),
+                expected: self.size,
+                actual: size,
+            });
+        }
+        let digest = sha256_digest(bytes);
+        if digest != self.digest {
+            return Err(SkillIntegrityError::Digest {
+                uri: self.uri.clone(),
+                expected: self.digest.clone(),
+                actual: digest,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The `sha256:` digest of `bytes` in the form the spec requires.
+pub fn sha256_digest(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    use sha2::{Digest, Sha256};
+
+    let hash = Sha256::digest(bytes);
+    let mut digest = String::with_capacity(7 + 64);
+    digest.push_str("sha256:");
+    for byte in hash {
+        write!(digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    digest
+}
+
+/// File bytes that do not match the manifest entry.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SkillIntegrityError {
+    #[error("{uri} is {actual} bytes, the manifest says {expected}")]
+    Size {
+        uri: String,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("{uri} has digest {actual}, the manifest says {expected}")]
+    Digest {
+        uri: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 /// The `SKILL.md` frontmatter, with every field the author wrote.
@@ -429,6 +493,60 @@ mod tests {
         #[test]
         fn name_comes_from_the_frontmatter() {
             assert_eq!(billing_skill().name(), "billing");
+        }
+    }
+
+    /// The `pdf-processing` SKILL.md from the spec, whose digest and size the
+    /// spec's example manifest lists.
+    const SPEC_SKILL_MD: &[u8] = b"---\nname: pdf-processing\ndescription: Extract, fill, and assemble PDF documents\n---\n\n# PDF processing\n\nChoose the matching template from `templates/`.\n";
+    const SPEC_SKILL_MD_DIGEST: &str =
+        "sha256:99b737495721155ece826d57521e2d66141ebdc1344a400487481ea2642ab19e";
+
+    mod sha256_digest {
+        use super::*;
+
+        #[test]
+        fn matches_the_digest_in_the_spec_example() {
+            assert_eq!(sha256_digest(SPEC_SKILL_MD), SPEC_SKILL_MD_DIGEST);
+        }
+    }
+
+    mod skill_resource_verify {
+        use super::*;
+
+        fn spec_entry() -> SkillResource {
+            SkillResource::new("skill://pdf-processing/SKILL.md", SPEC_SKILL_MD_DIGEST, 151)
+        }
+
+        #[test]
+        fn accepts_the_bytes_the_manifest_describes() {
+            assert_eq!(spec_entry().verify(SPEC_SKILL_MD), Ok(()));
+        }
+
+        #[test]
+        fn reports_a_size_mismatch_before_hashing() {
+            let error = spec_entry().verify(b"short").unwrap_err();
+            assert!(
+                matches!(error, SkillIntegrityError::Size { actual: 5, .. }),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn reports_a_digest_mismatch_for_same_sized_bytes() {
+            let mut tampered = SPEC_SKILL_MD.to_vec();
+            tampered[0] = b'+';
+            let error = spec_entry().verify(&tampered).unwrap_err();
+            assert!(
+                matches!(error, SkillIntegrityError::Digest { .. }),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn from_bytes_produces_an_entry_that_verifies() {
+            let entry = SkillResource::from_bytes("skill://pdf-processing/SKILL.md", SPEC_SKILL_MD);
+            assert_eq!(entry, spec_entry());
         }
     }
 
