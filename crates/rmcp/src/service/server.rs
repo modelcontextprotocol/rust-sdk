@@ -583,6 +583,23 @@ where
                 let id = req.id;
                 let mut request = match req.request {
                     ClientRequest::InitializeRequest(request) => break (request, id),
+                    ClientRequest::InvalidParams(invalid) => {
+                        // A known method whose params did not deserialize:
+                        // answer it and keep waiting for the handshake.
+                        transport
+                            .send(ServerJsonRpcMessage::error(
+                                ErrorData::invalid_params(invalid.to_string(), None),
+                                Some(id),
+                            ))
+                            .await
+                            .map_err(|error| {
+                                ServerInitializeError::transport::<T>(
+                                    error,
+                                    "sending pre-init invalid params response",
+                                )
+                            })?;
+                        continue;
+                    }
                     request => request,
                 };
                 let missing_metadata = request
