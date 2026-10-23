@@ -3934,6 +3934,7 @@ enum ElicitRequestParamsWire {
         meta: Option<RequestMetaObject>,
         message: String,
         url: String,
+        #[serde(default)]
         elicitation_id: String,
     },
     #[serde(untagged, rename_all = "camelCase")]
@@ -4043,6 +4044,9 @@ pub enum ElicitRequestParams {
         /// The client should direct the user to this URL to complete the elicitation.
         url: String,
         /// The unique identifier for this elicitation request.
+        /// Protocol `2026-07-28` removed this field: it is empty when absent,
+        /// and an empty id is not serialized.
+        #[serde(skip_serializing_if = "String::is_empty")]
         elicitation_id: String,
     },
 }
@@ -6136,6 +6140,24 @@ mod tests {
             "elicitationId": "elicitation-123"
         });
         assert_eq!(json_url, expected_url_json);
+    }
+
+    #[test]
+    fn test_url_elicitation_without_elicitation_id() {
+        // 2026-07-28 removed `elicitationId` from URL mode requests.
+        let json_data = json!({
+            "mode": "url",
+            "url": "https://mcp.example.com/ui/set_api_key",
+            "message": "Please provide your API key to continue."
+        });
+        let params: ElicitRequestParams =
+            serde_json::from_value(json_data.clone()).expect("Deserialization failed");
+        assert!(matches!(
+            &params,
+            ElicitRequestParams::UrlElicitationParams { elicitation_id, .. }
+                if elicitation_id.is_empty()
+        ));
+        assert_eq!(serde_json::to_value(&params).unwrap(), json_data);
     }
 
     #[test]
