@@ -17,19 +17,22 @@ use crate::{
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
         CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
         DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
-        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskRequest,
-        GetTaskResult, InitializeRequest, InitializeRequestParams, InitializedNotification,
-        InputRequest, InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
+        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetSkillRequest,
+        GetSkillRequestParams, GetSkillResult, GetTaskParams, GetTaskRequest, GetTaskResult,
+        InitializeRequest, InitializeRequestParams, InitializedNotification, InputRequest,
+        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
         ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
-        ListResourcesRequest, ListResourcesResult, ListToolsRequest, ListToolsResult,
-        NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
-        ProtocolVersion, ReadResourceRequest, ReadResourceRequestParams, ReadResourceResponse,
-        ReadResourceResult, Reference, RequestId, RequestMetaObject, RootsListChangedNotification,
-        ServerJsonRpcMessage, ServerNotification, ServerPeerInfo, ServerRequest, ServerResult,
-        SetLevelRequest, SetLevelRequestParams, SubscribeRequest, SubscribeRequestParams,
-        SubscriptionFilter, SubscriptionsListenRequest, SubscriptionsListenRequestParams,
-        SubscriptionsListenResult, UnsubscribeRequest, UnsubscribeRequestParams, UpdateTaskParams,
-        UpdateTaskRequest,
+        ListResourcesRequest, ListResourcesResult, ListSkillsRequest, ListSkillsResult,
+        ListToolsRequest, ListToolsResult, NumberOrString, PaginatedRequestParams,
+        ProgressNotification, ProgressNotificationParam, ProtocolVersion,
+        ReadResourceDirectoryRequest, ReadResourceDirectoryRequestMethod,
+        ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequest,
+        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Reference, RequestId,
+        RequestMetaObject, RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification,
+        ServerPeerInfo, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams,
+        SubscribeRequest, SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
+        SubscriptionsListenRequestParams, SubscriptionsListenResult, UnsubscribeRequest,
+        UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
     transport::DynamicTransportError,
 };
@@ -1530,6 +1533,73 @@ impl Peer<RoleClient> {
         }
     }
 
+    /// SEP-2640 `skills/list`: one page of the skills the server serves.
+    ///
+    /// The result carries the server's cache hints but is not stored in the
+    /// client response cache. A 2026-07-28 server that omits the hints is
+    /// accepted, as for `list_tools`.
+    pub async fn list_skills(
+        &self,
+        params: Option<PaginatedRequestParams>,
+    ) -> Result<ListSkillsResult, ServiceError> {
+        let result = self
+            .send_request_cancel_on_drop(ClientRequest::ListSkillsRequest(ListSkillsRequest {
+                method: Default::default(),
+                params,
+                extensions: Default::default(),
+            }))
+            .await?;
+        match result {
+            ServerResult::ListSkillsResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// SEP-2640 `skills/get`: the entry for one skill. A server that does
+    /// not serve the URI answers with `-32602`, passed through unchanged.
+    pub async fn get_skill(
+        &self,
+        params: GetSkillRequestParams,
+    ) -> Result<GetSkillResult, ServiceError> {
+        let result = self
+            .send_request_cancel_on_drop(ClientRequest::GetSkillRequest(GetSkillRequest::new(
+                params,
+            )))
+            .await?;
+        match result {
+            ServerResult::GetSkillResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// SEP-2640 `resources/directory/read`: the direct children of a
+    /// directory resource.
+    ///
+    /// Nothing is sent when the server did not declare `directoryRead`; the
+    /// call fails with `-32601` instead.
+    pub async fn read_resource_directory(
+        &self,
+        params: ReadResourceDirectoryRequestParams,
+    ) -> Result<ReadResourceDirectoryResult, ServiceError> {
+        let declared = self
+            .peer_info()
+            .is_some_and(|info| info.capabilities.supports_directory_read());
+        if !declared {
+            return Err(ServiceError::McpError(McpError::method_not_found::<
+                ReadResourceDirectoryRequestMethod,
+            >()));
+        }
+        let result = self
+            .send_request_cancel_on_drop(ClientRequest::ReadResourceDirectoryRequest(
+                ReadResourceDirectoryRequest::new(params),
+            ))
+            .await?;
+        match result {
+            ServerResult::ListResourcesResult(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
     /// Send one `prompts/get` request and return either a final result or an MRTR
     /// `InputRequiredResult` without driving any follow-up rounds.
     pub async fn get_prompt_once(
@@ -1904,6 +1974,23 @@ impl Peer<RoleClient> {
             }
         }
         Ok(resources)
+    }
+
+    /// Call [`Peer<RoleClient>::list_skills`] until every page is listed.
+    pub async fn list_all_skills(&self) -> Result<Vec<crate::model::Skill>, ServiceError> {
+        let mut skills = Vec::new();
+        let mut cursor = None;
+        loop {
+            let result = self
+                .list_skills(Some(PaginatedRequestParams { meta: None, cursor }))
+                .await?;
+            skills.extend(result.skills);
+            cursor = result.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(skills)
     }
 
     /// A wrapper method for [`Peer<RoleClient>::list_resource_templates`].
