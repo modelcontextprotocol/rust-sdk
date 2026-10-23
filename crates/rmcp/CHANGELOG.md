@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.7.0...rmcp-v3.8.0) - 2026-10-23
+
+### Added
+
+- *(transport)* expose body-free HTTP status errors ([#1386](https://github.com/modelcontextprotocol/rust-sdk/pull/1386))
+
+### Fixed
+
+- *(client)* stop SSE reconnects on permanent GET errors ([#1363](https://github.com/modelcontextprotocol/rust-sdk/pull/1363))
+
 ## [3.7.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.6.0...rmcp-v3.7.0) - 2026-10-22
 
 ### Added
