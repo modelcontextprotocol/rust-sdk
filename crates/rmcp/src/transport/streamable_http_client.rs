@@ -176,6 +176,41 @@ impl InsufficientScopeError {
     }
 }
 
+pub(crate) const MAX_RETRY_AFTER_BYTES: usize = 128;
+
+/// Body-free HTTP failure metadata.
+///
+/// The built-in reqwest client returns this for HTTP 429 and 5xx responses.
+/// HTTP 429 is classified without reading the body. JSON POST 5xx responses
+/// containing a valid JSON-RPC error retain that error instead.
+/// No response body, request URL, credentials, or other headers are retained.
+#[derive(Debug, Error)]
+#[error("HTTP {status}")]
+#[non_exhaustive]
+pub struct HttpStatusError {
+    /// HTTP status code (429 or 500..=599 for the built-in reqwest client).
+    pub status: u16,
+    /// First raw `Retry-After` value, if valid UTF-8 and at most 128 bytes.
+    ///
+    /// This is not parsed as a delay or date; callers decide whether and when
+    /// to retry. Missing, oversized, or invalid UTF-8 values become `None`.
+    pub retry_after: Option<String>,
+}
+
+impl HttpStatusError {
+    /// Create HTTP failure metadata for a custom transport backend.
+    ///
+    /// `retry_after` is retained without parsing if it is at most 128 bytes;
+    /// oversized values are discarded. No status-code restriction is imposed
+    /// on custom backends.
+    pub fn new(status: u16, retry_after: Option<String>) -> Self {
+        Self {
+            status,
+            retry_after: retry_after.filter(|value| value.len() <= MAX_RETRY_AFTER_BYTES),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
@@ -185,6 +220,9 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Io(#[from] std::io::Error),
     #[error("Client error: {0}")]
     Client(E),
+    /// HTTP failure metadata from a transport backend.
+    #[error(transparent)]
+    HttpStatus(#[from] HttpStatusError),
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,
     #[error("unexpected server response: {0}")]

@@ -1,7 +1,10 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use futures::stream::BoxStream;
-use http::{HeaderName, HeaderValue, header::WWW_AUTHENTICATE};
+use http::{
+    HeaderMap, HeaderName, HeaderValue, StatusCode,
+    header::{RETRY_AFTER, WWW_AUTHENTICATE},
+};
 use reqwest::header::ACCEPT;
 use sse_stream::Sse;
 
@@ -44,6 +47,19 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
         Ok(message @ JsonRpcMessage::Error(_)) => Some(message),
         _ => None,
     }
+}
+
+// Retain only status and bounded Retry-After metadata for HTTP failures.
+fn http_status_error(status: StatusCode, headers: &HeaderMap) -> Option<HttpStatusError> {
+    if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
+        return None;
+    }
+    let retry_after = headers
+        .get(RETRY_AFTER)
+        .filter(|value| value.as_bytes().len() <= MAX_RETRY_AFTER_BYTES)
+        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+        .map(str::to_owned);
+    Some(HttpStatusError::new(status.as_u16(), retry_after))
 }
 
 impl StreamableHttpClient for reqwest::Client {
@@ -124,6 +140,9 @@ impl StreamableHttpClient for reqwest::Client {
                     required_scope: scope,
                 },
             ));
+        }
+        if let Some(error) = http_status_error(response.status(), response.headers()) {
+            return Err(error.into());
         }
         let response = response.error_for_status()?;
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
@@ -254,6 +273,23 @@ impl StreamableHttpClient for reqwest::Client {
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
+        let is_json_response = content_type
+            .as_deref()
+            .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
+        // Rate limits and non-JSON failures return without reading the body. JSON
+        // server failures are read to keep their JSON-RPC error, so an unfinished
+        // body still blocks here.
+        let status_error = match (
+            http_status_error(status, response.headers()),
+            is_json_response,
+        ) {
+            (Some(error), is_json)
+                if !is_json || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            {
+                return Err(error.into());
+            }
+            (error, _) => error,
+        };
         let content_length = response.content_length();
         let session_id = response
             .headers()
@@ -294,11 +330,7 @@ impl StreamableHttpClient for reqwest::Client {
                 status,
                 reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
             );
-            if !is_auth_failure
-                && content_type
-                    .as_deref()
-                    .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()))
-            {
+            if !is_auth_failure && is_json_response {
                 match parse_json_rpc_error(&body) {
                     Some(message) => {
                         return Ok(StreamableHttpPostResponse::Json(message, session_id));
@@ -307,6 +339,9 @@ impl StreamableHttpClient for reqwest::Client {
                         "HTTP {status}: could not parse JSON body as a JSON-RPC error"
                     ),
                 }
+            }
+            if let Some(error) = status_error {
+                return Err(error.into());
             }
             return Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                 format!("HTTP {status}: {body}"),
@@ -460,11 +495,49 @@ fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
 mod tests {
     use rstest::rstest;
 
-    use super::parse_json_rpc_error;
+    use super::{http_status_error, parse_json_rpc_error};
     use crate::{
         model::{ClientJsonRpcMessage, ClientRequest, JsonRpcMessage, PingRequest, RequestId},
         transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
     };
+
+    #[test]
+    fn http_status_error_classifies_only_429_and_5xx() {
+        let headers = http::HeaderMap::new();
+        for code in 100..=599 {
+            let error = http_status_error(http::StatusCode::from_u16(code).unwrap(), &headers);
+            assert_eq!(error.is_some(), code == 429 || code >= 500, "HTTP {code}");
+            if let Some(error) = error {
+                assert_eq!(error.status, code);
+                assert_eq!(error.retry_after, None);
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::delay_seconds(b"17".to_vec(), true)]
+    #[case::http_date(b"Fri, 23 Oct 2026 12:00:00 GMT".to_vec(), true)]
+    #[case::empty(Vec::new(), true)]
+    #[case::non_ascii_utf8("é".as_bytes().to_vec(), true)]
+    #[case::at_limit("a".repeat(128).into_bytes(), true)]
+    #[case::over_limit("a".repeat(129).into_bytes(), false)]
+    #[case::limit_counts_bytes_not_chars("é".repeat(65).into_bytes(), false)]
+    #[case::invalid_utf8(b"\xff".to_vec(), false)]
+    fn http_status_error_retains_only_bounded_utf8_retry_after(
+        #[case] value: Vec<u8>,
+        #[case] retained: bool,
+    ) {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::RETRY_AFTER,
+            http::HeaderValue::from_bytes(&value).unwrap(),
+        );
+        let error = http_status_error(http::StatusCode::SERVICE_UNAVAILABLE, &headers).unwrap();
+        assert_eq!(
+            error.retry_after,
+            retained.then(|| String::from_utf8(value).unwrap())
+        );
+    }
 
     #[test]
     fn auth_required_error_new() {
